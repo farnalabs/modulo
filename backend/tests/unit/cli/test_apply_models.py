@@ -457,10 +457,25 @@ class TestPipelineEntityContracts:
             PipelineEntity.model_validate({"name": "sample", "max_autonomy_level": "banana"})
 
     def test_null_max_autonomy_level_passes_through(self) -> None:
-        """NULL/omitted = don't manage the ceiling (unchanged contract)."""
+        """FAR-1221: a DECLARED null is managed — it hashes into the view (and
+        the executor clears the live ceiling) instead of being indistinguishable
+        from an omitted key."""
         entity = PipelineEntity.model_validate({"name": "sample", "max_autonomy_level": None})
         assert entity.max_autonomy_level is None
+        assert entity.manages_max_autonomy
+        assert "max_autonomy_level" in entity.managed_view()
+        assert entity.managed_view()["max_autonomy_level"] is None
+
+    def test_omitted_max_autonomy_level_is_not_managed(self) -> None:
+        """Omitting the key leaves a UI-set ceiling untouched (no drift, no write)."""
+        entity = PipelineEntity.model_validate({"name": "sample"})
+        assert not entity.manages_max_autonomy
         assert "max_autonomy_level" not in entity.managed_view()
+
+    def test_declared_max_autonomy_level_is_managed(self) -> None:
+        entity = PipelineEntity.model_validate({"name": "sample", "max_autonomy_level": "notify_on_complete"})
+        assert entity.manages_max_autonomy
+        assert entity.managed_view()["max_autonomy_level"] == "notify_on_complete"
 
     def test_managed_view_carries_resolved_owner_ids(self) -> None:
         entity = PipelineEntity.model_validate({"name": "sample"})

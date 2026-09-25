@@ -502,6 +502,60 @@ entities:
         assert update.max_autonomy_level == "fully_autonomous"
 
     @respx.mock
+    def test_update_declared_null_ceiling_is_patched_as_null(self) -> None:
+        """FAR-1221: an explicit ``max_autonomy_level: null`` clears a live
+        ceiling — the PATCH must carry the key with an explicit null (the REST
+        PATCH keys on presence, so omitting it would leave the ceiling set)."""
+        existing_id = "00000000-0000-0000-0000-0000000000aa"
+        existing = _pipeline_item("sample", existing_id)
+        existing["max_autonomy_level"] = "fully_autonomous"
+        routes = _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(
+            """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      max_autonomy_level: null
+"""
+        )
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        updated_names = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated_names == ["sample"]
+        assert routes["pipeline_patch"].call_count == 1
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert "max_autonomy_level" in patch_payload
+        assert patch_payload["max_autonomy_level"] is None
+        update = PipelineUpdate.model_validate(patch_payload)
+        assert update.max_autonomy_level is None
+
+    @respx.mock
+    def test_update_omitted_ceiling_is_not_patched(self) -> None:
+        """FAR-1221: an OMITTED ceiling never appears in the PATCH — a UI-set
+        ceiling survives an apply run whose config does not declare one."""
+        existing_id = "00000000-0000-0000-0000-0000000000aa"
+        existing = _pipeline_item("sample", existing_id)
+        existing["max_autonomy_level"] = "fully_autonomous"
+        # Unrelated drift forces a PATCH so the payload can be inspected.
+        existing["max_concurrent_runs"] = 9
+        routes = _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(GRAPHLESS_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        updated_names = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated_names == ["sample"]
+        assert routes["pipeline_patch"].call_count == 1
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert "max_autonomy_level" not in patch_payload
+
+    @respx.mock
     def test_update_with_graph_drift_sends_graph_json(self) -> None:
         existing_id = "00000000-0000-0000-0000-0000000000aa"
         existing = _pipeline_item("sample", existing_id)

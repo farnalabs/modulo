@@ -367,9 +367,11 @@ class TestMigrationBackfillGrace:
         # 0257_rename_remy_to_assistant (FAR-1196 Tier 3) chains on top of
         # 0256_pipeline_max_autonomy_level, and
         # 0258_pipeline_accountability_owners (FAR-1161) chains on top of
-        # 0257_rename_remy_to_assistant, so it is now the single linear head
-        # of the chain.
-        assert heads == ["0258_pipeline_accountability_owners"], f"expected a single head, got {heads}"
+        # 0257_rename_remy_to_assistant, and
+        # 0259_pipeline_snapshot_max_autonomy_check (FAR-1223) chains on top of
+        # 0258_pipeline_accountability_owners, so it is now the single linear
+        # head of the chain.
+        assert heads == ["0259_pipeline_snapshot_max_autonomy_check"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

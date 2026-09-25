@@ -406,6 +406,11 @@ class PipelineEntity(BaseModel):
     ``null`` disables the breaker; omitting the key leaves a UI/API-set
     threshold untouched (no drift, no write).
 
+    ``max_autonomy_level`` (FAR-1163) follows the SAME opt-in rule (FAR-1221):
+    declare the key to manage the ceiling, ``null`` to CLEAR a UI/API-set
+    ceiling back to "inherit the default", and omit it to leave the live
+    ceiling untouched.
+
     Accountability owners (FAR-1161): ``business_owner_email`` /
     ``reliability_owner_email`` reference a member of the target org by
     EMAIL (users are not apply-managed entities, so the human-writable email
@@ -431,8 +436,10 @@ class PipelineEntity(BaseModel):
         default=None,
         description=(
             "Hard ceiling on the autonomy level any HITL-gate resolution may "
-            "reach. NULL/omitted = effective ceiling is the pipeline default. "
-            "The server validates ceiling >= default_autonomy_level."
+            "reach. Managed ONLY when declared (FAR-1221): an explicit null "
+            "CLEARS a UI/API-set ceiling, while omitting the key leaves the "
+            "live ceiling untouched. The server validates "
+            "ceiling >= default_autonomy_level."
         ),
     )
     graph: ApplyGraph | None = None
@@ -485,6 +492,17 @@ class PipelineEntity(BaseModel):
     def manages_circuit_breaker(self) -> bool:
         """True when the config declares circuit_breaker_threshold (even as null)."""
         return "circuit_breaker_threshold" in self.model_fields_set
+
+    @property
+    def manages_max_autonomy(self) -> bool:
+        """True when the config declares max_autonomy_level (even as null).
+
+        FAR-1221: an explicit ``max_autonomy_level: null`` must CLEAR a
+        UI/API-set ceiling, while an omitted key must leave it untouched —
+        the two are only distinguishable via ``model_fields_set`` (the same
+        test ``manages_circuit_breaker`` uses).
+        """
+        return "max_autonomy_level" in self.model_fields_set
 
     @field_validator("name")
     @classmethod
@@ -542,10 +560,12 @@ class PipelineEntity(BaseModel):
         }
         if self.manages_circuit_breaker:
             view["circuit_breaker_threshold"] = quantize_circuit_breaker_threshold(self.circuit_breaker_threshold)
-        # FAR-1163: the autonomy ceiling is managed ONLY when declared — an
-        # omitted ceiling leaves a UI-set ceiling untouched, exactly like the
-        # graph-optional precedent above (declare = manage, omit = don't).
-        if self.max_autonomy_level is not None:
+        # FAR-1163/FAR-1221: the autonomy ceiling is managed ONLY when
+        # declared — an omitted ceiling leaves a UI-set ceiling untouched,
+        # exactly like the graph-optional precedent above (declare = manage,
+        # omit = don't). A DECLARED null is included so drift detection
+        # compares it (and the executor clears the live ceiling).
+        if self.manages_max_autonomy:
             view["max_autonomy_level"] = self.max_autonomy_level
         if self.graph is not None:
             view["graph"] = {"nodes": [], "edges": []} if graph is None else graph
