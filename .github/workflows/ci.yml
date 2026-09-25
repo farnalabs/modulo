@@ -89,7 +89,43 @@ jobs:
               uv run --no-build --project backend --no-sync semgrep --config="$rule" --test ".semgrep/tests/${base}.py"
             fi
           done
-      - run: uv run --no-build --no-sync pip-audit
+      - name: pip-audit (bounded retry on transient PyPI service errors)
+        # pip-audit's PyPI vulnerability service raises ServiceError on any
+        # non-404 HTTP error (pip_audit/_service/pypi.py: `raise ServiceError
+        # from http_error`), so a transient `503 Server Error: Backend is
+        # unhealthy` from pypi.org fails this required check outright — observed
+        # on main at 675eac3b. Retry ONLY when the log shows that transient
+        # signature (or a PyPI connection error), never when pip-audit reports
+        # actual vulnerabilities, so a genuine finding is never masked. Mirrors
+        # the signature-gated retry used for the SonarCloud scan below.
+        run: |
+          set -uo pipefail
+          LOG="$(mktemp)"
+          trap 'rm -f "$LOG"' EXIT
+          for attempt in 1 2 3; do
+            : > "$LOG"
+            set +e
+            uv run --no-build --no-sync pip-audit 2>&1 | tee "$LOG"
+            RC=${PIPESTATUS[0]}
+            set -e
+            if [ "$RC" -eq 0 ]; then
+              echo "::notice::pip-audit succeeded on attempt ${attempt}/3."
+              exit 0
+            fi
+            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly" "$LOG"; then
+              if [ "$attempt" -lt 3 ]; then
+                echo "::warning::pip-audit hit a transient PyPI service error (attempt ${attempt}/3); retrying."
+                sleep $((attempt * 10))
+              else
+                echo "::warning::pip-audit hit a transient PyPI service error on the final attempt (3/3); not retrying."
+              fi
+              continue
+            fi
+            echo "::error::pip-audit failed with a non-transient error or found vulnerabilities; not retrying."
+            exit "$RC"
+          done
+          echo "::error::pip-audit still hit a transient PyPI service error after 3 attempts."
+          exit 1
       - name: Import-linter architecture contracts
         run: uv run --no-build --no-sync lint-imports
       - name: Validate sidebar nav translations
