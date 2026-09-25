@@ -1,6 +1,6 @@
 import { devices, type Page, type Response } from '@playwright/test'
 import { test, expect, setupLocalMockApi } from './setup/fixtures'
-import { FLAG_CACHE_KEY, serializeFlagCache } from '../../src/config/flagCache'
+import { flagCacheKey, serializeFlagCache } from '../../src/config/flagCache'
 
 // FAR-1237 — first-paint layout correctness on mobile under a SLOW
 // feature-flags response.
@@ -25,6 +25,8 @@ const MOCK_REFRESH_TOKEN = 'mock-refresh-token-for-e2e-tests'
 
 const HAMBURGER = '[aria-controls="mobile-sidebar"]'
 const RAIL = '[aria-label="Expand sidebar"]'
+// Kept as a literal (not imported from src/composables) so this e2e module
+// does not pull the browser-only app graph (localStorage) into the Node loader.
 const PENDING = '[data-testid="mobile-nav-pending"]'
 
 interface ChromeCounts {
@@ -162,9 +164,11 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean }): 
 
   if (opts.cachedRail !== undefined) {
     const payload = serializeFlagCache({ mobile_sidebar_rail: opts.cachedRail })
+    // The mock access token is opaque (no decodable org_id claim), so the
+    // store reads the shared `unknown` bucket — seed the same key it will use.
     await page.addInitScript(([key, raw]) => {
       localStorage.setItem(key, raw)
-    }, [FLAG_CACHE_KEY, payload] as [string, string])
+    }, [flagCacheKey(null), payload] as [string, string])
   }
 
   // 'commit' — don't gate on the full load event (external font stylesheet /

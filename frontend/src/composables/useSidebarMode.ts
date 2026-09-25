@@ -11,8 +11,21 @@ import { usePlanStore } from '../stores/planStore'
  *   feature-flags request is still in flight). The consumer must render
  *   NEITHER chrome — a neutral placeholder — so the first paint can never be
  *   the wrong layout, whatever mode the user's org actually resolves to.
+ *
+ * Scope of the guarantee (FAR-1237 review findings): it covers the first paint
+ * of the LAYOUT chrome, i.e. once AppLayout mounts. Before auth settles App.vue
+ * renders LoginView (no nav chrome at all), and the bare routes that render
+ * without AppLayout (e.g. /assistant, `meta.bare`) draw no nav chrome either —
+ * so neither can flash a wrong layout, and both are intentionally out of scope.
  */
 export type MobileNavMode = 'rail' | 'drawer' | 'pending'
+
+/**
+ * Stable test id for the pending placeholder header. Exported so components and
+ * specs share one literal (FAR-1237 review nit: the id was duplicated as a
+ * string across AppLayout.spec and the e2e spec, which could drift).
+ */
+export const MOBILE_NAV_PENDING_TESTID = 'mobile-nav-pending'
 
 export function useSidebarMode() {
   const isDesktop = useMediaQuery('(min-width: 768px)')

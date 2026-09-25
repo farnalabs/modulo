@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePlanStore } from '../stores/planStore'
-import { FLAG_CACHE_KEY, parseFlagCache, serializeFlagCache } from '../config/flagCache'
+import { flagCacheKey, parseFlagCache, serializeFlagCache } from '../config/flagCache'
 import { getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
+import { getAccessToken } from '../lib/api/client'
 import type { EventBusEvent } from '../types/events'
 
 const mockFlagsResponse = {
@@ -38,7 +39,21 @@ vi.mock('../lib/api/client', () => ({
     PUT: vi.fn(),
     DELETE: vi.fn(),
   },
+  // The flag cache is org-scoped via the access-token JWT claim (FAR-1237
+  // review finding); tests that don't care about the org leave this returning
+  // null, which maps to the shared `unknown` bucket.
+  getAccessToken: vi.fn(),
 }))
+
+/** Build a minimal opaque-JWT string carrying an `org_id` claim. */
+function jwtWithOrg(orgId: string): string {
+  const encode = (o: object) =>
+    btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ org_id: orgId })}.sig`
+}
+
+/** The cache key an org-less (opaque token) session uses. */
+const FLAG_CACHE_KEY = flagCacheKey(null)
 
 async function mockApiSuccess() {
   const { api } = await import('../lib/api/client')
@@ -75,8 +90,10 @@ function syncEvent(overrides: Partial<EventBusEvent> = {}): EventBusEvent {
 describe('usePlanStore', () => {
   beforeEach(async () => {
     // The flag map persists to localStorage (FAR-1237); a payload-driven test
-    // must not leak its cache into the next test's fresh store.
+    // must not leak its cache into the next test's fresh store. Default the
+    // token to org-less so cache reads/writes land in the `unknown` bucket.
     localStorage.clear()
+    vi.mocked(getAccessToken).mockReturnValue(null)
     setActivePinia(createPinia())
     clearAllRegistrations()
     await mockApiSuccess()
@@ -685,6 +702,76 @@ describe('usePlanStore', () => {
         setItem.mockRestore()
         warn.mockRestore()
       }
+    })
+
+    it('scopes the cache per org — a second org never hydrates the first org’s chrome', () => {
+      localStorage.setItem(flagCacheKey('org-a'), serializeFlagCache({ mobile_sidebar_rail: true }))
+      localStorage.setItem(flagCacheKey('org-b'), serializeFlagCache({ mobile_sidebar_rail: false }))
+
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg('org-a'))
+      setActivePinia(createPinia())
+      const orgA = usePlanStore()
+      expect(orgA.flagsSource).toBe('cache')
+      expect(orgA.featureEnabled('mobile_sidebar_rail')).toBe(true)
+
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg('org-b'))
+      setActivePinia(createPinia())
+      const orgB = usePlanStore()
+      expect(orgB.flagsSource).toBe('cache')
+      expect(orgB.featureEnabled('mobile_sidebar_rail')).toBe(false)
+    })
+
+    it('writes the resolved map under the current org bucket only', async () => {
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg('org-a'))
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+
+      await store.fetchPlan()
+
+      expect(parseFlagCache(localStorage.getItem(flagCacheKey('org-a')))).toEqual({
+        parallel_branches: true,
+        eval_system: false,
+        hitl_gates: true,
+      })
+      expect(localStorage.getItem(flagCacheKey('org-b'))).toBeNull()
+      expect(localStorage.getItem(flagCacheKey(null))).toBeNull()
+    })
+
+    it('an org-less (opaque token) session uses the shared unknown bucket', () => {
+      localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: true }))
+      // getAccessToken defaults to null in beforeEach.
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+    })
+
+    it('treats a throwing token read as the unknown bucket', () => {
+      vi.mocked(getAccessToken).mockImplementation(() => {
+        throw new Error('storage blocked')
+      })
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('none')
+      expect(store.features).toEqual({})
+    })
+
+    it('treats an empty org_id claim as the unknown bucket', () => {
+      localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: true }))
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg(''))
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+    })
+
+    it('serializeFlagCache rejects a non-boolean map (matches the read guard)', () => {
+      expect(() =>
+        serializeFlagCache({ a: 'yes' } as unknown as Record<string, boolean>),
+      ).toThrow(TypeError)
+      expect(() =>
+        serializeFlagCache({ a: true, b: 1 } as unknown as Record<string, boolean>),
+      ).toThrow(TypeError)
     })
   })
 })

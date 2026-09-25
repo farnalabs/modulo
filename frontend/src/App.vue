@@ -3,6 +3,14 @@
   <LoginView v-else-if="!isAuthenticated" />
   <ForceChangePasswordView v-else-if="passwordChangeRequired" />
   <AssistantOnlyView v-else-if="isBareRoute" />
+  <!-- FAR-1237 scope (review finding): the "never first-paint the wrong mobile
+       layout" guarantee applies to the FIRST PAINT OF THE LAYOUT COMPONENT —
+       AppLayout mounts only once auth has settled. Everything that can render
+       before/without it (LoginView, the forced-change view, the bare
+       AssistantOnlyView) draws no nav chrome, so there is no chrome-less→chrome
+       document paint to shift. The pending placeholder is position:fixed and
+       <main>'s pt-14 offset comes from the same reactive nav mode, so chrome
+       and offset mount in the same frame. -->
   <AppLayout v-else />
 </template>
 

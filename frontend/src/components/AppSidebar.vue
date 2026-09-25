@@ -97,15 +97,31 @@
        caused the slow-mobile flash of the wrong layout — neither chrome mounts
        until the mode is known (persisted cache or flags payload). The box is
        the same 3.5rem as the legacy header, so resolving to the drawer causes
-       no shift, and <main>'s pt-14 offset applies to both. -->
+       no shift, and <main>'s pt-14 offset applies to both.
+
+       Review finding: the placeholder must read as pending NAV, not a blank
+       slot. It now mirrors the drawer header's hamburger geometry (same 22px
+       Menu glyph in the same p-2 rounded box, but non-interactive with a muted
+       tone) and is a labelled live region (`role="status"` + `aria-busy`) so
+       attempted activation gets visible wait feedback instead of silence. The
+       header is position:fixed, so neither it nor <main>'s offset shifts when
+       the resolved chrome mounts. -->
   <template v-if="!isDesktop && mobileNavMode === 'pending'">
     <header
-      data-testid="mobile-nav-pending"
+      :data-testid="MOBILE_NAV_PENDING_TESTID"
+      role="status"
       aria-busy="true"
+      :aria-label="$t('components.AppLayout.loading_navigation')"
       class="md:hidden fixed top-0 left-0 right-0 z-50 flex items-center border-b bg-background px-4 h-14"
     >
-      <div class="h-5 w-28 rounded-md bg-muted animate-pulse" aria-hidden="true" />
-      <span class="sr-only">{{ $t('components.AppLayout.loading_navigation') }}</span>
+      <span
+        data-testid="mobile-nav-pending-hamburger"
+        class="rounded-md p-2 text-muted-foreground/50"
+        aria-hidden="true"
+      >
+        <Menu class="h-[22px] w-[22px]" />
+      </span>
+      <div class="ml-2 h-5 w-28 rounded-md bg-muted animate-pulse" aria-hidden="true" />
     </header>
   </template>
 
@@ -222,7 +238,7 @@ import SidebarFull from "./SidebarFull.vue";
 import SidebarNav from "./SidebarNav.vue";
 import SidebarRail from "./SidebarRail.vue";
 import { useSidebar } from "../composables/useSidebar";
-import { useSidebarMode } from "../composables/useSidebarMode";
+import { MOBILE_NAV_PENDING_TESTID, useSidebarMode } from "../composables/useSidebarMode";
 import { Menu, Search, X } from "@lucide/vue";
 
 const props = defineProps<{

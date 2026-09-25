@@ -1,10 +1,11 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { api } from "../lib/api/client";
+import { api, getAccessToken } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { formatApiError } from "../lib/api/formatError";
 import { registerSyncHandlers, disposeSyncHandlers } from "./syncRegistry";
-import { FLAG_CACHE_KEY, parseFlagCache, serializeFlagCache } from "../config/flagCache";
+import { flagCacheKey, parseFlagCache, serializeFlagCache } from "../config/flagCache";
+import { decodeJwtPayload } from "../lib/jwt";
 import type { EventBusEvent } from "@/types/events";
 
 interface ApiResult<T> {
@@ -47,15 +48,35 @@ function runPlanSource<T>(
 }
 
 /**
- * Synchronous read of the persisted flag map (FAR-1237). Runs at store
- * creation — before first paint — so flag-driven decisions (mobile nav
- * layout, gated surfaces) start from the LAST RESOLVED value instead of an
- * empty "everything off" map that later flips when the request lands.
+ * The org the current access token belongs to, read synchronously from the
+ * JWT `org_id` claim. Being synchronous matters: the flag cache must be
+ * scoped per org BEFORE first paint, when no server payload has landed yet
+ * (FAR-1237 review finding: the cache was per-origin, so signing into org B
+ * first-painted org A's resolved chrome). Returns null when the token is
+ * absent/opaque — those sessions share the `unknown` bucket.
  */
-function readFlagCache(): Record<string, boolean> | null {
+function currentOrgId(): string | null {
+  try {
+    const payload = decodeJwtPayload(getAccessToken());
+    const orgId = payload?.org_id;
+    return typeof orgId === "string" && orgId.length > 0 ? orgId : null;
+  } catch {
+    // No storage / no token helper available: fall back to the unknown bucket.
+    return null;
+  }
+}
+
+/**
+ * Synchronous read of the persisted flag map for `orgId` (FAR-1237). Runs at
+ * store creation — before first paint — so flag-driven decisions (mobile nav
+ * layout, gated surfaces) start from the LAST RESOLVED value for THIS org
+ * instead of an empty "everything off" map that later flips when the request
+ * lands.
+ */
+function readFlagCache(orgId: string | null): Record<string, boolean> | null {
   try {
     if (typeof localStorage === "undefined") return null;
-    return parseFlagCache(localStorage.getItem(FLAG_CACHE_KEY));
+    return parseFlagCache(localStorage.getItem(flagCacheKey(orgId)));
   } catch {
     // Storage blocked (private mode, disabled cookies): behave as uncached.
     return null;
@@ -66,7 +87,7 @@ function readFlagCache(): Record<string, boolean> | null {
 function writeFlagCache(flags: Record<string, boolean>): void {
   try {
     if (typeof localStorage === "undefined") return;
-    localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache(flags));
+    localStorage.setItem(flagCacheKey(currentOrgId()), serializeFlagCache(flags));
   } catch (err) {
     // Best-effort only: the in-memory map is already correct without it.
     console.warn("[plan] Failed to persist flag cache", err);
@@ -74,7 +95,7 @@ function writeFlagCache(flags: Record<string, boolean>): void {
 }
 
 export const usePlanStore = defineStore("plan", () => {
-  const cachedFlags = readFlagCache();
+  const cachedFlags = readFlagCache(currentOrgId());
   const currentTier = ref("community");
   const features = ref<Record<string, boolean>>(cachedFlags ?? {});
   // Where the current flag map came from. 'none' = nothing has ever resolved,

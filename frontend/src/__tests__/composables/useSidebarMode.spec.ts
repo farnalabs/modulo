@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSidebarMode } from '../../composables/useSidebarMode'
 import { usePlanStore } from '../../stores/planStore'
-import { FLAG_CACHE_KEY, serializeFlagCache } from '../../config/flagCache'
+import { flagCacheKey, serializeFlagCache } from '../../config/flagCache'
 
 vi.mock('../../lib/api/client', () => ({
   api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
@@ -57,7 +57,7 @@ describe('useSidebarMode (FAR-1237 — resolved-mode first paint)', () => {
   })
 
   it('a persisted cache resolves the mode synchronously — rail at first paint, before any fetch (primary UI)', () => {
-    localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({ mobile_sidebar_rail: true }))
+    localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: true }))
     setActivePinia(createPinia()) // fresh store re-reads the cache
 
     const mode = useSidebarMode()
@@ -68,7 +68,7 @@ describe('useSidebarMode (FAR-1237 — resolved-mode first paint)', () => {
   })
 
   it('a persisted cache resolves the mode synchronously for the secondary UI too (drawer at first paint)', () => {
-    localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({ mobile_sidebar_rail: false }))
+    localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: false }))
     setActivePinia(createPinia())
 
     const mode = useSidebarMode()
@@ -88,6 +88,15 @@ describe('useSidebarMode (FAR-1237 — resolved-mode first paint)', () => {
     mockMatchMedia(true)
     const mode = useSidebarMode()
     expect(mode.isDesktop.value).toBe(true)
+    expect(mode.showMobileHeader.value).toBe(false)
+  })
+
+  it('desktop resolves no mobile header even when the rail flag is ON', () => {
+    mockMatchMedia(true)
+    usePlanStore().features['mobile_sidebar_rail'] = true
+    const mode = useSidebarMode()
+    expect(mode.isDesktop.value).toBe(true)
+    expect(mode.mobileNavMode.value).toBe('rail')
     expect(mode.showMobileHeader.value).toBe(false)
   })
 })

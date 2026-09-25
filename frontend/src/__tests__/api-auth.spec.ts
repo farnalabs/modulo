@@ -11,6 +11,7 @@ import {
   setAccessToken,
   setDemoSession,
 } from '../lib/api/auth'
+import { flagCacheKey, serializeFlagCache } from '../config/flagCache'
 
 const TOKEN_KEY = 'modulo_access_token'
 // FAR-1197 legacy scrub key — no refresh token is persisted anymore.
@@ -85,6 +86,26 @@ describe('auth token lifecycle', () => {
     expect(localStorage.getItem('modulo_demo_ended')).toBeNull()
     expect(localStorage.getItem('modulo_demo_session')).toBeNull()
     expect(listener).toHaveBeenCalledWith(null)
+  })
+
+  it('clearAccessToken scrubs the persisted flag cache across all org buckets', () => {
+    setAccessToken('abc')
+    localStorage.setItem(flagCacheKey('org-a'), serializeFlagCache({ mobile_sidebar_rail: true }))
+    localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: true }))
+
+    clearAccessToken()
+
+    expect(localStorage.getItem(flagCacheKey('org-a'))).toBeNull()
+    expect(localStorage.getItem(flagCacheKey(null))).toBeNull()
+  })
+
+  it('clearAccessTokenForLogout scrubs the persisted flag cache (shared-device leak)', () => {
+    setAccessToken('abc')
+    localStorage.setItem(flagCacheKey('org-a'), serializeFlagCache({ mobile_sidebar_rail: true }))
+
+    clearAccessTokenForLogout()
+
+    expect(localStorage.getItem(flagCacheKey('org-a'))).toBeNull()
   })
 
   it('unsubscribe stops future notifications', () => {

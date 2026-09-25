@@ -49,6 +49,7 @@ import AppLayout from '../../components/AppLayout.vue'
 import { usePlanStore } from '../../stores/planStore'
 import { useOnboardingStore } from '../../composables/useOnboarding'
 import { useAssistantStore } from '../../composables/useAssistantStore'
+import { MOBILE_NAV_PENDING_TESTID } from '../../composables/useSidebarMode'
 import { api, getAccessToken } from '../../lib/api/client'
 
 const router = createRouter({
@@ -186,7 +187,13 @@ describe('AppLayout', () => {
       await nextTick()
 
       expect(usePlanStore().flagsSource).toBe('none')
-      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(true)
+      const pending = wrapper.find(`[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`)
+      expect(pending.exists()).toBe(true)
+      // A labelled live region with a non-interactive hamburger affordance, so
+      // an attempted tap reads as pending nav rather than a dead blank slot.
+      expect(pending.attributes('role')).toBe('status')
+      expect(pending.attributes('aria-busy')).toBe('true')
+      expect(pending.find('[data-testid="mobile-nav-pending-hamburger"]').exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
       // The placeholder occupies the fixed header slot, so the offset matches.

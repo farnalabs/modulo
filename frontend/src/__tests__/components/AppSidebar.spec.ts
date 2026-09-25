@@ -53,6 +53,9 @@ vi.mock('vue-router', async () => {
 
 import AppSidebar from '../../components/AppSidebar.vue'
 import { usePlanStore } from '../../stores/planStore'
+import { MOBILE_NAV_PENDING_TESTID } from '../../composables/useSidebarMode'
+
+const PENDING = `[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`
 
 const router = createRouter({
   history: createWebHistory(),
@@ -293,20 +296,28 @@ describe('AppSidebar', () => {
     it('renders a neutral placeholder — neither the legacy top-nav nor the rail — while the flag is unresolved', async () => {
       const wrapper = mountSidebar({}, { unresolved: true })
       await flushPromises()
-      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(true)
+      const pending = wrapper.find(PENDING)
+      expect(pending.exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
+      // Labelled live region with a non-interactive hamburger affordance: a tap
+      // gets visible pending feedback, not a response-less blank slot.
+      expect(pending.attributes('role')).toBe('status')
+      expect(pending.attributes('aria-busy')).toBe('true')
+      expect(pending.attributes('aria-label')).toBe('Loading navigation')
+      expect(pending.find('[data-testid="mobile-nav-pending-hamburger"]').exists()).toBe(true)
+      expect(pending.findAll('button, [href], input').length).toBe(0)
     })
 
     it('mounts the resolved rail without the legacy top-nav ever rendering first', async () => {
       const wrapper = mountSidebar({}, { unresolved: true })
       await flushPromises()
-      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(true)
+      expect(wrapper.find(PENDING).exists()).toBe(true)
 
       usePlanStore().features['mobile_sidebar_rail'] = true
       await nextTick()
 
-      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(false)
+      expect(wrapper.find(PENDING).exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
     })
@@ -320,14 +331,14 @@ describe('AppSidebar', () => {
       await nextTick()
 
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(false)
+      expect(wrapper.find(PENDING).exists()).toBe(false)
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
     })
 
     it('the placeholder occupies the fixed header slot (h-14) so resolving to the drawer shifts nothing', async () => {
       const wrapper = mountSidebar({}, { unresolved: true, attachTo: document.body })
       await flushPromises()
-      const header = wrapper.find('[data-testid="mobile-nav-pending"]')
+      const header = wrapper.find(PENDING)
       expect(header.classes()).toContain('fixed')
       expect(header.classes()).toContain('h-14')
 
