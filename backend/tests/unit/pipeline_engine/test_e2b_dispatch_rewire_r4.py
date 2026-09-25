@@ -1099,3 +1099,231 @@ def test_flag_off_branches_stay_in_the_source() -> None:
     assert "sandbox.kill(request_timeout=" in source
     # ...and every R4 site is gated on the flag local.
     assert source.count("_via_provider_dispatch") >= 5
+
+
+# ---------------------------------------------------------------------------
+# 13. Flag-ON seam error arms (every defensive branch is reachable + tested)
+# ---------------------------------------------------------------------------
+
+
+def test_require_dispatch_spec_fails_closed_with_typed_error() -> None:
+    """The create-spec narrow refuses a missing spec with the typed error.
+
+    Companion to ``test_require_dispatch_provider_fails_closed_with_typed_error``:
+    the flag-ON create loop must never reach ``create_workspace`` without a
+    ``WorkspaceSpec`` (there is no silent fall back to ``AsyncSandbox.create``).
+    """
+    with pytest.raises(RuntimeProviderError):
+        nr._require_dispatch_spec(None)
+
+
+def test_is_rate_limited_error_returns_false_for_non_rate_limit_failures() -> None:
+    """A non-rate-limit failure (and a cyclic ``__cause__`` chain) reports False.
+
+    The wrapped-SDK test above covers the ``True`` walk; this covers the walk
+    TERMINATING without a match — including the ``id`` guard that stops a
+    self-referential ``__cause__`` from looping forever.
+    """
+    assert nr._is_rate_limited_error(ValueError("not a rate limit")) is False
+    cyclic = ValueError("cyclic cause")
+    cyclic.__cause__ = cyclic
+    assert nr._is_rate_limited_error(cyclic) is False
+
+
+async def test_provider_commands_run_background_and_non_zero_exit_fail_loudly() -> None:
+    """``_ProviderCommands.run`` refuses a background start and RAISES on a
+    non-zero exit (the duck-typed helpers rely on the raise, mirroring the SDK).
+    """
+    from modulo.core.pipeline_engine.node_runner import _ProviderCommands
+    from modulo.core.runtime_provider import ExecResult
+
+    class _Provider:
+        async def exec_command(
+            self,
+            provider_ref: str,
+            command: list[str],
+            *,
+            cmd_timeout: int | None = None,
+        ) -> ExecResult:
+            return ExecResult(exit_code=3, stdout="", stderr="clone failed")
+
+    commands = _ProviderCommands(_Provider(), "sbx-cmds")
+    with pytest.raises(RuntimeError, match="background command start"):
+        await commands.run("echo hi", background=True)
+    with pytest.raises(RuntimeError, match="command exited with code 3"):
+        await commands.run("echo hi")
+
+
+def test_provider_mediated_handle_has_no_legacy_files_surface() -> None:
+    """Touching ``files`` on the ABC-mediated handle is loud, never a downgrade."""
+    handle = _ProviderMediatedHandle(MagicMock(), "sbx-handle")
+    with pytest.raises(RuntimeError, match="no legacy files surface"):
+        _ = handle.files
+
+
+class _DoneEarlyChunks:
+    """Yield chunks while ``done`` flips mid-stream, for the post-done pump join.
+
+    A custom async iterator (not an async generator) so nothing is left
+    suspended when the pump task dies on a raising callback — the watchdog's
+    ``reached_done`` pump join at the end of ``_wait_command_with_exec_process``
+    is the only thing under test.
+    """
+
+    def __init__(self, process: ExecProcess, items: list[ExecStreamChunk]) -> None:
+        self._process = process
+        self._items = list(items)
+        self._index = 0
+
+    def __aiter__(self) -> "_DoneEarlyChunks":
+        return self
+
+    async def __anext__(self) -> ExecStreamChunk:
+        if self._index >= len(self._items):
+            raise StopAsyncIteration
+        item = self._items[self._index]
+        self._index += 1
+        # ``done`` fires while the pump is still mid-stream, so the watchdog
+        # reaches its post-done pump join with the pump still running.
+        self._process.done.set()
+        return item
+
+
+async def test_exec_process_watchdog_defaults_tick_interval_and_tolerates_absent_callbacks() -> None:
+    """Omitting ``tick_interval`` uses ``_SANDBOX_TAIL_INTERVAL``; a stderr
+    chunk with no ``on_stderr`` callback is simply buffered.
+    """
+    stream = _ScriptedStream(exit_code=0)
+    stream.push("stdout", "o")
+    stream.push("stderr", "e")
+    stream.end()
+
+    outcome, stall = await _wait_command_with_exec_process(
+        stream.process,
+        total_timeout=5.0,
+        idle_timeout=5.0,
+        last_activity=lambda: asyncio.get_running_loop().time(),
+        # tick_interval omitted -> the _SANDBOX_TAIL_INTERVAL default.
+        # on_stdout/on_stderr omitted -> the "callback absent" arms.
+    )
+
+    assert stall is None
+    assert outcome.exit_code == 0
+    assert outcome.stdout == "o"
+    assert outcome.stderr == "e"
+
+
+async def test_exec_process_watchdog_idle_kill_failure_still_reports_stall() -> None:
+    """A failing kill is swallowed (best-effort) and the stall is still reported."""
+    stream = _ScriptedStream(exit_code=None)
+
+    async def _kill() -> None:
+        raise RuntimeError("kill transport down")
+
+    stream.process._kill = _kill
+
+    outcome, stall = await _wait_command_with_exec_process(
+        stream.process,
+        total_timeout=10.0,
+        idle_timeout=0.2,
+        last_activity=lambda: 0.0,
+        tick_interval=0.05,
+    )
+
+    assert outcome is None
+    assert stall is not None
+    assert "no output" in stall
+
+
+async def test_exec_process_watchdog_swallows_a_dying_pump_after_done() -> None:
+    """Once ``done`` has fired, a pump exception during the bounded join is
+    best-effort (logged at debug) and never masks the stream outcome.
+    """
+    process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
+    process.chunks = _DoneEarlyChunks(process, [ExecStreamChunk(stream="stdout", data="first")])
+
+    async def _on_stdout(data: str) -> None:
+        raise RuntimeError("pump callback blew up")
+
+    outcome, stall = await _wait_command_with_exec_process(
+        process,
+        total_timeout=5.0,
+        idle_timeout=5.0,
+        last_activity=lambda: asyncio.get_running_loop().time(),
+        tick_interval=0.05,
+        on_stdout=_on_stdout,
+    )
+
+    assert stall is None
+    # No healthy exit code was ever observed -> an explicit stream error, never
+    # a fabricated zero exit.
+    assert outcome.exit_code == -1
+    assert outcome.stream_error == "stream ended without an exit code"
+
+
+async def test_exec_process_watchdog_propagates_a_cancelled_pump_after_done() -> None:
+    """A cancelled pump during the post-done join is NOT swallowed — it
+    re-raises (cancellation is never converted into a fabricated outcome).
+    """
+    process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
+    process.chunks = _DoneEarlyChunks(process, [ExecStreamChunk(stream="stdout", data="first")])
+
+    async def _on_stdout(data: str) -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await _wait_command_with_exec_process(
+            process,
+            total_timeout=5.0,
+            idle_timeout=5.0,
+            last_activity=lambda: asyncio.get_running_loop().time(),
+            tick_interval=0.05,
+            on_stdout=_on_stdout,
+        )
+
+
+async def test_flag_on_empty_provider_ref_after_create_is_refused(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """A provider that returns an empty ref must fail closed, never build a
+    handle addressed by the empty string."""
+    _enable_flag(monkeypatch)
+    _install_log_tail(monkeypatch)
+    install_fake_dispatch(monkeypatch, ref="")
+
+    result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
+
+    assert result["output"]["status"] == "failed"
+    assert result["artifacts"][0]["output"]["error_type"] == "RuntimeProviderError"
+
+
+async def test_flag_on_dispatch_provider_close_failure_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """A provider ``close()`` failure is best-effort: the dispatch still returns
+    its real outcome."""
+    _enable_flag(monkeypatch)
+    _install_log_tail(monkeypatch)
+    fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-close-fail", exit_code=0)
+    close = AsyncMock(side_effect=RuntimeError("close blew up"))
+    dispatch.close = close  # type: ignore[method-assign]
+
+    result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    close.assert_awaited_once()
+
+
+async def test_flag_on_dispatch_provider_close_cancellation_propagates(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """A cancellation during ``close()`` re-raises — it is never swallowed."""
+    _enable_flag(monkeypatch)
+    _install_log_tail(monkeypatch)
+    fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-close-cancel", exit_code=0)
+    dispatch.close = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        await make_sandbox_agent_fn(_base_node_def())(_run_state())
