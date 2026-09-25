@@ -87,7 +87,8 @@ export function clearFlagCache(): void {
       if (key && key.startsWith(FLAG_CACHE_PREFIX)) stale.push(key)
     }
     for (const key of stale) localStorage.removeItem(key)
-  } catch {
+  } catch (err) {
     // Storage blocked (private mode, disabled cookies) — nothing to clear.
+    console.warn('[flagCache] failed to clear flag cache', err)
   }
 }
