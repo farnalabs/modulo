@@ -204,6 +204,150 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     const installsGetCalls = getMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/installs'))
     expect(installsGetCalls.length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('v1.0')
+    expect(wrapper.find('[data-testid="collection-install-warnings"]').exists()).toBe(false)
+  })
+
+  it('renders re-provision warnings returned by a successful install', async () => {
+    mockPublishedCollection([])
+    const warning =
+      '2 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.API_KEY, node.env.OTHER_KEY.'
+    postMock.mockResolvedValue({
+      ...makeInstall(),
+      resolved_manifest: { warnings: [warning] },
+    })
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const region = wrapper.find('[data-testid="collection-install-warnings"]')
+    expect(region.exists()).toBe(true)
+    expect(region.attributes('aria-live')).toBe('polite')
+    expect(region.attributes('role')).toBeUndefined()
+    expect(region.text()).toContain('This collection installed with warnings')
+    expect(region.text()).toContain('Review each warning below')
+    expect(region.text()).toContain(warning)
+  })
+
+  it('renders warnings from the refetched install so a reload keeps them visible', async () => {
+    const warning =
+      "2 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.API_KEY, node.env.OTHER_KEY."
+    mockPublishedCollection([
+      { ...makeInstall(), resolved_manifest: { warnings: [warning] } },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const region = wrapper.find('[data-testid="collection-install-warnings"]')
+    expect(postMock).not.toHaveBeenCalled()
+    expect(region.exists()).toBe(true)
+    expect(region.text()).toContain(warning)
+  })
+
+  it('keeps the standing install warnings when a later install attempt fails', async () => {
+    const warning =
+      "1 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.API_KEY."
+    mockPublishedCollection([
+      { ...makeInstall(), resolved_manifest: { warnings: [warning] } },
+    ])
+    vi.mocked(api.POST).mockResolvedValueOnce({
+      data: undefined,
+      error: 'Forbidden',
+    } as never)
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-install-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="collection-install-warnings"]').text()).toContain(warning)
+  })
+
+  it('does not render the warning region when warnings are empty', async () => {
+    mockPublishedCollection([])
+    postMock.mockResolvedValue({
+      ...makeInstall(),
+      resolved_manifest: { warnings: [] },
+    })
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-install-warnings"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['resolved_manifest is absent', undefined],
+    ['resolved_manifest has no warnings key', {}],
+    ['warnings is not an array', { warnings: 'credential(s) stripped' }],
+    ['warnings holds no usable strings', { warnings: [42, null, '   '] }],
+  ])('renders nothing when the install payload is malformed: %s', async (_label, resolved_manifest) => {
+    mockPublishedCollection([{ ...makeInstall(), resolved_manifest }])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-install-warnings"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="collection-install"]').exists()).toBe(true)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('escapes warning markup instead of rendering it as HTML', async () => {
+    const warning = '<img src=x onerror="alert(1)"> credential node.env.API_KEY was not exported.'
+    mockPublishedCollection([
+      { ...makeInstall(), resolved_manifest: { warnings: [warning] } },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const region = wrapper.find('[data-testid="collection-install-warnings"]')
+    expect(region.find('img').exists()).toBe(false)
+    expect(region.text()).toContain(warning)
+  })
+
+  it('shows the newest install record warnings when the list carries more than one', async () => {
+    const older = '1 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.OLD_KEY.'
+    const newer = '1 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.NEW_KEY.'
+    mockPublishedCollection([
+      { ...makeInstall(), created_at: '2026-09-14T00:00:00Z', resolved_manifest: { warnings: [newer] } },
+      { ...makeInstall(), created_at: '2026-09-13T00:00:00Z', resolved_manifest: { warnings: [older] } },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const region = wrapper.find('[data-testid="collection-install-warnings"]')
+    expect(region.text()).toContain(newer)
+    expect(region.text()).not.toContain(older)
   })
 
   it('disables the Install button while the request is in flight', async () => {
