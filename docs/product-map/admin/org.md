@@ -5,9 +5,11 @@ adr: []
 code:
   - backend/src/modulo/api/routes/org_settings.py
   - backend/src/modulo/api/routes/admin_orgs.py
+  - backend/src/modulo/api/routes/admin_feature_flags.py
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
+  - backend/tests/unit/api/test_admin_feature_flags.py
 bdd:
   - backend/tests/bdd/features/ui/org_settings.feature
   - backend/tests/bdd/features/triggers/pause.feature
@@ -35,6 +37,14 @@ kill-switch, authorization enforcement).
 - [x] Org-wide trigger pause is admin-only with audit logging; toggling to the
       current state is an idempotent no-op
       (`backend/tests/bdd/features/triggers/pause.feature`)
+- [x] Org feature-flag overrides are governance-audited: every set/clear/toggle
+      of an org `feature_overrides` entry appends a tamper-evident audit event
+      to the org chain (`feature_flag_override_set` / `feature_flag_override_cleared`,
+      `resource_type=org`, payload `{flag_name, enabled}`) through
+      `append_audit_event_isolated`, fail-open so a broken append never rolls back
+      the already-committed override
+      (`backend/src/modulo/api/routes/admin_feature_flags.py`,
+      `backend/tests/unit/api/test_admin_feature_flags.py`)
 - [x] Frontend renders org settings at `/admin/org` with org delete confirmation
       and product-analytics toggle (`frontend/src/manifest.yaml` testids)
 
@@ -44,6 +54,17 @@ kill-switch, authorization enforcement).
   yet built for the org-settings route).
 
 ## QA History
+- 2026-09-25: **Improve Architecture product-map walk** —
+  closed the feat-org "governance and audit partially wired" gap: the admin
+  feature-flag endpoints (`PUT /{flag}` toggle, `PUT`/`DELETE /{flag}/org-override`)
+  now emit `feature_flag_override_set` / `feature_flag_override_cleared` events on
+  the org's tamper-evident audit chain via `append_audit_event_isolated` (fail-open;
+  a broken append never rolls back the committed override). Manifest `feat-org`
+  status moved partial → covered; event payloads assert
+  `{flag_name, enabled}` with `resource_type=org`. Unit tests
+  `TestOrgFlagOverrideAudit` in `test_admin_feature_flags.py` pin the events and the
+  fail-open contract.
+
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/feature-flags`, `/admin/org`

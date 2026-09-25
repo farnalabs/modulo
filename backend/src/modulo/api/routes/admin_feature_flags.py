@@ -8,6 +8,7 @@ org overrides overlay on top of (both GET endpoints apply the overlay).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -23,11 +24,16 @@ from starlette.responses import Response
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
 from modulo.core.license import get_license
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
+
+_AUDIT_EVENT_FLAG_OVERRIDE_SET = "feature_flag_override_set"
+_AUDIT_EVENT_FLAG_OVERRIDE_CLEARED = "feature_flag_override_cleared"
+_AUDIT_LOG_KEY = "feature_flags.audit_append_failed"
 
 _CODE_FEATURE_FLAGS_LIST_FAILED = "feature_flags.list_failed"
 _MSG_FEATURE_FLAGS_NOT_AVAILABLE = "Feature flags are not available. Run database migrations to enable this feature."
@@ -200,6 +206,61 @@ async def _apply_org_flag_override(
     await _write_org_override(session, current_user.organisation_id, flag_name, enabled)
     await _invalidate_cache(settings, current_user.organisation_id)
     return flag
+
+
+async def _emit_org_flag_override_audit(
+    session: AsyncSession,
+    current_user: AuthenticatedPrincipal,
+    *,
+    flag_name: str,
+    enabled: bool | None,
+) -> None:
+    """Record an org feature-flag override change on the tamper-evident audit chain.
+
+    Org-level feature-flag governance (which flag the org overrode, in which
+    direction, by whom, and when) must be auditable — the kill-switch pause and
+    org-user lifecycle precedents both write audit events, and org overrides
+    change what the whole org can run, so a silent ``feature_overrides`` write
+    would make governance unattributable. ``enabled=None`` means the override
+    was cleared; ``True``/``False`` means it was set to that value.
+
+    Fail-open by design (the ``append_audit_event_isolated`` contract): the
+    override has already committed and must never roll back because the audit
+    write failed — a broken append is logged under ``_AUDIT_LOG_KEY`` and the
+    change stands. No-op when the principal carries no organisation (that path
+    is 403'd upstream, but the helper must never be the thing that raises).
+    """
+    if current_user.organisation_id is None:
+        return
+    principal = TenantPrincipal(
+        username=current_user.username,
+        organisation_id=current_user.organisation_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role or "admin",
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
+    )
+    payload: dict[str, Any] = {"flag_name": flag_name}
+    if enabled is not None:
+        payload["enabled"] = bool(enabled)
+        event_type = _AUDIT_EVENT_FLAG_OVERRIDE_SET
+    else:
+        event_type = _AUDIT_EVENT_FLAG_OVERRIDE_CLEARED
+    try:
+        await append_audit_event_isolated(
+            session,
+            principal,
+            resource_type="org",
+            resource_id=current_user.organisation_id,
+            event_type=event_type,
+            payload=payload,
+            log_key=_AUDIT_LOG_KEY,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(_AUDIT_LOG_KEY, exc_info=True)
 
 
 @router.get("", response_model=None)
@@ -417,6 +478,12 @@ async def toggle_feature_flag(
     """
     try:
         flag = await _apply_org_flag_override(settings, session, current_user, flag_name, req.enabled)
+        await _emit_org_flag_override_audit(
+            session,
+            current_user,
+            flag_name=flag_name,
+            enabled=req.enabled,
+        )
         return {
             "name": flag.name,
             "description": flag.description,
@@ -529,6 +596,12 @@ async def set_org_flag_override(
 ) -> Response | dict[str, Any]:
     try:
         await _apply_org_flag_override(settings, session, current_user, flag_name, req.enabled)
+        await _emit_org_flag_override_audit(
+            session,
+            current_user,
+            flag_name=flag_name,
+            enabled=req.enabled,
+        )
         return {"override": req.enabled}
     except HTTPException:
         raise
@@ -592,6 +665,12 @@ async def clear_org_flag_override(
             org.settings_json = settings_dict
             session.add(org)
         await _invalidate_cache(settings, current_user.organisation_id)
+        await _emit_org_flag_override_audit(
+            session,
+            current_user,
+            flag_name=flag_name,
+            enabled=None,
+        )
         return {"override": None}
     except HTTPException:
         raise

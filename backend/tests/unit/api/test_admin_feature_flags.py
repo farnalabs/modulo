@@ -809,6 +809,165 @@ class TestOrgOverrideOrgIdGuard:
 
 
 # ---------------------------------------------------------------------------
+# Feature-flag override governance audit (feat-org)
+# ---------------------------------------------------------------------------
+# Org feature-flag overrides change what the whole org can run, so every
+# set / clear / toggle must land on the org's tamper-evident audit chain
+# (feature_flag_override_set / feature_flag_override_cleared). The audit is
+# fail-open: a broken append must never roll back the already-committed
+# override, and a raising audit helper must never fail the request.
+
+
+class TestOrgFlagOverrideAudit:
+    # Matches the ``client`` fixture's principal.organisation_id (a string).
+    _ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+    def _assert_set_audit(self, mock: AsyncMock, *, flag_name: str, enabled: bool) -> None:
+        mock.assert_awaited_once()
+        call = mock.await_args
+        kwargs = call.kwargs
+        assert kwargs["event_type"] == "feature_flag_override_set"
+        assert kwargs["resource_type"] == "org"
+        assert kwargs["resource_id"] == self._ORG_ID
+        assert kwargs["payload"] == {"flag_name": flag_name, "enabled": enabled}
+        assert kwargs["log_key"] == "feature_flags.audit_append_failed"
+        assert call.args[1].organisation_id == self._ORG_ID
+        assert call.args[1].is_system_admin is True
+
+    def test_toggle_emits_override_set_audit(self, client: TestClient) -> None:
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        audit = AsyncMock()
+        with (
+            patch("modulo.api.routes.admin_feature_flags.append_audit_event_isolated", new=audit),
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["overridden"] is True
+        self._assert_set_audit(audit, flag_name="webhook_trigger", enabled=True)
+
+    def test_toggle_off_emits_override_set_audit(self, client: TestClient) -> None:
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        audit = AsyncMock()
+        with (
+            patch("modulo.api.routes.admin_feature_flags.append_audit_event_isolated", new=audit),
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/eval_system", json={"enabled": False})
+        assert resp.status_code == 200
+        self._assert_set_audit(audit, flag_name="eval_system", enabled=False)
+
+    def test_set_org_override_emits_override_set_audit(self, client: TestClient) -> None:
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        audit = AsyncMock()
+        with (
+            patch("modulo.api.routes.admin_feature_flags.append_audit_event_isolated", new=audit),
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
+        assert resp.status_code == 200
+        self._assert_set_audit(audit, flag_name="webhook_trigger", enabled=True)
+
+    def test_clear_org_override_emits_override_cleared_audit(self, client: TestClient) -> None:
+        org = _org_with_overrides(webhook_trigger=True)
+        redis_mock = AsyncMock()
+        audit = AsyncMock()
+        with (
+            patch("modulo.api.routes.admin_feature_flags.append_audit_event_isolated", new=audit),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
+        assert resp.status_code == 200
+        audit.assert_awaited_once()
+        call = audit.await_args
+        kwargs = call.kwargs
+        assert kwargs["event_type"] == "feature_flag_override_cleared"
+        assert kwargs["resource_type"] == "org"
+        assert kwargs["resource_id"] == self._ORG_ID
+        assert kwargs["payload"] == {"flag_name": "webhook_trigger"}
+        assert kwargs["log_key"] == "feature_flags.audit_append_failed"
+
+    def test_audit_failure_is_fail_open(self, client: TestClient) -> None:
+        """A raising audit helper must not fail the already-committed toggle."""
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                side_effect=RuntimeError("audit backend down"),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["overridden"] is True
+
+
+# ---------------------------------------------------------------------------
 # Middleware-level error handling
 # ---------------------------------------------------------------------------
 
