@@ -1163,8 +1163,8 @@ class TestCompositeTemplateMasking:
         """A missing / non-dict graph masks to an empty graph, never echoes it."""
         from modulo.api.routes.composite_templates import _mask_sub_pipeline_graph
 
-        assert _mask_sub_pipeline_graph(None) == {}
-        assert _mask_sub_pipeline_graph("not-a-graph") == {}  # type: ignore[arg-type]
+        assert not _mask_sub_pipeline_graph(None)
+        assert not _mask_sub_pipeline_graph("not-a-graph")  # type: ignore[arg-type]
 
     def test_patch_graph_missing_template_returns_404(self, client: TestClient) -> None:
         """A graph-bearing PATCH on a vanished template 404s before the write.

@@ -1593,7 +1593,7 @@ def test_diff_snapshots_non_dict_and_non_list_payloads_pass_through(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["snapshot_a"] == {"id": str(_SNAP_ID), "graph": {"nodes": [], "edges": []}}
-    assert body["nodes_added"] == []
+    assert not body["nodes_added"]
 
 
 # ---------------------------------------------------------------------------
