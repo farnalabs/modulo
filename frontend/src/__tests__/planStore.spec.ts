@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePlanStore } from '../stores/planStore'
 import { FLAG_CACHE_KEY, parseFlagCache, serializeFlagCache } from '../config/flagCache'
@@ -542,6 +542,12 @@ describe('usePlanStore', () => {
   })
 
   describe('persisted flag cache (FAR-1237 — synchronous first-paint source of truth)', () => {
+    afterEach(() => {
+      // Some cases below remove/replace the localStorage global; restore it so
+      // the outer beforeEach's localStorage.clear() keeps working.
+      vi.unstubAllGlobals()
+    })
+
     it('persists the resolved flag map to localStorage after a successful fetch', async () => {
       const store = usePlanStore()
       expect(store.flagsSource).toBe('none')
@@ -607,6 +613,78 @@ describe('usePlanStore', () => {
       expect(usePlanStore().flagsSource).toBe('none')
 
       expect(usePlanStore().features).toEqual({})
+    })
+
+    it('ignores a cache whose JSON is not an object (falsy, primitive, array)', () => {
+      // Each value exercises a distinct early-return arm of parseFlagCache's
+      // shape guard: falsy JSON, a truthy primitive, and an array.
+      for (const raw of ['null', '0', 'false', '5', '"off"', '[]']) {
+        expect(parseFlagCache(raw)).toBeNull()
+      }
+
+      localStorage.setItem(FLAG_CACHE_KEY, '"off"')
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+    })
+
+    it('ignores a cache whose flags field is missing, primitive, or an array', () => {
+      // Distinct early-return arms of the flags shape guard.
+      expect(parseFlagCache(JSON.stringify({ v: 1 }))).toBeNull()
+      expect(parseFlagCache(JSON.stringify({ v: 1, flags: 5 }))).toBeNull()
+      expect(parseFlagCache(JSON.stringify({ v: 1, flags: [] }))).toBeNull()
+    })
+
+    it('treats an unavailable localStorage as uncached', async () => {
+      vi.stubGlobal('localStorage', undefined)
+      setActivePinia(createPinia())
+
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('none')
+      expect(store.features).toEqual({})
+
+      // The fetch still resolves flags in memory; persistence is skipped.
+      await store.fetchPlan()
+      expect(store.flagsSource).toBe('server')
+      expect(store.featureEnabled('parallel_branches')).toBe(true)
+    })
+
+    it('treats a throwing localStorage read as uncached', () => {
+      const getItem = vi
+        .spyOn(Storage.prototype, 'getItem')
+        .mockImplementation(() => {
+          throw new Error('storage blocked')
+        })
+      try {
+        setActivePinia(createPinia())
+        const store = usePlanStore()
+        expect(store.flagsSource).toBe('none')
+        expect(store.features).toEqual({})
+      } finally {
+        getItem.mockRestore()
+      }
+    })
+
+    it('swallows a persist failure after a successful fetch', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const setItem = vi
+        .spyOn(Storage.prototype, 'setItem')
+        .mockImplementation(() => {
+          throw new Error('quota exceeded')
+        })
+      try {
+        const store = usePlanStore()
+        await store.fetchPlan()
+
+        expect(store.flagsSource).toBe('server')
+        expect(store.featureEnabled('parallel_branches')).toBe(true)
+        expect(warn).toHaveBeenCalledWith(
+          '[plan] Failed to persist flag cache',
+          expect.anything(),
+        )
+      } finally {
+        setItem.mockRestore()
+        warn.mockRestore()
+      }
     })
   })
 })
