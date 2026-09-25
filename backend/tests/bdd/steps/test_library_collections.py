@@ -426,9 +426,7 @@ def _collection_pins_duplicated(ctx: dict[str, Any]) -> None:
 @given("the collection has more than 25 pins")
 def _collection_pins_over_cap(ctx: dict[str, Any]) -> None:
     prim = _authoring_route_patch_ctx(ctx)
-    prim.manifest_pins = [
-        {"slug": f"schema-{i}", "version": "1.0"} for i in range(MAX_COLLECTION_PINS + 1)
-    ]
+    prim.manifest_pins = [{"slug": f"schema-{i}", "version": "1.0"} for i in range(MAX_COLLECTION_PINS + 1)]
 
 
 # --- Authoring When steps ---------------------------------------------------
@@ -483,9 +481,7 @@ def _operator_updates_collection(
 
 
 @when("the operator publishes the collection")
-def _operator_publishes_collection(
-    ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def _operator_publishes_collection(ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any]) -> None:
     client = _active_client(request)
     prim = ctx.get("collection") or _mk_collection_primitive(ctx, status="draft")
     lookup = ctx.get("pin_lookup")
