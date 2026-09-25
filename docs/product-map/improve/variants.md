@@ -65,6 +65,12 @@ than left as false coverage promises.
 
 ## QA History
 
+- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+  manifest `feat-variants` registry entry with this tracker: per-node eval-score
+  comparison (the `[x]` "eval scores per node" behaviour above) is now ticked, and
+  the unchecked item is narrowed to the genuinely missing per-token breakdown only.
+  The tracker's Known Gaps wording ("per-node eval-score / per-token breakdown drafts")
+  is clarified by the Behaviours line that already ships per-node eval scores.
 - 2026-09-23: **product-map review pass** — removed the stale
   `pipelines/run_variants.feature` "Coverage gaps are reported for a variant
   group" scenario (`@awaiting-implementation`, deselected) and its dead step

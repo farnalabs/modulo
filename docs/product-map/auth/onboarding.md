@@ -54,6 +54,10 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
 
 ## QA History
 
+- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+  manifest `feat-onboarding` registry entry with this tracker: the shipped skip/dismiss
+  logic (`POST /actions/{id}/complete|skip`, `POST /dismiss`) is now ticked, leaving
+  only the genuinely unshipped onboarding telemetry preferences unchecked (partial).
 - 2026-09-16: **product-map review pass** — closed the "BDD drift"
   gap: `sdlc_onboarding.feature` and its step module described a fictional 5-step
   SDLC wizard (`connect_tools` → `run_inference` → `review_schemas` → …) with a

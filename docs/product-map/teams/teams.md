@@ -82,6 +82,13 @@ org profile, and is the product-map home for user roles.
   (they belong to the auth/JWT feature edges).
 
 ## QA History
+- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+  manifest `feat-teams` registry entry with this tracker (both now
+  `status: covered`): the "team-level resource scoping partially wired" unchecked
+  item from #972 is closed against the shipped cross-team isolation /
+  team-pipeline-visibility / view-as-team surfaces verified below
+  (`core/team_visibility.py`, `auth/team_rbac.py`, the three BDD feature files).
+  Org-membership/entity lifecycle stays owned by `feat-teams-org-entity`.
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/users`, `/settings/teams`
