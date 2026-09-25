@@ -53,6 +53,24 @@
       >
         {{ installError }}
       </div>
+      <div
+        v-if="installWarnings.length > 0"
+        class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning"
+        aria-live="polite"
+        data-testid="collection-install-warnings"
+      >
+        <h3 class="text-sm font-medium">
+          {{ $t('views.CollectionDetail.install_warnings_title') }}
+        </h3>
+        <p class="mt-1 text-sm">
+          {{ $t('views.CollectionDetail.install_warnings_action') }}
+        </p>
+        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm">
+          <li v-for="(warning, index) in installWarnings" :key="`${index}-${warning}`">
+            {{ warning }}
+          </li>
+        </ul>
+      </div>
       <div v-if="collection.status === 'draft'" class="flex justify-end">
         <Button :disabled="publishing" data-testid="collection-publish" @click="publish">
           {{
@@ -191,6 +209,10 @@ interface ConnectorChecklistEntry {
   status: string
 }
 
+interface ResolvedManifest extends Record<string, unknown> {
+  warnings?: unknown
+}
+
 interface CollectionInstall {
   install_id: string
   collection_id: string
@@ -199,7 +221,7 @@ interface CollectionInstall {
   status: string
   community_sourced: boolean
   agents_granted: boolean
-  resolved_manifest: Record<string, unknown> | null
+  resolved_manifest: ResolvedManifest | null
   connector_checklist: ConnectorChecklistEntry[] | null
   installed_entities: Record<string, unknown> | null
   runnable: boolean
@@ -227,6 +249,13 @@ const publishError = ref<string | null>(null)
 const granting = ref<string | null>(null)
 const installing = ref(false)
 const installError = ref<string | null>(null)
+const installWarnings = ref<string[]>([])
+
+function resolvedManifestWarnings(manifest: ResolvedManifest | null | undefined): string[] {
+  const warnings = manifest?.warnings
+  if (!Array.isArray(warnings)) return []
+  return warnings.filter((warning): warning is string => typeof warning === 'string' && warning.trim().length > 0)
+}
 
 async function load() {
   loading.value = true
@@ -264,6 +293,8 @@ async function loadInstalls() {
   if (!installErr && installData) {
     const listResp = installData as unknown as { items: CollectionInstall[] }
     installs.value = listResp.items || []
+    const listed = resolvedManifestWarnings(installs.value[0]?.resolved_manifest)
+    if (listed.length > 0) installWarnings.value = listed
   }
 }
 
@@ -281,6 +312,9 @@ async function install() {
       installError.value = err ? formatApiError(err) : t('views.CollectionDetail.install_failed')
       return
     }
+    installWarnings.value = resolvedManifestWarnings(
+      (data as unknown as CollectionInstall).resolved_manifest,
+    )
     // Refetch so the installs section renders the new install record —
     // provenance, connector checklist, runnability, and for community-sourced
     // collections the default-deny state with its Grant Access control.
