@@ -14,11 +14,13 @@ existing TestInstallCollectionService tests.
 """
 
 import uuid
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core import workflow_import_export as wix
 from modulo.core.library_service import install as install_mod
 from modulo.core.library_service._seed_data import MODULO_ORG_ID
 from modulo.core.library_service.install import (
@@ -505,6 +507,55 @@ def _make_workflow_pin(pid: uuid.UUID) -> LibraryPrimitive:
     return _prim(pid, primitive_type="workflow", name="Wf", slug="wf", content_json=content)
 
 
+# What ``strip_graph_node_credentials`` records when a v1 export removes node
+# credentials (FAR-1181) — the shape ``_warn_redacted_credentials`` renders.
+_REDACTED_RECORD: list[dict[str, Any]] = [
+    {
+        "node_id": "4c7e9a10-8f3a-4d61-9b2c-4a5e6f809012",
+        "field": "env_vars",
+        "path": "GITHUB_TOKEN",
+        "reason": "key-classified credential",
+    },
+    {
+        "node_id": "4c7e9a10-8f3a-4d61-9b2c-4a5e6f809012",
+        "field": "parameter_overrides",
+        "path": "nested.password",
+        "reason": "key-classified credential",
+    },
+]
+
+
+def _workflow_pin_with_record(redacted: list[dict[str, Any]] | None) -> LibraryPrimitive:
+    """A collection workflow pin whose embedded bundle is a v1 export bundle.
+
+    ``redacted`` is the export's credential-redaction record; ``None`` models a
+    bundle with nothing stripped (or one exported before FAR-1181). The bundle
+    carries no agents / schemas / edges so the collection-install test below can
+    drive the REAL ``materialize_import`` without any DB write beyond the
+    pipeline itself.
+    """
+    bundle: dict[str, Any] = {
+        "pipeline": {
+            "name": "Shipped",
+            "description": "shipped workflow",
+            "graph_nodes_json": [{"id": "w0", "node_type": "agent", "position": {"x": 0, "y": 0}}],
+        },
+        "agents": [],
+        "schemas": [],
+        "edges": [],
+    }
+    if redacted is not None:
+        bundle["redacted_credentials"] = redacted
+    return _prim(
+        uuid.uuid4(),
+        primitive_type="workflow",
+        name="Shipped WF",
+        slug="shipped-wf",
+        version="1.0",
+        content_json={"bundle": bundle},
+    )
+
+
 class TestBuildBundleFromPins:
     def test_schema_pin(self) -> None:
         pid = uuid.uuid4()
@@ -556,6 +607,24 @@ class TestBuildBundleFromPins:
         pin = _prim(uuid.uuid4(), primitive_type="composite", name="X", slug="x")
         with pytest.raises(CollectionInstallError, match="unsupported primitive"):
             _build_bundle_from_pins([pin])
+
+    def test_workflow_pin_propagates_redaction_record(self) -> None:
+        """FAR-1181: the embedded workflow bundle's redaction record survives.
+
+        The v1 export STRIPS node credentials and records what it removed. A
+        workflow pin that was exported → imported → shipped into a collection
+        carries that record inside its embedded bundle; the synthetic bundle
+        must carry it too, or ``materialize_import`` has nothing to warn from.
+        """
+        bundle = _build_bundle_from_pins([_workflow_pin_with_record(list(_REDACTED_RECORD))])
+        paths = [entry["path"] for entry in bundle["redacted_credentials"]]
+        assert paths == ["GITHUB_TOKEN", "nested.password"]
+
+    def test_workflow_pin_without_record_carries_none(self) -> None:
+        """A bundle with nothing stripped must not fabricate a record."""
+        for redacted in (None, []):
+            bundle = _build_bundle_from_pins([_workflow_pin_with_record(redacted)])
+            assert not bundle["redacted_credentials"]
 
 
 class TestAppendAgentPin:
@@ -720,7 +789,7 @@ class TestInstallCollectionPaths:
                 new=AsyncMock(return_value={"schemas": {}, "agents": {}, "pipeline_id": str(uuid.uuid4())}),
             ),
             patch.object(install_mod, "_stamp_install_id", new=AsyncMock(return_value=[])),
-            patch.object(install_mod, "_record_entities", new=AsyncMock()),
+            patch.object(install_mod, "_record_entities", new=MagicMock()),
         ):
             install = await install_collection(session, _ORG_ID, _USER_ID, uuid.uuid4())
 
@@ -731,3 +800,60 @@ class TestInstallCollectionPaths:
         assert isinstance(manifest, dict)
         assert not manifest["warnings"]
         assert "schemas" in manifest
+
+
+# ---------------------------------------------------------------------------
+# FAR-1181: a collection install must re-surface the export's credential
+# redaction record as a warning (the stripped nodes arrive with no value to
+# restore, so the warning naming them is the ONLY actionable signal).
+# ---------------------------------------------------------------------------
+
+
+class _AsyncNoopContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+async def _install_workflow_collection(pin: LibraryPrimitive) -> Any:
+    """Run ``install_collection`` end-to-end with the REAL ``materialize_import``.
+
+    Only the DB edges are faked: the pin resolution, the synthetic bundle build,
+    and the whole import engine (including the warning mechanism) run for real,
+    so the assertion below observes what an operator would actually get back.
+    """
+    coll = _collection(manifest_pins=[{"slug": pin.slug, "version": pin.version}])
+    session = _mock_session(collection=coll, existing_install=None)
+    session.begin_nested = MagicMock(return_value=_AsyncNoopContext())
+
+    with (
+        patch.object(install_mod, "_resolve_pin", new=AsyncMock(return_value=pin)),
+        patch.object(install_mod, "set_rls_org", new=AsyncMock()),
+        patch.object(install_mod, "_stamp_install_id", new=AsyncMock(return_value=[])),
+        patch.object(install_mod, "_record_entities", new=MagicMock()),
+        # The import engine's only DB reads/writes: names lookups + creates.
+        patch.object(wix, "get_existing_agent_names", new=AsyncMock(return_value=set())),
+        patch.object(wix, "get_existing_pipeline_names", new=AsyncMock(return_value=set())),
+        patch.object(wix, "create_pipeline", new=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))),
+        patch.object(wix, "create_library_primitive", new=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))),
+    ):
+        return await install_collection(session, _ORG_ID, _USER_ID, uuid.uuid4())
+
+
+class TestInstallCollectionRedactionWarning:
+    async def test_install_warns_naming_stripped_keys(self) -> None:
+        """A stripped bundle shipped in a collection still warns on install."""
+        install = await _install_workflow_collection(_workflow_pin_with_record(list(_REDACTED_RECORD)))
+        warnings_text = " | ".join(install.resolved_manifest["warnings"])
+        assert "GITHUB_TOKEN" in warnings_text
+        assert "nested.password" in warnings_text
+        assert "re-provision" in warnings_text
+
+    @pytest.mark.parametrize("redacted", [None, []], ids=["absent-record", "empty-record"])
+    async def test_install_without_stripped_credentials_is_silent(self, redacted: list[dict[str, Any]] | None) -> None:
+        """Nothing stripped → no warning (the record, not the install, drives it)."""
+        install = await _install_workflow_collection(_workflow_pin_with_record(redacted))
+        warnings_text = " | ".join(install.resolved_manifest["warnings"])
+        assert "re-provision" not in warnings_text

@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from modulo.cli.apply.executor import ApplyHttpError, _failure_message, _find
-from modulo.cli.apply.models import ApplyEntityResolutionError, PipelineEntity
+from modulo.cli.apply.models import ApplyEntityResolutionError, PipelineEntity, strip_secret_shaped_config
 from modulo.cli.apply.plan import KIND_PIPELINE, canonical_hash
 
 if TYPE_CHECKING:
@@ -302,10 +302,15 @@ def apply_pipelines(
                     current = current_pipelines[entity.name]
                     pipeline_id = str(current["id"])
                     current_graph = current.get("graph") or _EMPTY_GRAPH
+                    # Strip secret-shaped entries symmetrically before hashing
+                    # (the server masks stored credentials on read): only the
+                    # hash comparison strips — the graph_json PATCH below still
+                    # carries the declared values.
                     graph_differs = (
                         entity.graph is not None
                         and graph is not None
-                        and canonical_hash(graph) != canonical_hash(current_graph)
+                        and canonical_hash(strip_secret_shaped_config(graph))
+                        != canonical_hash(strip_secret_shaped_config(current_graph))
                     )
                 pipeline_ids[entity.name] = pipeline_id
                 patch_payload: dict[str, Any] = {

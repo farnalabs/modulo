@@ -32,6 +32,10 @@ underscores before matching. Any key whose lowercased, normalised name
 - `passwd`
 - `key`
 - `credential`
+- `database_url`
+- `encryption`
+- `signing`
+- `private`
 
 This substring-based approach means `auth_token`, `bearer_token`,
 `webhook_secret`, and `session_key` are all automatically caught without
@@ -56,11 +60,29 @@ Masking is applied at these points:
 | `GET /api/v1/settings/observability` | `_mask_headers()` on OTLP headers | Known header keys |
 | `GET /api/v1/runs/{run_id}/nodes/{node_id}/output` | `_mask_output_value()` recursive traversal | Nested sensitive keys, depth-limited to 20 |
 | `GET /api/v1/runs/{run_id}/io` | `_mask_output_value()` on `outputs_json` | Nested sensitive keys |
-| `GET /api/v1/runs/{run_id}/export-fixture` | `_mask_output_value()` on `outputs_json` and `input_payload` | Nested sensitive keys |
+| `GET /api/v1/runs/{run_id}/export-fixture` | `_mask_output_value()` on `outputs_json` and `input_payload`; `mask_pipeline_graph_node()` on each node of `snapshot_graph_json` (via the shared snapshot-graph helper) | Nested sensitive keys; snapshot graph node credentials masked as on the graph read |
 | `POST /api/v1/runs/diff` | `_mask_output_value()` on both sides | Nested sensitive keys |
 | `POST /api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal` | `_mask_prompt_text()` / `_mask_message_list()` | Regex-based credential masking in prompt text |
 | `get_run_output` MCP tool | `_mask_output_value()` from `runs.py` | Nested sensitive keys, returns `masked_fields` list |
 | Admin SSO routes | `SensitiveValue` Pydantic type | Auto-masks on serialisation |
+| `GET /api/v1/pipelines/{id}/graph` (and convert/revert responses) | `mask_pipeline_graph_node()` on every node | Sensitive env-var keys masked whole; remaining env values + context file contents redacted by the canonical secret-VALUE patterns; `composite_parameter_values` / `parameter_overrides` deep-masked |
+| `GET /api/v1/pipelines/{id}/snapshots/{snapshot_id}` | `mask_pipeline_graph_node()` on each node of `graph_json` | Same node masking as the graph read |
+| Snapshot diff endpoint | `mask_pipeline_graph_node()` on `nodes_added` / `nodes_removed` and the diffed graphs | Same node masking |
+| `GET /api/v1/composite-templates/...` (list / get / create / patch / restore / editor GET+PUT) | `mask_pipeline_graph_node()` on every node of `sub_pipeline_graph_json` (via `_mask_sub_pipeline_graph` / `_mask_template_response`) | Same node masking as the pipeline graph read; the editor PUT and the PATCH endpoint resolve mask echoes against the stored template nodes via `merge_masked_graph_nodes()` |
+| `POST /api/v1/pipelines/{id}/save-as-composite` | `mask_pipeline_graph_node()` on every copied node | Secret env values are masked BEFORE the template is persisted, so the org-readable template storage never receives them in the clear |
+| MCP `get_pipeline_graph` tool | `mask_pipeline_graph_node()` on every node of the response | Same node masking as the REST graph read |
+| MCP `update_pipeline_graph` tool | `merge_masked_graph_nodes()` before the write; `mask_pipeline_graph_node()` on the response | Same read/write neutrality as the REST graph endpoint |
+| MCP `modulo://pipelines/{id}/snapshots/{snapshot_id}` resource | `mask_pipeline_graph_node()` on each node of `graph_json` before rendering | Same node masking as the REST snapshot detail |
+| `POST /api/v1/library/export/{pipeline_id}?format=v1` | `strip_graph_node_credentials()` on `graph_nodes_json` — **STRIP**, not mask | Credential entries are removed and recorded in `redacted_credentials`, never masked (see §6) |
+
+Graph READ masking must not corrupt data on WRITE: the graph endpoints are
+full-replace, so a PATCH round-tripping a masked GET would otherwise persist
+the mask literals over the stored secrets. `merge_masked_graph_nodes()`
+resolves mask echoes against the stored graph before a graph write commits —
+an echoed value is restored from storage, an echo with no stored counterpart
+is dropped (fail closed), and keys the caller removed stay removed. The same
+invariant holds on the MCP tool surface and on the composite-template editor /
+PATCH surfaces.
 
 ### 2. Log redaction
 
@@ -104,6 +126,40 @@ The `get_run_output` MCP tool returns agent outputs with sensitive fields
 masked. It also returns a `masked_fields` list so the calling agent knows
 which fields were redacted. This allows agents to proceed with their workflow
 while being aware of redacted data.
+
+### 6. Library export bundle (stripped, never masked)
+
+`POST /api/v1/library/export/{pipeline_id}?format=v1` builds the **v1
+portability bundle** — a ZIP carrying the pipeline's graph nodes, agents,
+schemas and model backends so a pipeline can be reconstructed on a *fresh*
+Modulo instance. Because it is cross-instance, it uses **strip** semantics:
+
+| Surface | Mechanism | Coverage |
+|---|---|---|
+| `POST /api/v1/library/export/{pipeline_id}?format=v1` (`export_pipeline_bundle`) | `strip_graph_node_credentials()` on `pipeline.graph_nodes_json` | `env_vars` entries removed when the KEY is classified sensitive (`is_sensitive_env_key`) or the VALUE matches a secret pattern; `context_files` entries removed when the file CONTENT matches a secret pattern; `composite_parameter_values` / `parameter_overrides` entries removed recursively through nested dicts and lists (key tier + value tier at every depth) |
+
+**Credentials are never exported; re-provision them on import.** Each removal
+is recorded in the bundle's top-level `redacted_credentials` list as
+`{node_id, field, path, reason}`. Importing that bundle emits a warning naming
+every removed key/path — *"N credential(s) were not exported with this bundle;
+re-provision them on this instance: …"* — and the import otherwise behaves as
+before. Non-secret node content (app URLs, regions, retry counts, positions) is
+exported unchanged.
+
+This surface deliberately does **not** use the `••••••` mask. On a
+same-instance read surface a mask placeholder means "unchanged — restore the
+stored value" (`merge_masked_graph_nodes` resolves it on write); in a bundle
+imported onto an instance that has no stored value, that meaning would silently
+drop the credential with no warning. Removing the entry — and telling the
+operator exactly what is missing — is the only safe semantics for a
+cross-instance artefact.
+
+If stripping itself fails, the whole credential-bearing field is dropped
+(fail-closed, mirroring `mask_pipeline_graph_node`) and recorded as a
+`stripping_failed` redaction, so a detector fault can never leak a raw
+credential into an exported bundle.
+
+`?format=v2` (ADR 015) carries no graph-node payload, so it needs no stripping.
 
 ---
 
@@ -163,11 +219,15 @@ This auto-masks the field on serialisation with zero additional code.
 
 ## How to Configure Which Fields Are Considered Sensitive
 
-Sensitive key patterns are defined in two locations:
+Sensitive key patterns are defined in three places:
 
-### API response masking
+### API response masking and library export stripping
 
-File: `backend/src/modulo/api/middleware/sensitive_mask.py`
+File: `backend/src/modulo/core/secret_patterns.py` — re-exported by
+`backend/src/modulo/api/middleware/sensitive_mask.py`, which is where API-layer
+callers import it from. It lives in `core` so core export paths
+(`workflow_import_export`, §6) can share the exact same classifier without the
+API layer being imported from `core`.
 
 ```python
 _SENSITIVE_KEY_PATTERNS = frozenset(
@@ -179,13 +239,19 @@ _SENSITIVE_KEY_PATTERNS = frozenset(
         "passwd",
         "key",
         "credential",
+        "database_url",
+        "encryption",
+        "signing",
+        "private",
     }
 )
 ```
 
 To add a new pattern, edit this set and verify tests pass. The function
 `is_sensitive_key(key)` performs case-insensitive substring matching, so
-adding `"pwd"` would catch `db_pwd`, `ldap_pwd`, etc.
+adding `"pwd"` would catch `db_pwd`, `ldap_pwd`, etc. Env-var names matched
+wholesale by `is_sensitive_env_key(key)` (on top of the substring patterns)
+are `MODULO_USERS`, `DATABASE_URL` and `PYPI_TOKEN`.
 
 ### Log redaction
 
@@ -278,6 +344,7 @@ If sensitive data is discovered in an unmasked location:
 | Log redaction | ✅ Complete | `logging_config.py` |
 | Encryption at rest | ✅ Complete | `secrets_backend/` |
 | Reveal endpoint | ✅ Complete | `sensitive_mask.py` |
+| Library export bundle (v1) credential stripping | ✅ Complete | `core/workflow_import_export.py` (`strip_graph_node_credentials`, import warning) |
 | BDD test coverage | ✅ Complete | `dom_sensitive_data.feature` |
 | Unit test coverage | ✅ Complete | `test_sensitive_mask.py` |
 

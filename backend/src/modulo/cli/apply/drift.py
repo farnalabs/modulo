@@ -207,7 +207,12 @@ def build_drift_detail(
         if not view or "graph" not in view:
             continue
         current = (current_entities.get(KIND_PIPELINE) or {}).get(name) or {}
-        current_graph: dict[str, Any] = current.get("graph") or {"nodes": [], "edges": []}
+        # Parity with the plan hash: the desired graph arrives already stripped
+        # (PipelineEntity.managed_view), so strip the current side too — else a
+        # server-masked credential would show up as a spurious 'modified' node.
+        from modulo.cli.apply.models import strip_secret_shaped_config
+
+        current_graph: dict[str, Any] = strip_secret_shaped_config(current.get("graph") or {"nodes": [], "edges": []})
         breakdown = _diff_graph(view["graph"], current_graph)
         graph_changed = any(side for field in breakdown.values() for side in field.values())
         # FAR-220: name the git-sourced content fields that drifted (commit

@@ -276,3 +276,141 @@ class TestUpdatePipelineGraphHitlDescription:
         assert "error" not in result, result
         assert result["pipeline_id"] == str(pipeline_id)
         mock_replace_graph.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1181 — masking parity on the MCP read/write surfaces
+# ---------------------------------------------------------------------------
+
+_GCP_SECRET = "AIza" + "0123456789abcdef" * 3
+_MASK_SECRET_NODE = {
+    "id": "2c7e9a10-8f3a-4d61-9b2c-4a5e6f809010",
+    "node_type": "agent",
+    "agent_id": "11111111-1111-1111-1111-111111111111",
+    "position": {"x": 0, "y": 0},
+    "env_vars": {"GOOGLE_API_KEY": _GCP_SECRET, "APP_URL": "https://example.com"},
+}
+
+
+class TestMcpGraphMaskingParity:
+    """FAR-1181: the MCP get_pipeline_graph / update_pipeline_graph tools must
+    apply the SAME masking parity as the REST graph endpoints — a read never
+    surfaces a raw node credential, and a write round-tripping the masked read
+    never persists mask literals over the stored values."""
+
+    def setup_method(self) -> None:
+        _set_ctx(role="operator")
+
+    def teardown_method(self) -> None:
+        _clear_ctx()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None))
+    @patch("modulo.db.crud.pipeline.get_pipeline_graph")
+    async def test_get_pipeline_graph_masks_node_env(
+        self,
+        mock_get_graph: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import get_pipeline_graph_tool
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_get_graph.return_value = ([{**_MASK_SECRET_NODE}], [])
+
+        result = await get_pipeline_graph_tool(pipeline_id="2c7e9a10-8f3a-4d61-9b2c-4a5e6f809099")
+
+        assert "error" not in result, result
+        env = result["nodes"][0]["env_vars"]
+        assert env["GOOGLE_API_KEY"] == SENSITIVE_VALUE_MASK
+        # Plain values pass through untouched (no over-masking).
+        assert env["APP_URL"] == "https://example.com"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_update_resolves_masked_echo_and_masks_response(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_guardrail_rows: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import update_pipeline_graph
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        secret_node = {**_MASK_SECRET_NODE}
+        mock_get_pipeline.return_value = MagicMock(
+            id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**secret_node}]
+        )
+        mock_replace_graph.return_value = ([{**secret_node}], [])
+        mock_session.return_value.__aenter__.return_value = AsyncMock()
+
+        masked_node = {
+            **_MASK_SECRET_NODE,
+            "env_vars": {
+                "GOOGLE_API_KEY": SENSITIVE_VALUE_MASK,
+                "APP_URL": "https://example.com",
+            },
+        }
+        result = await update_pipeline_graph(
+            pipeline_id="2c7e9a10-8f3a-4d61-9b2c-4a5e6f809099",
+            nodes=[masked_node],
+            edges=[],
+        )
+
+        assert "error" not in result, result
+        written = mock_replace_graph.await_args.kwargs["nodes"]
+        # The mask echo was resolved against the stored graph BEFORE the write.
+        assert written[0]["env_vars"]["GOOGLE_API_KEY"] == _GCP_SECRET
+        # The tool response re-masked the node.
+        assert result["nodes"][0]["env_vars"]["GOOGLE_API_KEY"] == SENSITIVE_VALUE_MASK
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_update_drops_masked_echo_without_stored_counterpart(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_guardrail_rows: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import update_pipeline_graph
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        mock_get_pipeline.return_value = MagicMock(
+            id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**_MASK_SECRET_NODE}]
+        )
+        mock_replace_graph.return_value = ([{**_MASK_SECRET_NODE}], [])
+        mock_session.return_value.__aenter__.return_value = AsyncMock()
+
+        result = await update_pipeline_graph(
+            pipeline_id="2c7e9a10-8f3a-4d61-9b2c-4a5e6f809099",
+            nodes=[
+                {
+                    **_MASK_SECRET_NODE,
+                    "env_vars": {
+                        "RABBITMQ_URL": SENSITIVE_VALUE_MASK,  # no stored counterpart
+                    },
+                }
+            ],
+            edges=[],
+        )
+
+        assert "error" not in result, result
+        written = mock_replace_graph.await_args.kwargs["nodes"]
+        # The unverifiable mask echo is dropped, never persisted as a value.
+        assert "RABBITMQ_URL" not in written[0]["env_vars"]

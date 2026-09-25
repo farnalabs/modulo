@@ -41,6 +41,7 @@ from modulo.api.middleware.sensitive_mask import (
     is_sensitive_key,
     mask_sensitive_value,
 )
+from modulo.api.routes.pipelines import _masked_snapshot_graph
 from modulo.api.team_scope import resolve_trigger_run_team_scope
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -2022,6 +2023,10 @@ async def export_run_fixture(
     Returns the input payload, per-node outputs, snapshot graph, and
     a ``fixture_map`` that can be loaded directly into
     ``StubModelBackend(fixture_map=...)`` for regression testing.
+
+    All three surfaces are masked for secrets: ``input_payload`` /
+    ``outputs_json`` via :func:`_mask_output_value`, and the snapshot
+    graph via the shared pipeline-graph node masker (FAR-1181).
     """
     try:
         async with session.begin():
@@ -2061,7 +2066,12 @@ async def export_run_fixture(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
-    graph_json = snapshot.graph_json if snapshot else {}
+    # FAR-1181: snapshots store the graph with REAL stored values (mask echoes
+    # are resolved back to secrets on write), so the fixture export must mask
+    # node credentials exactly as the graph / snapshot-detail / MCP reads do —
+    # otherwise any caller with ``run.output`` can read them here. The shared
+    # helper also passes non-dict payloads through unchanged.
+    graph_json = _masked_snapshot_graph(snapshot.graph_json) if snapshot else {}
 
     # Normalize to the pure return before masking (FAR-126): node_return
     # resolves each node's pure return for new-shape rows (telemetry present)
