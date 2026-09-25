@@ -49,7 +49,7 @@ def _mask_sub_pipeline_graph(graph: dict[str, Any] | None) -> dict[str, Any]:
     logic.
     """
     if not isinstance(graph, dict):
-        return graph if isinstance(graph, dict) else {}
+        return {}
     masked = dict(graph)
     nodes = graph.get("nodes")
     if isinstance(nodes, list):
