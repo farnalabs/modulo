@@ -112,19 +112,10 @@ async function checkConfigured(): Promise<void> {
   }
 }
 
-// Resolve the plan (assistant flag + dev mode) only for failure runs, so a
-// healthy run page never pays for a feature-flag round trip.
-watch(
-  analyzableFailure,
-  (isFailure) => {
-    if (isFailure && !planStore.loaded && !planStore.isLoading) {
-      void planStore.fetchPlan().catch(() => {})
-    }
-  },
-  { immediate: true },
-)
-
-// Once the button is eligible to show, ask whether a backend model exists.
+// Resolve whether a backend model exists the moment the button becomes
+// eligible to show. The plan itself (assistant flag + dev mode) is NOT fetched
+// here — AppLayout already loads it for every authenticated route, so this
+// component only reads it.
 watch(
   visible,
   (isVisible) => {

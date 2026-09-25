@@ -3381,7 +3381,7 @@ export default {
     "AnalyzeRunButton": {
       "analyze": "Analyze",
       "checking_configuration": "Checking the Assistant configuration...",
-      "assistant_not_configured": "The Assistant is not configured. Add a model backend with credentials to enable analysis.",
+      "assistant_not_configured": "The Assistant is not configured. Add a model backend with credentials in Model Backends to enable analysis.",
       "assistant_busy": "The Assistant is already responding. Wait for it to finish, then try again.",
       "session_name": "Analyze run {run}",
       "status_starting": "Starting a root-cause analysis conversation...",

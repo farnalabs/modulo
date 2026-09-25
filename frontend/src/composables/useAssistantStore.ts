@@ -97,13 +97,19 @@ export const useAssistantStore = defineStore('assistant', () => {
   /**
    * Create a new chat session. `name` seeds the session title (optional —
    * the server derives one from the conversation when it is left null).
+   * The body is typed against the generated OpenAPI schema so the wire
+   * contract is checked by vue-tsc, not assumed.
    */
   async function createSession(options?: { name?: string | null }) {
     error.value = null
     try {
-      const resp = await api.POST('/api/v1/assistant/sessions', {
-        body: { name: options?.name ?? null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as components['schemas']['CreateSessionRequest'],
-      })
+      const body: components['schemas']['CreateSessionRequest'] = {
+        name: options?.name ?? null,
+        provider: null,
+        model: null,
+        context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+      }
+      const resp = await api.POST('/api/v1/assistant/sessions', { body })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
         return null
