@@ -661,6 +661,10 @@ async def test_flag_on_context_files_land_through_the_provider(monkeypatch: pyte
     _enable_flag(monkeypatch)
     sandbox = _sandbox_mock("sbx-ctx")
     node_def = _base_node_def(context_files={"/home/user/context/notes.txt": "ctx-body"})
+    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # seam, so the dispatch must be a fake (the command still fails, as the
+    # empty fixture sandbox does, keeping the SandboxNodeFailedError arm).
+    install_fake_dispatch(monkeypatch, ref="sbx-ctx")
 
     fn = make_sandbox_agent_fn(node_def)
     with (
@@ -681,6 +685,9 @@ async def test_flag_on_script_mode_input_json_lands_through_the_provider(
     _enable_flag(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = b'{"result": "ok"}'
     sandbox = _script_sandbox_mock("sbx-script")
+    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # seam; the scripted command completes with exit code 0.
+    install_fake_dispatch(monkeypatch, ref="sbx-script", exit_code=0)
 
     fn = make_sandbox_agent_fn(_script_node_def())
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
@@ -696,6 +703,9 @@ async def test_flag_on_bridge_writes_land_through_the_provider(monkeypatch: pyte
     _enable_flag(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = b'{"summary": "done"}'
     sandbox = _script_sandbox_mock("sbx-bridge")
+    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # seam; the scripted command completes with exit code 0.
+    install_fake_dispatch(monkeypatch, ref="sbx-bridge", exit_code=0)
 
     server = MagicMock()
     server.start = AsyncMock(return_value=47591)
