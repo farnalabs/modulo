@@ -993,7 +993,8 @@ class TestOrgFlagOverrideAudit:
                 enabled=True,
             )
         audit.assert_awaited_once()
-        assert audit.await_args.args[1].org_role == ""
+        org_role = audit.await_args.args[1].org_role
+        assert org_role == ""
 
     async def test_audit_reraises_cancelled_error(self) -> None:
         """Cancellation must propagate, never be swallowed by the fail-open helper."""
