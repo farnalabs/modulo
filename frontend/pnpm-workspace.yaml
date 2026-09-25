@@ -113,6 +113,7 @@ minimumReleaseAgeExclude:
   - '@datadog/js-core@0.0.15'
   - '@lucide/vue@1.46.0'
   - '@lucide/vue@1.47.0'
+  - '@lucide/vue@1.48.0'
   - '@types/node@26.6.1'
   - '@sentry/browser@10.75.0'
   - '@sentry/browser-utils@10.75.0'
