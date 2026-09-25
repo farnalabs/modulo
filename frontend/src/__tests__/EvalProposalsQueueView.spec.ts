@@ -72,6 +72,7 @@ vi.mock('../composables/useDataFetch', async () => {
 })
 
 import EvalProposalsQueueView from '../views/EvalProposalsQueueView.vue'
+import PageTabs from '../components/PageTabs.vue'
 
 describe('EvalProposalsQueueView', () => {
   beforeEach(() => {
@@ -92,6 +93,19 @@ describe('EvalProposalsQueueView', () => {
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('views.EvalProposalsQueueView.title')
+  })
+
+  it('does not render the redundant page-level tab strip (FAR-1236)', async () => {
+    const wrapper = mount(EvalProposalsQueueView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="proposal-card-rec-1"]').exists()).toBe(true)
+    })
+    expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
   })
 
   it('publishProposal replaces the whole response through the writable computed (FAR-645)', async () => {

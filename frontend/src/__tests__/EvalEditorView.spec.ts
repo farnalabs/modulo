@@ -28,6 +28,7 @@ vi.mock('vue-i18n', () => ({
 
 import EvalEditorView from '../views/EvalEditorView.vue'
 import { api } from '../lib/api/client'
+import PageTabs from '../components/PageTabs.vue'
 
 const apiGET = api.GET as ReturnType<typeof vi.fn>
 const apiPOST = api.POST as ReturnType<typeof vi.fn>
@@ -77,6 +78,19 @@ describe('EvalEditorView', () => {
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('views.EvalEditorView.eval_editor')
+  })
+
+  it('does not render the redundant page-level tab strip (FAR-1236)', async () => {
+    const wrapper = mount(EvalEditorView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="eval-editor-pipeline"]').exists()).toBe(true)
+    })
+    expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
   })
 
   it('renders a per-type config placeholder on the textarea', async () => {
