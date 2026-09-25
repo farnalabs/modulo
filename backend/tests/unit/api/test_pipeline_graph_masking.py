@@ -7,6 +7,11 @@ Covers both sides of the masked graph round-trip:
 - WRITE: a full-replace graph write (PATCH /graph) round-tripping a masked
   read resolves mask echoes against the stored graph, so the mask literals are
   never persisted over the stored secrets.
+
+And the one surface that must STRIP rather than mask — the v1 library export
+bundle, which is cross-instance: a mask placeholder would mean "restore the
+stored value" on an instance that has none. Export removes the credential
+entries and records them; import warns that they must be re-provisioned.
 """
 
 import json
@@ -547,3 +552,178 @@ async def test_mcp_snapshot_detail_masks_node_credentials() -> None:
     assert "rollback to v1 with" in result
     # The mask literal survives json.dumps() unicode-escaping in the node JSON.
     assert json.dumps(SENSITIVE_VALUE_MASK)[1:-1] in result
+
+
+# ---------------------------------------------------------------------------
+# Library export bundle (v1): cross-instance credential STRIPPING
+# ---------------------------------------------------------------------------
+
+# A node carrying every credential class the export must remove:
+# key-classified env keys, a secret VALUE under a non-sensitive env key, a
+# secret-bearing context file, and secrets in both deep parameter fields.
+_SECRET_NODE: dict[str, Any] = {
+    "id": "4c7e9a10-8f3a-4d61-9b2c-4a5e6f809012",
+    "node_type": "agent",
+    "position": {"x": 0, "y": 0},
+    "env_vars": {
+        # Key tier: GITHUB_TOKEN is key-classified.
+        "GITHUB_TOKEN": _GHP_SECRET,
+        # Value tier: the ghp_ pattern under a key that is NOT key-classified.
+        "DEPLOY_NOTES": f"rollback to v1 with {_GHP_SECRET}",
+        # Not a credential: must survive so the bundle stays reconstructible.
+        "APP_URL": "https://example.com",
+    },
+    "context_files": {"/tmp/creds.txt": f"token={_STRIPE_SECRET}"},
+    "composite_parameter_values": {
+        "cfg": {
+            "api_key": _STRIPE_SECRET,  # key tier
+            "deploy_notes": f"rotate {_GHP_SECRET}",  # value tier
+            "region": "eu",  # non-secret sibling: survives
+        }
+    },
+    "parameter_overrides": {
+        "nested": {
+            "password": "hunter2-secret",  # key tier
+            "webhook": f"body {_STRIPE_SECRET}",  # value tier
+            "retries": 3,  # non-secret sibling: survives
+        }
+    },
+}
+
+
+def _export_session_for(nodes: list[dict[str, Any]]) -> AsyncMock:
+    """Session fake for export_pipeline_bundle: pipeline read + edge read.
+
+    The node carries no agent / schema / model-backend references, so only
+    those two queries are issued (the reference collectors early-return).
+    """
+    pipeline = SimpleNamespace(
+        id=_PIPELINE_ID,
+        name="Secret Pipeline",
+        description="d",
+        graph_nodes_json=nodes,
+        run_context_defaults={},
+        node_timeout_seconds=300,
+        retry_policy={},
+        owner_team_id=None,
+        account_id=_USER_ID,
+        visibility="org",
+    )
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = pipeline
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = []
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[pipeline_result, edges_result])
+    return session
+
+
+class _AsyncNoopContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+async def test_v1_export_strips_node_credentials_and_records_redactions() -> None:
+    """The v1 portability bundle carries NO raw credential — entries are removed.
+
+    Strip, not mask: a bundle is imported on a different instance, where a mask
+    placeholder would be dropped silently. The removals are recorded so the
+    import can warn, and non-secret node content still ships.
+    """
+    from modulo.core.workflow_import_export import export_pipeline_bundle, extract_bundle_json_from_zip
+
+    data = await export_pipeline_bundle(_export_session_for([dict(_SECRET_NODE)]), _PIPELINE_ID)
+    bundle = extract_bundle_json_from_zip(data)
+    dump = json.dumps(bundle)
+    node = bundle["pipeline"]["graph_nodes_json"][0]
+
+    # No raw secret anywhere in the bundle, and no mask placeholder either.
+    assert _GHP_SECRET not in dump
+    assert _STRIPE_SECRET not in dump
+    assert "hunter2-secret" not in dump
+    assert SENSITIVE_VALUE_MASK not in dump
+
+    # The credential ENTRIES are gone — removed, not echoed.
+    assert "GITHUB_TOKEN" not in node["env_vars"]
+    assert "DEPLOY_NOTES" not in node["env_vars"]
+    assert "/tmp/creds.txt" not in node["context_files"]
+    assert "api_key" not in node["composite_parameter_values"]["cfg"]
+    assert "deploy_notes" not in node["composite_parameter_values"]["cfg"]
+    assert "password" not in node["parameter_overrides"]["nested"]
+    assert "webhook" not in node["parameter_overrides"]["nested"]
+
+    # Non-secret content survives.
+    assert node["env_vars"]["APP_URL"] == "https://example.com"
+    assert node["composite_parameter_values"]["cfg"]["region"] == "eu"
+    assert node["parameter_overrides"]["nested"]["retries"] == 3
+    assert node["position"] == {"x": 0, "y": 0}
+
+    # The redaction record names every removed key / path.
+    removed = {(entry["field"], entry["path"]) for entry in bundle["redacted_credentials"]}
+    assert ("env_vars", "GITHUB_TOKEN") in removed
+    assert ("env_vars", "DEPLOY_NOTES") in removed
+    assert ("context_files", "/tmp/creds.txt") in removed
+    assert ("composite_parameter_values", "cfg.api_key") in removed
+    assert ("composite_parameter_values", "cfg.deploy_notes") in removed
+    assert ("parameter_overrides", "nested.password") in removed
+    assert ("parameter_overrides", "nested.webhook") in removed
+
+
+async def test_v1_import_warns_that_exported_credentials_were_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round-trip: importing the stripped bundle warns, naming the redacted keys.
+
+    The warning is the only place an importer learns that node credentials are
+    ABSENT (there is no stored value on this instance to restore), so it must
+    name them; the import itself must otherwise behave exactly as before.
+    """
+    from modulo.core import workflow_import_export as wix
+    from modulo.core.workflow_import_export import export_pipeline_bundle, extract_bundle_json_from_zip
+
+    export_data = await export_pipeline_bundle(_export_session_for([dict(_SECRET_NODE)]), _PIPELINE_ID)
+    bundle = extract_bundle_json_from_zip(export_data)
+
+    pipeline_id = uuid.uuid4()
+    primitive_id = uuid.uuid4()
+    monkeypatch.setattr(wix, "create_pipeline", AsyncMock(return_value=SimpleNamespace(id=pipeline_id)))
+    monkeypatch.setattr(wix, "create_library_primitive", AsyncMock(return_value=SimpleNamespace(id=primitive_id)))
+    monkeypatch.setattr(wix, "get_existing_agent_names", AsyncMock(return_value=set()))
+    monkeypatch.setattr(wix, "get_existing_pipeline_names", AsyncMock(return_value=set()))
+
+    session = AsyncMock()
+    session.flush = AsyncMock()
+    session.begin_nested = MagicMock(return_value=_AsyncNoopContext())
+
+    result = await wix.materialize_import(session, _ORG_ID, _USER_ID, bundle)
+
+    warnings_text = " | ".join(result["warnings"])
+    assert "GITHUB_TOKEN" in warnings_text
+    assert "nested.password" in warnings_text
+    assert "re-provision" in warnings_text
+    # The import still succeeds structurally.
+    assert result["pipeline_id"] == str(pipeline_id)
+    assert result["primitive_id"] == str(primitive_id)
+    assert result["pipeline_name"] == "Secret Pipeline"
+
+
+def test_v2_export_carries_no_graph_nodes() -> None:
+    """v2 (ADR 015) has no graph-node payload, so there is nothing to strip.
+
+    Pins the check that keeps the v2 path out of scope for credential
+    stripping: if a graph-node payload ever reaches the v2 envelope, this
+    fails before the bundle can leak one.
+    """
+    from modulo.core.workflow_import_export import _build_v2_bundle, _V2ExportParts
+
+    pipeline = SimpleNamespace(id=_PIPELINE_ID, name="Secret Pipeline", visibility="org", owner_team_id=None)
+    parts = _V2ExportParts(agents=[], schemas=[], edges=[], triggers=[], owner_team_name=None, author="a@b.c")
+
+    dump = json.dumps(_build_v2_bundle(pipeline, parts))
+
+    assert "graph_nodes_json" not in dump
+    assert _GHP_SECRET not in dump
+    assert _STRIPE_SECRET not in dump

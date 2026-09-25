@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.runner_bindings import BindingValidationError, validate_binding_pair
+from modulo.core.secret_patterns import is_sensitive_env_key, is_sensitive_key, mask_secret_values_in_text
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.agent_runner_binding import replace_agent_bindings
 from modulo.db.crud.library_primitive import create_library_primitive
@@ -223,13 +224,220 @@ async def _fetch_and_project_edges(session: AsyncSession, pipeline_id: uuid.UUID
     ]
 
 
+# ---------------------------------------------------------------------------
+# Credential stripping for the v1 portability bundle (FAR-1181)
+# ---------------------------------------------------------------------------
+
+# Node fields that can carry instance-scoped credentials.
+_GRAPH_NODE_CREDENTIAL_FIELDS: tuple[str, ...] = (
+    "env_vars",
+    "context_files",
+    "composite_parameter_values",
+    "parameter_overrides",
+)
+
+
+def _has_secret_value(value: Any) -> bool:
+    """True when the canonical secret-VALUE patterns match anywhere in *value*.
+
+    Reuses :func:`mask_secret_values_in_text` as the detector rather than
+    writing new detection logic: every pattern it applies replaces its match
+    with the mask, so a returned string that differs from the input proves at
+    least one secret pattern matched, while clean text is returned unchanged.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    return mask_secret_values_in_text(value) != value
+
+
+def _redaction(node_id: str, field: str, path: str, reason: str) -> dict[str, str]:
+    """Build one redaction record: which credential was removed and why.
+
+    ``path`` is relative to ``field`` (a bare key for ``env_vars`` /
+    ``context_files``, a dotted / indexed key path for the deep fields), so the
+    import-side warning can name exactly what the operator must re-provision.
+    """
+    return {"node_id": node_id, "field": field, "path": path, "reason": reason}
+
+
+def _strip_env_vars(node_id: str, env: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Remove credential-bearing env entries (key tier, then value tier)."""
+    kept: dict[str, Any] = {}
+    redactions: list[dict[str, str]] = []
+    for key, value in env.items():
+        name = str(key)
+        if is_sensitive_env_key(name):
+            redactions.append(_redaction(node_id, "env_vars", name, "sensitive_key"))
+            continue
+        if _has_secret_value(value):
+            redactions.append(_redaction(node_id, "env_vars", name, "secret_value"))
+            continue
+        kept[key] = value
+    return kept, redactions
+
+
+def _strip_context_files(node_id: str, files: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Remove context files whose CONTENT carries a secret (value tier only).
+
+    Mirrors :func:`modulo.api.middleware.sensitive_mask.mask_pipeline_graph_node`,
+    which runs only the value patterns over file content — a file NAME is not a
+    credential, its bytes are.
+    """
+    kept: dict[str, Any] = {}
+    redactions: list[dict[str, str]] = []
+    for name, content in files.items():
+        if _has_secret_value(content):
+            redactions.append(_redaction(node_id, "context_files", str(name), "secret_value"))
+            continue
+        kept[name] = content
+    return kept, redactions
+
+
+def _strip_deep_values(
+    node_id: str,
+    field: str,
+    value: Any,
+    path: str,
+    redactions: list[dict[str, str]],
+) -> Any:
+    """Strip secret-shaped entries from a deep parameter value, in place of masking.
+
+    Applies the same two tiers as the shipped :func:`mask_config_json` at every
+    nesting depth — an entry is removed when its own key is sensitive OR its
+    string value matches a secret pattern — but REMOVES the entry instead of
+    writing a mask placeholder: a portability bundle is cross-instance, where a
+    mask literal would be silently dropped on import with no warning. A dict's
+    own keys govern its entries; a list's elements are walked the same way (the
+    governing key never outlives its dict entry, because a sensitive key drops
+    its whole value above).
+    """
+    if isinstance(value, dict):
+        kept: dict[str, Any] = {}
+        for key, item in value.items():
+            key_name = str(key)
+            child_path = f"{path}.{key_name}" if path else key_name
+            if is_sensitive_key(key_name):
+                redactions.append(_redaction(node_id, field, child_path, "sensitive_key"))
+                continue
+            if isinstance(item, str) and _has_secret_value(item):
+                redactions.append(_redaction(node_id, field, child_path, "secret_value"))
+                continue
+            kept[key] = _strip_deep_values(node_id, field, item, child_path, redactions)
+        return kept
+    if isinstance(value, list):
+        kept_list: list[Any] = []
+        for index, element in enumerate(value):
+            element_path = f"{path}[{index}]"
+            if isinstance(element, str) and _has_secret_value(element):
+                redactions.append(_redaction(node_id, field, element_path, "secret_value"))
+                continue
+            kept_list.append(_strip_deep_values(node_id, field, element, element_path, redactions))
+        return kept_list
+    return value
+
+
+def _strip_node_credentials(node: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Return ``(stripped_node, redactions)`` for one graph node.
+
+    The caller's ``node`` is never mutated. Non-dict values for a credential
+    field are left untouched, exactly as the masker leaves them.
+    """
+    node_id = str(node.get("id", ""))
+    redactions: list[dict[str, str]] = []
+    stripped = dict(node)
+
+    env = node.get("env_vars")
+    if isinstance(env, dict):
+        kept_env, env_redactions = _strip_env_vars(node_id, env)
+        stripped["env_vars"] = kept_env
+        redactions.extend(env_redactions)
+
+    files = node.get("context_files")
+    if isinstance(files, dict):
+        kept_files, file_redactions = _strip_context_files(node_id, files)
+        stripped["context_files"] = kept_files
+        redactions.extend(file_redactions)
+
+    for node_field in ("composite_parameter_values", "parameter_overrides"):
+        values = node.get(node_field)
+        if isinstance(values, dict):
+            stripped[node_field] = _strip_deep_values(node_id, node_field, values, "", redactions)
+
+    return stripped, redactions
+
+
+def _fail_closed_scrub(node: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Drop every credential-bearing field wholesale when stripping raised (FAR-1181).
+
+    Mirrors the fail-closed posture of ``mask_pipeline_graph_node``: an export
+    must never emit a raw credential because a detector misfired, so the whole
+    field goes — recorded as a redaction, surfaced as an import warning.
+    """
+    node_id = str(node.get("id", ""))
+    stripped = dict(node)
+    redactions: list[dict[str, str]] = []
+    for node_field in _GRAPH_NODE_CREDENTIAL_FIELDS:
+        if node_field in stripped:
+            stripped.pop(node_field)
+            redactions.append(_redaction(node_id, node_field, "", "stripping_failed"))
+    return stripped, redactions
+
+
+def strip_graph_node_credentials(
+    graph_nodes: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Remove instance-scoped credentials from graph nodes for a portability bundle.
+
+    Returns ``(stripped_nodes, redactions)``. Entries are REMOVED, never masked:
+    a bundle is exported from one instance and imported on another, so the
+    "unchanged, restore the stored value" meaning of a mask placeholder would
+    silently drop the credential on the importing instance with no warning.
+
+    Per field (all detection reuses the shipped helpers — no new logic):
+
+    - ``env_vars`` — an entry whose KEY is classified sensitive
+      (:func:`is_sensitive_env_key`), or whose VALUE matches the canonical
+      secret patterns, is removed. Non-secret env values survive so the
+      exported pipeline stays reconstructible.
+    - ``context_files`` — an entry whose file CONTENT matches a secret pattern
+      is removed.
+    - ``composite_parameter_values`` / ``parameter_overrides`` — secret-shaped
+      entries removed recursively through nested dicts and lists (key tier and
+      value tier at every depth).
+
+    Every removal is recorded as ``{node_id, field, path, reason}`` so the
+    import path can tell the operator exactly what to re-provision.
+    """
+    stripped_nodes: list[dict[str, Any]] = []
+    redactions: list[dict[str, str]] = []
+    for node in graph_nodes or []:
+        if not isinstance(node, dict):
+            stripped_nodes.append(node)
+            continue
+        try:
+            stripped, node_redactions = _strip_node_credentials(node)
+        except Exception:
+            logger.exception(
+                "strip_graph_node_credentials: stripping failed for node %s; fail-closed scrub applied",
+                node.get("id"),
+            )
+            stripped, node_redactions = _fail_closed_scrub(node)
+        stripped_nodes.append(stripped)
+        redactions.extend(node_redactions)
+    return stripped_nodes, redactions
+
+
 async def export_pipeline_bundle(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
 ) -> bytes:
     """Build a portable ZIP bundle from a pipeline.
 
-    Strips owner_team_id and other org-private fields.
+    Strips owner_team_id and other org-private fields, and REMOVES the graph
+    nodes' instance-scoped credentials (FAR-1181): a bundle is cross-instance,
+    so it must never carry secrets. The removed keys are recorded in the
+    bundle's top-level ``redacted_credentials`` list and re-surfaced as an
+    import warning.
     """
     try:
         pipeline = await _load_pipeline(session, pipeline_id)
@@ -242,12 +450,14 @@ async def export_pipeline_bundle(
 
         edges_list = await _fetch_and_project_edges(session, pipeline_id)
 
+        stripped_nodes, redacted_credentials = strip_graph_node_credentials(pipeline.graph_nodes_json)
+
         bundle: dict[str, Any] = {
             "format_version": BUNDLE_FORMAT_VERSION,
             "pipeline": {
                 "name": pipeline.name,
                 "description": pipeline.description,
-                "graph_nodes_json": pipeline.graph_nodes_json or [],
+                "graph_nodes_json": stripped_nodes,
                 "run_context_defaults": dict(pipeline.run_context_defaults or {}),
                 "node_timeout_seconds": pipeline.node_timeout_seconds,
                 "retry_policy": dict(pipeline.retry_policy or {}),
@@ -257,6 +467,7 @@ async def export_pipeline_bundle(
             "schemas": schemas_list,
             "model_backends": model_backends_list,
             "edges": edges_list,
+            "redacted_credentials": redacted_credentials,
         }
     except asyncio.CancelledError:
         raise
@@ -268,7 +479,13 @@ async def export_pipeline_bundle(
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(MANIFEST_FILENAME, json.dumps(bundle, indent=2, default=str))
 
-    logger.info("Exported pipeline %s with %d agents, %d edges", pipeline_id, len(agents_list), len(edges_list))
+    logger.info(
+        "Exported pipeline %s with %d agents, %d edges, %d credential(s) stripped",
+        pipeline_id,
+        len(agents_list),
+        len(edges_list),
+        len(redacted_credentials),
+    )
     return buf.getvalue()
 
 
@@ -1091,6 +1308,7 @@ async def _materialize_pipeline_and_edges(
     bundle: dict[str, Any],
 ) -> tuple[Pipeline, list[PipelineEdge], Any]:
     """Create the imported pipeline, its edges, and the library primitive."""
+    _warn_redacted_credentials(bundle, ctx.warnings)
     graph_nodes = _rewire_graph_nodes(
         _normalize_graph_nodes(sections.pipeline_info, ctx.warnings),
         agent_id_map,
@@ -1212,6 +1430,44 @@ def _normalize_graph_nodes(pipeline_info: dict[str, Any], warnings: list[str]) -
         return raw_graph_nodes
     warnings.append("Pipeline 'graph_nodes_json' is not a list; nodes will be empty.")
     return []
+
+
+# Cap the paths listed in the credential-redaction warning so a graph with
+# hundreds of redacted entries cannot produce an unusable wall of text.
+_MAX_LISTED_REDACTIONS = 10
+
+
+def _redaction_label(entry: dict[str, Any]) -> str:
+    """Render one redaction record as ``<node_id>.<field>[.<path>]``."""
+    node_id = str(entry.get("node_id") or "?")
+    field = str(entry.get("field") or "?")
+    path = str(entry.get("path") or "")
+    return f"{node_id}.{field}.{path}" if path else f"{node_id}.{field}"
+
+
+def _warn_redacted_credentials(bundle: dict[str, Any], warnings: list[str]) -> None:
+    """Warn that the bundle's credentials were stripped at export (FAR-1181).
+
+    The v1 portability bundle never carries instance-scoped node credentials
+    (:func:`strip_graph_node_credentials`), so an imported pipeline arrives
+    with those env vars / context files / parameter values ABSENT — unlike a
+    mask echo, there is nothing on this instance to restore them from. The
+    warning names every removed key/path so the operator re-provisions them
+    instead of discovering the gap at first run.
+    """
+    raw = bundle.get("redacted_credentials")
+    if not isinstance(raw, list):
+        return
+    entries = [entry for entry in raw if isinstance(entry, dict)]
+    if not entries:
+        return
+    labels = [_redaction_label(entry) for entry in entries]
+    shown = ", ".join(labels[:_MAX_LISTED_REDACTIONS])
+    remainder = f" (and {len(labels) - _MAX_LISTED_REDACTIONS} more)" if len(labels) > _MAX_LISTED_REDACTIONS else ""
+    warnings.append(
+        f"{len(labels)} credential(s) were not exported with this bundle; "
+        f"re-provision them on this instance: {shown}{remainder}."
+    )
 
 
 def _apply_imported_retry_policy(pipeline: Pipeline, pipeline_info: dict[str, Any], warnings: list[str]) -> None:

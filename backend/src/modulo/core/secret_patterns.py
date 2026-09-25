@@ -8,11 +8,16 @@ redaction sites. Agent-output masking (:mod:`modulo.api.routes.runs`) and the
 API-layer :mod:`modulo.api.middleware.sensitive_mask` import these names
 directly.
 
-Key-NAME masking (matching on config keys such as ``token`` / ``password``)
-remains a separate concern owned by each read surface (``error_codes.py``,
-``node_runner.py``, ``soc2.py``), because those sites mask by key rather than
-by secret value and some run under import-linter contracts that this leaf
-module must not pull in.
+Key-NAME detection (matching config/env keys such as ``token`` / ``password``)
+also lives here — :func:`is_sensitive_key` / :func:`is_sensitive_env_key`,
+re-exported by :mod:`modulo.api.middleware.sensitive_mask` so API-layer callers
+keep importing from their documented home while core export paths
+(``workflow_import_export``, FAR-1181) can share the SAME classifier without
+breaching the ``core-does-not-import-api`` contract. The specialised key
+matching owned by individual read surfaces (``error_codes.py``,
+``node_runner.py``, ``soc2.py``, ``logging_config``) stays where it is: those
+mask by key rather than by secret value and this leaf module must not pull
+them in.
 
 This module lives in ``modulo.core`` (a leaf with no ``modulo.*`` imports) so
 that core redaction sites can use it without violating the
@@ -112,6 +117,52 @@ SECRET_VALUE_PATTERNS: list[tuple[re.Pattern[str], Any]] = [
         lambda m: f"{m.group(1)}{SENSITIVE_VALUE_MASK}",
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Sensitive KEY-name detection (canonical; re-exported by api.middleware.sensitive_mask)
+# ---------------------------------------------------------------------------
+
+# Explicit env-var names that are always credentials, regardless of any
+# substring pattern.
+_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "MODULO_USERS",
+        "DATABASE_URL",
+        "PYPI_TOKEN",
+    }
+)
+
+_SENSITIVE_KEY_PATTERNS: frozenset[str] = frozenset(
+    {
+        "token",
+        "secret",
+        "api_key",
+        "password",
+        "passwd",
+        "key",
+        "credential",
+        "database_url",
+        "encryption",
+        "signing",
+        "private",
+    }
+)
+
+
+def is_sensitive_key(key: str) -> bool:
+    """True when a config / parameter KEY name looks credential-shaped.
+
+    Case-insensitive substring match after normalising dashes and spaces to
+    underscores, so ``api-key``, ``api key`` and ``API_KEY`` all match.
+    """
+    key_lower = key.lower().replace("-", "_").replace(" ", "_")
+    return any(pattern in key_lower for pattern in _SENSITIVE_KEY_PATTERNS)
+
+
+def is_sensitive_env_key(key: str) -> bool:
+    """True when an env-var KEY name is always treated as a credential."""
+    return key in _SENSITIVE_ENV_KEYS or is_sensitive_key(key)
 
 
 def mask_secret_values_in_text(text: str) -> str:

@@ -20,7 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session, require_system_or_org_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret_scoped
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, mask_secret_values_in_text
+from modulo.core.secret_patterns import (
+    SENSITIVE_VALUE_MASK,
+    is_sensitive_env_key,
+    is_sensitive_key,
+    mask_secret_values_in_text,
+)
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -29,6 +34,8 @@ from modulo.settings import Settings, get_settings
 # Required because mypy runs under `strict` (no_implicit_reexport = True).
 __all__ = [
     "SENSITIVE_VALUE_MASK",
+    "is_sensitive_env_key",
+    "is_sensitive_key",
     "mask_pipeline_graph_node",
     "merge_masked_config",
     "merge_masked_config_json",
@@ -37,48 +44,18 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-# The DOM-side mask constant lives in :mod:`modulo.core.secret_patterns` (the
-# single source of truth) so the two modules can never drift. The canonical
-# secret-format redaction patterns, the value-pattern list and the shared raw
-# patterns (``SECRET_VALUE_PATTERNS``, ``mask_secret_values_in_text``,
-# ``GITHUB_PAT_PATTERN``, ``AWS_ACCESS_KEY_PATTERN``) are also defined ONCE in
-# :mod:`modulo.core.secret_patterns`; the API layer (runs.py) imports them
-# directly from there. They live in ``core`` (not here) so the core redaction
-# sites (error_codes.py, node_runner.py, soc2.py) can use the same definitions
-# without violating the ``core-does-not-import-api`` contract.
-
-_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
-    {
-        "MODULO_USERS",
-        "DATABASE_URL",
-        "PYPI_TOKEN",
-    }
-)
-
-_SENSITIVE_KEY_PATTERNS = frozenset(
-    {
-        "token",
-        "secret",
-        "api_key",
-        "password",
-        "passwd",
-        "key",
-        "credential",
-        "database_url",
-        "encryption",
-        "signing",
-        "private",
-    }
-)
-
-
-def is_sensitive_key(key: str) -> bool:
-    key_lower = key.lower().replace("-", "_").replace(" ", "_")
-    return any(pattern in key_lower for pattern in _SENSITIVE_KEY_PATTERNS)
-
-
-def is_sensitive_env_key(key: str) -> bool:
-    return key in _SENSITIVE_ENV_KEYS or is_sensitive_key(key)
+# The DOM-side mask constant, the canonical secret-format redaction patterns,
+# the value-pattern list, the sensitive-KEY classifier
+# (``_SENSITIVE_KEY_PATTERNS`` / ``is_sensitive_key`` / ``is_sensitive_env_key``)
+# and the shared raw patterns (``SECRET_VALUE_PATTERNS``,
+# ``mask_secret_values_in_text``, ``GITHUB_PAT_PATTERN``, ``AWS_ACCESS_KEY_PATTERN``)
+# are all defined ONCE in :mod:`modulo.core.secret_patterns` (the single source of
+# truth) so the two modules can never drift. The API layer (runs.py) imports the
+# value patterns from there directly. They live in ``core`` so the core redaction
+# and export sites (error_codes.py, node_runner.py, soc2.py,
+# workflow_import_export) can use the same definitions without violating the
+# ``core-does-not-import-api`` contract; this module re-exports the names its
+# callers import from here.
 
 
 def mask_sensitive_value(value: str) -> str:

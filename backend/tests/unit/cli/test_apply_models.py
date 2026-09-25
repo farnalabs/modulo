@@ -565,9 +565,10 @@ class TestSensitiveKeyTwin:
     def test_local_sensitive_key_patterns_equal_middleware(self) -> None:
         """Drift alarm: the CLI runs WITHOUT server settings, so it cannot
         import the FastAPI/DB-heavy mask middleware — the local pattern set
-        must stay byte-identical to the middleware's."""
-        from modulo.api.middleware.sensitive_mask import _SENSITIVE_KEY_PATTERNS
+        must stay byte-identical to the canonical set the middleware re-exports
+        (``modulo.core.secret_patterns``)."""
         from modulo.cli.apply import models
+        from modulo.core.secret_patterns import _SENSITIVE_KEY_PATTERNS
 
         assert models._SENSITIVE_KEY_PATTERNS == _SENSITIVE_KEY_PATTERNS
 
