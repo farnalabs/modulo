@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHistory, useRoute } from 'vue-router'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
@@ -77,6 +78,8 @@ function mockMatchMedia(matches: boolean) {
 
 interface MountOptions {
   mobileRail?: boolean
+  /** Leave the flag unresolved (no cache, no payload) — the FAR-1237 pending state. */
+  unresolved?: boolean
   [key: string]: unknown
 }
 
@@ -84,10 +87,16 @@ function mountSidebar(props = {}, extra: MountOptions = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const store = usePlanStore()
-  if (extra.mobileRail) {
-    store.features['mobile_sidebar_rail'] = true
+  if (extra.unresolved) {
+    // Leave flagsSource 'none' and the flag map empty — nothing has resolved.
+  } else {
+    // Resolve the flag explicitly (payload/cache applied): OFF unless the test
+    // opts into the rail. Pre-FAR-1237 an empty map silently meant "OFF",
+    // which is what made the unresolved state indistinguishable from a
+    // resolved drawer and caused the first-paint flash.
+    store.features['mobile_sidebar_rail'] = extra.mobileRail === true
   }
-  const { mobileRail: _mobileRail, ...mountExtra } = extra
+  const { mobileRail: _mobileRail, unresolved: _unresolved, ...mountExtra } = extra
   return mount(AppSidebar, {
     props: {
       isSystemAdmin: true,
@@ -277,6 +286,52 @@ describe('AppSidebar', () => {
       expect(searchBtn.exists()).toBe(true)
       const modifier = navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'
       expect(searchBtn.attributes('title')).toBe(`Search pages... (${modifier}+K)`)
+    })
+  })
+
+  describe('mobile — flag unresolved (FAR-1237 first-paint guard)', () => {
+    it('renders a neutral placeholder — neither the legacy top-nav nor the rail — while the flag is unresolved', async () => {
+      const wrapper = mountSidebar({}, { unresolved: true })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
+    })
+
+    it('mounts the resolved rail without the legacy top-nav ever rendering first', async () => {
+      const wrapper = mountSidebar({}, { unresolved: true })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(true)
+
+      usePlanStore().features['mobile_sidebar_rail'] = true
+      await nextTick()
+
+      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(false)
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+    })
+
+    it('mounts the legacy drawer when the flag resolves OFF, with no rail having rendered first', async () => {
+      const wrapper = mountSidebar({}, { unresolved: true })
+      await flushPromises()
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
+
+      usePlanStore().flagsSource = 'server' // payload applied: flag OFF
+      await nextTick()
+
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(false)
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
+    })
+
+    it('the placeholder occupies the fixed header slot (h-14) so resolving to the drawer shifts nothing', async () => {
+      const wrapper = mountSidebar({}, { unresolved: true, attachTo: document.body })
+      await flushPromises()
+      const header = wrapper.find('[data-testid="mobile-nav-pending"]')
+      expect(header.classes()).toContain('fixed')
+      expect(header.classes()).toContain('h-14')
+
+      wrapper.unmount()
     })
   })
 

@@ -26,6 +26,10 @@ function mockMatchMedia(matches: boolean) {
 
 beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
+  // FAR-1237: the plan store hydrates feature flags from localStorage at
+  // creation — clear it so one test's persisted flag map cannot decide the
+  // next test's layout.
+  localStorage.clear()
   // afterEach calls vi.restoreAllMocks(), which resets the api.GET mock's
   // implementation to a no-op. Re-establish it here so every test (AppLayout
   // mounts ProductAnalyticsConsentPrompt, which fetches consent on mount) gets
@@ -89,6 +93,10 @@ describe('AppLayout', () => {
           stubs: { LogoMark: true },
         },
       })
+      // Resolve the flag OFF (payload applied): the drawer is the resolved
+      // mode here — an unresolved store must render the pending placeholder
+      // instead (asserted in the FAR-1237 block below).
+      usePlanStore().features['mobile_sidebar_rail'] = false
       // The mocked onboarding API resolves ready=true with isFirstRun defaulting
       // to true, so the banner would otherwise be active. Dismiss it to isolate
       // the header-only offset path this test exercises.
@@ -160,6 +168,29 @@ describe('AppLayout', () => {
       expect(main.classes()).not.toContain('pt-14')
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+    })
+  })
+
+  describe('mobile — nav flag unresolved (FAR-1237 pending placeholder)', () => {
+    it('renders neither chrome on first paint — pending placeholder + header offset, no hamburger, no rail', async () => {
+      mockMatchMedia(false)
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      const onboarding = useOnboardingStore()
+      onboarding.dismissed = true
+      await nextTick()
+      await nextTick()
+
+      expect(usePlanStore().flagsSource).toBe('none')
+      expect(wrapper.find('[data-testid="mobile-nav-pending"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
+      // The placeholder occupies the fixed header slot, so the offset matches.
+      expect(wrapper.find('main').classes()).toContain('pt-14')
     })
   })
 

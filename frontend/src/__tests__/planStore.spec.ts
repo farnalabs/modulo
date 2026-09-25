@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePlanStore } from '../stores/planStore'
+import { FLAG_CACHE_KEY, parseFlagCache, serializeFlagCache } from '../config/flagCache'
 import { getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
 import type { EventBusEvent } from '../types/events'
 
@@ -73,6 +74,9 @@ function syncEvent(overrides: Partial<EventBusEvent> = {}): EventBusEvent {
 
 describe('usePlanStore', () => {
   beforeEach(async () => {
+    // The flag map persists to localStorage (FAR-1237); a payload-driven test
+    // must not leak its cache into the next test's fresh store.
+    localStorage.clear()
     setActivePinia(createPinia())
     clearAllRegistrations()
     await mockApiSuccess()
@@ -535,5 +539,74 @@ describe('usePlanStore', () => {
     expect(getHandlers('team').size).toBe(0)
     expect(getHandlers('license').size).toBe(0)
     expect(getHandlers('plan').size).toBe(0)
+  })
+
+  describe('persisted flag cache (FAR-1237 — synchronous first-paint source of truth)', () => {
+    it('persists the resolved flag map to localStorage after a successful fetch', async () => {
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('none')
+
+      await store.fetchPlan()
+
+      expect(store.flagsSource).toBe('server')
+      expect(parseFlagCache(localStorage.getItem(FLAG_CACHE_KEY))).toEqual({
+        parallel_branches: true,
+        eval_system: false,
+        hitl_gates: true,
+      })
+    })
+
+    it('hydrates flags synchronously from the persisted cache before any fetch', () => {
+      localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({ mobile_sidebar_rail: true }))
+      setActivePinia(createPinia()) // fresh store re-reads the cache
+
+      const store = usePlanStore()
+
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+      // A cache hit is NOT a server load — the router tier guard still fetches.
+      expect(store.loaded).toBe(false)
+      expect(store.features).toEqual({ mobile_sidebar_rail: true })
+    })
+
+    it('an empty-but-present cache still counts as resolved (empty ≠ unknown)', () => {
+      localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({}))
+      setActivePinia(createPinia())
+
+      const store = usePlanStore()
+
+      expect(store.flagsSource).toBe('cache')
+      expect(store.loaded).toBe(false)
+    })
+
+    it('keeps the cached flags resolved when the fetch fails (never reverts to unknown)', async () => {
+      localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({ mobile_sidebar_rail: true }))
+      const { api } = await import('../lib/api/client')
+      ;(api.GET as any).mockRejectedValue(new Error('offline'))
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+
+      await store.fetchPlan()
+
+      expect(store.error).toContain('offline')
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+    })
+
+    it('ignores a corrupt, wrong-version, or non-boolean cache', () => {
+      localStorage.setItem(FLAG_CACHE_KEY, '{not json')
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+
+      localStorage.setItem(FLAG_CACHE_KEY, JSON.stringify({ v: 999, flags: { a: true } }))
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+
+      localStorage.setItem(FLAG_CACHE_KEY, JSON.stringify({ v: 1, flags: { a: 'yes' } }))
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+
+      expect(usePlanStore().features).toEqual({})
+    })
   })
 })
