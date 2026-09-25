@@ -1407,11 +1407,11 @@ async def _build_dispatch_provider() -> "RuntimeProvider | None":
     from modulo.core.runtime_provider import build_hub
 
     try:
-        hub = build_hub()
+        provider_hub = build_hub()
     except Exception:
         _log.warning("sandbox_agent.dispatch_hub_build_failed", exc_info=True)
         return None
-    return hub.get("e2b")
+    return provider_hub.get("e2b")
 
 
 def _require_dispatch_provider(provider: "RuntimeProvider | None") -> "RuntimeProvider":
