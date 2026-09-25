@@ -81,17 +81,22 @@ def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]
     FAR-1161: ``business_owner_id`` / ``reliability_owner_id`` are part of the
     canonical-hash input (the desired view always carries both keys — see
     ``PipelineEntity.managed_view``) so ``--diff`` detects owner drift.
-    Secret-shaped graph entries are stripped on BOTH sides (the desired side in
-    ``PipelineEntity.managed_view``) so server-masked stored credentials do not
-    produce permanent false drift.
+    FAR-1232: the current graph is REDACTED through the server mask tiers the
+    desired side is redacted with (``strip_secret_shaped_graph`` — mirror of
+    ``mask_pipeline_graph_node``, which masks credential-bearing node fields
+    on read); re-redaction is idempotent, so the two sides hash equal whenever
+    the declaration matches stored state — no phantom 'updated' plan.
     """
-    from modulo.cli.apply.models import quantize_circuit_breaker_threshold, strip_secret_shaped_config
+    from modulo.cli.apply.models import (
+        quantize_circuit_breaker_threshold,
+        strip_secret_shaped_graph,
+    )
 
     view: dict[str, Any] = {}
     for key in desired_view:
         if key == "graph":
-            current_graph = current.get("graph") or {"nodes": [], "edges": []}
-            view[key] = strip_secret_shaped_config(current_graph)
+            raw_current = current.get("graph") or {"nodes": [], "edges": []}
+            view[key] = strip_secret_shaped_graph(raw_current)
         elif key == "circuit_breaker_threshold":
             # The API serialises the Numeric(14, 6) column as a float;
             # canonicalise both sides to 6dp so no false drift is reported.

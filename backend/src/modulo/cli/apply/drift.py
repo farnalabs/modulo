@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from modulo.cli.apply.models import strip_secret_shaped_graph
 from modulo.cli.apply.plan import (
     _CURRENT_VIEWS,
     KIND_BACKEND,
@@ -207,17 +208,20 @@ def build_drift_detail(
         if not view or "graph" not in view:
             continue
         current = (current_entities.get(KIND_PIPELINE) or {}).get(name) or {}
-        # Parity with the plan hash: the desired graph arrives already stripped
-        # (PipelineEntity.managed_view), so strip the current side too — else a
-        # server-masked credential would show up as a spurious 'modified' node.
-        from modulo.cli.apply.models import strip_secret_shaped_config
-
-        current_graph: dict[str, Any] = strip_secret_shaped_config(current.get("graph") or {"nodes": [], "edges": []})
+        raw_current_graph: dict[str, Any] = current.get("graph") or {"nodes": [], "edges": []}
+        # FAR-1232: the desired view arrives already redacted (managed_view),
+        # so the current side is redacted through the identical CLI mask —
+        # the node/modified breakdown then compares like-for-like (a masked
+        # secret shows as the sentinel on BOTH sides instead of a phantom
+        # "modified" entry that is pure masking).
+        current_graph = strip_secret_shaped_graph(raw_current_graph)
         breakdown = _diff_graph(view["graph"], current_graph)
         graph_changed = any(side for field in breakdown.values() for side in field.values())
         # FAR-220: name the git-sourced content fields that drifted (commit
-        # moves) alongside the generic node/edge breakdown.
-        git_content = _diff_git_content(view["graph"], current_graph)
+        # moves). Content-ref fields sit OUTSIDE the secret-bearing node
+        # fields, so the git comparison runs on the RAW current graph (with
+        # its refs intact) while the modified decision uses redacted views.
+        git_content = _diff_git_content(view["graph"], raw_current_graph)
         if git_content:
             breakdown["git_content"] = git_content
         if graph_changed or git_content:

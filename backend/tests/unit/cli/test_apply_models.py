@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from pydantic import ValidationError
 
@@ -586,6 +588,124 @@ class TestSensitiveKeyTwin:
 
         for key in ("signing_secret", "API-KEY", "db password", "TokenValue", "hmac_secret", "note", "scan_interval"):
             assert is_sensitive_key(key) == middleware_is_sensitive_key(key), key
+
+    def test_local_is_sensitive_env_key_matches_middleware(self) -> None:
+        """FAR-1232 drift alarm: the CLI env tier classifies keys through the
+        same middleware classifier, so the CLI env mask and the middleware
+        env mask must produce identical dicts (otherwise the desired/current
+        hashes stop matching — the org-state sentinel (``••••••``) would be
+        treated as a secret on one side only, swinging the graph hash every
+        plan run)."""
+        from modulo.api.middleware.sensitive_mask import (
+            is_sensitive_env_key as middleware_is_sensitive_env_key,
+        )
+        from modulo.cli.apply.models import _mask_graph_env_vars_for_hash, is_sensitive_env_key
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, mask_secret_values_in_text
+        from modulo.core.secret_patterns import is_sensitive_env_key as core_is_sensitive_env_key
+
+        assert is_sensitive_env_key is core_is_sensitive_env_key
+
+        sample = {
+            "MODULO_USERS": "admin:pw",
+            "GITHUB_TOKEN": "ghp_00112233445566778899aabbccddeeff00112233",
+            "LOG_LEVEL": "debug",
+            "SCAN_INTERVAL": "60s",
+        }
+        cli_masked = _mask_graph_env_vars_for_hash(sample)
+        middleware_masked = {
+            k: (SENSITIVE_VALUE_MASK if middleware_is_sensitive_env_key(k) else mask_secret_values_in_text(v))
+            for k, v in sample.items()
+        }
+        assert cli_masked == middleware_masked
+
+
+class TestPipelineGraphSecretParity:
+    """FAR-1232: the CLI hash view of a declared graph must equal the hash of
+    the same graph as the server displays it (masked). If the hashes disagree,
+    every plan run reports updated and re-sends the graph (snapshot churn)."""
+
+    DECLARED: ClassVar[dict] = {
+        "nodes": [
+            {
+                "id": "00000000-0000-0000-0000-0000000000a1",
+                "agent": "worker",
+                "position": {"x": 0, "y": 0},
+                "env_vars": {"MODULO_USERS": "admin:pw123", "LOG_LEVEL": "debug"},
+                "context_files": {"runbook.md": "token ghp_00112233445566778899aabbccddeeff00112233"},
+                "parameter_overrides": {"nested": {"db_password": "s3cr3t"}},
+            }
+        ],
+        "edges": [],
+    }
+    # What the API read shows after mask_pipeline_graph_node: env tier
+    # (whole-value sentinel), value tier (in-place redaction), deep tier
+    # (whole mask under the sensitive leaf key).
+    SERVER_VIEW: ClassVar[dict[str, dict]] = {
+        "nodes": [
+            {
+                "id": "00000000-0000-0000-0000-0000000000a1",
+                "agent": "worker",
+                "position": {"x": 0, "y": 0},
+                "env_vars": {"MODULO_USERS": "••••••", "LOG_LEVEL": "debug"},
+                "context_files": {"runbook.md": "token ••••••"},
+                "parameter_overrides": {"nested": {"db_password": "••••••"}},
+            }
+        ],
+        "edges": [],
+    }
+
+    def test_declared_and_masked_read_hash_equal(self) -> None:
+        from modulo.cli.apply.models import strip_secret_shaped_graph
+        from modulo.cli.apply.plan import canonical_hash
+
+        stripped = strip_secret_shaped_graph(self.DECLARED)
+        raw_sentinel_hash = canonical_hash(strip_secret_shaped_graph(self.SERVER_VIEW))
+        assert canonical_hash(stripped) == raw_sentinel_hash
+
+    def test_hash_age_falsifying(self) -> None:
+        """The test must fail if the redaction is removed (regression gate)."""
+        from modulo.cli.apply.plan import canonical_hash
+
+        assert canonical_hash(self.DECLARED) != canonical_hash(self.SERVER_VIEW)
+
+    def test_masked_current_view_round_trips(self) -> None:
+        """Applying the redaction to an already-masked API read (idempotency)
+        is identity — the current-side hash is stable across repeated plans."""
+        from modulo.cli.apply.models import strip_secret_shaped_graph
+        from modulo.cli.apply.plan import canonical_hash
+
+        once = strip_secret_shaped_graph(self.SERVER_VIEW)
+        twice = strip_secret_shaped_graph(once)
+        assert canonical_hash(once) == canonical_hash(twice)
+
+    def test_row_resolution_non_secret_env_passthrough(self) -> None:
+        from modulo.cli.apply.models import strip_secret_shaped_graph
+
+        stripped = strip_secret_shaped_graph(self.DECLARED)
+        assert stripped["nodes"][0]["env_vars"]["LOG_LEVEL"] == "debug"
+
+    def test_managed_view_redacts_secret_shaped_graph(self) -> None:
+        """FAR-1232: a declared graph with secrets reaches plan output only
+        through the redaction — the managed view is the plan view."""
+        from modulo.cli.apply.models import PipelineEntity, strip_secret_shaped_graph
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        entity = PipelineEntity.model_validate({"name": "sample", "graph": self.DECLARED})
+        view = entity.managed_view(graph=self.DECLARED)
+        assert view["graph"] == strip_secret_shaped_graph(self.DECLARED)
+        assert view["graph"]["nodes"][0]["env_vars"]["MODULO_USERS"] == SENSITIVE_VALUE_MASK
+
+    def test_declares_secrets_per_field(self) -> None:
+        from modulo.cli.apply.models import graph_declares_secrets
+
+        assert graph_declares_secrets(self.DECLARED)
+        assert graph_declares_secrets(self.SERVER_VIEW), "a sentinel-masked read still counts as secret-bearing"
+        clean = {
+            "nodes": [{"id": "x", "agent": "w", "position": {"x": 0, "y": 0}, "env_vars": {"LOG_LEVEL": "debug"}}],
+            "edges": [],
+        }
+        assert graph_declares_secrets(clean) is False
+        assert graph_declares_secrets({"nodes": [], "edges": []}) is False
 
 
 class TestForwardReferenceMergeGate:

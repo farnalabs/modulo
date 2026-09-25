@@ -84,6 +84,29 @@ is dropped (fail closed), and keys the caller removed stay removed. The same
 invariant holds on the MCP tool surface and on the composite-template editor /
 PATCH surfaces.
 
+**CLI hashing parity (FAR-1232).** The declarative `modulo apply` CLI compares
+its YAML declarations against the API's MASKED reads, so the CLI carries its own
+redaction (`strip_secret_shaped_graph` in `modulo/cli/apply/models.py`): pipeline
+graph node env vars, context files, composite parameter values and parameter
+overrides pass through the identical mask tiers (`is_sensitive_env_key` + the
+canonical `modulo.core.secret_patterns` value patterns + deep-dict masking).
+Because re-redacting already-redacted content is idempotent, the declared and the
+stored-masked sides hash equal whenever the declaration matches stored state (no
+phantom re-send per plan run). The same redaction runs on BOTH plan sides, so a
+graph drift breakdown compares like-for-like rather than showing mask-only
+"modified" entries. A rotated secret is invisible to that hash (both sides show
+the mask sentinel) — `--refresh-secrets` re-sends the declared graph (true values
+write through) for pipelines whose resolved graph declares secret-shaped
+entries, and triggers keep the existing config_json refresh behaviour.
+
+**Audited non-graph surfaces (FAR-1232).** No pipeline-graph serialisation was
+found on: the feedback, HITL, variant-group, and run daily-facts surfaces
+(structured records carry no graph payloads); the pipeline list / detail REST
+endpoints (node COUNT only, never node contents); the workflow engine internals
+and demo seed fixtures (server-internal, never client-facing). The sentinel-mask
+storage pattern means the org read never exposes a clear secret for these
+surfaces to leak.
+
 ### 2. Log redaction
 
 Every log record passes through `SensitiveFieldFilter`, which redacts

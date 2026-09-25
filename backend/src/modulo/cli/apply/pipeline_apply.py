@@ -25,7 +25,12 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from modulo.cli.apply.executor import ApplyHttpError, _failure_message, _find
-from modulo.cli.apply.models import ApplyEntityResolutionError, PipelineEntity, strip_secret_shaped_config
+from modulo.cli.apply.models import (
+    ApplyEntityResolutionError,
+    PipelineEntity,
+    graph_declares_secrets,
+    strip_secret_shaped_graph,
+)
 from modulo.cli.apply.plan import KIND_PIPELINE, canonical_hash
 
 if TYPE_CHECKING:
@@ -172,6 +177,7 @@ def build_desired_views(
     blocked_keys: set[tuple[str, str]],
     *,
     git_resolver: Callable[[GitContentRef], str] | None = None,
+    refresh_secrets: bool = False,
 ) -> tuple[dict[str, list[tuple[str, dict[str, Any]]]], list[tuple[str, str, str]]]:
     """Plan-phase resolution for pipeline entities (agent refs + git content refs + owner emails + shape).
 
@@ -181,6 +187,13 @@ def build_desired_views(
     *git_resolver* threads into :func:`resolve_graph` for FAR-220 movable
     ``git+`` refs (None = the default ``git ls-remote`` resolver).
     An unresolvable declared owner email blocks the affected entity (FAR-1161).
+
+    With ``refresh_secrets`` set, a pipeline whose RESOLVED graph declares
+    secret-shaped entries (FAR-1232: ``graph_declares_secrets`` — entries
+    the drift hash redacts because the API read path masks them) is marked
+    with a ``secrets_refresh`` view flag so the plan always reports
+    ``updated`` and the write path re-sends the declared true graph —
+    secret-only graph rotation is invisible to the hash otherwise.
     """
     agents = current_entities.get("agents") or {}
     ambiguous_pipelines = current_entities.get("ambiguous_pipeline_names") or {}
@@ -234,6 +247,13 @@ def build_desired_views(
                 ),
             )
         )
+        # FAR-1232 --refresh-secrets: a graph declaring secret-shaped entries
+        # is always re-sent (the criterion runs on the TRUE resolved graph,
+        # never its masked hash view). The marker key participates in the
+        # canonical hash (the current view cannot produce it), so the plan
+        # reports updated for the refreshed run.
+        if refresh_secrets and graph is not None and graph_declares_secrets(graph):
+            desired[KIND_PIPELINE][-1][1]["secrets_refresh"] = True
     return desired, blocked
 
 
@@ -244,6 +264,7 @@ def apply_pipelines(
     report: dict[str, list[dict[str, Any]]],
     *,
     git_resolver: Callable[[GitContentRef], str] | None = None,
+    refresh_secrets: bool = False,
 ) -> dict[str, str]:
     """Create/update pipelines per the plan report, capturing failures.
 
@@ -251,7 +272,9 @@ def apply_pipelines(
     when the config declares a graph. Update: PATCH /{id} with the managed
     top-level fields; graph_json is included only when the graph hash
     differs from the fetched current graph (a graph write snapshots the
-    pipeline, so an unchanged graph must not churn snapshots).
+    pipeline, so an unchanged graph must not churn snapshots) — both sides
+    hashed through the symmetric FAR-1232 graph redaction, with
+    ``refresh_secrets`` re-sending secret-declaring graphs outright.
 
     The accountability-owner keys (FAR-1161) are ALWAYS sent on both POST
     and PATCH: the resolved id, or null when the config declares no owner
@@ -302,15 +325,22 @@ def apply_pipelines(
                     current = current_pipelines[entity.name]
                     pipeline_id = str(current["id"])
                     current_graph = current.get("graph") or _EMPTY_GRAPH
-                    # Strip secret-shaped entries symmetrically before hashing
-                    # (the server masks stored credentials on read): only the
-                    # hash comparison strips — the graph_json PATCH below still
-                    # carries the declared values.
+                    # FAR-1232: the graph drift decision hashes BOTH sides
+                    # through the same symmetric redaction the plan hash
+                    # used (``strip_secret_shaped_graph``) — comparing the
+                    # raw declaration against the API-masked read would
+                    # re-send the graph (and churn a snapshot) on every
+                    # updated-pipeline run. With ``refresh_secrets``, a
+                    # secret-declaring graph is re-sent outright (real
+                    # values write through).
                     graph_differs = (
                         entity.graph is not None
                         and graph is not None
-                        and canonical_hash(strip_secret_shaped_config(graph))
-                        != canonical_hash(strip_secret_shaped_config(current_graph))
+                        and (
+                            canonical_hash(strip_secret_shaped_graph(graph))
+                            != canonical_hash(strip_secret_shaped_graph(current_graph))
+                            or (refresh_secrets and graph_declares_secrets(graph))
+                        )
                     )
                 pipeline_ids[entity.name] = pipeline_id
                 patch_payload: dict[str, Any] = {
