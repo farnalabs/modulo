@@ -10344,6 +10344,10 @@ export interface components {
             total_cost_usd?: unknown;
             /** Total Tokens */
             total_tokens?: number | null;
+            /** Node Token Usage */
+            node_token_usage?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at?: unknown;
             /** Completed At */

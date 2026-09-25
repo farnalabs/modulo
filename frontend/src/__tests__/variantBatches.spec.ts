@@ -42,6 +42,7 @@ const batchDetail: VariantBatchDetail = {
       pass_rate: 1,
       total_cost_usd: 0.5,
       total_tokens: 1200,
+      node_token_usage: null,
       eval_results: [
         { eval_id: 'e-1', node_id: 'n-1', passed: true, score: 0.9, detail: null },
       ],
@@ -56,6 +57,7 @@ const batchDetail: VariantBatchDetail = {
       pass_rate: 0.25,
       total_cost_usd: 1.25,
       total_tokens: 3400,
+      node_token_usage: null,
       eval_results: [],
       node_outputs: { step: { ok: false } },
     },
