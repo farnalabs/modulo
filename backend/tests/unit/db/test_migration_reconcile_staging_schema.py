@@ -89,9 +89,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # (FAR-1163) chains off 0255, and 0257_rename_remy_to_assistant
 # (FAR-1196 Tier 3) chains off 0256_pipeline_max_autonomy_level, and
 # 0258_pipeline_accountability_owners (FAR-1161) chains off
-# 0257_rename_remy_to_assistant, and 0259_pipeline_snapshot_max_autonomy_check
-# (FAR-1223) chains off 0258_pipeline_accountability_owners as the chain head.
-_CHAIN_HEAD_MIGRATION = "0259_pipeline_snapshot_max_autonomy_check"
+# 0257_rename_remy_to_assistant, 0259_pipeline_snapshot_max_autonomy_check
+# (FAR-1223) chains off 0258_pipeline_accountability_owners, and
+# 0260_decision_record_payload (FAR-1102) chains off 0259 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0260_decision_record_payload"
 
 
 def _source(name: str) -> str:

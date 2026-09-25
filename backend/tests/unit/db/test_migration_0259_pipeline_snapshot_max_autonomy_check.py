@@ -7,7 +7,8 @@ unguarded since 0110. 0259 closes both gaps.
 
 Lenses:
 
-* **Chain** - 0259 chains onto 0258 and is the single linear head.
+* **Chain** - 0259 chains onto 0258; 0260_decision_record_payload is the
+  single linear head on top of it.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
   vocabulary and a TABLE-QUALIFIED ``conrelid`` gate; downgrade is the
@@ -32,6 +33,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
+_HEAD_MIGRATION = "0260_decision_record_payload"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)
@@ -66,9 +68,9 @@ def _executed() -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0259(self) -> None:
+    def test_single_head_is_0260(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_MIGRATION_REVISION], f"expected a single head, got {heads}"
+        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0258(self) -> None:
         module = _load_migration()
