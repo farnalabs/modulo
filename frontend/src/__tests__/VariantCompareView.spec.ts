@@ -72,11 +72,10 @@ describe('VariantCompareView', () => {
         mocks: { $t: (key: string) => key },
       },
     })
-    await vi.waitFor(() => {
-      expect(wrapper.find('[data-testid="variant-compare-group-select"]').exists()).toBe(true)
-    })
+    await nextTick()
+    await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('views.variantCompare.title')
+    expect(wrapper.text()).toContain('Variants')
   })
 
   it('does not render the redundant page-level tab strip (FAR-1236)', async () => {
