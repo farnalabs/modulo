@@ -9,4 +9,5 @@ except PackageNotFoundError:
 
 
 def get_version() -> str:
+    """Return the installed package version, or ``"0.0.0-dev"`` when uninstalled."""
     return __version__
