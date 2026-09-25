@@ -109,6 +109,7 @@ def _make_session(*, fail_on_commit: bool = False) -> MagicMock:
         session.commit = AsyncMock(side_effect=RuntimeError("simulated commit failure"))
     else:
         session.commit = AsyncMock()
+    session.flush = AsyncMock()
     session.rollback = AsyncMock()
     session.close = AsyncMock()
 
