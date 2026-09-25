@@ -41,7 +41,7 @@ from modulo.core.pipeline_engine.node_runner import (
 )
 from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo
 from modulo.settings import Settings, get_settings
-from tests.unit.pipeline_engine.conftest import FakeFileIOProvider
+from tests.unit.pipeline_engine.conftest import FakeFileIOProvider, install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -250,6 +250,10 @@ async def test_flag_on_writes_land_before_the_agent_command(monkeypatch: pytest.
         return await original_run(*args, **kwargs)
 
     sandbox.commands.run = AsyncMock(side_effect=_run_and_record)
+    # FAR-1050 R4: flag ON no longer reaches ``AsyncSandbox.create`` — the
+    # command starts through the ABC stream primitive, so the ordering probe
+    # is wired to the dispatch seam's own "command" milestone.
+    install_fake_dispatch(monkeypatch, ref="sbx-order", command_events=order)
 
     fn = make_sandbox_agent_fn(_base_node_def())
     with (
@@ -335,12 +339,16 @@ async def test_no_sandbox_files_call_is_reachable_when_the_flag_is_on(
     """The legacy handle is unreachable flag-ON — even where a failure is swallowed.
 
     ``_ForbiddenFiles`` records every attribute touch, so an arm that catches
-    its own AssertionError cannot make this test pass vacuously.
+    its own AssertionError cannot make this test pass vacuously. FAR-1050 R4
+    additionally routes the dispatch through the provider seam, so the only
+    handle the body ever holds is the ABC-mediated one (whose ``files``
+    surface raises by construction).
     """
     _enable_flag(monkeypatch)
     sandbox = _sandbox_mock("sbx-forbidden")
     forbidden = _ForbiddenFiles()
     sandbox.files = forbidden
+    install_fake_dispatch(monkeypatch, ref="sbx-forbidden")
 
     fn = make_sandbox_agent_fn(_base_node_def())
     with (
