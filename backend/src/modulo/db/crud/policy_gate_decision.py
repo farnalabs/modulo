@@ -31,6 +31,36 @@ _DECISION_FK_CONSTRAINTS: frozenset[str] = frozenset(
 _DECISION_FK_SUBSTRINGS: tuple[str, ...] = ("policy_gate_decision",)
 
 
+def _extract_constraint_name(exc: object) -> str | None:
+    """Extract the constraint name from a SQLAlchemy IntegrityError.
+
+    Tries ``exc.constraint_name`` first (set by some DBAPI adapters).  Falls
+    back to the underlying DBAPI exception (``exc.orig``) which carries the
+    native constraint name for asyncpg and psycopg2.  As a last resort, parse
+    the constraint name from the error message string (asyncpg populates the
+    ``detail`` attribute with the constraint name in its standard error format).
+    """
+    name = getattr(exc, "constraint_name", None)
+    if name:
+        return name
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        name = getattr(orig, "constraint_name", None)
+        if name:
+            return name
+        # asyncpg ForeignKeyViolationError message format:
+        # '...violates foreign key constraint "constraint_name"...'
+        msg = str(orig)
+        marker = 'foreign key constraint "'
+        idx = msg.find(marker)
+        if idx != -1:
+            start = idx + len(marker)
+            end = msg.find('"', start)
+            if end != -1:
+                return msg[start:end]
+    return None
+
+
 def is_policy_gate_decision_fk_error(exc: Exception) -> bool:
     """Return True if *exc* is an IntegrityError referencing a decision FK.
 
@@ -41,7 +71,7 @@ def is_policy_gate_decision_fk_error(exc: Exception) -> bool:
 
     if not isinstance(exc, IntegrityError):
         return False
-    constraint = getattr(exc, "constraint_name", None)
+    constraint = _extract_constraint_name(exc)
     if constraint is None:
         return False
     if constraint in _DECISION_FK_CONSTRAINTS:

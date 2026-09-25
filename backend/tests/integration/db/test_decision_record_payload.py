@@ -13,11 +13,16 @@ Covers criteria 8, 9, 10, 16 (integration half).
 import uuid
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 pytestmark = pytest.mark.integration
+
+
+# ---------------------------------------------------------------------------
+# Helpers — mirror the sibling test_policy_gate_constraints.py pattern
+# ---------------------------------------------------------------------------
 
 
 async def _setup_org(engine: AsyncEngine):
@@ -47,6 +52,40 @@ async def _setup_org(engine: AsyncEngine):
             {"id": str(pipe_id), "oid": str(org_id), "n": f"{slug}-pipe", "aid": str(acc_id)},
         )
     return org_id, acc_id, pipe_id
+
+
+async def _insert_eval(engine, org_id, pipe_id, acc_id, node_id, eval_type="regex"):
+    eval_id = uuid.uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, "
+                "node_id, eval_type, config_json, version) "
+                "VALUES (:id, :oid, :pid, :aid, :nid, :et, '{}'::json, 1)"
+            ),
+            {
+                "id": str(eval_id),
+                "oid": str(org_id),
+                "pid": str(pipe_id),
+                "aid": str(acc_id),
+                "nid": str(node_id),
+                "et": eval_type,
+            },
+        )
+    return eval_id
+
+
+async def _insert_gate(engine, org_id, eval_id, node_id, action="warn"):
+    gate_id = uuid.uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
+                "action, version) VALUES (:id, :oid, :eid, :nid, :a, 1)"
+            ),
+            {"id": str(gate_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "a": action},
+        )
+    return gate_id
 
 
 async def _insert_decision_full(
@@ -86,6 +125,14 @@ async def _insert_decision_full(
     return decision_id
 
 
+async def _setup_eval_and_gate(engine, org_id, acc_id, pipe_id):
+    """Create a valid eval + policy_gate pair; returns (node_id, eval_id, gate_id)."""
+    node_id = uuid.uuid4()
+    eval_id = await _insert_eval(engine, org_id, pipe_id, acc_id, node_id)
+    gate_id = await _insert_gate(engine, org_id, eval_id, node_id)
+    return node_id, eval_id, gate_id
+
+
 # ---------------------------------------------------------------------------
 # C8: six payload columns present with the declared types/defaults
 # ---------------------------------------------------------------------------
@@ -94,10 +141,10 @@ async def _insert_decision_full(
 class TestC8PayloadColumns:
     @pytest.mark.asyncio
     async def test_columns_present_in_schema(self, db_engine: AsyncEngine) -> None:
-        from sqlalchemy import inspect
-
-        inspector = inspect(db_engine.sync_engine)
-        columns = {c["name"] for c in inspector.get_columns("policy_gate_decisions")}
+        async with db_engine.connect() as connection:
+            columns = await connection.run_sync(
+                lambda conn: {c["name"] for c in inspect(conn).get_columns("policy_gate_decisions")}
+            )
         expected = {
             "resolved_action",
             "error_detail",
@@ -111,29 +158,7 @@ class TestC8PayloadColumns:
     @pytest.mark.asyncio
     async def test_payload_row_round_trips(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        gate_id, eval_id = uuid.uuid4(), uuid.uuid4()
-        async with db_engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, "
-                    "node_id, eval_type, config_json, version) "
-                    "VALUES (:id, :oid, :pid, :aid, :nid, 'regex', '{}'::json, 1)"
-                ),
-                {
-                    "id": str(eval_id),
-                    "oid": str(org_id),
-                    "pid": str(pipe_id),
-                    "aid": str(acc_id),
-                    "nid": str(uuid.uuid4()),
-                },
-            )
-            await conn.execute(
-                text(
-                    "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                    "action, version) VALUES (:id, :oid, :eid, :nid, 'warn', 3)"
-                ),
-                {"id": str(gate_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(uuid.uuid4())},
-            )
+        node_id, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         node_id = uuid.uuid4()
         did = await _insert_decision_full(
             db_engine,
@@ -168,15 +193,16 @@ class TestC8PayloadColumns:
 
     @pytest.mark.asyncio
     async def test_defaults_apply_on_insert(self, db_engine: AsyncEngine) -> None:
-        org_id, _, _ = await _setup_org(db_engine)
-        payload = {"id": str(uuid.uuid4()), "oid": str(org_id), "pgid": str(uuid.uuid4()), "eid": str(uuid.uuid4())}
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        decision_id = uuid.uuid4()
         async with db_engine.begin() as conn:
             await conn.execute(
                 text(
                     "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
                     "VALUES (:id, :oid, :pgid, :eid)"
                 ),
-                payload,
+                {"id": str(decision_id), "oid": str(org_id), "pgid": str(gate_id), "eid": str(eval_id)},
             )
             row = (
                 (
@@ -185,7 +211,7 @@ class TestC8PayloadColumns:
                             "SELECT resolved_action, policy_gate_version, error_detail "
                             "FROM policy_gate_decisions WHERE id = :id"
                         ),
-                        {"id": payload["id"]},
+                        {"id": str(decision_id)},
                     )
                 )
                 .mappings()
@@ -204,23 +230,25 @@ class TestC8PayloadColumns:
 class TestC9ResolvedActionCheck:
     @pytest.mark.asyncio
     async def test_invalid_action_rejected(self, db_engine: AsyncEngine) -> None:
-        org_id, _, _ = await _setup_org(db_engine)
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         with pytest.raises(IntegrityError):
-            await _insert_decision_full(db_engine, org_id, uuid.uuid4(), uuid.uuid4(), resolved_action="explode")
+            await _insert_decision_full(db_engine, org_id, gate_id, eval_id, resolved_action="explode")
 
     @pytest.mark.asyncio
     async def test_all_vocabulary_values_accepted(self, db_engine: AsyncEngine) -> None:
-        org_id, _, _ = await _setup_org(db_engine)
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         for action in ("continue", "warn", "block"):
-            did = await _insert_decision_full(db_engine, org_id, uuid.uuid4(), uuid.uuid4(), resolved_action=action)
+            did = await _insert_decision_full(db_engine, org_id, gate_id, eval_id, resolved_action=action)
             assert did is not None
 
     @pytest.mark.asyncio
     async def test_check_constraint_present_in_schema(self, db_engine: AsyncEngine) -> None:
-        from sqlalchemy import inspect
-
-        inspector = inspect(db_engine.sync_engine)
-        ck_names = {ck["name"] for ck in inspector.get_check_constraints("policy_gate_decisions")}
+        async with db_engine.connect() as connection:
+            ck_names = await connection.run_sync(
+                lambda conn: {ck["name"] for ck in inspect(conn).get_check_constraints("policy_gate_decisions")}
+            )
         assert "ck_policy_gate_decisions_resolved_action" in ck_names
 
 
@@ -232,10 +260,10 @@ class TestC9ResolvedActionCheck:
 class TestC10TemporaryUniquenessIndex:
     @pytest.mark.asyncio
     async def test_index_present_and_unique(self, db_engine: AsyncEngine) -> None:
-        from sqlalchemy import inspect
-
-        inspector = inspect(db_engine.sync_engine)
-        indexes = {ix["name"]: ix for ix in inspector.get_indexes("policy_gate_decisions")}
+        async with db_engine.connect() as connection:
+            indexes = await connection.run_sync(
+                lambda conn: {ix["name"]: ix for ix in inspect(conn).get_indexes("policy_gate_decisions")}
+            )
         assert "ix_tmp_policy_gate_decisions_run_gate_result" in indexes
         assert indexes["ix_tmp_policy_gate_decisions_run_gate_result"]["unique"] is True
         cols = indexes["ix_tmp_policy_gate_decisions_run_gate_result"]["column_names"]
@@ -243,8 +271,10 @@ class TestC10TemporaryUniquenessIndex:
 
     @pytest.mark.asyncio
     async def test_identical_run_gate_result_rejected(self, db_engine: AsyncEngine) -> None:
-        org_id, _, _ = await _setup_org(db_engine)
-        gate_id, eval_id, run_id, er_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        run_id = uuid.uuid4()
+        er_id = uuid.uuid4()
         await _insert_decision_full(
             db_engine,
             org_id,
@@ -266,15 +296,17 @@ class TestC10TemporaryUniquenessIndex:
     @pytest.mark.asyncio
     async def test_null_eval_result_id_rows_unbounded(self, db_engine: AsyncEngine) -> None:
         """NULLs compare distinct: unlimited custodial rows for the same (run, gate)."""
-        org_id, _, _ = await _setup_org(db_engine)
-        gate_id, eval_id, run_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        run_id = uuid.uuid4()
         ids = [await _insert_decision_full(db_engine, org_id, gate_id, eval_id, run_id=run_id) for _ in range(3)]
         assert len(set(ids)) == 3
 
     @pytest.mark.asyncio
     async def test_distinct_eval_result_allowed(self, db_engine: AsyncEngine) -> None:
-        org_id, _, _ = await _setup_org(db_engine)
-        gate_id, eval_id, run_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        run_id = uuid.uuid4()
         await _insert_decision_full(db_engine, org_id, gate_id, eval_id, run_id=run_id, eval_result_id=uuid.uuid4())
         await _insert_decision_full(db_engine, org_id, gate_id, eval_id, run_id=run_id, eval_result_id=uuid.uuid4())
 
@@ -291,8 +323,8 @@ class TestC16RealIntegrityErrorMetadata:
         whose metadata classifies as a decision-record FK error."""
         from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
-        org_id, _, _ = await _setup_org(db_engine)
-        gate_id, eval_id = uuid.uuid4(), uuid.uuid4()
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         await _insert_decision_full(db_engine, org_id, gate_id, eval_id)
         exc = None
         try:

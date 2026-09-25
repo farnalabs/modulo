@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column(
             "resolved_action",
             sa.Text(),
-            server_default="'continue'",
+            server_default=sa.text("'continue'"),
             nullable=False,
         ),
     )
