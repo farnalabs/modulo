@@ -30,6 +30,7 @@ from tests.unit.api.mock_session import configure_mock_session
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
 from modulo.api.main import app
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.routes.pipelines import (
     GraphValidationIssue,
     _graph_response,
@@ -581,12 +582,15 @@ class TestSecretNonLeak:
             }
         ]
         resp = _graph_response(nodes, [])
+        # Non-vacuous: the invalid node produced at least one validation issue.
+        assert resp.validation_issues
         # The sentinel must NOT appear in any validation issue message
         for issue in resp.validation_issues:
             assert sentinel not in issue.message
-        # The sentinel IS in the node data (preserved by the fix) — verify the test is not vacuous
+        # FAR-1181: the graph read masks credential-bearing env values, so the
+        # sentinel is no longer returned raw on the node either.
         node = resp.nodes[0]
-        assert node.env_vars == {"OPENAI_API_KEY": sentinel}
+        assert node.env_vars == {"OPENAI_API_KEY": SENSITIVE_VALUE_MASK}
 
     def test_env_vars_not_in_endpoint_validation_issues(self, client: TestClient) -> None:
         """Same check through the GET /graph endpoint — the sentinel must not

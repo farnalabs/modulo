@@ -1008,6 +1008,12 @@ class TestInstallCollectionService:
             mock_collection.version = "1.0"
             mock_collection.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
             mock_session.get = AsyncMock(return_value=mock_collection)
+            # ``_persist_collection_row`` -> set_rls_org calls
+            # ``session.in_transaction()`` synchronously; on a bare AsyncMock
+            # that returns a coroutine nobody awaits (leaks a
+            # PytestUnraisableExceptionWarning) — and it must read True or
+            # set_rls_org raises "requires an active transaction".
+            mock_session.in_transaction = MagicMock(return_value=True)
 
             existing = MagicMock()
             existing.install_id = uuid.uuid4()
@@ -1047,6 +1053,11 @@ class TestInstallCollectionService:
             mock_collection.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
             mock_session.get = AsyncMock(return_value=mock_collection)
             mock_session.add = MagicMock()
+            # set_rls_org calls session.in_transaction() synchronously — a bare
+            # AsyncMock would return an un-awaited coroutine (warning leak);
+            # it must read True or set_rls_org raises "requires an active
+            # transaction".
+            mock_session.in_transaction = MagicMock(return_value=True)
 
             pin = MagicMock()
             pin.primitive_type = "schema"
@@ -1073,8 +1084,12 @@ class TestInstallCollectionService:
                     return_value=[],
                 ),
                 patch(
+                    # _record_entities is SYNCHRONOUS (install_collection calls
+                    # it without await); patching it with an AsyncMock returns a
+                    # coroutine nobody awaits, which leaks a
+                    # PytestUnraisableExceptionWarning on every run.
                     "modulo.core.library_service.install._record_entities",
-                    new_callable=AsyncMock,
+                    new_callable=MagicMock,
                 ),
             ):
                 return await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())

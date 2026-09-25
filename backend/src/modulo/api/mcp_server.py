@@ -61,7 +61,12 @@ from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimite
 from modulo.api.middleware.sensitive_mask import (
     is_sensitive_key as _shared_is_sensitive_key,
 )
-from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
+from modulo.api.middleware.sensitive_mask import (
+    mask_config_json,
+    mask_pipeline_graph_node,
+    merge_masked_config,
+    merge_masked_graph_nodes,
+)
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
@@ -2648,11 +2653,17 @@ async def get_pipeline_graph_tool(
         nodes, edges = result
         edge_dicts = _serialize_edges(edges)
 
+        # FAR-1181 (echo of the REST parity in routes/pipelines.py): the same
+        # credential-bearing node fields (env_vars / context_files /
+        # composite_parameter_values / parameter_overrides) must be masked on
+        # every graph read, not only the REST surface.
+        masked_nodes = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
+
         return {
             "pipeline_id": pipeline_id,
-            "nodes": nodes,
+            "nodes": masked_nodes,
             "edges": edge_dicts,
-            "node_count": len(nodes),
+            "node_count": len(masked_nodes),
             "edge_count": len(edge_dicts),
         }
     except ProgrammingError:
@@ -2811,6 +2822,12 @@ async def _update_pipeline_graph_impl(
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
             if _team_scoped_key_mismatch(pipeline.owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
+            # FAR-1181: the graph READ masks env_vars/context_files/parameter
+            # values; a full-replace write round-tripping that masked read must
+            # not persist the mask literals over the stored secrets. Echoes are
+            # resolved against the stored graph before the write commits — the
+            # same parity routes/pipelines.py applies on REST graph writes.
+            nodes = merge_masked_graph_nodes(nodes, list(pipeline.graph_nodes_json or []))
             mismatches = await find_connector_team_mismatches(
                 s,
                 org_id=org_id,
@@ -2856,7 +2873,9 @@ async def _update_pipeline_graph_impl(
 
     return {
         "pipeline_id": pipeline_id,
-        "nodes": updated_nodes,
+        # FAR-1181: mask the response so the MCP write surface cannot echo the
+        # stored credentials back (parity with the REST _graph_response).
+        "nodes": [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in updated_nodes],
         "edges": _serialize_edges(updated_edges),
         "node_count": len(updated_nodes),
         "edge_count": len(updated_edges),
@@ -9060,7 +9079,12 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     if snap is None:
         return f"error: Snapshot {snapshot_id} not found"
 
-    nodes = snap.graph_json.get("nodes", [])
+    # Mask credential-bearing node fields (env_vars, context_files,
+    # composite_parameter_values, parameter_overrides) exactly as the REST
+    # snapshot-detail and MCP get_pipeline_graph read paths do: snapshots
+    # store the graph with real stored values (mask echoes are resolved back
+    # to secrets on write), so raw serialization would leak them.
+    nodes = [mask_pipeline_graph_node(dict(n)) if isinstance(n, dict) else n for n in snap.graph_json.get("nodes", [])]
     edges = snap.graph_json.get("edges", [])
     result = f"Snapshot {snapshot_id} (v{snap.snapshot_version}) for pipeline {pipeline_id}\n"
     result += f"Nodes ({len(nodes)}):\n"

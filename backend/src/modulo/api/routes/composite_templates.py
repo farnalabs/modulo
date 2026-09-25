@@ -17,6 +17,7 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node, merge_masked_graph_nodes
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.composite_engine.expander import (
@@ -35,6 +36,25 @@ from modulo.db.rls import set_rls_org
 
 _MSG_COMPOSITE_TEMPLATE_NOT_FOUND = "Composite template not found"
 _PERM_PIPELINE_UPDATE = "pipeline.update"
+
+
+def _mask_sub_pipeline_graph(graph: dict[str, Any] | None) -> dict[str, Any]:
+    """Mask credential-bearing node fields inside a sub-pipeline graph (FAR-1181).
+
+    Composite templates are readable by EVERY org member
+    (``get_current_tenant_user``, no team gate) and ``save-as-composite`` can
+    copy a pipeline's node ``env_vars`` verbatim, so the template's
+    ``sub_pipeline_graph_json`` must never surface a raw secret. Reuses the
+    same per-node masker the pipeline graph read applies — no new detection
+    logic.
+    """
+    if not isinstance(graph, dict):
+        return {}
+    masked = dict(graph)
+    nodes = graph.get("nodes")
+    if isinstance(nodes, list):
+        masked["nodes"] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
+    return masked
 
 
 logger = logging.getLogger(__name__)
@@ -113,6 +133,18 @@ class CompositeTemplateListResponse(BaseModel):
     page_size: int
 
 
+def _mask_template_response(template: Any) -> CompositeTemplateResponse:
+    """Serialise a template with its sub-pipeline graph nodes masked (FAR-1181).
+
+    Every read surface that returns a CompositeTemplateResponse (list / get /
+    create / patch / restore) goes through this so credential-bearing node
+    fields can never reach an org member unmasked.
+    """
+    resp = CompositeTemplateResponse.model_validate(template)
+    resp.sub_pipeline_graph_json = _mask_sub_pipeline_graph(resp.sub_pipeline_graph_json)
+    return resp
+
+
 @router.get("")
 @handle_db_errors("composite_templates.list_composite_templates_endpoint")
 async def list_composite_templates_endpoint(
@@ -151,7 +183,7 @@ async def list_composite_templates_endpoint(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return CompositeTemplateListResponse(
-        items=[CompositeTemplateResponse.model_validate(t) for t in result.items],
+        items=[_mask_template_response(t) for t in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
@@ -181,7 +213,7 @@ async def create_composite_template_endpoint(
                 parameter_schema_id=req.parameter_schema_id,
                 version=req.version,
             )
-        return CompositeTemplateResponse.model_validate(template)
+        return _mask_template_response(template)
     except ProgrammingError:
         logger.exception("composite_templates.create_composite_template_endpoint")
         raise HTTPException(
@@ -237,7 +269,7 @@ async def get_composite_template_endpoint(
         ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
-    return CompositeTemplateResponse.model_validate(template)
+    return _mask_template_response(template)
 
 
 @router.patch("/{template_id}")
@@ -257,6 +289,19 @@ async def update_composite_template_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # FAR-1181: a PATCH round-tripping the masked GET would otherwise
+            # persist mask literals over the template's stored node values.
+            # Resolve echoes against the current template before the write.
+            incoming_graph = updates.get("sub_pipeline_graph_json")
+            if isinstance(incoming_graph, dict) and isinstance(incoming_graph.get("nodes"), list):
+                current = await get_composite_template(session, template_id)
+                if current is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
+                current_graph = current.sub_pipeline_graph_json
+                stored_nodes: list[dict[str, Any]] = []
+                if isinstance(current_graph, dict) and isinstance(current_graph.get("nodes"), list):
+                    stored_nodes = [n for n in current_graph["nodes"] if isinstance(n, dict)]
+                incoming_graph["nodes"] = merge_masked_graph_nodes(list(incoming_graph["nodes"]), stored_nodes)
             template = await update_composite_template(session, template_id, updates)
     except ProgrammingError:
         logger.exception("composite_templates.update_composite_template_endpoint")
@@ -280,7 +325,7 @@ async def update_composite_template_endpoint(
         ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
-    return CompositeTemplateResponse.model_validate(template)
+    return _mask_template_response(template)
 
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -351,7 +396,7 @@ async def restore_composite_template_endpoint(
         ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
-    return CompositeTemplateResponse.model_validate(template)
+    return _mask_template_response(template)
 
 
 # ---------------------------------------------------------------------------
@@ -399,9 +444,13 @@ async def get_composite_editor_endpoint(
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
     graph = template.sub_pipeline_graph_json
+    # FAR-1181: mask the same credential-bearing node fields the pipeline graph
+    # read masks — an org member opening the composite editor must never see a
+    # raw secret regardless of how the template was created.
+    masked = _mask_sub_pipeline_graph(graph)
     return EditorGraphResponse(
-        nodes=graph.get("nodes", []),
-        edges=graph.get("edges", []),
+        nodes=masked.get("nodes", []),
+        edges=masked.get("edges", []),
     )
 
 
@@ -420,7 +469,16 @@ async def save_composite_editor_endpoint(
             if template is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
             graph = dict(template.sub_pipeline_graph_json) if template.sub_pipeline_graph_json else {}
-            graph["nodes"] = req.nodes
+            # FAR-1181: an editor PUT round-tripping the masked GET resolves
+            # mask echoes against the stored template nodes so the mask
+            # literals are never persisted over the stored values (parity with
+            # the pipeline graph write paths).
+            raw_nodes = graph.get("nodes")
+            stored_nodes: list[dict[str, Any]] = (
+                [n for n in raw_nodes if isinstance(n, dict)] if isinstance(raw_nodes, list) else []
+            )
+            resolved_nodes = merge_masked_graph_nodes(list(req.nodes), stored_nodes)
+            graph["nodes"] = resolved_nodes
             graph["edges"] = req.edges
             template = await update_composite_template(
                 session,
@@ -451,9 +509,12 @@ async def save_composite_editor_endpoint(
         ) from None
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
+    # FAR-1181: mask the save response too — the editor round-trip never
+    # re-displays a raw secret after the write.
+    masked = _mask_sub_pipeline_graph(template.sub_pipeline_graph_json)
     return EditorGraphResponse(
-        nodes=template.sub_pipeline_graph_json.get("nodes", []),
-        edges=template.sub_pipeline_graph_json.get("edges", []),
+        nodes=masked.get("nodes", []),
+        edges=masked.get("edges", []),
     )
 
 

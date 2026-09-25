@@ -550,6 +550,15 @@ class PipelineEntity(BaseModel):
         passed in the same way as the graph) so the desired side hashes in
         the same id-space the API returns. Both keys are ALWAYS present:
         omission means null (declarative clear).
+
+        Secret-shaped graph entries (sensitive node/edge keys, or values the
+        server masks on read — e.g. a credential in a node's ``env_vars``/
+        ``context_files``) are stripped before hashing, symmetrically with the
+        current side (see ``_pipeline_current_view``). The server masks stored
+        secrets on read, so hashing the raw declared value against the masked
+        stored value would make ``apply`` report permanent false drift and
+        re-PATCH the graph on every run. The WRITE payload still carries the
+        declared values (only the hash comparison strips them).
         """
         view: dict[str, Any] = {
             "description": self.description,
@@ -568,7 +577,8 @@ class PipelineEntity(BaseModel):
         if self.manages_max_autonomy:
             view["max_autonomy_level"] = self.max_autonomy_level
         if self.graph is not None:
-            view["graph"] = {"nodes": [], "edges": []} if graph is None else graph
+            graph_view = {"nodes": [], "edges": []} if graph is None else graph
+            view["graph"] = strip_secret_shaped_config(graph_view)
         return view
 
 

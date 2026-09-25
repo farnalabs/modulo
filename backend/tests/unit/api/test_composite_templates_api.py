@@ -936,3 +936,273 @@ class TestUpdateParameterPortsJson:
         call_kwargs = upd.call_args
         updates = call_kwargs[0][2]
         assert isinstance(updates["parameter_ports_json"], list)
+
+
+class TestCompositeTemplateMasking:
+    """FAR-1181: composite templates must never surface raw secrets.
+
+    Composite templates are readable by every org member and
+    ``save-as-composite`` can copy a pipeline's credential-bearing node fields
+    verbatim, so every read surface masks node ``env_vars`` / ``context_files``
+    / parameter-value fields the same way the pipeline graph read does.
+    """
+
+    _SECRET_TOKEN = "ghp_" + "0123456789abcdef" * 2 + "fedcba98"
+
+    def _graph(self) -> dict[str, object]:
+        return {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "node_type": "agent",
+                    "agent_id": "00000000-0000-0000-0000-000000000005",
+                    "label": "Secret Node",
+                    "env_vars": {
+                        "GITHUB_TOKEN": self._SECRET_TOKEN,
+                        "APP_URL": "https://example.com",
+                    },
+                    "context_files": {"/tmp/staging/creds.txt": f"token={self._SECRET_TOKEN}"},
+                }
+            ],
+            "edges": [],
+        }
+
+    def test_get_template_masks_secret_env_and_context_files(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        template = _make_template(sub_pipeline_graph_json=self._graph())
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 200
+        node = resp.json()["sub_pipeline_graph_json"]["nodes"][0]
+        assert node["env_vars"] == {
+            "GITHUB_TOKEN": SENSITIVE_VALUE_MASK,
+            "APP_URL": "https://example.com",
+        }
+        assert node["context_files"] == {"/tmp/staging/creds.txt": "token=" + SENSITIVE_VALUE_MASK}
+
+    def test_list_templates_masks_graph_nodes(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        template = _make_template(sub_pipeline_graph_json=self._graph())
+        page_result = MagicMock(items=[template], total=1, page=1, page_size=20)
+        with (
+            patch("modulo.api.routes.composite_templates.list_composite_templates", return_value=page_result),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/composite-templates")
+        assert resp.status_code == 200
+        node = resp.json()["items"][0]["sub_pipeline_graph_json"]["nodes"][0]
+        assert node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+        assert "https://example.com" in node["env_vars"]["APP_URL"]
+
+    def test_restore_masks_graph_nodes(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        template = _make_template(sub_pipeline_graph_json=self._graph())
+        with (
+            patch("modulo.api.routes.composite_templates.restore_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
+        assert resp.status_code == 200
+        node = resp.json()["sub_pipeline_graph_json"]["nodes"][0]
+        assert node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+    def test_get_editor_masks_secret_env(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        template = _make_template(sub_pipeline_graph_json=self._graph())
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
+        assert resp.status_code == 200
+        node = resp.json()["nodes"][0]
+        assert node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+    def test_editor_put_resolves_mask_echo_and_masks_response(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        template = _make_template(sub_pipeline_graph_json=self._graph())
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.get_composite_template",
+                return_value=template,
+            ),
+            patch(
+                "modulo.api.routes.composite_templates.update_composite_template",
+                return_value=template,
+            ) as upd,
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            # The editor round-trips the masked GET: GITHUB_TOKEN comes back
+            # as the mask literal; APP_URL and the non-sensitive string are
+            # passed through as-is. The mask echo must be restored from the
+            # stored template node — never persisted as an overwrite.
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={
+                    "nodes": [
+                        {
+                            "id": "n1",
+                            "node_type": "agent",
+                            "agent_id": "00000000-0000-0000-0000-000000000005",
+                            "label": "Secret Node",
+                            "env_vars": {
+                                "GITHUB_TOKEN": SENSITIVE_VALUE_MASK,
+                                "APP_URL": "https://example.com",
+                            },
+                            "context_files": {"/tmp/staging/creds.txt": SENSITIVE_VALUE_MASK},
+                        }
+                    ],
+                    "edges": [],
+                },
+            )
+        assert resp.status_code == 200
+        graph = upd.await_args.args[2]["sub_pipeline_graph_json"]
+        node = graph["nodes"][0]
+        assert node["env_vars"] == {
+            "GITHUB_TOKEN": self._SECRET_TOKEN,
+            "APP_URL": "https://example.com",
+        }
+        assert node["context_files"] == {"/tmp/staging/creds.txt": f"token={self._SECRET_TOKEN}"}
+        response_node = resp.json()["nodes"][0]
+        assert response_node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+    def test_editor_put_drops_mask_echo_without_stored_counterpart(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        graph = self._graph()
+        template = _make_template(sub_pipeline_graph_json=graph)
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.get_composite_template",
+                return_value=template,
+            ),
+            patch(
+                "modulo.api.routes.composite_templates.update_composite_template",
+                return_value=template,
+            ) as upd,
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.put(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
+                json={
+                    "nodes": [
+                        {
+                            "id": "n1",
+                            "node_type": "agent",
+                            "agent_id": "00000000-0000-0000-0000-000000000005",
+                            "env_vars": {
+                                "GITHUB_TOKEN": SENSITIVE_VALUE_MASK,
+                                "NEW_VAR": SENSITIVE_VALUE_MASK,
+                            },
+                            "context_files": {"p": SENSITIVE_VALUE_MASK},
+                        }
+                    ],
+                    "edges": [],
+                },
+            )
+        assert resp.status_code == 200
+        node = upd.await_args.args[2]["sub_pipeline_graph_json"]["nodes"][0]
+        # NEW_VAR has no stored counterpart — mask echo dropped, not persisted.
+        assert "NEW_VAR" not in node["env_vars"]
+
+    def test_patch_resolves_mask_echoes_before_storing_graph(self, client: TestClient) -> None:
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        template_after = _make_template(sub_pipeline_graph_json=self._graph())
+        template_before = _make_template(sub_pipeline_graph_json=self._graph())
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.get_composite_template",
+                return_value=template_before,
+            ),
+            patch(
+                "modulo.api.routes.composite_templates.update_composite_template",
+                return_value=template_after,
+            ) as upd,
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}",
+                json={
+                    "sub_pipeline_graph_json": {
+                        "nodes": [
+                            {
+                                "id": "n1",
+                                "node_type": "agent",
+                                "agent_id": "00000000-0000-0000-0000-000000000005",
+                                "env_vars": {
+                                    "GITHUB_TOKEN": SENSITIVE_VALUE_MASK,
+                                    "APP_URL": "https://example.com",
+                                },
+                                "context_files": {"/tmp/staging/creds.txt": SENSITIVE_VALUE_MASK},
+                            }
+                        ],
+                        "edges": [],
+                    }
+                },
+            )
+        assert resp.status_code == 200
+        updates = upd.await_args.args[2]
+        node = updates["sub_pipeline_graph_json"]["nodes"][0]
+        assert node["env_vars"] == {
+            "GITHUB_TOKEN": self._SECRET_TOKEN,
+            "APP_URL": "https://example.com",
+        }
+        response_node = resp.json()["sub_pipeline_graph_json"]["nodes"][0]
+        assert response_node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+    def test_mask_sub_pipeline_graph_non_dict_returns_empty(self) -> None:
+        """A missing / non-dict graph masks to an empty graph, never echoes it."""
+        from modulo.api.routes.composite_templates import _mask_sub_pipeline_graph
+
+        assert not _mask_sub_pipeline_graph(None)
+        assert not _mask_sub_pipeline_graph("not-a-graph")  # type: ignore[arg-type]
+
+    def test_patch_graph_missing_template_returns_404(self, client: TestClient) -> None:
+        """A graph-bearing PATCH on a vanished template 404s before the write.
+
+        The mask-echo resolver reads the current template to restore echoed
+        secrets; if the template is gone there is nothing to resolve against, so
+        the request must fail rather than persist a mask literal.
+        """
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{uuid.uuid4()}",
+                json={"sub_pipeline_graph_json": {"nodes": [{"id": "n1"}], "edges": []}},
+            )
+        assert resp.status_code == 404
+
+    def test_patch_graph_with_non_dict_stored_graph_keeps_incoming_nodes(self, client: TestClient) -> None:
+        """A stored graph that is not a dict yields no stored nodes to merge.
+
+        The echo resolver must tolerate a null / malformed stored graph on an
+        otherwise valid template rather than raising, and take the incoming
+        nodes wholesale when there is nothing to resolve against.
+        """
+        stored = _make_template(sub_pipeline_graph_json=None)
+        stored_after = _make_template(sub_pipeline_graph_json={"nodes": [{"id": "n1"}], "edges": []})
+        with (
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=stored),
+            patch(
+                "modulo.api.routes.composite_templates.update_composite_template",
+                return_value=stored_after,
+            ) as upd,
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}",
+                json={"sub_pipeline_graph_json": {"nodes": [{"id": "n1"}], "edges": []}},
+            )
+        assert resp.status_code == 200
+        assert upd.await_args.args[2]["sub_pipeline_graph_json"]["nodes"] == [{"id": "n1"}]
