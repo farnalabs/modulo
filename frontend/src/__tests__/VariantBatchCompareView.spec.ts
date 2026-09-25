@@ -228,6 +228,56 @@ describe('VariantBatchCompareView', () => {
     expect(wrapper.find('[data-testid="variant-batch-run-link-r1"]').exists()).toBe(true)
   })
 
+  it('renders the per-node token breakdown when a variant run has one', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            node_token_usage: {
+              planner: { input_tokens: 150, output_tokens: 450, total_tokens: 600, cost_usd: 0.015 },
+              coder: { input_tokens: 1200, output_tokens: 3200, total_tokens: 4400, cost_usd: 0.108 },
+            },
+          }),
+          run({ run_id: 'r2', variant_name: 'sonnet', node_token_usage: null }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    const text = breakdown.text()
+    expect(text).toContain('planner')
+    expect(text).toContain('coder')
+    expect(text).toContain('600')
+    expect(text).toContain('4400')
+  })
+
+  it('hides the token breakdown for runs without per-node usage', async () => {
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Default mock runs carry no node_token_usage.
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="variant-batch-token-breakdown"]').exists()).toBe(false)
+  })
+
   it('re-fires the batch from the frozen batch', async () => {
     const wrapper = mount(VariantBatchCompareView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },

@@ -40,6 +40,15 @@ export interface VariantBatchRunEval {
   detail?: string | null
 }
 
+/** Per-node token usage for one variant run (feat-variants per-token comparison). */
+export interface VariantNodeTokenUsage {
+  input_tokens?: number | null
+  output_tokens?: number | null
+  total_tokens?: number | null
+  cost_usd?: number | null
+  model_cost_raw_usd?: number | null
+}
+
 export interface VariantBatchRun {
   run_id: string
   variant_name: string
@@ -51,6 +60,8 @@ export interface VariantBatchRun {
   pass_rate: number | null
   total_cost_usd: number | null
   total_tokens: number | null
+  /** Per-node token breakdown keyed by node id/label; null when not recorded. */
+  node_token_usage: Record<string, VariantNodeTokenUsage> | null
   eval_results: VariantBatchRunEval[]
   node_outputs: Record<string, unknown> | null
 }

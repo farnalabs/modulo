@@ -1036,6 +1036,26 @@ def test_run_response_node_token_usage_none_when_not_available(client: TestClien
     assert body["node_token_usage"] is None
 
 
+def test_run_response_node_token_usage_fails_closed_on_non_dict(client: TestClient) -> None:
+    """A corrupt / non-object stored union degrades to None, never a 500.
+
+    The union is a display-only surface; a malformed stored value (e.g. a
+    legacy non-JSON object or a hostile scalar) must serialize as null instead
+    of raising into the run detail (or the variant-compare surfaces that now
+    reuse the same serializer).
+    """
+    run = _make_run(status="complete", node_token_usage="not-a-dict")
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["node_token_usage"] is None
+
+
 def test_run_response_populates_trace_id(client: TestClient) -> None:
     run = _make_run(status="running")
     with (
