@@ -1,5 +1,6 @@
 """Unit tests for the admin feature-flags API endpoint."""
 
+import asyncio
 import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,7 +12,11 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.admin_feature_flags import _enforce_team_tier_gate, _resolve_tier
+from modulo.api.routes.admin_feature_flags import (
+    _emit_org_flag_override_audit,
+    _enforce_team_tier_gate,
+    _resolve_tier,
+)
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
@@ -965,6 +970,55 @@ class TestOrgFlagOverrideAudit:
             resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["overridden"] is True
+
+    async def test_audit_no_op_when_principal_has_no_organisation(self) -> None:
+        """No-op (never raise) when the principal carries no organisation.
+
+        The route 403s this principal upstream, but the helper must be safe to
+        call directly and must never be the thing that raises.
+        """
+        audit = AsyncMock()
+        principal = AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=None,
+            account_id="00000000-0000-0000-0000-000000000002",
+            org_role="admin",
+            is_system_admin=True,
+        )
+        with patch(
+            "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+            new=audit,
+        ):
+            await _emit_org_flag_override_audit(
+                MagicMock(),
+                principal,
+                flag_name="webhook_trigger",
+                enabled=True,
+            )
+        audit.assert_not_awaited()
+
+    async def test_audit_reraises_cancelled_error(self) -> None:
+        """Cancellation must propagate, never be swallowed by the fail-open except."""
+        principal = AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=self._ORG_ID,
+            account_id="00000000-0000-0000-0000-000000000002",
+            org_role="admin",
+            is_system_admin=True,
+        )
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _emit_org_flag_override_audit(
+                MagicMock(),
+                principal,
+                flag_name="webhook_trigger",
+                enabled=True,
+            )
 
 
 # ---------------------------------------------------------------------------
