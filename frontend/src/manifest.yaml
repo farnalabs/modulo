@@ -4900,11 +4900,11 @@ features:
         description: Home dashboard, metrics overview, and saved views
         status: partial
         behaviours:
-            - "[x] The dashboard renders saved views, token spend, eval rate, and run activity widgets"
+            - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
             - "[x] Dashboard metrics are scoped to the caller's organisation with per-team breakdown"
-            - "[ ] Saved views for the dashboard are configurable with custom filters and column layouts"
+            - "[ ] Saved Views (`/admin/views`, `GET/POST/PATCH/DELETE /api/v1/views` gated by `view_modes`) are configurable with custom filters and column layouts"
         deferrals:
-            - "Saved views customization for the dashboard is tracked under feat-dashboard (see product map)"
+            - "Saved Views are deferred from the MVP nav — the `/admin/views` route and its `/api/v1/views` CRUD surface are hidden via `visibility: private_preview`; restore from git history when re-enabling (FAR-546)"
     feat-environments:
         description: Environment profiles
         status: covered
@@ -5276,9 +5276,11 @@ features:
         description: System-level organization administration
         status: covered
         behaviours:
-            - "[x] System admin can list and manage organisations"
-            - "[x] Org license management is BDD-covered"
-            - "[x] Org creation with reserved infrastructure orgs is handled"
+            - "[x] POST /api/v1/admin/orgs creates a new org with a slug-uniqueness check and cost-component seeding; a duplicate slug is 409, a regular org admin is 403 (drives the real admin_orgs route with DB seams patched — system_admin_orgs.feature)"
+            - "[x] GET /api/v1/admin/orgs lists all orgs to a system admin and hides the reserved infrastructure orgs (the nil-UUID public-error ingest org and the modulo-library registry org); a regular org admin is 403"
+            - "[x] POST /api/v1/admin/orgs/{org_id}/users creates a user within a target org with cross-tenant account-takeover protection (an account already a member of the org or a local account holding a password in another org is 409), boundary role/password validation (invalid org_role or a weak password is 422), a missing org is 404, and a regular admin is 403 (system_admin_users.feature)"
+            - "[x] DELETE /api/v1/admin/orgs/{org_id} deletes an organisation — 404 for a missing org, 403 for a regular admin (system_admin_orgs.feature)"
+            - "[x] Org-level license management: GET/PUT/DELETE on /api/v1/admin/orgs/{org_id}/license resolves/stores/clears the org's settings_json.license_key via parse_and_verify, falls back to the system license, and is role-gated (GET org.license.view / PUT+DELETE org.license.manage) — BDD: system_admin_orgs.feature"
     feat-teams:
         description: Users, teams, and role-based access
         status: partial
