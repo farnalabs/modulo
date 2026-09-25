@@ -191,6 +191,38 @@ describe('AnalyzeRunButton configured / disabled states', () => {
     expect(apiMocks.modelBackends).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  it('fails closed when the model-backends request itself throws', async () => {
+    enableAssistant()
+    apiMocks.modelBackends.mockRejectedValue(new Error('network down'))
+    const wrapper = mountButton()
+    await flushPromises()
+
+    const button = wrapper.find('[data-testid="run-detail-analyze-button"]')
+    expect(button.attributes('aria-disabled')).toBe('true')
+    expect(wrapper.find('[data-testid="run-detail-analyze-tooltip"]').text()).toContain('not configured')
+  })
+
+  it('treats a model-backends response with no items array as not configured', async () => {
+    enableAssistant()
+    apiMocks.modelBackends.mockResolvedValue({ data: {}, error: undefined })
+    const wrapper = mountButton()
+    await flushPromises()
+
+    const button = wrapper.find('[data-testid="run-detail-analyze-button"]')
+    expect(button.attributes('aria-disabled')).toBe('true')
+    expect(wrapper.find('[data-testid="run-detail-analyze-tooltip"]').text()).toContain('not configured')
+  })
+
+  it('never derives a disabled reason while the action is hidden', async () => {
+    // The assistant plan flag is off, so `visible` is false. `disabledReason`
+    // must short-circuit to null rather than describing a hidden button.
+    const wrapper = mountButton()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { disabledReason: string | null }
+    expect(vm.disabledReason).toBeNull()
+  })
 })
 
 describe('AnalyzeRunButton press', () => {
@@ -243,6 +275,57 @@ describe('AnalyzeRunButton press', () => {
 
     expect(streamMocks.connectStream).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="run-detail-analyze-status"]').text()).toContain('Failed to start')
+  })
+
+  it('reports a failure without a store error when session creation returns null', async () => {
+    enableAssistant()
+    modelBackends([{ has_credentials: true }])
+    const store = useAssistantStore()
+    // A null session with no surfaced store error: the status line falls back
+    // to an empty message rather than throwing on `undefined`.
+    vi.spyOn(store, 'createSession').mockResolvedValue(null)
+    const wrapper = mountButton()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="run-detail-analyze-button"]').trigger('click')
+    await flushPromises()
+
+    expect(store.error).toBeNull()
+    expect(streamMocks.connectStream).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="run-detail-analyze-status"]').text()).toContain('Failed to start')
+  })
+
+  it('reports a failure without throwing when the handoff throws after session creation', async () => {
+    enableAssistant()
+    modelBackends([{ has_credentials: true }])
+    const store = useAssistantStore()
+    vi.spyOn(store, 'sendMessage').mockRejectedValue(new Error('seeded message rejected'))
+    const wrapper = mountButton()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="run-detail-analyze-button"]').trigger('click')
+    await flushPromises()
+
+    expect(streamMocks.connectStream).not.toHaveBeenCalled()
+    const status = wrapper.find('[data-testid="run-detail-analyze-status"]').text()
+    expect(status).toContain('Failed to start')
+    expect(status).toContain('seeded message rejected')
+  })
+
+  it('keeps an already-open assistant panel as-is after starting an analysis', async () => {
+    enableAssistant()
+    modelBackends([{ has_credentials: true }])
+    const store = useAssistantStore()
+    store.panelState = 'docked'
+    const wrapper = mountButton()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="run-detail-analyze-button"]').trigger('click')
+    await flushPromises()
+
+    // The component only promotes `closed` to `floating`; a docked panel stays docked.
+    expect(store.panelState).toBe('docked')
+    expect(streamMocks.connectStream).toHaveBeenCalledWith('session-9')
   })
 
   it('blocks a second press while an assistant response is already streaming', async () => {
