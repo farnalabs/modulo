@@ -3563,7 +3563,8 @@ export default {
       "collapse_sidebar": "Collapse sidebar",
       "expand_sidebar": "Expand sidebar",
       "user_profile": "User profile",
-      "main_navigation": "Main navigation"
+      "main_navigation": "Main navigation",
+      "loading_navigation": "Loading navigation"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",

@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePlanStore } from '../stores/planStore'
+import { flagCacheKey, parseFlagCache, serializeFlagCache } from '../config/flagCache'
 import { getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
+import { getAccessToken } from '../lib/api/client'
 import type { EventBusEvent } from '../types/events'
 
 const mockFlagsResponse = {
@@ -37,7 +39,21 @@ vi.mock('../lib/api/client', () => ({
     PUT: vi.fn(),
     DELETE: vi.fn(),
   },
+  // The flag cache is org-scoped via the access-token JWT claim (FAR-1237
+  // review finding); tests that don't care about the org leave this returning
+  // null, which maps to the shared `unknown` bucket.
+  getAccessToken: vi.fn(),
 }))
+
+/** Build a minimal opaque-JWT string carrying an `org_id` claim. */
+function jwtWithOrg(orgId: string): string {
+  const encode = (o: object) =>
+    btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ org_id: orgId })}.sig`
+}
+
+/** The cache key an org-less (opaque token) session uses. */
+const FLAG_CACHE_KEY = flagCacheKey(null)
 
 async function mockApiSuccess() {
   const { api } = await import('../lib/api/client')
@@ -73,6 +89,11 @@ function syncEvent(overrides: Partial<EventBusEvent> = {}): EventBusEvent {
 
 describe('usePlanStore', () => {
   beforeEach(async () => {
+    // The flag map persists to localStorage (FAR-1237); a payload-driven test
+    // must not leak its cache into the next test's fresh store. Default the
+    // token to org-less so cache reads/writes land in the `unknown` bucket.
+    localStorage.clear()
+    vi.mocked(getAccessToken).mockReturnValue(null)
     setActivePinia(createPinia())
     clearAllRegistrations()
     await mockApiSuccess()
@@ -535,5 +556,222 @@ describe('usePlanStore', () => {
     expect(getHandlers('team').size).toBe(0)
     expect(getHandlers('license').size).toBe(0)
     expect(getHandlers('plan').size).toBe(0)
+  })
+
+  describe('persisted flag cache (FAR-1237 — synchronous first-paint source of truth)', () => {
+    afterEach(() => {
+      // Some cases below remove/replace the localStorage global; restore it so
+      // the outer beforeEach's localStorage.clear() keeps working.
+      vi.unstubAllGlobals()
+    })
+
+    it('persists the resolved flag map to localStorage after a successful fetch', async () => {
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('none')
+
+      await store.fetchPlan()
+
+      expect(store.flagsSource).toBe('server')
+      expect(parseFlagCache(localStorage.getItem(FLAG_CACHE_KEY))).toEqual({
+        parallel_branches: true,
+        eval_system: false,
+        hitl_gates: true,
+      })
+    })
+
+    it('hydrates flags synchronously from the persisted cache before any fetch', () => {
+      localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({ mobile_sidebar_rail: true }))
+      setActivePinia(createPinia()) // fresh store re-reads the cache
+
+      const store = usePlanStore()
+
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+      // A cache hit is NOT a server load — the router tier guard still fetches.
+      expect(store.loaded).toBe(false)
+      expect(store.features).toEqual({ mobile_sidebar_rail: true })
+    })
+
+    it('an empty-but-present cache still counts as resolved (empty ≠ unknown)', () => {
+      localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({}))
+      setActivePinia(createPinia())
+
+      const store = usePlanStore()
+
+      expect(store.flagsSource).toBe('cache')
+      expect(store.loaded).toBe(false)
+    })
+
+    it('keeps the cached flags resolved when the fetch fails (never reverts to unknown)', async () => {
+      localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache({ mobile_sidebar_rail: true }))
+      const { api } = await import('../lib/api/client')
+      ;(api.GET as any).mockRejectedValue(new Error('offline'))
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+
+      await store.fetchPlan()
+
+      expect(store.error).toContain('offline')
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+    })
+
+    it('ignores a corrupt, wrong-version, or non-boolean cache', () => {
+      localStorage.setItem(FLAG_CACHE_KEY, '{not json')
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+
+      localStorage.setItem(FLAG_CACHE_KEY, JSON.stringify({ v: 999, flags: { a: true } }))
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+
+      localStorage.setItem(FLAG_CACHE_KEY, JSON.stringify({ v: 1, flags: { a: 'yes' } }))
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+
+      expect(usePlanStore().features).toEqual({})
+    })
+
+    it('ignores a cache whose JSON is not an object (falsy, primitive, array)', () => {
+      // Each value exercises a distinct early-return arm of parseFlagCache's
+      // shape guard: falsy JSON, a truthy primitive, and an array.
+      for (const raw of ['null', '0', 'false', '5', '"off"', '[]']) {
+        expect(parseFlagCache(raw)).toBeNull()
+      }
+
+      localStorage.setItem(FLAG_CACHE_KEY, '"off"')
+      setActivePinia(createPinia())
+      expect(usePlanStore().flagsSource).toBe('none')
+    })
+
+    it('ignores a cache whose flags field is missing, primitive, or an array', () => {
+      // Distinct early-return arms of the flags shape guard.
+      expect(parseFlagCache(JSON.stringify({ v: 1 }))).toBeNull()
+      expect(parseFlagCache(JSON.stringify({ v: 1, flags: 5 }))).toBeNull()
+      expect(parseFlagCache(JSON.stringify({ v: 1, flags: [] }))).toBeNull()
+    })
+
+    it('treats an unavailable localStorage as uncached', async () => {
+      vi.stubGlobal('localStorage', undefined)
+      setActivePinia(createPinia())
+
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('none')
+      expect(store.features).toEqual({})
+
+      // The fetch still resolves flags in memory; persistence is skipped.
+      await store.fetchPlan()
+      expect(store.flagsSource).toBe('server')
+      expect(store.featureEnabled('parallel_branches')).toBe(true)
+    })
+
+    it('treats a throwing localStorage read as uncached', () => {
+      const getItem = vi
+        .spyOn(Storage.prototype, 'getItem')
+        .mockImplementation(() => {
+          throw new Error('storage blocked')
+        })
+      try {
+        setActivePinia(createPinia())
+        const store = usePlanStore()
+        expect(store.flagsSource).toBe('none')
+        expect(store.features).toEqual({})
+      } finally {
+        getItem.mockRestore()
+      }
+    })
+
+    it('swallows a persist failure after a successful fetch', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const setItem = vi
+        .spyOn(Storage.prototype, 'setItem')
+        .mockImplementation(() => {
+          throw new Error('quota exceeded')
+        })
+      try {
+        const store = usePlanStore()
+        await store.fetchPlan()
+
+        expect(store.flagsSource).toBe('server')
+        expect(store.featureEnabled('parallel_branches')).toBe(true)
+        expect(warn).toHaveBeenCalledWith(
+          '[plan] Failed to persist flag cache',
+          expect.anything(),
+        )
+      } finally {
+        setItem.mockRestore()
+        warn.mockRestore()
+      }
+    })
+
+    it('scopes the cache per org — a second org never hydrates the first org’s chrome', () => {
+      localStorage.setItem(flagCacheKey('org-a'), serializeFlagCache({ mobile_sidebar_rail: true }))
+      localStorage.setItem(flagCacheKey('org-b'), serializeFlagCache({ mobile_sidebar_rail: false }))
+
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg('org-a'))
+      setActivePinia(createPinia())
+      const orgA = usePlanStore()
+      expect(orgA.flagsSource).toBe('cache')
+      expect(orgA.featureEnabled('mobile_sidebar_rail')).toBe(true)
+
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg('org-b'))
+      setActivePinia(createPinia())
+      const orgB = usePlanStore()
+      expect(orgB.flagsSource).toBe('cache')
+      expect(orgB.featureEnabled('mobile_sidebar_rail')).toBe(false)
+    })
+
+    it('writes the resolved map under the current org bucket only', async () => {
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg('org-a'))
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+
+      await store.fetchPlan()
+
+      expect(parseFlagCache(localStorage.getItem(flagCacheKey('org-a')))).toEqual({
+        parallel_branches: true,
+        eval_system: false,
+        hitl_gates: true,
+      })
+      expect(localStorage.getItem(flagCacheKey('org-b'))).toBeNull()
+      expect(localStorage.getItem(flagCacheKey(null))).toBeNull()
+    })
+
+    it('an org-less (opaque token) session uses the shared unknown bucket', () => {
+      localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: true }))
+      // getAccessToken defaults to null in beforeEach.
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+    })
+
+    it('treats a throwing token read as the unknown bucket', () => {
+      vi.mocked(getAccessToken).mockImplementation(() => {
+        throw new Error('storage blocked')
+      })
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('none')
+      expect(store.features).toEqual({})
+    })
+
+    it('treats an empty org_id claim as the unknown bucket', () => {
+      localStorage.setItem(flagCacheKey(null), serializeFlagCache({ mobile_sidebar_rail: true }))
+      vi.mocked(getAccessToken).mockReturnValue(jwtWithOrg(''))
+      setActivePinia(createPinia())
+      const store = usePlanStore()
+      expect(store.flagsSource).toBe('cache')
+      expect(store.featureEnabled('mobile_sidebar_rail')).toBe(true)
+    })
+
+    it('serializeFlagCache rejects a non-boolean map (matches the read guard)', () => {
+      expect(() =>
+        serializeFlagCache({ a: 'yes' } as unknown as Record<string, boolean>),
+      ).toThrow(TypeError)
+      expect(() =>
+        serializeFlagCache({ a: true, b: 1 } as unknown as Record<string, boolean>),
+      ).toThrow(TypeError)
+    })
   })
 })
