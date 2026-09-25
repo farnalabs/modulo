@@ -35,6 +35,7 @@ from sqlalchemy.sql import Select
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.routes.pipelines import _finalize_locked_graph_save
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -1520,10 +1521,13 @@ def test_diff_snapshots_unknown_returns_404(client: tuple[TestClient, AsyncMock]
 
 def test_diff_snapshots_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
+    secret = "raw-secret-that-must-not-leak"
     result = {
-        "snapshot_a": {"id": str(_SNAP_ID)},
-        "snapshot_b": {"id": str(uuid.uuid4())},
-        "nodes_added": [],
+        "snapshot_a": {"id": str(_SNAP_ID), "graph": {"nodes": [], "edges": []}},
+        "snapshot_b": {"id": str(uuid.uuid4()), "graph": {"nodes": [], "edges": []}},
+        "nodes_added": [
+            {"id": "n-added", "node_type": "agent", "env_vars": {"OPENAI_API_KEY": secret}},
+        ],
         "nodes_removed": [],
         "nodes_modified": [],
         "edges_added": [],
@@ -1544,7 +1548,11 @@ def test_diff_snapshots_happy_path(client: tuple[TestClient, AsyncMock]) -> None
             _stop_all(_rls_started)
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["snapshot_a"] == {"id": str(_SNAP_ID)}
+    body = resp.json()
+    assert body["snapshot_a"] == {"id": str(_SNAP_ID), "graph": {"nodes": [], "edges": []}}
+    # FAR-1181: the diff surface masks credential-bearing node fields.
+    assert body["nodes_added"][0]["env_vars"]["OPENAI_API_KEY"] == SENSITIVE_VALUE_MASK
+    assert secret not in resp.text
 
 
 # ---------------------------------------------------------------------------
