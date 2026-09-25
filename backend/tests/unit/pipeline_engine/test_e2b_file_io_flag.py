@@ -20,6 +20,7 @@ attribute touch, so a swallowed exception cannot hide a legacy-path call), and
 the flag-OFF arm never touches the provider seam.
 """
 
+import json
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,6 +33,8 @@ from modulo.core.pipeline_engine.node_runner import (
     _build_file_io_provider,
     _file_io_provider_for,
     _file_io_via_provider_enabled,
+    _get_info_via_provider,
+    _list_fs_entries_via_provider,
     _read_file_via_provider,
     _write_file_via_provider,
     make_sandbox_agent_fn,
@@ -523,3 +526,152 @@ async def test_write_helper_propagates_a_provider_failure(monkeypatch: pytest.Mo
 
     with pytest.raises(RuntimeError, match="provider write exploded"):
         await _write_file_via_provider("sbx-write-fail", _PROMPT_PATH, "x")
+
+
+# ---------------------------------------------------------------------------
+# 6. Remaining flag-ON call-site arms (context files, script input, bridge)
+# ---------------------------------------------------------------------------
+
+
+def _script_sandbox_mock(sandbox_id: str) -> MagicMock:
+    """Sandbox mock for a script-mode dispatch whose command succeeds."""
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "script stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.sandbox_id = sandbox_id
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(return_value="")
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.files.list = AsyncMock(return_value=[])
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    sandbox.get_metrics = AsyncMock(return_value=MagicMock(cpu_used_pct=1.0, mem_used=1, disk_used=1))
+    return sandbox
+
+
+def _script_node_def(**overrides: Any) -> dict[str, Any]:
+    node_def: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0, "y": 0},
+        "template_id": "opencode",
+        "mode": "script",
+        "script_command": "python3 /home/user/main.py",
+        "agent_prompt": "ignored in script mode",
+        "timeout_seconds": 30,
+    }
+    node_def.update(overrides)
+    return node_def
+
+
+async def test_get_info_via_provider_requires_a_non_empty_path(fake_file_io, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Site 3: a blank/absent watch path fails closed, never reaching the ABC."""
+    _enable_flag(monkeypatch)
+    with pytest.raises(RuntimeProviderError, match="non-empty path"):
+        await _get_info_via_provider("sbx-info", None)
+    with pytest.raises(RuntimeProviderError, match="non-empty path"):
+        await _get_info_via_provider("sbx-info", "")
+    assert not fake_file_io.events
+
+
+async def test_list_fs_entries_filters_untracked_rows(fake_file_io, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Site 4: non-str rows, the redirected log, the watch log and glob misses
+    are all excluded BEFORE a stat; only tracker-kept rows are statted."""
+    _enable_flag(monkeypatch)
+    keep = "/home/user/out/build.log"
+    watch_log = "/home/user/watch.json"
+    fake_file_io.files[keep] = b"1234567890"
+
+    async def _list(provider_ref: str, path: str) -> list[Any]:
+        fake_file_io.refs.append(provider_ref)
+        fake_file_io.events.append(f"list:{path}")
+        return [
+            12345,  # not a str -> discarded
+            nr._SANDBOX_LOG_PATH,  # redirected agent log -> excluded
+            watch_log,  # configured watch log -> excluded
+            "/home/user/notes.txt",  # does not match ``*.log`` -> excluded
+            keep,  # tracked -> statted
+        ]
+
+    fake_file_io.list_files = _list  # type: ignore[method-assign]
+
+    entries = await _list_fs_entries_via_provider("sbx-filter", "/", watch_log_path=watch_log, watch_globs=["*.log"])
+
+    assert [entry.path for entry in entries] == [keep]
+    # One listing + exactly one stat (for the kept row).
+    assert fake_file_io.refs == ["sbx-filter", "sbx-filter"]
+    assert "get_info:/home/user/notes.txt" not in fake_file_io.events
+
+
+async def test_flag_on_context_files_land_through_the_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """The context-files arm (written before the command) routes to the ABC."""
+    _enable_flag(monkeypatch)
+    sandbox = _sandbox_mock("sbx-ctx")
+    node_def = _base_node_def(context_files={"/home/user/context/notes.txt": "ctx-body"})
+
+    fn = make_sandbox_agent_fn(node_def)
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert fake_file_io.files["/home/user/context/notes.txt"] == b"ctx-body"
+    assert "write:/home/user/context/notes.txt" in fake_file_io.events
+    assert not sandbox.files.write.called
+
+
+async def test_flag_on_script_mode_input_json_lands_through_the_provider(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """The script-mode input.json arm routes to the ABC, not ``sandbox.files``."""
+    _enable_flag(monkeypatch)
+    fake_file_io.files["/home/user/output.json"] = b'{"result": "ok"}'
+    sandbox = _script_sandbox_mock("sbx-script")
+
+    fn = make_sandbox_agent_fn(_script_node_def())
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert fake_file_io.files["/home/user/input.json"] == json.dumps({"task": "x"}).encode("utf-8")
+    assert not sandbox.files.write.called
+
+
+async def test_flag_on_bridge_writes_land_through_the_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """All three loop-intercept bridge files route to the ABC when the flag is ON."""
+    _enable_flag(monkeypatch)
+    fake_file_io.files["/home/user/output.json"] = b'{"summary": "done"}'
+    sandbox = _script_sandbox_mock("sbx-bridge")
+
+    server = MagicMock()
+    server.start = AsyncMock(return_value=47591)
+    server.close = AsyncMock()
+
+    node_def = _base_node_def(loop_intercept={"enabled": True, "latency_budget_ms": 100})
+    fn = make_sandbox_agent_fn(node_def)
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.guardrails.loop_intercept.load_loop_intercept_guardrails",
+            new=AsyncMock(return_value=[MagicMock()]),
+        ),
+        patch("modulo.core.guardrails.loop_intercept.LoopInterceptCallbackServer", return_value=server),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    for bridge_path in (
+        "/home/user/modulo_bridge.py",
+        "/home/user/modulo_bridge_config.json",
+        "/home/user/.modulo_bridge_cmd.sh",
+    ):
+        assert bridge_path in fake_file_io.files
+    assert not sandbox.files.write.called
+    server.close.assert_awaited_once()
