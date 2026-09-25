@@ -113,11 +113,20 @@ async def delete_organisation(
     # still references a live org backend would abort the hard org delete.
     # Delete the binding rows explicitly FIRST so teardown is unconditional.
     from modulo.db.crud.agent_runner_binding import delete_org_binding_rows
+    from modulo.db.crud.policy_gate_decision import purge_org_decision_records
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     await set_rls_org(session, org_id)
     await set_rls_execution_context(session)
     await delete_org_binding_rows(session, org_id)
+
+    # FAR-1102: purge governance decision records BEFORE the hard-delete.
+    # The RESTRICT FK chain (pipelines -> evals -> policy_gates ->
+    # policy_gate_decisions) means hard-deleting the org with decision rows
+    # present raises IntegrityError → raw 500.  Shared helper with Path 3
+    # (org_deletion.py confirm_org_deletion).
+    await purge_org_decision_records(session, org_id)
+
     await session.delete(org)
     await session.flush()
     return True

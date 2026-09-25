@@ -8800,9 +8800,24 @@ async def _delete_housekeeping_group(
             async with s.begin_nested():
                 if await _delete_housekeeping_entity(s, model_cls, eid, org_id):
                     deleted_count += 1
-        except IntegrityError:
+        except IntegrityError as exc:
             _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
-            errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
+            from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+
+            if is_policy_gate_decision_fk_error(exc):
+                errors.append(
+                    {
+                        "id": eid,
+                        "entity_type": entity_type,
+                        "error": (
+                            f"Cannot delete {entity_type} {eid}: governance decision records present"
+                            " — archive or purge policy_gate_decisions first"
+                        ),
+                        "blocked_by": "policy_gate_decisions",
+                    }
+                )
+            else:
+                errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
     return deleted_count
 
 

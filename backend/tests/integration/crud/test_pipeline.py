@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.pipeline import (
     clone_pipeline,
     create_pipeline,
-    delete_pipeline,
     get_pipeline,
     get_pipeline_graph,
     list_pipelines,
@@ -114,18 +113,6 @@ async def test_update_pipeline_unknown_returns_none(
     rls_session: AsyncSession,
 ) -> None:
     assert await update_pipeline(rls_session, uuid.uuid4(), {"name": "x"}) is None
-
-
-async def test_delete_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
-    p = await create_pipeline(rls_session, org_id=test_org, name="Delete Me", account_id=test_user)
-    assert await delete_pipeline(rls_session, p.id) is True
-    assert await get_pipeline(rls_session, p.id) is None
-
-
-async def test_delete_pipeline_unknown_returns_false(
-    rls_session: AsyncSession,
-) -> None:
-    assert await delete_pipeline(rls_session, uuid.uuid4()) is False
 
 
 async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(

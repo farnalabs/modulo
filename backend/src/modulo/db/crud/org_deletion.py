@@ -287,6 +287,16 @@ async def confirm_org_deletion(
     # Hard-delete terminal runs past retention window
     deleted_runs = await batch_delete_old_terminal_runs(session, max_age_days=RUN_RETENTION_DAYS, batch_size=500)
 
+    # FAR-1102: purge governance decision records BEFORE the org hard-delete.
+    # The RESTRICT FK chain (pipelines -> evals -> policy_gates ->
+    # policy_gate_decisions) means hard-deleting the org with decision rows
+    # present raises IntegrityError → raw 500.  Child-first purge of the
+    # decision rows prevents this.  This is the same shared helper used by
+    # Path 6 (organisation.py delete_organisation).
+    from modulo.db.crud.policy_gate_decision import purge_org_decision_records
+
+    await purge_org_decision_records(session, org_id)
+
     # Hard-delete the organisation — FK cascade removes all remaining scoped rows
     await session.delete(org)
     await session.flush()

@@ -2155,6 +2155,7 @@ class CollectionUninstallResponse(BaseModel):
     install_id: str
     deleted: list[dict[str, str]]
     detached: list[dict[str, str]]
+    blocked: list[dict[str, str]] = Field(default_factory=list)
 
 
 @router.post(
@@ -2278,6 +2279,7 @@ async def uninstall_collection_endpoint(
         install_id=result["install_id"],
         deleted=result["deleted"],
         detached=result["detached"],
+        blocked=result.get("blocked", []),
     )
 
 
