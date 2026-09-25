@@ -125,6 +125,8 @@ export default {
       "install": "Install",
       "installing": "Installing...",
       "install_failed": "Failed to install this collection",
+      "install_warnings_title": "This collection installed with warnings",
+      "install_warnings_action": "Review each warning below. If credentials were stripped from the exported bundle, re-provision them on this instance before running the collection.",
       "installs_title": "Installs",
       "install_status": "Status: {status}",
       "community_sourced": "Community",
