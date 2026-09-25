@@ -630,17 +630,18 @@ async def reset_pipeline_circuit_breaker(
     *,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
-) -> bool:
+) -> int | None:
     """Admin re-enable: clear the tripped flag and re-activate the pipeline's triggers.
 
-    Returns ``True`` when the pipeline exists and the breaker was reset
-    (triggers re-activated); ``False`` when no such pipeline exists in the org.
+    Returns the number of re-activated triggers (``len(re_enabled_ids)`` — ``0``
+    when the pipeline had no active triggers) when the pipeline exists and the
+    breaker was reset; ``None`` when no such pipeline exists in the org.
     """
     pipeline = (
         await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
     ).scalar_one_or_none()
     if pipeline is None:
-        return False
+        return None
     pipeline.circuit_breaker_tripped = False
     pipeline.circuit_breaker_tripped_at = None
     # FAR-190: every re-activated trigger's no-delivery streak epoch is
@@ -676,7 +677,7 @@ async def reset_pipeline_circuit_breaker(
         raise
     except Exception:
         _log.warning("circuit_breaker.reset_streak_clear_failed pipeline=%s", pipeline_id)
-    return True
+    return len(re_enabled_ids)
 
 
 async def _dispatch_circuit_breaker_tripped(

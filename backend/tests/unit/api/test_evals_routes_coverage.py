@@ -201,13 +201,6 @@ def _patch_route_rls():
     with (
         patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
-        # FAR-1100 chunk 3 → 3b freeze: the create/edit guard runs before the
-        # admin gates, guardrail validation, and DB error mapping these tests
-        # exist to cover, so it would short-circuit them all to 409.  Bypass
-        # the temporary freeze here; the freeze itself is verified directly in
-        # tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b
-        # lands (CO-8).
-        patch("modulo.api.routes.evals.raise_if_frozen"),
     ):
         yield
 
@@ -622,6 +615,7 @@ def test_create_eval_from_run_returns_definition_with_sample(client: tuple[TestC
             _result(scalar_one_or_none=run),  # run lookup
             _result(scalar_one_or_none=pipeline),  # pipeline lookup
             _result(rows=[row]),  # B2b: the run's __final__ rows page
+            _result(scalar_one_or_none=None),  # PolicyGate upsert lookup (none yet)
         ],
     )
 

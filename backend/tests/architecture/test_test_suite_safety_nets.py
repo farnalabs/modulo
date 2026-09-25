@@ -109,14 +109,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Import handles duplicate pipeline names with suffix",
         }
     ),
-    "tests/bdd/features/mcp/library_browse.feature": frozenset(
-        {
-            "MCP library_browse is read-only",
-            "MCP lists library primitives",
-            "MCP searches library primitives",
-            "MCP without library:browse scope is blocked",
-        }
-    ),
     "tests/bdd/features/ui/eval_dashboard.feature": frozenset(
         {
             "Compare two runs side-by-side",

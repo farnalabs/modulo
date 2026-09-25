@@ -93,9 +93,15 @@ test.describe('Notifications', { tag: "@regression" }, () => {
     })
 
     await page.goto('/notifications')
-    await page.waitForLoadState('networkidle')
 
-    expect(receivedParams['status']).toBe('active')
+    // FAR-250: the app shell opens a long-lived SSE stream to /api/v1/events,
+    // so `networkidle` never resolves. Wait for the notifications request
+    // itself instead of network quiescence.
+    await expect
+      .poll(() => receivedParams['status'], {
+        message: 'Notifications list request must include a status filter',
+      })
+      .toBe('active')
   })
 
   test('notifications page auto-applies filters without Apply button', { tag: "@regression" }, async ({ page, env }) => {
@@ -112,8 +118,14 @@ test.describe('Notifications', { tag: "@regression" }, () => {
     })
 
     await page.goto('/notifications')
-    await page.waitForLoadState('networkidle')
-    const initialCount = requests.length
+
+    // FAR-250: the app shell opens a long-lived SSE stream to /api/v1/events,
+    // so `networkidle` never resolves. Wait for the list request itself.
+    await expect
+      .poll(() => requests.length, {
+        message: 'Notifications list must be requested on load',
+      })
+      .toBeGreaterThan(0)
 
     // The Apply Filters button should not exist
     await expect(page.locator('[data-testid="notifications-apply-filters"]')).toHaveCount(0)

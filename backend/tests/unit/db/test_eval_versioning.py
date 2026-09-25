@@ -151,21 +151,57 @@ def test_resolve_unpinned_raises_for_missing_definition() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# API helper — update is a version-scoped event                               #
+# Redirect helper — update is a version-scoped event                          #
 # --------------------------------------------------------------------------- #
-def test_stamp_eval_definition_version_bumps_and_snapshots() -> None:
-    from modulo.api.routes.evals import _stamp_eval_definition_version
+def test_create_or_update_eval_bumps_and_snapshots_on_update() -> None:
+    """Version stamping (FAR-382) now lives in ``create_or_update_eval``.
 
-    session = _make_session()
+    An update (``existing_eval_id`` given) bumps ``version`` and snapshots the
+    prior config into ``pre_version_raw``.
+    """
+    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
+    from modulo.db.models.eval import Eval
+
     org_id = uuid.uuid4()
-    row = _make_definition(org_id, version=1, config={"pattern": "old"})
-    session.add(row)
-    session.flush()
+    pipeline_id = uuid.uuid4()
+    row_id = uuid.uuid4()
+    row = Eval(
+        id=row_id,
+        organisation_id=org_id,
+        pipeline_id=pipeline_id,
+        account_id=uuid.uuid4(),
+        name="eval",
+        eval_type="regex",
+        config_json={"pattern": "old"},
+        version=1,
+    )
 
-    _stamp_eval_definition_version(row)
-    assert row.version == 2
-    assert row.pre_version_raw == {"config_json": {"pattern": "old"}}
-    session.close()
+    class _Result:
+        def scalar_one_or_none(self):
+            return row
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_Result())
+
+    updated = asyncio.run(
+        create_or_update_eval(
+            session,
+            org_id=org_id,
+            account_id=uuid.uuid4(),
+            pipeline_id=pipeline_id,
+            node_id=None,
+            name="eval",
+            eval_type="regex",
+            config_json={"pattern": "new"},
+            failure_behaviour="warn",
+            pass_threshold=None,
+            suite_id=None,
+            existing_eval_id=row_id,
+        )
+    )
+
+    assert updated.version == 2
+    assert updated.pre_version_raw == {"config_json": {"pattern": "old"}}
 
 
 def test_eval_def_to_dict_surfaces_version() -> None:

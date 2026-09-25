@@ -11,12 +11,13 @@ from sqlalchemy.sql import Select
 _AUTHZ_ENFORCE_SNIPPET = "authz_enforce"
 
 # FAR-223 PR A: the graph-save route loads the pipeline's guardrail eval rows
-# (select(EvalDefinition).where(pipeline_id=..., organisation_id=...,
+# (select(Eval).where(pipeline_id=..., organisation_id=...,
 # eval_type="guardrail")) to enforce the per-node guardrail cap at authoring
-# time. The strict mock raises on un-stubbed queries, so this SELECT on the
-# eval_definitions table is stubbed by default to no rows — no guardrail rows
-# means no cap violation (no 422).
-_GUARDRAIL_ROWS_SNIPPET = "FROM eval_definitions"
+# time. FAR-1101 chunk 3b redirected the load to the ``evals`` table. The
+# strict mock raises on un-stubbed queries, so this SELECT on the evals table is
+# stubbed by default to no rows — no guardrail rows means no cap violation
+# (no 422).
+_GUARDRAIL_ROWS_SNIPPET = "FROM evals"
 
 # FAR-526 Part A: the context-bound decrypt helper (decode_stored_secret_scoped)
 # (re-)applies the RLS org via set_rls_org, which issues a

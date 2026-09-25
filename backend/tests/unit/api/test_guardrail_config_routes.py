@@ -124,9 +124,9 @@ def _patched(
             ("check_guardrail_drift", "check_guardrail_drift", {"return_value": False}),
             ("append_audit_event", "append_audit_event", {"new_callable": AsyncMock}),
             (
-                "load_pipeline_guardrail_rows",
-                "load_pipeline_guardrail_rows",
-                {"new_callable": AsyncMock, "return_value": []},
+                "_load_pipeline_guardrail_rows_by_name",
+                "_load_pipeline_guardrail_rows_by_name",
+                {"new_callable": AsyncMock, "return_value": (MagicMock(), {})},
             ),
         ]:
             mocks[name] = stack.enter_context(patch(f"modulo.api.routes.guardrail_config.{target}", **kwargs))
@@ -268,9 +268,9 @@ def test_apply_collision_with_node_bound_row_returns_409(admin_client: TestClien
     with (
         _patched(pin=_proposed_pin()),
         patch(
-            "modulo.api.routes.guardrail_config.load_pipeline_guardrail_rows",
+            "modulo.api.routes.guardrail_config._load_pipeline_guardrail_rows_by_name",
             new_callable=AsyncMock,
-            return_value=[colliding_row],
+            return_value=(pipeline, {"no-aws-keys": colliding_row}),
         ),
     ):
         resp = admin_client.post(f"{_BASE}/apply")
@@ -492,3 +492,68 @@ def test_diff_summary_counts_by_action() -> None:
     ]
     summary = _diff_summary(changes)
     assert summary == {"add": 2, "update": 0, "remove": 1}
+
+
+# ---------------------------------------------------------------------------
+# Helper units: evals-backed row load + upsert (chunk 3b cutover)
+# ---------------------------------------------------------------------------
+
+
+async def test_load_pipeline_guardrail_rows_by_name_reads_evals() -> None:
+    """The org-level guardrail load reads the ``evals`` table and keys live
+    rows by name, dropping nameless rows."""
+    from modulo.api.routes.guardrail_config import _load_pipeline_guardrail_rows_by_name
+
+    session = AsyncMock()
+    named = MagicMock()
+    named.name = "no-aws-keys"
+    unnamed = MagicMock()
+    unnamed.name = None
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [named, unnamed]
+    session.execute = AsyncMock(return_value=result)
+
+    pipeline = MagicMock()
+    pipeline.id = uuid.uuid4()
+
+    returned_pipeline, by_name = await _load_pipeline_guardrail_rows_by_name(session, pipeline, _ORG_ID)
+
+    assert returned_pipeline is pipeline
+    assert by_name == {"no-aws-keys": named}
+    session.execute.assert_awaited_once()
+
+
+async def test_apply_guardrail_upserts_updates_existing_config_row() -> None:
+    """An existing org-level (node_id IS NULL) row is updated through the
+    shared helper with ``existing_eval_id`` so version stamping is not skipped."""
+    from modulo.api.routes.guardrail_config import _apply_guardrail_upserts
+    from modulo.core.guardrails.config import GuardrailConfigSet
+
+    session = AsyncMock()
+    existing = MagicMock()
+    existing.id = uuid.uuid4()
+    existing.node_id = None
+    existing.name = "no-aws-keys"
+    pipeline = MagicMock()
+    pipeline.id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.guardrail_config.to_eval_config", return_value={"action": "block"}),
+        patch(
+            "modulo.api.routes.guardrail_config.create_or_update_eval",
+            new_callable=AsyncMock,
+        ) as mock_upsert,
+    ):
+        await _apply_guardrail_upserts(
+            session,
+            pipeline,
+            {"no-aws-keys": existing},
+            {"no-aws-keys": object()},
+            GuardrailConfigSet(),
+            _ORG_ID,
+            _USER_ID,
+        )
+
+    mock_upsert.assert_awaited_once()
+    assert mock_upsert.call_args.kwargs["existing_eval_id"] == existing.id
+    assert mock_upsert.call_args.kwargs["eval_type"] == "guardrail"

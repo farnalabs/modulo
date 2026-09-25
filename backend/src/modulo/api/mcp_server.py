@@ -126,7 +126,6 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
-from modulo.core.eval_engine.eval_definition_freeze import definition_frozen_response
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
@@ -164,7 +163,7 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
-from modulo.db.crud.pipeline import get_pipeline
+from modulo.db.crud.pipeline import CircuitBreakerThresholdChangeDenied, get_pipeline
 from modulo.db.crud.run import WorkItemRefsRequiredError, get_run
 from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
@@ -178,7 +177,7 @@ from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
 
 if TYPE_CHECKING:
-    from modulo.db.models.eval_definition import EvalDefinition
+    pass
 
 _log = logging.getLogger(__name__)
 
@@ -441,6 +440,28 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
         key_scope=_ctx_key_scope.get(None),
         auth_type=_ctx_auth_type.get(None),
     )
+
+
+# FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
+# requires the same org-admin permission as the circuit-breaker reset.
+_CODE_COST_MANAGE = "cost.manage"  # nosec B105 — permission scope name, not a credential
+
+
+def _ctx_may_manage_cost() -> bool:
+    """FAR-1184: True when the request's role holds ``cost.manage`` (fail-closed).
+
+    Uses the SAME authority as every other permission check — the ADR 047
+    registry (``resolve_required``) plus the org-role hierarchy check
+    (``assert_org_role``). A missing/unknown role raises ``PermissionDenied``
+    and resolves to False, never True.
+    """
+    from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+
+    try:
+        assert_org_role(_ctx_role_val(), resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+    except PermissionDenied:
+        return False
+    return True
 
 
 def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
@@ -1491,6 +1512,16 @@ def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[st
         return None, {"error": "invalid_id", "field": field, "detail": f"Invalid UUID format: {value}"}
 
 
+def _parse_optional_uuid(
+    value: str | None,
+    field: str,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse an OPTIONAL UUID tool param (None passes through as "unassigned")."""
+    if value is None:
+        return None, None
+    return _parse_uuid_param(value, field)
+
+
 _TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
 
 
@@ -1683,7 +1714,16 @@ async def list_pipelines_tool(
         async with _session(org_id) as s:
             result = await list_pipelines(s, cursor=cursor, page_size=lim, team_id=_ctx_team_id_val())
         return {
-            "data": [{"id": str(p.id), "name": p.name, "visibility": p.visibility} for p in result.items],
+            "data": [
+                {
+                    "id": str(p.id),
+                    "name": p.name,
+                    "visibility": p.visibility,
+                    "business_owner_id": _owner_id_str(p.business_owner_id),
+                    "reliability_owner_id": _owner_id_str(p.reliability_owner_id),
+                }
+                for p in result.items
+            ],
             "total": result.total,
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
@@ -1700,7 +1740,11 @@ async def list_pipelines_tool(
     description="Create a new pipeline in the organisation. Returns the created pipeline details. "
     "Optional circuit_breaker_threshold (USD, > 0) sets a monthly spend circuit breaker: when the "
     "pipeline's calendar-month spend would exceed it, runs are rejected and the pipeline's triggers "
-    "pause until an org admin resets it. Omit or pass null for no breaker."
+    "pause until an org admin resets it. Omit or pass null for no breaker. "
+    "Optional business_owner_id / reliability_owner_id (account UUIDs) assign the accountability "
+    "owners (FAR-1161); each assignee must be an active member of this organisation and, when "
+    "visibility is 'team', a member of the owner team — an ineligible owner is rejected with a "
+    "validation error, never silently dropped. Omit or pass null for unassigned."
 )
 @_RETRY_DB
 async def create_pipeline(
@@ -1714,6 +1758,8 @@ async def create_pipeline(
     max_autonomy_level: str | None = None,
     folder_id: str | None = None,
     circuit_breaker_threshold: float | None = None,
+    business_owner_id: str | None = None,
+    reliability_owner_id: str | None = None,
 ) -> dict[str, Any]:
     parsed_folder_id: uuid.UUID | None = None
     if folder_id is not None:
@@ -1724,6 +1770,12 @@ async def create_pipeline(
     threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
     if threshold_error is not None:
         return threshold_error
+    parsed_business_owner, business_owner_err = _parse_optional_uuid(business_owner_id, "business_owner_id")
+    if business_owner_err is not None:
+        return business_owner_err
+    parsed_reliability_owner, reliability_owner_err = _parse_optional_uuid(reliability_owner_id, "reliability_owner_id")
+    if reliability_owner_err is not None:
+        return reliability_owner_err
 
     # FAR-1163: the autonomy ceiling must be a valid level and sit at or
     # above the default (same rule as the REST create route).
@@ -1739,10 +1791,27 @@ async def create_pipeline(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("create_pipeline")
-        from modulo.db.crud.pipeline import create_pipeline
+        from modulo.db.crud.pipeline import (
+            circuit_breaker_threshold_change_allowed,
+            create_pipeline,
+            normalize_circuit_breaker_threshold,
+        )
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
+
+        # FAR-1184: every surface that can set the threshold runs the ONE
+        # shared check. Create always starts from previous=None ("set where
+        # none exists"), so this consults cost.manage but can only refuse if
+        # the rule ever tightens; the refusal still audits + returns a
+        # permission-denied result like set_pipeline_circuit_breaker.
+        new_threshold = normalize_circuit_breaker_threshold(circuit_breaker_threshold)
+        if not circuit_breaker_threshold_change_allowed(
+            None,
+            new_threshold,
+            may_manage_cost=_ctx_may_manage_cost(),
+        ):
+            raise CircuitBreakerThresholdChangeDenied(previous=None, new=new_threshold)
 
         async with _session(org_id) as s:
             pipeline = await create_pipeline(
@@ -1759,6 +1828,8 @@ async def create_pipeline(
                 max_autonomy_level=max_autonomy_level,
                 folder_id=parsed_folder_id,
                 circuit_breaker_threshold=circuit_breaker_threshold,
+                business_owner_id=parsed_business_owner,
+                reliability_owner_id=parsed_reliability_owner,
             )
 
         return {
@@ -1770,10 +1841,24 @@ async def create_pipeline(
             "default_autonomy_level": pipeline.default_autonomy_level,
             "circuit_breaker_threshold": _threshold_float(pipeline.circuit_breaker_threshold),
             "max_autonomy_level": pipeline.max_autonomy_level,
+            "business_owner_id": _owner_id_str(pipeline.business_owner_id),
+            "reliability_owner_id": _owner_id_str(pipeline.reliability_owner_id),
             "created_at": pipeline.created_at.isoformat() if pipeline.created_at else None,
+        }
+    except CircuitBreakerThresholdChangeDenied as exc:
+        await _append_mcp_threshold_denial_audit(org_id, None, exc)
+        return {
+            "error": "permission_denied",
+            "field": "circuit_breaker_threshold",
+            "detail": str(exc),
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except FastAPIHTTPException as exc:
+        # FAR-1161: the shared eligibility invariant rejects an ineligible
+        # accountability owner with a 422 — surface the specific detail
+        # instead of a generic internal error.
+        return {"error": "validation_failed", "detail": str(exc.detail)}
     except ProgrammingError:
         _log.exception("create_pipeline failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -1800,13 +1885,70 @@ def _threshold_float(value: Any) -> float | None:
     return float(value)
 
 
+def _owner_id_str(value: Any) -> str | None:
+    """Serialise an accountability-owner column as a JSON string (None = unassigned).
+
+    FAR-1161: defensive like ``PipelineResponse._coerce_owner_id`` — partial
+    ORM stand-ins and test doubles expose non-column attributes that must
+    serialise as "unassigned" (None), never a repr string.
+    """
+    return str(value) if isinstance(value, uuid.UUID | str) else None
+
+
+async def _append_mcp_threshold_denial_audit(
+    org_id: uuid.UUID,
+    resource_id: uuid.UUID | None,
+    exc: CircuitBreakerThresholdChangeDenied,
+) -> None:
+    """FAR-1184: append the threshold-change-denied audit event for an MCP denial.
+
+    Runs in a fresh ``_session`` after the guarded write's transaction rolled
+    back (or before it ever ran), so the refusal is never lost. Best-effort:
+    an audit failure is logged but never masks the permission-denied result.
+    ``resource_id`` is None on ``create_pipeline`` (no row exists yet).
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.db.crud.pipeline import CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT
+
+        async with _session(org_id) as s:
+            try:
+                actor_user_id = _ctx_user_id_val()
+            except McpAuthContextError:
+                actor_user_id = None
+            await append_audit_event(
+                s,
+                org_id=org_id,
+                event_type=CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
+                actor_user_id=actor_user_id,
+                resource_type="pipeline",
+                resource_id=resource_id,
+                payload_json={
+                    "denied": True,
+                    "previous_threshold_usd": float(exc.previous) if exc.previous is not None else None,
+                    "new_threshold_usd": float(exc.new) if exc.new is not None else None,
+                    "changed_by": str(actor_user_id) if actor_user_id is not None else None,
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "mcp.circuit_breaker_threshold_change_denial_audit_failed",
+            extra={"org_id": str(org_id)},
+        )
+
+
 @mcp.tool(
     description="Set or clear a pipeline's monthly spend circuit breaker (USD). "
     "circuit_breaker_threshold > 0 enables it: when the pipeline's calendar-month spend plus a run's "
     "cost would exceed the threshold, the run is rejected, all of the pipeline's triggers pause and "
     "admins are notified; an org admin resets it via POST "
     "/api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. Pass null to disable. "
-    "Every change is audited (pipeline.circuit_breaker_threshold_changed). Available on every plan."
+    "Lowering the threshold or setting the first one requires pipeline.update; RAISING it or "
+    "CLEARING an existing one requires the cost.manage (org admin) permission and is refused "
+    "otherwise (FAR-1184). Every change is audited (pipeline.circuit_breaker_threshold_changed); "
+    "refusals are audited as pipeline.circuit_breaker_threshold_change_denied. Available on every plan."
 )
 @_RETRY_DB
 async def set_pipeline_circuit_breaker(
@@ -1827,14 +1969,37 @@ async def set_pipeline_circuit_breaker(
         if threshold_error is not None:
             return threshold_error
 
-        from modulo.db.crud.pipeline import update_pipeline
+        from modulo.db.crud.pipeline import (
+            circuit_breaker_threshold_change_allowed,
+            get_pipeline,
+            normalize_circuit_breaker_threshold,
+            update_pipeline,
+        )
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
+        # FAR-1184: validated above; normalise to the column's Decimal scale
+        # BEFORE the permission comparison so an unexpected type never
+        # reaches `new <= previous`.
+        new_threshold = normalize_circuit_breaker_threshold(circuit_breaker_threshold)
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
+            current = await get_pipeline(s, pid)
+            # FAR-1184: raising/clearing the spend limit requires cost.manage;
+            # lowering or setting where none exists keeps pipeline.update.
+            # Raised BEFORE the mutation; the denial audits fresh + returns a
+            # permission-denied result via the except clause below.
+            if current is not None and not circuit_breaker_threshold_change_allowed(
+                current.circuit_breaker_threshold,
+                new_threshold,
+                may_manage_cost=_ctx_may_manage_cost(),
+            ):
+                raise CircuitBreakerThresholdChangeDenied(
+                    previous=current.circuit_breaker_threshold,
+                    new=new_threshold,
+                )
             pipeline = await update_pipeline(
                 s,
                 pid,
@@ -1850,6 +2015,13 @@ async def set_pipeline_circuit_breaker(
                 "circuit_breaker_threshold": _threshold_float(pipeline.circuit_breaker_threshold),
                 "circuit_breaker_tripped": bool(pipeline.circuit_breaker_tripped),
             }
+    except CircuitBreakerThresholdChangeDenied as exc:
+        await _append_mcp_threshold_denial_audit(org_id, pid, exc)
+        return {
+            "error": "permission_denied",
+            "field": "circuit_breaker_threshold",
+            "detail": str(exc),
+        }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -1858,6 +2030,82 @@ async def set_pipeline_circuit_breaker(
     except Exception:
         _log.exception("set_pipeline_circuit_breaker failed")
         return _tool_error("Failed to set pipeline circuit breaker")
+
+
+@mcp.tool(
+    description=(
+        "Set BOTH of a pipeline's accountability owners (FAR-1161) in one atomic write. "
+        "Both parameters are REQUIRED and nullable: pass an account UUID to assign, or null to "
+        "clear that owner (there is no leave-unchanged state — the tool always writes both "
+        "fields; pass the owner's current id to keep it). The assignee must be an active member "
+        "of this organisation and, when the pipeline's visibility is 'team', a member of the "
+        "pipeline's owner team — the shared eligibility invariant rejects an ineligible owner "
+        "with a validation error (never silently dropped). Returns the stored owners. "
+        "Every change is audited (pipeline.business_owner_changed / pipeline.reliability_owner_changed)."
+    ),
+)
+@_RETRY_DB
+async def set_pipeline_owners(
+    pipeline_id: str,
+    business_owner_id: str | None,
+    reliability_owner_id: str | None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("set_pipeline_owners")
+
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        if pid is None:
+            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+        parsed_business, business_err = _parse_optional_uuid(business_owner_id, "business_owner_id")
+        if business_err is not None:
+            return business_err
+        parsed_reliability, reliability_err = _parse_optional_uuid(reliability_owner_id, "reliability_owner_id")
+        if reliability_err is not None:
+            return reliability_err
+
+        from modulo.db.crud.pipeline import update_pipeline
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            pipeline = await update_pipeline(
+                s,
+                pid,
+                {
+                    "business_owner_id": parsed_business,
+                    "reliability_owner_id": parsed_reliability,
+                },
+                org_id=org_id,
+                account_id=account_id,
+            )
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            # Built inside the session (commits on exit) so no expired attribute is read.
+            return {
+                "pipeline_id": pipeline_id,
+                "business_owner_id": _owner_id_str(pipeline.business_owner_id),
+                "reliability_owner_id": _owner_id_str(pipeline.reliability_owner_id),
+            }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except FastAPIHTTPException as exc:
+        # FAR-1161: the shared eligibility invariant rejects an ineligible
+        # accountability owner with a 422 — surface the specific detail
+        # instead of a generic internal error.
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+    except ProgrammingError:
+        _log.exception("set_pipeline_owners failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("set_pipeline_owners failed")
+        return _tool_error("Failed to set pipeline owners")
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
@@ -3223,14 +3471,52 @@ async def list_eval_definitions(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_eval_definitions")
-        from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
 
         org_id = _ctx_org_id_val()
         pid = uuid.UUID(pipeline_id) if pipeline_id else None
         lim = max(1, min(limit, 100))
 
+        from modulo.db.crud.pagination import CursorPaginator
+        from modulo.db.models.eval import Eval
+        from modulo.db.models.policy_gate import PolicyGate as PolicyGateModel
+
         async with _session(org_id) as s:
-            result = await db_list_eval_definitions(s, org_id, pipeline_id=pid, cursor=cursor, limit=lim)
+            q = select(Eval).where(
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
+            )
+            if pid is not None:
+                q = q.where(Eval.pipeline_id == pid)
+
+            paginator = CursorPaginator(sort_field="name", sort_dir="asc")
+            page = await paginator.paginate(
+                s,
+                q,
+                cursor=cursor,
+                limit=lim,
+                model=Eval,
+                compute_total=True,
+            )
+            rows = page.items
+
+            # Batch-load PolicyGates for failure_behaviour mapping.
+            gate_map: dict[uuid.UUID, Any] = {}
+            if rows:
+                eval_ids = [r.id for r in rows]
+                gates = (
+                    (
+                        await s.execute(
+                            select(PolicyGateModel).where(
+                                PolicyGateModel.eval_id.in_(eval_ids),
+                                PolicyGateModel.organisation_id == org_id,
+                                PolicyGateModel.deleted_at.is_(None),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                gate_map = {g.eval_id: g for g in gates}
 
         return {
             "data": [
@@ -3239,15 +3525,15 @@ async def list_eval_definitions(
                     "name": d.name,
                     "type": d.eval_type,
                     "pipeline_id": str(d.pipeline_id),
-                    "failure_behaviour": d.failure_behaviour,
-                    "pass_threshold": d.pass_threshold,
+                    "failure_behaviour": gate_map[d.id].action if d.id in gate_map else "warn",
+                    "pass_threshold": float(d.pass_threshold) if d.pass_threshold is not None else None,
                     "suite_id": d.suite_id,
                 }
-                for d in result.items
+                for d in rows
             ],
-            "total": result.total,
-            "next_cursor": result.next_cursor,
-            "has_more": result.has_more,
+            "total": page.total,
+            "next_cursor": page.next_cursor,
+            "has_more": page.has_more,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -3329,21 +3615,25 @@ def _parse_eval_ref_ids(
     return primary, node, None
 
 
-async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> "EvalDefinition | None":
-    """Load an org-scoped EvalDefinition row; None when the row does not exist.
+async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> Any:
+    """Load an org-scoped ``Eval`` row; ``None`` when the row does not exist.
 
-    Shared by the update and delete impls; the model import stays lazy per
-    this module's convention.
+    Return type is ``Eval | None`` (from ``modulo.db.models.eval``); written
+    as ``Any`` because the import is deferred inside the function body.
+
+    Consolidated single loader (chunk 3b cutover): reads from the ``evals``
+    table instead of ``eval_definitions``.  Used by the update (W6) and
+    delete (W9) impls.
     """
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.eval import Eval
     from modulo.db.soft_delete import include_soft_deleted
 
     return (
         await s.execute(
             include_soft_deleted(
-                select(EvalDefinition).where(
-                    EvalDefinition.id == eid,
-                    EvalDefinition.organisation_id == org_id,
+                select(Eval).where(
+                    Eval.id == eid,
+                    Eval.organisation_id == org_id,
                 )
             )
         )
@@ -3381,12 +3671,10 @@ async def _create_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Persist a new EvalDefinition; shared with the MCP tool wrapper."""
-    # FAR-1100 chunk 3 → 3b freeze: creation disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    if (err := definition_frozen_response()) is not None:
-        return err
+    """Persist a new EvalDefinition; shared with the MCP tool wrapper.
 
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("create_eval_definition")
@@ -3409,10 +3697,21 @@ async def _create_eval_definition_impl(
 
     cfg = config_json if config_json is not None else {}
 
-    if (guard_err := _eval_def_guardrail_validation_error(eval_type, failure_behaviour, cfg)) is not None:
-        return guard_err
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval, validate_guardrail_request
+    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
+    # Run guardrail validator; catch HTTPException and convert to MCP error dict
+    try:
+        validate_guardrail_request(
+            eval_type=eval_type,
+            failure_behaviour=failure_behaviour,
+            config_json=cfg,
+        )
+    except StarletteHTTPException as exc:
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+
     from modulo.db.models.pipeline import Pipeline
 
     async with _session(org_id) as s:
@@ -3427,22 +3726,24 @@ async def _create_eval_definition_impl(
         if pipeline is None:
             return {"error": "pipeline_not_found", "detail": MSG_PIPELINE_NOT_FOUND}
 
-        eval_def = EvalDefinition(
-            organisation_id=org_id,
-            pipeline_id=pid,
-            node_id=nid,
-            name=name,
-            eval_type=eval_type,
-            config_json=cfg,
-            failure_behaviour=failure_behaviour,
-            pass_threshold=pass_threshold,
-            suite_id=suite_id,
-            account_id=account_id,
-            version=1,
-        )
-        s.add(eval_def)
-        await s.flush()
-        return _eval_def_to_dict(eval_def)
+        try:
+            eval_row = await create_or_update_eval(
+                s,
+                org_id=org_id,
+                account_id=account_id,
+                pipeline_id=pid,
+                node_id=nid,
+                name=name,
+                eval_type=eval_type,
+                config_json=cfg,
+                failure_behaviour=failure_behaviour,
+                pass_threshold=pass_threshold,
+                suite_id=suite_id,
+            )
+        except PolicyGateBindingViolationError as exc:
+            return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
+
+        return _eval_def_to_dict(eval_row, failure_behaviour_override=failure_behaviour)
 
 
 @mcp.tool(
@@ -3531,25 +3832,6 @@ def _collect_eval_definition_updates(
     return updates
 
 
-def _eval_def_guardrail_validation_error(
-    eval_type: str,
-    failure_behaviour: str | None,
-    config_json: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Run the REST guardrail validator; returns a validation_failed dict or None."""
-    from modulo.api.routes.evals import _validate_guardrail_request
-
-    try:
-        _validate_guardrail_request(
-            eval_type=eval_type,
-            failure_behaviour=failure_behaviour,
-            config_json=config_json,
-        )
-    except StarletteHTTPException as exc:
-        return {"error": "validation_failed", "detail": str(exc.detail)}
-    return None
-
-
 async def _update_eval_definition_impl(
     eval_id: str,
     node_id: str | None,
@@ -3560,12 +3842,10 @@ async def _update_eval_definition_impl(
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
-    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper."""
-    # FAR-1100 chunk 3 → 3b freeze: editing disabled between read cutover and
-    # write cutover.  Remove when chunk 3b lands (CO-8).
-    if (err := definition_frozen_response()) is not None:
-        return err
+    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper.
 
+    Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("update_eval_definition")
@@ -3573,7 +3853,6 @@ async def _update_eval_definition_impl(
     from modulo.api.routes.evals import (
         _MSG_EVAL_DEFINITION_NOT_FOUND,
         _eval_def_to_dict,
-        _stamp_eval_definition_version,
     )
 
     val_err: dict[str, Any] | None = _assert_update_eval_definition_params(
@@ -3602,26 +3881,72 @@ async def _update_eval_definition_impl(
         suite_id=suite_id,
     )
 
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    from modulo.core.eval_engine.eval_definition_write import create_or_update_eval, validate_guardrail_request
+    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
     async with _session(org_id) as s:
-        eval_def = await _load_eval_def(s, org_id, eid)
-        if eval_def is None:
+        eval_row = await _load_eval_def(s, org_id, eid)
+        if eval_row is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
-        guard_err = _eval_def_guardrail_validation_error(
-            eval_type=updates.get("eval_type", eval_def.eval_type),
-            failure_behaviour=updates.get("failure_behaviour", eval_def.failure_behaviour),
-            config_json=updates.get("config_json", eval_def.config_json),
-        )
-        if guard_err is not None:
-            return guard_err
+        # Resolve current failure_behaviour from the PolicyGate (if any),
+        # falling back to "warn" for guardrail-typed / suite-scoped evals.
+        from modulo.db.models.policy_gate import PolicyGate as PolicyGateModel
 
-        # FAR-382: snapshot the pre-edit config, then bump the version so a
-        # rubric/config change is an explicitly version-scoped event.
-        _stamp_eval_definition_version(eval_def)
-        for key, value in updates.items():
-            setattr(eval_def, key, value)
-        await s.flush()
-        return _eval_def_to_dict(eval_def)
+        gate_result = await s.execute(
+            select(PolicyGateModel).where(
+                PolicyGateModel.eval_id == eval_row.id,
+                PolicyGateModel.organisation_id == org_id,
+                PolicyGateModel.deleted_at.is_(None),
+            )
+        )
+        current_gate = gate_result.scalar_one_or_none()
+        current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
+
+        # Run guardrail validator; catch HTTPException and convert to MCP error dict
+        try:
+            validate_guardrail_request(
+                eval_type=updates.get("eval_type", eval_row.eval_type),
+                failure_behaviour=updates.get("failure_behaviour", current_failure_behaviour),
+                config_json=updates.get("config_json", eval_row.config_json),
+            )
+        except StarletteHTTPException as exc:
+            return {"error": "validation_failed", "detail": str(exc.detail)}
+
+        # Redirect to Eval+PolicyGate via the shared helper — version
+        # stamping and PolicyGate management are handled internally.
+        try:
+            eval_row = await create_or_update_eval(
+                s,
+                org_id=org_id,
+                account_id=eval_row.account_id,
+                pipeline_id=eval_row.pipeline_id,
+                node_id=updates.get("node_id", eval_row.node_id),
+                name=updates.get("name") or eval_row.name or "",
+                eval_type=updates.get("eval_type", eval_row.eval_type),
+                config_json=updates.get("config_json", eval_row.config_json),
+                failure_behaviour=updates.get("failure_behaviour", current_failure_behaviour),
+                pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
+                suite_id=updates.get("suite_id", eval_row.suite_id),
+                eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
+                existing_eval_id=eid,
+            )
+        except PolicyGateBindingViolationError as exc:
+            return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
+
+        # Reload the PolicyGate for the response mapping.
+        gate_result = await s.execute(
+            select(PolicyGateModel).where(
+                PolicyGateModel.eval_id == eval_row.id,
+                PolicyGateModel.organisation_id == org_id,
+                PolicyGateModel.deleted_at.is_(None),
+            )
+        )
+        policy_gate = gate_result.scalar_one_or_none()
+
+        return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
 
 
 @mcp.tool(
@@ -3691,7 +4016,15 @@ async def _audit_eval_def_delete(
 
 
 async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, Any]:
-    """Soft-delete or purge an EvalDefinition; shared with the MCP tool wrapper."""
+    """Soft-delete or purge an Eval; shared with the MCP tool wrapper.
+
+    Reads from the ``evals`` table (chunk 3b cutover). Soft-delete stamps
+    ``deleted_at``/``deleted_by`` on the ``Eval`` and its live ``PolicyGate``
+    (if any) in the same transaction. Hard-delete removes the ``Eval`` row
+    (``PolicyGate`` cascades via ``ON DELETE CASCADE``); ``PolicyGateDecision``
+    rows block hard-delete via RESTRICT — both keys checked (``eval_id``
+    direct and ``policy_gate_id`` cascade).
+    """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("delete_eval_definition")
@@ -3709,20 +4042,49 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     async with _session(org_id) as s:
-        eval_def = await _load_eval_def(s, org_id, eid)
-        if eval_def is None:
+        eval_row = await _load_eval_def(s, org_id, eid)
+        if eval_row is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
-        is_guardrail = eval_def.eval_type == "guardrail"
+        is_guardrail = eval_row.eval_type == "guardrail"
         soft = is_guardrail and not hard
-        eval_name = eval_def.name
+        eval_name = eval_row.name
         if soft:
-            eval_def.deleted_at = datetime.now(UTC)
-            eval_def.deleted_by = account_id
+            now = datetime.now(UTC)
+            eval_row.deleted_at = now
+            eval_row.deleted_by = account_id
+            # Soft-delete the live PolicyGate (if any) in the same
+            # transaction — no orphaned gate enforcing silently.
+            from modulo.db.models.policy_gate import PolicyGate
+
+            gate_result = await s.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_row.id,
+                    PolicyGate.organisation_id == org_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            gate = gate_result.scalar_one_or_none()
+            if gate is not None:
+                gate.deleted_at = now
+                gate.deleted_by = account_id
         else:
-            await s.delete(eval_def)
+            # Hard-delete: PolicyGate cascades via ON DELETE CASCADE;
+            # PolicyGateDecision rows block via RESTRICT (both keys:
+            # eval_id direct + policy_gate_id cascade).
+            try:
+                await s.delete(eval_row)
+                await s.flush()
+            except IntegrityError:
+                return {
+                    "error": "delete_blocked_by_decisions",
+                    "detail": (
+                        "Cannot hard-delete eval: existing decision rows prevent"
+                        " removal (RESTRICT on eval_id and/or policy_gate_id)"
+                    ),
+                }
         if is_guardrail:
-            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name)
+            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name or "")
     return {"id": str(eid), "soft_deleted": soft, "hard_deleted": not soft}
 
 
@@ -4690,6 +5052,10 @@ async def search_library(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         org_id = _ctx_org_id_val()
+        try:
+            _check_agent_tool_scope("search_library")
+        except MCPAuthorizationError as exc:
+            return {"error": "insufficient_scope", "detail": str(exc)}
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
@@ -8620,6 +8986,8 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
         f"Description: {pipeline.description or '(none)'}",
         f"Status: {'active' if pipeline.graph_nodes_json else 'inactive'}",
         f"Visibility: {pipeline.visibility}",
+        f"Business owner: {_owner_id_str(getattr(pipeline, 'business_owner_id', None)) or '(none)'}",
+        f"Reliability owner: {_owner_id_str(getattr(pipeline, 'reliability_owner_id', None)) or '(none)'}",
         f"Created: {pipeline.created_at.isoformat()}",
         f"Node count: {len(pipeline.graph_nodes_json)}",
         f"Edge count: {edge_count}",

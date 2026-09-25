@@ -279,13 +279,16 @@ async def test_post_node_eval_persists_via_evals_cutover(
 # ---------------------------------------------------------------------------
 
 
-async def test_eval_suite_guard_still_reads_eval_definitions(
+async def test_eval_suite_guard_reads_evals_not_eval_definitions(
     db_engine: AsyncEngine,
     migrated_db_url: str,
 ) -> None:
-    """``_check_eval_suites`` still reads ``eval_definitions`` in this chunk
-    (the suite read switch lands in chunk 5c): an all-pass run clears the
-    guard; a below-threshold run raises ``EvalSuiteBlockedError``."""
+    """``_check_eval_suites`` now reads from ``evals`` (not ``eval_definitions``).
+    An all-pass run clears the guard; a below-threshold run raises
+    ``EvalSuiteBlockedError``. The thresholds differ between tables so the
+    test can distinguish which table governs: if it reads ``evals`` (intended),
+    the 0.5 threshold governs; if it reads ``eval_definitions`` (wrong), the
+    0.8 threshold governs."""
     from modulo.core.pipeline_engine.executor import PipelineExecutor
     from modulo.settings import get_settings
 
@@ -294,20 +297,22 @@ async def test_eval_suite_guard_still_reads_eval_definitions(
     pipe = await _seed_pipeline(db_engine, org_id, "PipeCutoverSuite", account_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe, {"nodes": [], "edges": []})
 
-    # Suite-scoped eval_definitions (node_id NULL, suite_id + threshold set).
-    # The same UUIDs are mirrored into `evals` — the post-cutover data shape
-    # 0254's backfill produces — because eval_results.eval_id now resolves
-    # via evals (tenant trigger), while `_check_eval_suites` still reads
-    # eval_definitions (chunk 5c switches that read).
+    # Suite-scoped evals (node_id NULL, suite_id + threshold set).
+    # eval_definitions rows use a DIFFERENT threshold (0.8) so the test can
+    # distinguish which table _check_eval_suites reads: if it reads
+    # evals (intended, chunk 3b), the 0.5 threshold governs;
+    # if it reads eval_definitions (wrong), the 0.8 threshold governs.
     def_a = uuid.uuid4()
     def_b = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         for eval_id, name in ((def_a, "suite-a"), (def_b, "suite-b")):
+            # eval_definitions row uses threshold 0.8 (the WRONG source
+            # for this chunk — if _check_eval_suites reads it, 0.8 governs)
             await conn.execute(
                 text(
                     "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, name, eval_type, "
                     "config_json, failure_behaviour, pass_threshold, suite_id, account_id) "
-                    "VALUES (:id, :oid, :pid, :name, 'regex', '{}'::json, 'warn', 0.5, 'suite-17', :aid)"
+                    "VALUES (:id, :oid, :pid, :name, 'regex', '{}'::json, 'warn', 0.8, 'suite-17', :aid)"
                 ),
                 {
                     "id": str(eval_id),
@@ -317,15 +322,12 @@ async def test_eval_suite_guard_still_reads_eval_definitions(
                     "aid": str(account_id),
                 },
             )
-            # evals row uses a DIFFERENT threshold (0.8) so the test can
-            # distinguish which table _check_eval_suites reads: if it reads
-            # eval_definitions (intended, CO-3), the 0.5 threshold governs;
-            # if it reads evals (wrong), the 0.8 threshold governs.
+            # evals row uses threshold 0.5 (the CORRECT source for this chunk)
             await conn.execute(
                 text(
                     "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, "
                     "config_json, pass_threshold, suite_id, account_id) "
-                    "VALUES (:id, :oid, :pid, NULL, :name, 'regex', '{}'::jsonb, 0.8, 'suite-17', :aid)"
+                    "VALUES (:id, :oid, :pid, NULL, :name, 'regex', '{}'::jsonb, 0.5, 'suite-17', :aid)"
                 ),
                 {
                     "id": str(eval_id),
@@ -341,10 +343,10 @@ async def test_eval_suite_guard_still_reads_eval_definitions(
     executor = PipelineExecutor(db_engine, checkpointer_conn_string=conn_string)
     session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    # All-pass run: full set coverage, aggregate 0.5 >= 0.5 (eval_definitions
-    # threshold) -> no raise.  If _check_eval_suites incorrectly read evals
-    # (threshold 0.8), the 0.5 aggregate would be below threshold and the
-    # guard would raise — this is the falsifiability check (F4).
+    # All-pass run: full set coverage, aggregate 0.5 >= 0.5 (evals
+    # threshold) -> no raise.  If _check_eval_suites incorrectly read
+    # eval_definitions (threshold 0.8), the 0.5 aggregate would be below
+    # threshold and the guard would raise — this is the falsifiability check.
     run_pass = await _seed_run(db_engine, org_id, pipe, snap, status="running")
     async with db_engine.connect() as conn, conn.begin():
         for eval_id in (def_a, def_b):

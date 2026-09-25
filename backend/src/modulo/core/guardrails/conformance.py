@@ -418,19 +418,19 @@ async def load_node_guardrails(
     Returns engine DTOs via ``to_engine_definition``.
     """
     from modulo.core.guardrails import to_engine_definition
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.eval import Eval
 
-    stmt = select(EvalDefinition).where(
-        EvalDefinition.pipeline_id == pipeline_id,
-        EvalDefinition.organisation_id == org_id,
-        EvalDefinition.eval_type == "guardrail",
-        EvalDefinition.deleted_at.is_(None),
+    stmt = select(Eval).where(
+        Eval.pipeline_id == pipeline_id,
+        Eval.organisation_id == org_id,
+        Eval.eval_type == "guardrail",
+        Eval.deleted_at.is_(None),
     )
     if node_id:
         node_uuid = uuid.UUID(node_id) if _is_uuid(node_id) else None
-        stmt = stmt.where((EvalDefinition.node_id.is_(None)) | (EvalDefinition.node_id == node_uuid))
+        stmt = stmt.where((Eval.node_id.is_(None)) | (Eval.node_id == node_uuid))
     else:
-        stmt = stmt.where(EvalDefinition.node_id.is_(None))
+        stmt = stmt.where(Eval.node_id.is_(None))
     rows = (await session.execute(stmt)).scalars().all()
     return [to_engine_definition(row) for row in rows]
 
@@ -455,16 +455,16 @@ async def load_claimed_guardrails(
     block-action claims), never silently skip claims.
     """
     from modulo.core.guardrails import to_engine_definition
-    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.eval import Eval
 
     try:
         async with session_factory() as session, session.begin():
             await _set_rls(session, org_id)
-            stmt = select(EvalDefinition).where(
-                EvalDefinition.pipeline_id == pipeline_id,
-                EvalDefinition.organisation_id == org_id,
-                EvalDefinition.eval_type == "guardrail",
-                EvalDefinition.deleted_at.is_(None),
+            stmt = select(Eval).where(
+                Eval.pipeline_id == pipeline_id,
+                Eval.organisation_id == org_id,
+                Eval.eval_type == "guardrail",
+                Eval.deleted_at.is_(None),
             )
             rows = (await session.execute(stmt)).scalars().all()
         guardrails = [to_engine_definition(row) for row in rows]

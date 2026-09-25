@@ -7,8 +7,11 @@ sandboxed processes) and executing commands within them.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
+import posixpath
+import shlex
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -26,6 +29,7 @@ __all__ = [
     "ExecProcess",
     "ExecResult",
     "ExecStreamChunk",
+    "IsolationPolicy",
     "ProviderCapabilityUnsupportedError",
     "ProviderNotConfiguredError",
     "ProvisionTimeoutError",
@@ -36,6 +40,7 @@ __all__ = [
     "StreamingUnsupportedError",
     "UnknownProviderTypeError",
     "UnknownRefError",
+    "WorkspaceFileInfo",
     "WorkspaceGoneError",
     "WorkspaceNetworkValidationError",
     "WorkspaceSpec",
@@ -202,6 +207,10 @@ class BackendUnreachableError(RuntimeProviderError):
 _DOCKER_ENV_VARS: tuple[str, ...] = ("MODULO_DOCKER_HOST", "DOCKER_HOST")
 _E2B_ENV_VAR = "MODULO_E2B_API_KEY"
 
+# Per-command bound for the exec-based file-I/O default bodies (FAR-1050
+# R2a) — mirrors the bundled-runner file helpers' 30s exec bound.
+_FILE_IO_CMD_TIMEOUT = 30
+
 # Documented unconfigured behaviour (ADR 029 / FAR-587): every
 # ``ck_env_profiles_provider_type`` CHECK value maps either to a provider that
 # is always registered ("local") or to the env var whose presence registers
@@ -275,6 +284,49 @@ class WorkspaceSpec:
     allow_root_user: bool = False
 
 
+@dataclass(frozen=True)
+class IsolationPolicy:
+    """The three named in-sandbox isolation controls (ADR 040).
+
+    Carrier for :meth:`RuntimeProvider.apply_isolation` — the single owner
+    of in-sandbox enforcement among these three named controls:
+
+    1. git-credential scoping (``scoped`` / ``none``, single- and multi-host),
+    2. the selected-mode egress allowlist,
+    3. the read-only seal.
+
+    Field semantics mirror the legacy engine-side
+    ``sandbox_policy.apply_sandbox_policy`` keyword arguments exactly (the
+    FAR-1050 R3 parity requirement): ``egress_allowlist`` entries may carry
+    a pre-resolved ``_resolved_ip`` key; ``allowed_hosts`` threads the
+    node's validated multi-host mapping (host -> env-var name) for
+    ``scoped`` credentials; ``command_timeout`` bounds each in-sandbox
+    step.
+    """
+
+    read_only: bool = False
+    git_credentials: str | None = None
+    egress_policy: str | None = None
+    egress_allowlist: list[dict[str, Any]] | None = None
+    allowed_hosts: dict[str, str] | None = None
+    command_timeout: float = 60.0
+
+
+@dataclass(frozen=True)
+class WorkspaceFileInfo:
+    """Filesystem metadata for a workspace path (FAR-1050 R2a).
+
+    Carrier for :meth:`RuntimeProvider.get_info`: the provider-neutral
+    minimum every tier can report — the path as addressed, the byte size
+    (for directories the entry's own size, as reported by the substrate),
+    and whether the path is a directory.
+    """
+
+    path: str
+    size: int
+    is_dir: bool
+
+
 @dataclass
 class ExecResult:
     """Result of executing a command in a workspace."""
@@ -321,6 +373,15 @@ class ExecProcess:
     async def kill(self) -> None:
         """Terminate the exec stream + underlying command best-effort."""
         await self._kill()
+
+
+def _file_io_failure(operation: str, path: str, result: ExecResult) -> RuntimeProviderError:
+    """Build the typed failure raised by the exec-based file-I/O defaults (FAR-1050 R2a)."""
+    detail = (result.stderr or result.stdout or "").strip()
+    return RuntimeProviderError(
+        f"Runtime provider {operation} failed for {path!r} "
+        f"(exit {result.exit_code})" + (f": {detail[:200]}" if detail else "")
+    )
 
 
 class RuntimeProvider(ABC):
@@ -439,6 +500,153 @@ class RuntimeProvider(ABC):
         raise ProviderCapabilityUnsupportedError(
             f"Runtime provider '{self.__class__.__name__}' does not implement read_log_tail"
         )
+
+    async def apply_isolation(
+        self,
+        provider_ref: str,
+        spec: WorkspaceSpec,
+        policy: IsolationPolicy,
+    ) -> None:
+        """Enforce the three named in-sandbox isolation controls (ADR 040).
+
+        ``apply_isolation`` is the single owner of in-sandbox enforcement
+        among the three named controls carried by *policy* (ADR 040
+        "Isolation enforcement"): git-credential scoping, the selected-mode
+        egress allowlist, and the read-only seal. ``provider_ref``
+        addresses the workspace — the same ref-first convention as
+        :meth:`read_log_tail` / :meth:`exec_command` (the ADR's
+        ``apply_isolation(spec, policy)`` shorthand names the two domain
+        arguments; the ref is the addressing primitive every workspace-
+        taking method carries) — and ``spec`` carries the workspace
+        attribution context.
+
+        Optional base-class method (ADR 040 "Error honesty": the same
+        carve-out from the contract freeze as :meth:`exec_command_stream`,
+        :meth:`destroy_workspace_by_ref` and :meth:`read_log_tail`):
+        providers that do not override it raise the typed
+        :class:`ProviderCapabilityUnsupportedError` — never a raw
+        ``NotImplementedError``. Callers surface that refusal as a
+        TERMINAL named-code run failure (a deterministic refusal must
+        never retry-loop); they must never silently downgrade to a
+        provider-specific direct call.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement apply_isolation"
+        )
+
+    # ------------------------------------------------------------------
+    # File-I/O primitives (FAR-1050 R2a)
+    # ------------------------------------------------------------------
+    #
+    # Exec-based defaults built on the exec_command primitive, so every
+    # provider gets them for free: bytes travel base64-encoded (binary-safe
+    # over the text exec channel), every path is shlex.quote'd into the shell
+    # snippet, and each call is bounded by _FILE_IO_CMD_TIMEOUT. Providers
+    # with a native files API (E2B) override these with the SDK call.
+
+    async def read_file(self, provider_ref: str, path: str) -> bytes:
+        """Read a workspace file as raw bytes (FAR-1050 R2a).
+
+        Exec-based default: the file is base64-encoded inside the workspace
+        (``base64 < path``) so arbitrary binary content survives the text
+        exec channel, then decoded here. A non-zero command exit — missing
+        file, unreadable path, provider exec failure — raises the typed
+        :class:`RuntimeProviderError` (never a silent empty read).
+
+        Providers with a native files API override this (E2B uses
+        ``sandbox.files.read``).
+        """
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", f"base64 < {shlex.quote(path)}"],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("read_file", path, result)
+        # Whitespace-tolerant decode: base64 wraps output at 76 columns.
+        return base64.b64decode("".join(result.stdout.split()))
+
+    async def write_file(self, provider_ref: str, path: str, data: bytes) -> None:
+        """Write *data* to a workspace file, creating parent directories (FAR-1050 R2a).
+
+        Exec-based default: the payload is base64-encoded and piped through
+        ``base64 -d`` into the target (same shape as the bundled-runner file
+        write), so arbitrary bytes are safe on the exec channel. Parent
+        directories are created first, mirroring E2B's native ``files.write``
+        behaviour. A non-zero command exit raises the typed
+        :class:`RuntimeProviderError`.
+
+        The payload rides on the command line, so this default suits
+        modest files; providers with a native files API override it for
+        large payloads (E2B uses ``sandbox.files.write``).
+        """
+        payload = base64.b64encode(data).decode("ascii")
+        parent = posixpath.dirname(path) or "."
+        script = (
+            f"mkdir -p {shlex.quote(parent)} && printf '%s' {shlex.quote(payload)} | base64 -d > {shlex.quote(path)}"
+        )
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", script],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("write_file", path, result)
+
+    async def list_files(self, provider_ref: str, path: str) -> list[str]:
+        """List the entries directly inside the directory *path* (FAR-1050 R2a).
+
+        Returns the full path of each immediate child (files and
+        directories, hidden entries included; ``.``/``..`` excluded),
+        sorted by path so the result is deterministic across providers.
+        ``path`` must be a directory; a non-zero command exit (missing
+        directory, permission denied) raises the typed
+        :class:`RuntimeProviderError`.
+
+        Exec-based default: ``ls -1A`` with the names joined back onto
+        *path*; E2B uses ``sandbox.files.list``.
+        """
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", f"ls -1A {shlex.quote(path)}"],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("list_files", path, result)
+        base = path.rstrip("/") or "/"
+        return sorted(
+            posixpath.join(base, name) for name in result.stdout.splitlines() if name and name not in {".", ".."}
+        )
+
+    async def get_info(self, provider_ref: str, path: str) -> WorkspaceFileInfo:
+        """Stat *path* and return its :class:`WorkspaceFileInfo` (FAR-1050 R2a).
+
+        ``is_dir`` is True only for directories (symlinks are reported as
+        their own type — the substrate's ``stat`` does not follow them);
+        ``size`` is the byte size the substrate reports (for directories,
+        the directory entry's own size). The returned ``path`` echoes the
+        *path* as addressed, so the contract is identical on every tier.
+
+        Exec-based default: ``stat -c '%F<TAB>%s'``; a non-zero command
+        exit (missing path) raises the typed :class:`RuntimeProviderError`.
+        E2B uses ``sandbox.files.get_info``.
+        """
+        script = f"stat -c {shlex.quote('%F\t%s')} {shlex.quote(path)}"
+        result = await self.exec_command(
+            provider_ref,
+            ["sh", "-c", script],
+            cmd_timeout=_FILE_IO_CMD_TIMEOUT,
+        )
+        if result.exit_code != 0:
+            raise _file_io_failure("get_info", path, result)
+        kind, sep, size_text = result.stdout.strip().partition("\t")
+        if not sep:
+            raise RuntimeProviderError(f"get_info could not parse stat output for {path}: {result.stdout!r}")
+        try:
+            size = int(size_text.strip())
+        except ValueError as exc:
+            raise RuntimeProviderError(f"get_info could not parse stat size for {path}: {size_text!r}") from exc
+        return WorkspaceFileInfo(path=path, size=size, is_dir=kind.strip() == "directory")
 
     @abstractmethod
     async def get_workspace_status(self, provider_ref: str) -> str:

@@ -78,6 +78,9 @@ def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]
 
     A graph-less config does not manage the graph at all (the key is absent
     from the desired view), so a UI-authored graph never causes drift.
+    FAR-1161: ``business_owner_id`` / ``reliability_owner_id`` are part of the
+    canonical-hash input (the desired view always carries both keys — see
+    ``PipelineEntity.managed_view``) so ``--diff`` detects owner drift.
     """
     from modulo.cli.apply.models import quantize_circuit_breaker_threshold
 
@@ -89,6 +92,11 @@ def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]
             # The API serialises the Numeric(14, 6) column as a float;
             # canonicalise both sides to 6dp so no false drift is reported.
             view[key] = quantize_circuit_breaker_threshold(current.get(key))
+        elif key in ("business_owner_id", "reliability_owner_id"):
+            # FAR-1161: accountability owners — both sides are UUID strings
+            # (or null); coerce so a UUID object and its string form hash alike.
+            value = current.get(key)
+            view[key] = None if value is None else str(value)
         else:
             view[key] = current.get(key)
     return view

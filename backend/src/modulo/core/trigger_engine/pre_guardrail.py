@@ -111,16 +111,19 @@ async def _load_guardrail_definitions(
     ``eval_type='guardrail'`` for the pipeline, org-scoped. No ``node_id``
     filter — both org-level (``node_id IS NULL``) and node-bound rows are bound
     to the pipeline's runs, mirroring the seam exactly. The engine DTO mapping
-    is ``to_engine_definition`` (never reimplemented here).
+    is ``EvalDefinition`` with ``failure_behaviour='warn'`` (guardrails pin
+    warn — the ``Eval`` table has no ``failure_behaviour`` column).
+
+    Reads from the ``evals`` table (chunk 3b cutover).
     """
-    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+    from modulo.db.models.eval import Eval
 
     result = await session.execute(
-        select(EvalDefinitionModel).where(
-            EvalDefinitionModel.pipeline_id == pipeline_id,
-            EvalDefinitionModel.organisation_id == org_id,
-            EvalDefinitionModel.eval_type == "guardrail",
-            EvalDefinitionModel.deleted_at.is_(None),
+        select(Eval).where(
+            Eval.pipeline_id == pipeline_id,
+            Eval.organisation_id == org_id,
+            Eval.eval_type == "guardrail",
+            Eval.deleted_at.is_(None),
         )
     )
     rows = result.scalars().all()

@@ -7,7 +7,7 @@ statements and inspect the WHERE clauses, not just the returned rows.
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -142,6 +142,46 @@ async def test_load_eval_suite_run_query_carries_org_predicate() -> None:
     run_sql = _compiled_sql(session.statements[0])
     assert "runs.organisation_id" in run_sql
     assert "runs.id" in run_sql
+
+
+@pytest.mark.asyncio
+async def test_publish_eval_proposal_binding_violation_returns_400() -> None:
+    """The publish redirect surfaces a PolicyGate binding violation as 400
+    (chunk 3b write-cutover)."""
+    from fastapi import HTTPException
+
+    from modulo.api.routes import feedback as feedback_routes
+    from modulo.api.routes.feedback import PublishEvalProposalRequest, publish_eval_proposal
+    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    run = MagicMock()
+    run.pipeline_id = uuid.uuid4()
+    principal = MagicMock()
+    principal.organisation_id = _ORG_ID
+    principal.account_id = uuid.uuid4()
+    principal.org_role = "admin"
+    req = PublishEvalProposalRequest(name="n", eval_type="regex", config={})
+
+    with (
+        patch.object(feedback_routes, "set_rls_org", new=AsyncMock()),
+        patch.object(feedback_routes, "set_rls_user_context", new=AsyncMock()),
+        patch.object(feedback_routes, "_resolve_publish_context", new=AsyncMock(return_value=(run, uuid.uuid4()))),
+        patch(
+            "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
+            new=AsyncMock(side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}])),
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await publish_eval_proposal(_RECORD_ID, req, session, principal)
+
+    assert excinfo.value.status_code == 400
+    assert "PolicyGate binding violation" in excinfo.value.detail
 
 
 @pytest.mark.asyncio

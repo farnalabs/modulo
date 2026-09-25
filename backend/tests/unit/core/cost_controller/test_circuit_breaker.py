@@ -177,25 +177,29 @@ class TestCheckPipelineCircuitBreaker:
 
 
 class TestResetPipelineCircuitBreaker:
-    async def test_clears_trip_and_reactivates_triggers(self, mock_session: AsyncMock) -> None:
+    async def test_clears_trip_and_returns_reactivated_count(self, mock_session: AsyncMock) -> None:
         pipeline = _make_pipeline(threshold=Decimal(1000), tripped=True)
         pipeline_result = _pipeline_result(pipeline)
+        re_enabled_ids = [uuid.uuid4(), uuid.uuid4()]
         update_result = MagicMock()
+        update_result.scalars.return_value.all.return_value = re_enabled_ids
         mock_session.execute = AsyncMock(side_effect=[pipeline_result, update_result])
 
         reset = await reset_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID)
 
-        assert reset is True
+        # FAR-1186: success returns the count of re-activated triggers (N ids
+        # from the UPDATE ... RETURNING), not a truthy bool.
+        assert reset == 2
         assert pipeline.circuit_breaker_tripped is False
         assert pipeline.circuit_breaker_tripped_at is None
         assert mock_session.execute.await_count == 2
 
-    async def test_missing_pipeline_returns_false(self, mock_session: AsyncMock) -> None:
+    async def test_missing_pipeline_returns_none(self, mock_session: AsyncMock) -> None:
         missing = MagicMock()
         missing.scalar_one_or_none.return_value = None
         mock_session.execute = AsyncMock(return_value=missing)
 
         reset = await reset_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID)
 
-        assert reset is False
+        assert reset is None
         mock_session.execute.assert_awaited_once()

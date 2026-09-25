@@ -9,8 +9,6 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from modulo.api.mcp_server import (
     create_eval_definition,
     delete_eval_definition,
@@ -44,12 +42,25 @@ def _make_eval_def(**kwargs: object) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
-def _make_session_cm(return_obj: object) -> AsyncMock:
-    """Return an ``_session``-compatible async context manager yielding a mock session."""
+def _make_session_cm(return_obj: object, side_effect: list[object] | None = None) -> AsyncMock:
+    """Return an ``_session``-compatible async context manager yielding a mock session.
+
+    ``side_effect`` scripts one ``scalar_one_or_none`` result per ``execute``
+    call in order (used by the redirect path, which issues several selects);
+    when omitted every ``execute`` returns ``return_obj``.
+    """
     sess = AsyncMock()
-    execute_result = MagicMock()
-    execute_result.scalar_one_or_none = MagicMock(return_value=return_obj)
-    sess.execute = AsyncMock(return_value=execute_result)
+    if side_effect is not None:
+        results = []
+        for value in side_effect:
+            r = MagicMock()
+            r.scalar_one_or_none = MagicMock(return_value=value)
+            results.append(r)
+        sess.execute = AsyncMock(side_effect=results)
+    else:
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=return_obj)
+        sess.execute = AsyncMock(return_value=execute_result)
     sess.add = MagicMock()
     sess.delete = AsyncMock()
     sess.flush = AsyncMock()
@@ -89,22 +100,6 @@ def _clear_context() -> None:
     _ctx_role.set(None)
     _ctx_auth_token.set(None)
     _ctx_auth_type.set(None)
-
-
-@pytest.fixture(autouse=True)
-def _bypass_eval_definition_freeze():
-    """Bypass the FAR-1100 chunk 3 → 3b eval-definition create/edit freeze.
-
-    These tests verify the still-live MCP create/update production paths
-    (persistence, version bump / pre-version snapshot, scope and validation
-    errors).  The freeze guard runs before all of them, so without this bypass
-    every case would collapse to a single ``definition_frozen`` assertion.  The
-    freeze itself is verified directly in
-    tests/unit/api/test_eval_definition_freeze.py.  Remove when chunk 3b lands
-    (CO-8).
-    """
-    with patch("modulo.api.mcp_server.definition_frozen_response", return_value=None):
-        yield
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +251,10 @@ class TestUpdateEvalDefinition:
         mock_validate_auth: AsyncMock,
     ) -> None:
         existing = _make_eval_def(name="old", version=1, config_json={"foo": "bar"})
-        mock_session.return_value = _make_session_cm(existing)
+        # execute order: load eval, current PolicyGate (none), load eval for the
+        # update, reload PolicyGate (none) — the new model has no gate for this
+        # suite-scoped eval.
+        mock_session.return_value = _make_session_cm(None, side_effect=[existing, None, existing, None])
 
         result = await update_eval_definition(
             eval_id=str(existing.id),

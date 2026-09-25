@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple, TypeGuard
 
 import yaml
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,7 @@ from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.runner_bindings import BindingValidationError, validate_binding_pair
 from modulo.core.secret_patterns import is_sensitive_env_key, is_sensitive_key, mask_secret_values_in_text
+from modulo.db.crud.account import get_account_by_email
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.agent_runner_binding import replace_agent_bindings
 from modulo.db.crud.library_primitive import create_library_primitive
@@ -36,6 +38,7 @@ from modulo.db.crud.pipeline import (
     create_pipeline,
     enforce_manual_node_output_schemas,
 )
+from modulo.db.crud.pipeline_owner import validate_accountability_owner
 from modulo.db.crud.schema import create_schema, create_schema_version
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -75,6 +78,8 @@ class _V2ExportParts(NamedTuple):
     triggers: list[dict[str, Any]]
     owner_team_name: str | None
     author: str
+    business_owner_email: str | None = None
+    reliability_owner_email: str | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +201,99 @@ def _is_valid_edge_type(edge_type: str) -> bool:
 # ---------------------------------------------------------------------------
 # Export — pipeline_id → ZIP bytes
 # ---------------------------------------------------------------------------
+
+
+async def _resolve_owner_emails_for_export(
+    session: AsyncSession,
+    pipeline: Pipeline,
+) -> tuple[str | None, str | None]:
+    """Resolve the pipeline's accountability-owner ids to emails (FAR-1161).
+
+    Export carries owner EMAILS (the human-writable, portable key — import
+    resolves them back to local accounts and re-applies the full eligibility
+    invariant). Returns ``(business_owner_email, reliability_owner_email)``
+    with None where no owner is set. Non-UUID attribute values (partial ORM
+    stand-ins / test doubles) are treated as unassigned, so this issues NO
+    query when neither owner is set — existing export test sequences are
+    unaffected.
+    """
+    business_id = getattr(pipeline, "business_owner_id", None)
+    reliability_id = getattr(pipeline, "reliability_owner_id", None)
+    if not isinstance(business_id, uuid.UUID):
+        business_id = None
+    if not isinstance(reliability_id, uuid.UUID):
+        reliability_id = None
+    if business_id is None and reliability_id is None:
+        return None, None
+    ids = {owner_id for owner_id in (business_id, reliability_id) if owner_id is not None}
+    rows = list((await session.execute(select(Account).where(Account.id.in_(ids)))).scalars())
+    emails = {row.id: row.email for row in rows}
+    business_email = emails.get(business_id) if business_id is not None else None
+    reliability_email = emails.get(reliability_id) if reliability_id is not None else None
+    if business_id is not None and business_email is None:
+        logger.warning(
+            "export: business owner account %s not found; email omitted from bundle",
+            business_id,
+        )
+    if reliability_id is not None and reliability_email is None:
+        logger.warning(
+            "export: reliability owner account %s not found; email omitted from bundle",
+            reliability_id,
+        )
+    return business_email, reliability_email
+
+
+async def _resolve_owner_emails_for_import(
+    ctx: _ImportContext,
+    pipeline_info: dict[str, Any],
+) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+    """Resolve bundled owner emails to eligible account ids (FAR-1161).
+
+    Unresolvable or ineligible owners are STRIPPED (left unassigned) with a
+    disclosed warning in the import result — one bad owner never fails the
+    whole import, and an ineligible owner is NEVER imported. Eligibility runs
+    the FULL invariant via ``validate_accountability_owner`` (active org
+    member + visibility scope) against the pipeline's post-create shape
+    (the import always creates ``visibility="org"``).
+    """
+    resolved: list[uuid.UUID | None] = []
+    for email_key, owner_field in (
+        ("business_owner_email", "business_owner_id"),
+        ("reliability_owner_email", "reliability_owner_id"),
+    ):
+        email = pipeline_info.get(email_key)
+        if email is None or email == "":
+            resolved.append(None)
+            continue
+        if not isinstance(email, str):
+            ctx.warnings.append(f"Pipeline {email_key} is not a string; {owner_field} left unassigned.")
+            resolved.append(None)
+            continue
+        account_id = await get_account_by_email(ctx.session, email)
+        if account_id is None:
+            ctx.warnings.append(
+                f"Owner email '{email}' ({email_key}) does not resolve to an account; {owner_field} left unassigned."
+            )
+            resolved.append(None)
+            continue
+        try:
+            await validate_accountability_owner(
+                ctx.session,
+                owner_account_id=account_id.id,
+                field=owner_field,
+                org_id=ctx.org_id,
+                visibility="org",
+                owner_team_id=ctx.owner_team_id,
+            )
+        except HTTPException as exc:
+            ctx.warnings.append(
+                f"Owner email '{email}' ({email_key}) is not an eligible owner ({exc.detail}); "
+                f"{owner_field} left unassigned."
+            )
+            resolved.append(None)
+            continue
+        resolved.append(account_id.id)
+    return resolved[0], resolved[1]
 
 
 async def _load_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline:
@@ -433,14 +531,16 @@ async def export_pipeline_bundle(
 ) -> bytes:
     """Build a portable ZIP bundle from a pipeline.
 
-    Strips owner_team_id and other org-private fields, and REMOVES the graph
-    nodes' instance-scoped credentials (FAR-1181): a bundle is cross-instance,
-    so it must never carry secrets. The removed keys are recorded in the
-    bundle's top-level ``redacted_credentials`` list and re-surfaced as an
-    import warning.
+    Strips owner_team_id and other org-private fields; carries the
+    accountability-owner EMAILS (FAR-1161) so owners survive the round-trip.
+    Also REMOVES the graph nodes' instance-scoped credentials (FAR-1181): a
+    bundle is cross-instance, so it must never carry secrets. The removed keys
+    are recorded in the bundle's top-level ``redacted_credentials`` list and
+    re-surfaced as an import warning.
     """
     try:
         pipeline = await _load_pipeline(session, pipeline_id)
+        business_owner_email, reliability_owner_email = await _resolve_owner_emails_for_export(session, pipeline)
 
         agent_ids, schema_ids, model_backend_ids = _collect_referenced_ids(pipeline.graph_nodes_json)
 
@@ -462,6 +562,8 @@ async def export_pipeline_bundle(
                 "node_timeout_seconds": pipeline.node_timeout_seconds,
                 "retry_policy": dict(pipeline.retry_policy or {}),
                 "visibility": "org",  # Always strip team scoping
+                "business_owner_email": business_owner_email,
+                "reliability_owner_email": reliability_owner_email,
             },
             "agents": agents_list,
             "schemas": schemas_list,
@@ -671,6 +773,7 @@ async def _gather_v2_export_parts(
     schema_ids: set[uuid.UUID],
 ) -> _V2ExportParts:
     """Fetch and project every piece of a v2 bundle for a pipeline."""
+    business_owner_email, reliability_owner_email = await _resolve_owner_emails_for_export(session, pipeline)
     agents_list = await _build_v2_agents_list(session, agent_ids, schema_ids)
     schemas_list = await _build_schemas_list(session, schema_ids)
     edges_list = await _fetch_and_project_edges_v2(session, pipeline.id)
@@ -684,6 +787,8 @@ async def _gather_v2_export_parts(
         triggers=triggers_list,
         owner_team_name=owner_team_name,
         author=author,
+        business_owner_email=business_owner_email,
+        reliability_owner_email=reliability_owner_email,
     )
 
 
@@ -697,6 +802,8 @@ def _build_v2_bundle(pipeline: Pipeline, parts: _V2ExportParts) -> dict[str, Any
             "version": "1.0.0",
             "author": parts.author,
             "owner_team": parts.owner_team_name,
+            "business_owner_email": parts.business_owner_email,
+            "reliability_owner_email": parts.reliability_owner_email,
             "visibility": pipeline.visibility,
             "lifecycle_map_ref": None,
             "composite_template_refs": [],
@@ -1228,7 +1335,11 @@ async def materialize_import(
 ) -> dict[str, Any]:
     """Create pipeline, agents, schemas, and edges from an import bundle.
 
-    Returns a dict with created entity IDs and any warnings.
+    Returns a dict with created entity IDs and any warnings. Accountability
+    owners (FAR-1161) are carried as emails in the bundle: each is resolved
+    to a local account and re-validated against the full eligibility
+    invariant; an unresolvable or ineligible owner is STRIPPED with a
+    disclosed warning (never fails the import, never imports ineligible).
     """
     _validate_bundle_format(bundle)
     await _validate_owner_team(session, org_id, owner_team_id)
@@ -2017,6 +2128,10 @@ async def _create_imported_pipeline(
     base_name: str,
 ) -> Pipeline:
     """Create the imported pipeline, retrying with a suffixed name on collision."""
+    # FAR-1161: resolve owner emails ONCE before the retry loop (name
+    # collisions must not re-run resolution); unresolvable/ineligible owners
+    # are stripped with a disclosed warning, never failing the import.
+    business_owner_id, reliability_owner_id = await _resolve_owner_emails_for_import(ctx, pipeline_info)
     attempt_p = 0
     while True:
         try:
@@ -2031,6 +2146,8 @@ async def _create_imported_pipeline(
                     owner_team_id=ctx.owner_team_id,
                     node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
                     run_context_defaults=pipeline_info.get("run_context_defaults"),
+                    business_owner_id=business_owner_id,
+                    reliability_owner_id=reliability_owner_id,
                 )
         except IntegrityError:
             if _retries_exhausted(attempt_p):

@@ -439,6 +439,8 @@ class TestPipelineEntityContracts:
             "description": None,
             "max_concurrent_runs": 2,
             "stdout_retention_config": None,
+            "business_owner_id": None,
+            "reliability_owner_id": None,
         }
 
     def test_mixed_case_max_autonomy_level_is_normalised(self) -> None:
@@ -459,6 +461,12 @@ class TestPipelineEntityContracts:
         entity = PipelineEntity.model_validate({"name": "sample", "max_autonomy_level": None})
         assert entity.max_autonomy_level is None
         assert "max_autonomy_level" not in entity.managed_view()
+
+    def test_managed_view_carries_resolved_owner_ids(self) -> None:
+        entity = PipelineEntity.model_validate({"name": "sample"})
+        view = entity.managed_view(business_owner_id="20000000-0000-0000-0000-0000000000b1", reliability_owner_id=None)
+        assert view["business_owner_id"] == "20000000-0000-0000-0000-0000000000b1"
+        assert view["reliability_owner_id"] is None
 
     def test_declared_graph_managed_view_includes_graph(self) -> None:
         entity = PipelineEntity.model_validate(

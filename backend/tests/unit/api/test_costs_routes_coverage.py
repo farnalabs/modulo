@@ -423,7 +423,7 @@ def test_set_spend_ceiling_partial_update_keeps_other_ceiling(client: tuple[Test
 def test_reset_circuit_breaker_unknown_pipeline_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with ExitStack() as stack:
-        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=False)))
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=None)))
         stack.enter_context(_rls_cm())
         resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
 
@@ -445,20 +445,24 @@ def test_reset_circuit_breaker_assert_error_matrix(client: tuple[TestClient, Asy
 def test_reset_circuit_breaker_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with ExitStack() as stack:
-        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=3)))
         stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=AsyncMock()))
         stack.enter_context(_rls_cm())
         resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["circuit_breaker_tripped"] is False
+    body = resp.json()
+    assert body["circuit_breaker_tripped"] is False
+    # FAR-1186: the route surfaces the count returned by the controller; the
+    # old code hardcoded 0 here regardless of how many triggers were re-enabled.
+    assert body["triggers_reactivated"] == 3
 
 
 def test_reset_circuit_breaker_writes_reset_audit_event(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     audit = AsyncMock()
     with ExitStack() as stack:
-        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=2)))
         stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=audit))
         stack.enter_context(_rls_cm())
         resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
@@ -469,13 +473,15 @@ def test_reset_circuit_breaker_writes_reset_audit_event(client: tuple[TestClient
     assert kwargs["event_type"] == "pipeline.circuit_breaker_reset"
     assert kwargs["resource_id"] == _PIPELINE_ID
     assert kwargs["actor_user_id"] == _USER_ID
+    # FAR-1186: the audit payload carries the reactivated-trigger count too.
+    assert kwargs["payload_json"]["triggers_reactivated"] == 2
 
 
 def test_reset_circuit_breaker_unknown_pipeline_writes_no_audit_event(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     audit = AsyncMock()
     with ExitStack() as stack:
-        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=False)))
+        stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=AsyncMock(return_value=None)))
         stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=audit))
         stack.enter_context(_rls_cm())
         resp = http.post(f"/api/v1/admin/costs/circuit-breaker/{_PIPELINE_ID}/reset")
@@ -491,7 +497,7 @@ def test_reset_circuit_breaker_works_without_team_license(client: tuple[TestClie
     community_plan.feature_enabled.return_value = False
     community_plan.list_enabled_features.return_value = []
     app.dependency_overrides[get_plan_context] = lambda: community_plan
-    reset = AsyncMock(return_value=True)
+    reset = AsyncMock(return_value=1)
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=reset))
         stack.enter_context(patch(f"{_PREFIX}append_audit_event", new=AsyncMock()))
@@ -509,7 +515,7 @@ def test_reset_circuit_breaker_requires_org_admin(client: tuple[TestClient, Asyn
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username=f"{role}@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role
     )
-    reset = AsyncMock(return_value=True)
+    reset = AsyncMock(return_value=1)
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=reset))
         stack.enter_context(_rls_cm())

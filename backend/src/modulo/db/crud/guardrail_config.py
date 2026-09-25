@@ -20,7 +20,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
+from modulo.db.models.eval import Eval
 from modulo.db.models.organisation import Organisation
 
 
@@ -29,7 +29,7 @@ async def load_pipeline_guardrail_rows(
     *,
     pipeline_id: uuid.UUID,
     organisation_id: uuid.UUID,
-) -> list[EvalDefinitionRow]:
+) -> list[Eval]:
     """Load a pipeline's bound guardrail eval rows (``eval_type='guardrail'``).
 
     Single shared implementation of the guardrail row-load used by the
@@ -37,19 +37,25 @@ async def load_pipeline_guardrail_rows(
     seam (``core.pipeline_engine.recovery``), snapshot guardrail pinning
     (``db.crud.pipeline_snapshot``), and the graph-save cap validation
     (``api.routes.pipelines``) — previously copy-pasted at each call site.
-    Returns ORM rows; each caller converts to its own DTO
-    (``to_engine_definition`` / ``serialize_guardrail_pin``) so result shapes
-    are unchanged. The filter is fixed: ``pipeline_id`` + ``organisation_id`` +
+
+    Reads from the ``evals`` table (chunk 3b cutover). Returns ``Eval`` ORM
+    rows; each caller converts to its own DTO (``to_engine_definition`` /
+    ``serialize_guardrail_pin``). The ``Eval`` model lacks a ``failure_behaviour``
+    column — callers that need it (``to_engine_definition``,
+    ``serialize_guardrail_pin``) default to ``"warn"`` (guardrails are
+    warn-only by design — the action is driven by ``config_json.action``).
+
+    The filter is fixed: ``pipeline_id`` + ``organisation_id`` +
     ``eval_type == 'guardrail'`` + ``deleted_at IS NULL`` (FAR-309 PR B
     interception respect — a soft-deleted guardrail is never bound to new
     runs; snapshot pins may still reference it and take the skip path).
     """
     result = await session.execute(
-        select(EvalDefinitionRow).where(
-            EvalDefinitionRow.pipeline_id == pipeline_id,
-            EvalDefinitionRow.organisation_id == organisation_id,
-            EvalDefinitionRow.eval_type == "guardrail",
-            EvalDefinitionRow.deleted_at.is_(None),
+        select(Eval).where(
+            Eval.pipeline_id == pipeline_id,
+            Eval.organisation_id == organisation_id,
+            Eval.eval_type == "guardrail",
+            Eval.deleted_at.is_(None),
         )
     )
     return list(result.scalars().all())

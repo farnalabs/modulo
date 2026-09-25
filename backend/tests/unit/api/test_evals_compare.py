@@ -420,6 +420,10 @@ class TestEvalFromRun:
                 _make_result(scalar_value=None),  # set_rls_user_context (org_role)
                 _make_result(scalar_one_value=run),
                 _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+                _make_result(scalar_one_value=None),  # _insert: set_rls_org
+                _make_result(scalar_value=None),  # _insert: set_rls_user_context (user_id)
+                _make_result(scalar_value=None),  # _insert: set_rls_user_context (org_role)
+                _make_result(scalar_one_value=None),  # _insert: PolicyGate upsert lookup
             ],
         )
         mock_session.add = MagicMock()
@@ -472,6 +476,10 @@ class TestEvalFromRun:
                 _make_result(scalar_value=None),  # set_rls_user_context (org_role)
                 _make_result(scalar_one_value=run),
                 _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+                _make_result(scalar_one_value=None),  # _insert: set_rls_org
+                _make_result(scalar_value=None),  # _insert: set_rls_user_context (user_id)
+                _make_result(scalar_value=None),  # _insert: set_rls_user_context (org_role)
+                _make_result(scalar_one_value=None),  # _insert: PolicyGate upsert lookup
             ],
         )
         mock_session.add = MagicMock()
@@ -517,6 +525,10 @@ class TestEvalFromRun:
                 _make_result(scalar_value=None),  # set_rls_user_context (org_role)
                 _make_result(scalar_one_value=run),
                 _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+                _make_result(scalar_one_value=None),  # _insert: set_rls_org
+                _make_result(scalar_value=None),  # _insert: set_rls_user_context (user_id)
+                _make_result(scalar_value=None),  # _insert: set_rls_user_context (org_role)
+                _make_result(scalar_one_value=None),  # _insert: PolicyGate upsert lookup
             ],
         )
         mock_session.add = MagicMock()
@@ -604,6 +616,10 @@ class TestEvalFromRun:
                     _make_result(scalar_value=None),  # set_rls_user_context (org_role)
                     _make_result(scalar_one_value=run),
                     _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+                    _make_result(scalar_one_value=None),  # _insert: set_rls_org
+                    _make_result(scalar_value=None),  # _insert: set_rls_user_context (user_id)
+                    _make_result(scalar_value=None),  # _insert: set_rls_user_context (org_role)
+                    _make_result(scalar_one_value=None),  # _insert: PolicyGate upsert lookup
                 ],
             )
             mock_session.add = MagicMock()

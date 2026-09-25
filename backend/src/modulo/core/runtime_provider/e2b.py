@@ -18,7 +18,9 @@ from modulo.core.runtime_provider import (
     ExecProcess,
     ExecResult,
     ExecStreamChunk,
+    IsolationPolicy,
     RuntimeProvider,
+    WorkspaceFileInfo,
     WorkspaceSpec,
 )
 from modulo.core.runtime_provider.log_tail import combine_log_entries
@@ -46,6 +48,10 @@ _STREAM_START_TIMEOUT = 120
 _LOG_TAIL_ENTRY_LIMIT = 60
 _LOG_TAIL_FETCH_TIMEOUT_S = 8
 _LOG_TAIL_RAW_FALLBACK = 4000
+# FAR-1050 R2a file-I/O primitives: bound on the native ``sandbox.files``
+# calls (SDK ``request_timeout`` + outer ``asyncio.wait_for``), mirroring
+# the house rule that every E2B SDK call sits under a wait_for.
+_FILE_IO_TIMEOUT = 30
 
 
 @dataclass(frozen=True)
@@ -311,6 +317,125 @@ class E2BRuntimeProvider(RuntimeProvider):
             return "\n".join(combined)[-max_bytes:].encode("utf-8", errors="replace")
         except Exception:
             return raw[: min(_LOG_TAIL_RAW_FALLBACK, max_bytes)].encode("utf-8", errors="replace")
+
+    async def apply_isolation(
+        self,
+        provider_ref: str,
+        spec: WorkspaceSpec,
+        policy: IsolationPolicy,
+    ) -> None:
+        """Run the sandbox-policy enforcement scripts in the sandbox (FAR-1050 R3).
+
+        ADR 040 ``apply_isolation``: wraps the existing
+        ``sandbox_policy.apply_sandbox_policy`` — the same script builders,
+        the same step order (git-credential scope -> egress allowlist ->
+        read-only seal), the same ``user=root``, and the same
+        enforcement-critical-raise vs egress-best-effort split — so the
+        flag-ON primitive and the flag-OFF engine invocation emit identical
+        enforcement for a fixed policy (pinned by the R3 parity unit test).
+
+        The sandbox is taken from this instance's tracked handles when the
+        provider created the workspace (the R4 dispatch shape); otherwise it
+        is reconnected by ref via ``AsyncSandbox.connect`` — the same by-ref
+        pattern as :meth:`destroy_workspace_by_ref` — so the R3 flag-ON
+        engine path can enforce a workspace the legacy direct path
+        provisioned. ``spec`` carries workspace attribution for callers; the
+        scripts target the fixed ``/home/user`` workspace and do not read it.
+        """
+        # Lazy import (house convention): sandbox_policy is dependency-free,
+        # but importing it pulls the pipeline_engine package __init__ — the
+        # engine process already has it loaded when this runs.
+        from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+
+        sandbox = await self._resolve_sandbox(provider_ref, "apply isolation")
+        await apply_sandbox_policy(
+            sandbox,
+            read_only=policy.read_only,
+            git_credentials=policy.git_credentials,
+            egress_policy=policy.egress_policy,
+            egress_allowlist=policy.egress_allowlist,
+            allowed_hosts=policy.allowed_hosts,
+            command_timeout=policy.command_timeout,
+        )
+
+    # ------------------------------------------------------------------
+    # File-I/O primitives (FAR-1050 R2a) — native SDK overrides
+    # ------------------------------------------------------------------
+    #
+    # These override the ABC's exec-based defaults with E2B's native
+    # ``sandbox.files`` API: no shell round-trip, no base64, binary-safe by
+    # construction. Handle resolution mirrors :meth:`apply_isolation`
+    # (tracked handle first, otherwise reconnect by ref).
+
+    async def read_file(self, provider_ref: str, path: str) -> bytes:
+        """Read a file from the sandbox via the native files API (FAR-1050 R2a)."""
+        sandbox = await self._resolve_sandbox(provider_ref, "read_file")
+        data = await asyncio.wait_for(
+            sandbox.files.read(path, format="bytes", request_timeout=_FILE_IO_TIMEOUT),
+            timeout=_FILE_IO_TIMEOUT,
+        )
+        return bytes(data)
+
+    async def write_file(self, provider_ref: str, path: str, data: bytes) -> None:
+        """Write *data* to a sandbox file via the native files API (FAR-1050 R2a).
+
+        The SDK creates missing parent directories, matching the ABC
+        default's ``mkdir -p`` behaviour.
+        """
+        sandbox = await self._resolve_sandbox(provider_ref, "write_file")
+        await asyncio.wait_for(
+            sandbox.files.write(path, data, request_timeout=_FILE_IO_TIMEOUT),
+            timeout=_FILE_IO_TIMEOUT,
+        )
+
+    async def list_files(self, provider_ref: str, path: str) -> list[str]:
+        """List a sandbox directory via the native files API (FAR-1050 R2a).
+
+        Returns full child paths sorted by path — the same contract as the
+        ABC's exec-based default (``entry.path`` is what the SDK reports).
+        """
+        sandbox = await self._resolve_sandbox(provider_ref, "list_files")
+        entries = await asyncio.wait_for(
+            sandbox.files.list(path, request_timeout=_FILE_IO_TIMEOUT),
+            timeout=_FILE_IO_TIMEOUT,
+        )
+        return sorted(str(entry.path) for entry in entries if str(getattr(entry, "name", "")) not in {"", ".", ".."})
+
+    async def get_info(self, provider_ref: str, path: str) -> WorkspaceFileInfo:
+        """Stat a sandbox path via the native files API (FAR-1050 R2a)."""
+        sandbox = await self._resolve_sandbox(provider_ref, "get_info")
+        info = await asyncio.wait_for(
+            sandbox.files.get_info(path, request_timeout=_FILE_IO_TIMEOUT),
+            timeout=_FILE_IO_TIMEOUT,
+        )
+        file_type = getattr(info.type, "value", info.type)
+        return WorkspaceFileInfo(
+            path=path,
+            size=int(getattr(info, "size", 0) or 0),
+            is_dir=str(file_type) == "dir",
+        )
+
+    async def _resolve_sandbox(self, provider_ref: str, operation: str) -> Any:
+        """Return the sandbox handle for *provider_ref* (FAR-1050 R2a).
+
+        The same handle-resolution shape as :meth:`apply_isolation`: use the
+        tracked handle when this provider created the workspace, otherwise
+        reconnect by ref via ``AsyncSandbox.connect`` — so the file-I/O
+        primitives also work on a workspace the legacy direct path
+        provisioned. A failed reconnect raises ``RuntimeError`` naming
+        *operation*, the same failure class ``apply_isolation`` raises.
+        """
+        sandbox = self._sandboxes.get(provider_ref)
+        if sandbox is not None:
+            return sandbox
+        from e2b import AsyncSandbox
+
+        try:
+            return await AsyncSandbox.connect(provider_ref, api_key=self._api_key)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Failed to reconnect to sandbox {provider_ref} to {operation}: {exc}") from exc
 
     async def exec_command_stream(
         self,
