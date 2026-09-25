@@ -209,7 +209,7 @@ async def test_flag_off_invokes_legacy_apply_sandbox_policy(monkeypatch: pytest.
     builder.assert_not_awaited()
 
 
-async def test_flag_on_routes_through_provider_apply_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_on_routes_through_provider_apply_isolation(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     _enable_flag(monkeypatch)
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = _RecordingIsolationProvider()
@@ -237,9 +237,15 @@ async def test_flag_on_routes_through_provider_apply_isolation(monkeypatch: pyte
     assert isinstance(policy, IsolationPolicy)
     assert policy.read_only is True
     assert policy.command_timeout == 60.0
+    # FAR-1050 R2b: the flag-ON dispatch also routed its file writes through
+    # the ABC primitive (the fake provider), never the legacy handle.
+    assert any(e.startswith("write:") for e in fake_file_io.events)
+    assert not sandbox.files.write.called
 
 
-async def test_flag_on_predicate_still_gates_no_policy_no_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_on_predicate_still_gates_no_policy_no_invocation(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
     """The `_should_apply_sandbox_policy` predicate is unchanged: a node
     with no isolation controls triggers NEITHER path, even flag ON."""
     _enable_flag(monkeypatch)
@@ -280,7 +286,9 @@ def test_node_runner_still_imports_apply_sandbox_policy_flag_off_path() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_on_capability_refusal_maps_to_terminal_named_code(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_on_capability_refusal_maps_to_terminal_named_code(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
     """ADR 040: apply_isolation's refusal is a TERMINAL run failure with a
     named error code — never a retry-loop. The typed cause is preserved."""
     from modulo.core.pipeline_engine import runtime_retry

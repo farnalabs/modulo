@@ -81,7 +81,7 @@ if TYPE_CHECKING:
 
     from modulo.core.artifacts.streaming import StreamingArtifactWriter
     from modulo.core.artifacts.writer import ArtifactWriter
-    from modulo.core.runtime_provider import RuntimeProvider
+    from modulo.core.runtime_provider import RuntimeProvider, WorkspaceFileInfo
 
 import typing
 
@@ -153,7 +153,7 @@ from modulo.db.lifecycle_refs import (
     validate_ref_entry,
 )
 from modulo.db.rls import set_rls_execution_context, set_rls_org
-from modulo.settings import work_item_refs_cap
+from modulo.settings import get_settings, work_item_refs_cap
 
 _log = logging.getLogger(__name__)
 
@@ -1212,6 +1212,146 @@ async def _apply_isolation_via_provider(
         raise SandboxTierRefusedError(
             f"Runtime provider refused in-sandbox isolation for sandbox {sandbox_id}: {exc}"
         ) from exc
+
+
+def _file_io_via_provider_enabled() -> bool:
+    """Read ``MODULO_E2B_VIA_PROVIDER`` at a file-I/O call site (FAR-1050 R2b).
+
+    A runtime read (never captured at import), so a settings flip takes
+    effect without stale-module gymnastics — the design doc's
+    ``if get_settings().modulo_e2b_via_provider:`` gate, wrapped in the
+    fail-open shell the dispatch already uses for its other settings
+    reads (the idempotency / connector killswitches): an unreadable flag
+    resolves to the flag-OFF value, i.e. the legacy direct path. A settings
+    outage must never be able to kill a dispatch, and the flag's default
+    is OFF anyway, so fail-open and fail-default agree here.
+    """
+    try:
+        return bool(get_settings().modulo_e2b_via_provider)
+    except Exception:
+        _log.warning(
+            "sandbox_agent.file_io_flag_read_failed",
+            exc_info=True,
+        )
+        return False
+
+
+async def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
+    """FAR-1050 R2b flag-ON file I/O: build the E2B RuntimeProvider.
+
+    Sibling seam of :func:`_build_isolation_provider` — delegates to
+    :func:`_build_log_tail_provider` so the hub-construction logic exists
+    once while giving the file-I/O path its own test-substitutable
+    injection point (a test patches THIS name to substitute a fake
+    provider without disturbing the R1/R3 seams). Returns ``None`` when the
+    provider cannot be constructed (never raises) — the caller maps that to
+    a typed failure rather than silently degrading to ``sandbox.files``.
+    """
+    return await _build_log_tail_provider(api_key)
+
+
+async def _file_io_provider_for(sandbox_id: str | None) -> "tuple[RuntimeProvider, str]":
+    """Resolve ``(provider, provider_ref)`` for a flag-ON file call (FAR-1050 R2b).
+
+    Fails CLOSED: a missing/blank dispatch sandbox id, a missing E2B
+    credential, or a provider-construction failure raises
+    :class:`RuntimeProviderError` instead of falling back to the legacy
+    ``sandbox.files`` handle — with ``MODULO_E2B_VIA_PROVIDER`` ON the
+    legacy path must stay unreachable (revert = flag OFF, never a silent
+    per-call downgrade). Key resolution mirrors the R1/R3 helpers (runtime
+    bridge / ``MODULO_E2B_API_KEY``, then legacy ``E2B_API_KEY``).
+    """
+    from modulo.core.runtime_config.key_bridge import get_e2b_api_key
+    from modulo.core.runtime_provider import RuntimeProviderError
+
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        raise RuntimeProviderError("FAR-1050 flag-ON file I/O requires the dispatch sandbox id")
+    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+    provider = await _build_file_io_provider(api_key) if api_key else None
+    if provider is None:
+        raise RuntimeProviderError(
+            "FAR-1050 flag-ON file I/O could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
+        )
+    return provider, sandbox_id
+
+
+async def _write_file_via_provider(sandbox_id: str | None, path: str, content: str) -> None:
+    """Flag-ON sibling of ``sandbox.files.write(path, content)`` (FAR-1050 R2b).
+
+    Text is UTF-8 encoded for the bytes-typed ABC primitive — the same
+    encoding the SDK applies to the ``str`` the legacy arm passes. The
+    caller keeps its ``asyncio.wait_for`` bound, so the I/O timeout
+    threading is identical on both arms.
+    """
+    provider, ref = await _file_io_provider_for(sandbox_id)
+    await provider.write_file(ref, path, content.encode("utf-8"))
+
+
+async def _read_file_via_provider(sandbox_id: str | None, path: str) -> str:
+    """Flag-ON sibling of ``sandbox.files.read(path, format="text")`` (FAR-1050 R2b).
+
+    Decodes the primitive's bytes the way the SDK's text read does (UTF-8,
+    replacement on undecodable input) so both arms hand downstream code the
+    same ``str`` type and the same length semantics.
+    """
+    provider, ref = await _file_io_provider_for(sandbox_id)
+    data = await provider.read_file(ref, path)
+    return bytes(data).decode("utf-8", errors="replace")
+
+
+async def _get_info_via_provider(sandbox_id: str | None, path: str | None) -> "WorkspaceFileInfo":
+    """Flag-ON sibling of ``sandbox.files.get_info(path)`` (FAR-1050 R2b).
+
+    The returned :class:`WorkspaceFileInfo` carries ``.size``, which is the
+    only field the probe call sites read off the legacy SDK entry too.
+    ``path`` is typed ``str | None`` because the watch-log probe is
+    addressed by an optional node setting; a missing path fails the same
+    way the legacy SDK call would (the probe's ``except Exception`` turns
+    it into a quiet probe failure).
+    """
+    from modulo.core.runtime_provider import RuntimeProviderError
+
+    provider, ref = await _file_io_provider_for(sandbox_id)
+    if not isinstance(path, str) or not path:
+        raise RuntimeProviderError("FAR-1050 flag-ON file I/O stat requires a non-empty path")
+    return await provider.get_info(ref, path)
+
+
+async def _list_fs_entries_via_provider(
+    sandbox_id: str | None,
+    path: str,
+    *,
+    watch_log_path: str | None,
+    watch_globs: list[str],
+) -> "list[WorkspaceFileInfo]":
+    """Flag-ON sibling of the watchdog's ``sandbox.files.list`` probe (FAR-1050 R2b).
+
+    ``list_files`` yields full child paths only, while the fs tracker reads
+    ``path`` + ``size`` off each row (its stat key is ``(mtime, size)``, and
+    neither the legacy SDK entry nor the ABC model exposes ``mtime`` — the
+    legacy key's mtime component is ``None`` too), so size is resolved per
+    entry through ``get_info``.
+
+    Only rows the tracker would keep are statted: the log-path exclusions
+    and the watch-glob filter run first, so a broad listing costs one stat
+    per *matching* entry instead of one per child. Rows the tracker
+    discards are simply absent from the returned list, which leaves
+    ``seen`` (and the prune that consumes it) identical to the legacy arm.
+    A listing or stat failure propagates to the caller's existing
+    probe-failure handling.
+    """
+    provider, ref = await _file_io_provider_for(sandbox_id)
+    paths = await provider.list_files(ref, path)
+    entries: list[WorkspaceFileInfo] = []
+    for raw_path in paths:
+        if not isinstance(raw_path, str):
+            continue
+        if raw_path == _SANDBOX_LOG_PATH or (watch_log_path and raw_path == watch_log_path):
+            continue
+        if not _path_matches_any_glob(raw_path, watch_globs):
+            continue
+        entries.append(await provider.get_info(ref, raw_path))
+    return entries
 
 
 def _bounded_tail(text: str, limit: int) -> str:
@@ -6321,6 +6461,9 @@ class _SandboxWatchdog:
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
         self._sandbox = sandbox
+        # FAR-1050 R2b: provider ref for the flag-ON file-I/O probes — the
+        # ABC addresses a workspace by dispatch sandbox id, not by SDK handle.
+        self._sandbox_ref: str | None = getattr(sandbox, "sandbox_id", None) or None
         self._stall = stall
         self._node_id = node_id
         self._run_id = run_id
@@ -6427,10 +6570,19 @@ class _SandboxWatchdog:
         # unresponsive). Do NOT refresh liveness — the idle watchdog
         # treats a prolonged probe failure as a genuine stall.
         try:
-            info = await asyncio.wait_for(
-                self._sandbox.files.get_info(_SANDBOX_LOG_PATH),
-                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-            )
+            if _file_io_via_provider_enabled():
+                # FAR-1050 R2b flag-ON: stat through the ABC primitive. The
+                # flag-OFF arm below stays the legacy direct handle until
+                # slice R6 retires it.
+                info = await asyncio.wait_for(
+                    _get_info_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
+            else:
+                info = await asyncio.wait_for(
+                    self._sandbox.files.get_info(_SANDBOX_LOG_PATH),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
             # Heartbeat channel: a successful get_info proves the
             # sandbox connection is responsive. When enable_heartbeat
             # is False (strict mode) this touch is a no-op because the
@@ -6449,10 +6601,19 @@ class _SandboxWatchdog:
         if size <= self._drain_offset:
             return
         try:
-            content = await asyncio.wait_for(
-                self._sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
-                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-            )
+            if _file_io_via_provider_enabled():
+                # FAR-1050 R2b flag-ON: the ABC primitive is bytes-typed and
+                # the helper decodes it to text, so the windowing below is
+                # untouched on either arm.
+                content = await asyncio.wait_for(
+                    _read_file_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
+            else:
+                content = await asyncio.wait_for(
+                    self._sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -6534,10 +6695,18 @@ class _SandboxWatchdog:
 
     async def probe_log_growth(self) -> None:
         try:
-            info = await asyncio.wait_for(
-                self._sandbox.files.get_info(self._watch_log_path),
-                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-            )
+            if _file_io_via_provider_enabled():
+                # FAR-1050 R2b flag-ON: ABC stat; ``.size`` is the only
+                # field this probe reads (same as the legacy SDK entry).
+                info = await asyncio.wait_for(
+                    _get_info_via_provider(self._sandbox_ref, self._watch_log_path),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
+            else:
+                info = await asyncio.wait_for(
+                    self._sandbox.files.get_info(self._watch_log_path),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
             size = int(getattr(info, "size", 0) or 0)
         except asyncio.CancelledError:
             raise
@@ -6557,11 +6726,28 @@ class _SandboxWatchdog:
         if now - self._fs_last_stat < self._fs_min_stat_interval:
             return
         self._fs_last_stat = now
+        matches: Any
         try:
-            matches = await asyncio.wait_for(
-                self._sandbox.files.list(path="/", request_timeout=_SANDBOX_TAIL_READ_TIMEOUT),
-                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-            )
+            if _file_io_via_provider_enabled():
+                # FAR-1050 R2b flag-ON: the ABC listing yields paths only, so
+                # the helper resolves each TRACKED row's stat via get_info
+                # and returns tracker-shaped rows (see its docstring). The
+                # consumption below (list coercion + _track_fs_entry) is
+                # untouched on either arm.
+                matches = await asyncio.wait_for(
+                    _list_fs_entries_via_provider(
+                        self._sandbox_ref,
+                        "/",
+                        watch_log_path=self._watch_log_path,
+                        watch_globs=self._watch_globs,
+                    ),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
+            else:
+                matches = await asyncio.wait_for(
+                    self._sandbox.files.list(path="/", request_timeout=_SANDBOX_TAIL_READ_TIMEOUT),
+                    timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -8226,7 +8412,17 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         for raw_path, raw_content in context_files.items():
             write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
             write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
-            await asyncio.wait_for(sandbox.files.write(write_path, write_content), timeout=_SANDBOX_IO_TIMEOUT)
+            if _file_io_via_provider_enabled():
+                # FAR-1050 R2b flag-ON: context inputs land through the ABC
+                # primitive (bytes = the same UTF-8 encoding the SDK applies
+                # to the str the legacy arm passes); ordering is unchanged —
+                # every write still precedes the agent command.
+                await asyncio.wait_for(
+                    _write_file_via_provider(_sandbox_id, write_path, write_content),
+                    timeout=_SANDBOX_IO_TIMEOUT,
+                )
+            else:
+                await asyncio.wait_for(sandbox.files.write(write_path, write_content), timeout=_SANDBOX_IO_TIMEOUT)
 
         # FAR-901: write advisory schema contract files into the sandbox.
         # The contract is ADVISORY — Modulo validates independently; these
@@ -8267,10 +8463,20 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         if _schema_file.is_file():
                             _file_content = _schema_file.read_text(encoding="utf-8")
                             _sandbox_rel = f"{_sandbox_schema_dir}/{node_id}/{_schema_file.name}"
-                            await asyncio.wait_for(
-                                sandbox.files.write(_sandbox_rel, _file_content),
-                                timeout=_SANDBOX_IO_TIMEOUT,
-                            )
+                            if _file_io_via_provider_enabled():
+                                # FAR-1050 R2b flag-ON: advisory contract files
+                                # land through the ABC primitive. A failure still
+                                # raises into the SAME contract try/except, so it
+                                # stays a best-effort warning on either arm.
+                                await asyncio.wait_for(
+                                    _write_file_via_provider(_sandbox_id, _sandbox_rel, _file_content),
+                                    timeout=_SANDBOX_IO_TIMEOUT,
+                                )
+                            else:
+                                await asyncio.wait_for(
+                                    sandbox.files.write(_sandbox_rel, _file_content),
+                                    timeout=_SANDBOX_IO_TIMEOUT,
+                                )
                     # LLM mode: inject schema file paths into the rendered prompt.
                     if sandbox_mode != "script":
                         _input_schema_path = f"{_sandbox_schema_dir}/{node_id}/input.active.json"
@@ -8306,19 +8512,34 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # truncation) to /home/user/input.json and never writes a prompt.
         _input_json = json.dumps(raw_input)
         if sandbox_mode == "script":
-            await asyncio.wait_for(
-                sandbox.files.write("/home/user/input.json", _input_json),
-                timeout=_SANDBOX_IO_TIMEOUT,
-            )
+            if _file_io_via_provider_enabled():
+                # FAR-1050 R2b flag-ON: script input through the ABC primitive.
+                await asyncio.wait_for(
+                    _write_file_via_provider(_sandbox_id, "/home/user/input.json", _input_json),
+                    timeout=_SANDBOX_IO_TIMEOUT,
+                )
+            else:
+                await asyncio.wait_for(
+                    sandbox.files.write("/home/user/input.json", _input_json),
+                    timeout=_SANDBOX_IO_TIMEOUT,
+                )
         else:
             if len(_input_json) > 10240:
                 _input_json = json.dumps(
                     {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
                 )
-            await asyncio.wait_for(
-                sandbox.files.write("/home/user/prompt.md", rendered_prompt),
-                timeout=_SANDBOX_IO_TIMEOUT,
-            )
+            if _file_io_via_provider_enabled():
+                # FAR-1050 R2b flag-ON: rendered prompt through the ABC
+                # primitive (content and ordering unchanged).
+                await asyncio.wait_for(
+                    _write_file_via_provider(_sandbox_id, "/home/user/prompt.md", rendered_prompt),
+                    timeout=_SANDBOX_IO_TIMEOUT,
+                )
+            else:
+                await asyncio.wait_for(
+                    sandbox.files.write("/home/user/prompt.md", rendered_prompt),
+                    timeout=_SANDBOX_IO_TIMEOUT,
+                )
 
         # FAR-800: provision managed workspace inputs INSIDE the sandbox.
         # Runs AFTER context files and prompt are written but BEFORE the
@@ -8676,17 +8897,38 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             ),
                         )
                         _bridge_port = await _bridge_server.start()
-                        await asyncio.wait_for(
-                            sandbox.files.write("/home/user/modulo_bridge.py", bridge_client_source()),
-                            timeout=_SANDBOX_IO_TIMEOUT,
-                        )
-                        await asyncio.wait_for(
-                            sandbox.files.write(
-                                "/home/user/modulo_bridge_config.json",
-                                json.dumps(loop_intercept_config.model_dump(mode="json")),
-                            ),
-                            timeout=_SANDBOX_IO_TIMEOUT,
-                        )
+                        if _file_io_via_provider_enabled():
+                            # FAR-1050 R2b flag-ON: bridge client through the ABC
+                            # primitive — still inside the bridge try, so a
+                            # failure stays fail-open on either arm.
+                            await asyncio.wait_for(
+                                _write_file_via_provider(
+                                    _sandbox_id, "/home/user/modulo_bridge.py", bridge_client_source()
+                                ),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                        else:
+                            await asyncio.wait_for(
+                                sandbox.files.write("/home/user/modulo_bridge.py", bridge_client_source()),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                        if _file_io_via_provider_enabled():
+                            await asyncio.wait_for(
+                                _write_file_via_provider(
+                                    _sandbox_id,
+                                    "/home/user/modulo_bridge_config.json",
+                                    json.dumps(loop_intercept_config.model_dump(mode="json")),
+                                ),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                        else:
+                            await asyncio.wait_for(
+                                sandbox.files.write(
+                                    "/home/user/modulo_bridge_config.json",
+                                    json.dumps(loop_intercept_config.model_dump(mode="json")),
+                                ),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
                         sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://127.0.0.1:{_bridge_port}"
                         sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
                         # FAR-664 (newline-safe bridge handoff): the rendered
@@ -8701,10 +8943,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         # post-``--`` argv and runs it as a shell command, so
                         # interception semantics are unchanged. Uniform for
                         # single-line and multi-line commands (one code path).
-                        await asyncio.wait_for(
-                            sandbox.files.write("/home/user/.modulo_bridge_cmd.sh", rendered_agent_command),
-                            timeout=_SANDBOX_IO_TIMEOUT,
-                        )
+                        if _file_io_via_provider_enabled():
+                            await asyncio.wait_for(
+                                _write_file_via_provider(
+                                    _sandbox_id, "/home/user/.modulo_bridge_cmd.sh", rendered_agent_command
+                                ),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                        else:
+                            await asyncio.wait_for(
+                                sandbox.files.write("/home/user/.modulo_bridge_cmd.sh", rendered_agent_command),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
                         _bridge_wrapped_command = (
                             "python3 /home/user/modulo_bridge.py --wrap -- bash /home/user/.modulo_bridge_cmd.sh"
                         )
@@ -8959,10 +9209,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _stall_full_stdout: str | None = None
             if cmd_result is None:
                 try:
-                    _fresh_log = await asyncio.wait_for(
-                        sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
-                        timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-                    )
+                    if _file_io_via_provider_enabled():
+                        # FAR-1050 R2b flag-ON: full-log re-read through the ABC
+                        # primitive; the str/bytes handling below is unchanged.
+                        _fresh_log = await asyncio.wait_for(
+                            _read_file_via_provider(_sandbox_id, _SANDBOX_LOG_PATH),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
+                    else:
+                        _fresh_log = await asyncio.wait_for(
+                            sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
                     if isinstance(_fresh_log, str):
                         _fresh_text = _fresh_log
                     else:
@@ -9057,13 +9315,25 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if cmd_result is not None:
             try:
                 _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
-                raw_output = await asyncio.wait_for(
-                    sandbox.files.read(
-                        "/home/user/output.json",
-                        request_timeout=_remaining_after_cmd,
-                    ),
-                    timeout=_remaining_after_cmd,
-                )
+                if _file_io_via_provider_enabled():
+                    # FAR-1050 R2b flag-ON: output.json through the ABC
+                    # primitive. The ``_remaining_after_cmd`` bound is kept
+                    # (the ABC has no per-call timeout knob, so the outer
+                    # wait_for is what threads it); the helper decodes to the
+                    # same ``str`` the legacy text read returns, so
+                    # ``json.loads`` / marker shaping see an unchanged value.
+                    raw_output = await asyncio.wait_for(
+                        _read_file_via_provider(_sandbox_id, "/home/user/output.json"),
+                        timeout=_remaining_after_cmd,
+                    )
+                else:
+                    raw_output = await asyncio.wait_for(
+                        sandbox.files.read(
+                            "/home/user/output.json",
+                            request_timeout=_remaining_after_cmd,
+                        ),
+                        timeout=_remaining_after_cmd,
+                    )
                 output_json = json.loads(raw_output)
             except asyncio.CancelledError:
                 raise
