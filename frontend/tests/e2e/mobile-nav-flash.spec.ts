@@ -154,8 +154,9 @@ async function boot(page: Page, opts: { rail: boolean; cachedRail?: boolean }): 
         }
       })
       observer.observe({ type: 'layout-shift', buffered: true })
-    } catch {
+    } catch (err) {
       // layout-shift unsupported — CLS stays 0 (advisory metric only).
+      console.warn('[far-1237] layout-shift observer unavailable', err)
     }
   })
 
@@ -191,8 +192,9 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
           `[far-1237]   shift ${shift.value.toFixed(3)} from: ${shift.nodes.join(' | ') || '<no sources>'}\n`,
         )
       }
-    } catch {
+    } catch (err) {
       // Page already gone — no CLS to report.
+      console.warn('[far-1237] CLS read skipped (page closed)', err)
     }
   })
 
@@ -200,7 +202,7 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
   // assert. A pre-fix failure still completes the whole session, so the
   // recorded diagnostics and CLS include the header↔rail swap itself rather
   // than aborting before it happens.
-  test('first visit (rail org): pending placeholder paints first, the legacy top-nav never appears', async ({ page }) => {
+  test('first visit (rail org): pending placeholder paints first, the legacy top-nav never appears', { tag: '@mobile' }, async ({ page }) => {
     const gate = await boot(page, { rail: true })
 
     const firstPaint = await chrome(page)
@@ -219,7 +221,7 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     expect(settled).toEqual({ hamburger: 0, rail: 1, pending: 0 })
   })
 
-  test('first visit (drawer org): pending placeholder paints first, the rail never appears', async ({ page }) => {
+  test('first visit (drawer org): pending placeholder paints first, the rail never appears', { tag: '@mobile' }, async ({ page }) => {
     const gate = await boot(page, { rail: false })
 
     const firstPaint = await chrome(page)
@@ -238,7 +240,7 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     expect(settled).toEqual({ hamburger: 1, rail: 0, pending: 0 })
   })
 
-  test('returning rail user: the left rail paints first from the persisted cache, even while flags are slow', async ({ page }) => {
+  test('returning rail user: the left rail paints first from the persisted cache, even while flags are slow', { tag: '@mobile' }, async ({ page }) => {
     const gate = await boot(page, { rail: true, cachedRail: true })
 
     const firstPaint = await chrome(page)
@@ -256,7 +258,7 @@ test.describe('FAR-1237 — mobile first-paint layout under a slow feature-flags
     expect(settled, 'the layout must not flip once resolved').toEqual({ hamburger: 0, rail: 1, pending: 0 })
   })
 
-  test('returning drawer user (secondary UI): the top-nav paints first from cache and is never swapped for the rail', async ({ page }) => {
+  test('returning drawer user (secondary UI): the top-nav paints first from cache and is never swapped for the rail', { tag: '@mobile' }, async ({ page }) => {
     const gate = await boot(page, { rail: false, cachedRail: false })
 
     const firstPaint = await chrome(page)

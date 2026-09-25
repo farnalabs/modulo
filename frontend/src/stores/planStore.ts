@@ -67,8 +67,9 @@ function writeFlagCache(flags: Record<string, boolean>): void {
   try {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem(FLAG_CACHE_KEY, serializeFlagCache(flags));
-  } catch {
+  } catch (err) {
     // Best-effort only: the in-memory map is already correct without it.
+    console.warn("[plan] Failed to persist flag cache", err);
   }
 }
 
