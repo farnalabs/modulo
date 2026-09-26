@@ -733,9 +733,16 @@ def validate_agent_git_content_values(
 ) -> None:
     """Save-time pin gate for git-sourced content refs on Agent rows (FAR-220).
 
-    Shared, non-HTTP validation called by BOTH Agent write surfaces: the REST
-    save paths (``routes/agents.py`` -> HTTP 422) and the MCP ``create_agent``
-    tool (-> tool error dict). An ``Agent`` row carries the same content fields
+    Shared, non-HTTP validation called by every Agent write path: the REST
+    save paths (``routes/agents.py`` -> HTTP 422), the MCP ``create_agent``
+    tool (-> tool error dict), the graph-PATCH Agent-command sync in
+    ``routes/pipelines.py`` (``_sync_agent_row_commands``, which validates
+    each incoming ``agent_commands`` list before writing the row — surfaced
+    as HTTP 422 by the graph save/patch/update endpoints), and prompt
+    rollback (``db/crud/agent.py`` ``rollback_prompt_version``, which
+    re-validates the restored template so a legacy history entry cannot
+    re-poison a clean row — the typed error propagates to the route, which
+    maps it to HTTP 422). An ``Agent`` row carries the same content fields
     a ``sandbox_agent`` node does (``prompt_template``/``agent_prompt`` and
     ``agent_commands``), and the graph-save gate never sees an Agent's own
     values — they flow into nodes at run time. Without this gate a write path

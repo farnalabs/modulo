@@ -943,6 +943,8 @@ async def rollback_prompt(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> PromptRollbackResponse:
+    from modulo.core.pipeline_engine.git_content import GitContentRefError
+
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -962,6 +964,11 @@ async def rollback_prompt(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
+    except GitContentRefError as exc:
+        # FAR-220: the restored template carried an unpinned git content ref;
+        # the CRUD gate failed closed before any mutation. Surface 422 instead
+        # of the generic-handler 500 (same mapping as the Agent save paths).
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except SQLAlchemyError:
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(

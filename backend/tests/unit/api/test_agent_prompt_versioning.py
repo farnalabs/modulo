@@ -283,6 +283,27 @@ class TestRollback:
             resp = client.put(f"{BASE}/prompts/rollback/v99", json={})
         assert resp.status_code == 404
 
+    def test_rollback_rejects_unpinned_git_ref(self, client: TestClient) -> None:
+        """FAR-220: when the CRUD gate fails closed on an unpinned git content
+        ref in the restored template, the rollback route surfaces HTTP 422
+        (not the generic-handler 500) — same mapping as the Agent save paths.
+        This test FAILS without the route clause (GitContentRefError would be
+        swallowed by `except Exception` into a 500)."""
+        from modulo.core.pipeline_engine.git_content import GitContentRefError
+
+        with (
+            patch(
+                "modulo.api.routes.agents.rollback_prompt_version",
+                side_effect=GitContentRefError(
+                    "prompt_template 'git+https://github.com/example/repo.git@main#p.md' is not pinned to a commit SHA"
+                ),
+            ),
+            patch("modulo.api.routes.agents.set_rls_org"),
+        ):
+            resp = client.put(f"{BASE}/prompts/rollback/v1", json={})
+        assert resp.status_code == 422
+        assert "not pinned" in resp.json()["detail"]
+
 
 class TestDiffVersions:
     def test_diff_returns_structured_lines(self, client: TestClient) -> None:
