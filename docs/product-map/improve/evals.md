@@ -20,7 +20,6 @@ unit-tests:
   - backend/tests/unit/api/test_eval_leaderboards.py
   - backend/tests/unit/core/test_eval_engine.py
   - backend/tests/unit/core/test_eval_suite.py
-  - backend/tests/unit/core/test_eval_suite_phase1.py
   - backend/tests/unit/db/test_eval_suite_run.py
   - frontend/src/__tests__/EvalEditorView.spec.ts
   - frontend/src/__tests__/EvalProposalsQueueView.spec.ts
