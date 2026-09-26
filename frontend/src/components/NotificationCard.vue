@@ -29,7 +29,7 @@
         aria-live="polite"
       >
         <span class="font-medium">{{ runStateLabel }}</span>
-        <span v-if="cancelReasonLabel" class="text-muted-foreground">{{ cancelReasonLabel }}</span>
+        <span v-if="cancelReasonText" class="text-muted-foreground">{{ cancelReasonText }}</span>
       </p>
 
       <!-- HITL awaiting affordance: only while the linked run can still be
@@ -110,6 +110,7 @@ import type { NotificationResponse } from "../lib/api/notifications";
 import { dismissNotification } from "../lib/api/notifications";
 import DismissDialog from "./DismissDialog.vue";
 import { formatRelativeTime } from "../lib/formatDate";
+import { runStatusLabel, cancelReasonLabel } from "../utils/runUtils";
 
 const props = defineProps<{
   notification: NotificationResponse;
@@ -155,33 +156,24 @@ const hasRunState = computed(() => runStatus.value !== null);
 
 const runIsTerminal = computed(() => props.notification.run_terminal === true);
 
-/** Localised status word, resolved from the NotificationCard status map.
- *  Unknown/absent statuses never render (hasRunState guards the block). */
-const runStateLabel = computed(() => {
-  const status = runStatus.value;
-  if (status === null) return "";
-  const key = `components.NotificationCard.run_statuses.${status}`;
-  const translated = t(key);
-  return translated === key ? status.replaceAll("_", " ") : translated;
-});
+/** Localised status word, resolved from the shared run-status vocabulary
+ *  (the same `runStatusLabel` the runs list and run detail use). Unknown
+ *  statuses humanise the raw value; absent ones never render (hasRunState
+ *  guards the block). */
+const runStateLabel = computed(() => runStatusLabel(runStatus.value));
 
 const runStateClass = computed(() => {
   if (runIsTerminal.value) return "text-muted-foreground";
   return "text-primary";
 });
 
-/** Short cancel-reason phrase (FAR-1233 ``runs.cancel_reason``), shown only
- *  alongside a cancelled run. A NULL/unknown reason is the first-class
- *  "never recorded" case and is stated as such rather than guessed (mirrors
- *  the run-detail fallback; the column vocabulary is closed by
- *  ``ck_runs_cancel_reason``). */
-const cancelReasonLabel = computed(() => {
+/** Cancel-reason phrase (FAR-1233 ``runs.cancel_reason``), shown only alongside
+ *  a cancelled run. Resolved from the shared `cancelReasonLabel` util so the
+ *  copy matches the run-detail view; a NULL/unknown reason is the first-class
+ *  "never recorded" case and is stated as such rather than guessed. */
+const cancelReasonText = computed(() => {
   if (runStatus.value !== "cancelled") return "";
-  const reason = props.notification.run_cancel_reason ?? "";
-  const key = `components.NotificationCard.cancel_reasons.${reason}`;
-  const translated = t(key);
-  if (translated !== key) return translated;
-  return t("components.NotificationCard.cancel_reasons.unknown");
+  return cancelReasonLabel(props.notification.run_cancel_reason, t);
 });
 
 /**

@@ -856,7 +856,7 @@ import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
-import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription } from '../utils/runUtils'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
@@ -1585,21 +1585,11 @@ const analyzeRunInfo = computed<AnalyzeRunInfo | null>(() => {
 })
 
 // FAR-1233 cancellation transparency: one message per cancel-reason code
-// (the backend's closed vocabulary), keyed to i18n entries so no code or raw
-// backend string is ever rendered to the user. An unknown/absent reason —
-// every run cancelled before the columns shipped — falls back to the neutral
-// "reason not recorded" message rather than guessing a cause.
-const CANCEL_REASON_MESSAGE_KEYS: Record<string, string> = {
-  user_requested: 'views.RunDetailView.cancel_reason_user_requested',
-  agent_requested: 'views.RunDetailView.cancel_reason_agent_requested',
-  hitl_gate_expired: 'views.RunDetailView.cancel_reason_hitl_gate_expired',
-  hitl_gate_missing: 'views.RunDetailView.cancel_reason_hitl_gate_missing',
-}
-
-const cancelReasonMessage = computed(() => {
-  const key = CANCEL_REASON_MESSAGE_KEYS[run.value?.cancel_reason ?? '']
-  return t(key ?? 'views.RunDetailView.cancel_reason_unknown')
-})
+// (the backend's closed vocabulary). The mapping lives in the shared
+// `cancelReasonLabel` util so this view and the notification card cannot drift;
+// an unknown/absent reason — every run cancelled before the columns shipped —
+// falls back to the neutral "reason not recorded" message rather than guessing.
+const cancelReasonMessage = computed(() => cancelReasonLabel(run.value?.cancel_reason, t))
 
 // Attribution line under the reason: the ``system`` sentinel gets its own
 // copy; an acting account id is shortened like every other id on this page.

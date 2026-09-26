@@ -1641,11 +1641,6 @@ export default {
       "stopping": "Stopping...",
       "cancel_failed": "Failed to cancel:",
       "cancel_reason_title": "Why this run was cancelled",
-      "cancel_reason_user_requested": "An operator cancelled it on request.",
-      "cancel_reason_agent_requested": "An agent cancelled it through the API.",
-      "cancel_reason_hitl_gate_expired": "It was cancelled automatically: the human review gate expired without a decision.",
-      "cancel_reason_hitl_gate_missing": "It was cancelled automatically: the human review gate was never created.",
-      "cancel_reason_unknown": "Reason not recorded.",
       "cancelled_by_system": "Cancelled by the system",
       "cancelled_by_actor": "Cancelled by {actor}",
       "rerun": "Re-run",
@@ -3841,31 +3836,7 @@ export default {
       "view": "View",
       "awaiting_hitl": "Awaiting your review \u2014 a human-in-the-loop gate is open for this run.",
       "awaiting_hitl_view_run": "View run",
-      "hitl_run_terminal": "No review needed \u2014 this run is no longer waiting for a decision.",
-      "run_statuses": {
-        "pending": "pending",
-        "running": "running",
-        "awaiting_human": "awaiting a human",
-        "claimed": "claimed",
-        "unknown": "in an unknown state",
-        "hitl_parked": "parked",
-        "complete": "completed",
-        "failed": "failed",
-        "cancelled": "cancelled",
-        "eval_failed": "blocked by a guardrail",
-        "stalled": "stalled",
-        "budget_exceeded": "stopped on token budget",
-        "router_no_match": "stopped with no matching route",
-        "cost_ceiling_exceeded": "stopped on the spend ceiling",
-        "compensation_failed": "failed with compensation"
-      },
-      "cancel_reasons": {
-        "user_requested": "Cancelled by an operator.",
-        "agent_requested": "Cancelled through the API.",
-        "hitl_gate_expired": "Cancelled automatically: the review gate expired without a decision.",
-        "hitl_gate_missing": "Cancelled automatically: the review gate was never created.",
-        "unknown": "Reason not recorded."
-      }
+      "hitl_run_terminal": "No review needed \u2014 this run is no longer waiting for a decision."
     },
     "NodeCategoryEditor": {
       "message_circle": "Message Circle",
@@ -4200,6 +4171,13 @@ export default {
     "claimed": "A worker has claimed the run and will execute it.",
     "hitl_parked": "The HITL gate expired unanswered; the run is parked pending a decision.",
     "unknown": "The run is in an unrecognised state."
+  },
+  "cancelReasons": {
+    "user_requested": "An operator cancelled it on request.",
+    "agent_requested": "An agent cancelled it through the API.",
+    "hitl_gate_expired": "It was cancelled automatically: the human review gate expired without a decision.",
+    "hitl_gate_missing": "It was cancelled automatically: the human review gate was never created.",
+    "unknown": "Reason not recorded."
   },
   "connectors": {
     "rest": {

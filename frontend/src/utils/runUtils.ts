@@ -59,6 +59,25 @@ export function runStatusDescription(status: string | null | undefined, t: (key:
   return translated === key ? runStatusLabel(status) : translated
 }
 
+const CANCEL_REASON_MESSAGE_KEYS: Record<string, string> = {
+  user_requested: 'cancelReasons.user_requested',
+  agent_requested: 'cancelReasons.agent_requested',
+  hitl_gate_expired: 'cancelReasons.hitl_gate_expired',
+  hitl_gate_missing: 'cancelReasons.hitl_gate_missing',
+}
+
+/**
+ * Human-readable message for a run's closed `runs.cancel_reason` vocabulary
+ * (FAR-1233). An unknown/absent reason — every run cancelled before the reason
+ * columns shipped — falls back to the neutral "reason not recorded" message
+ * rather than guessing a cause. Shared by the run detail view and the
+ * notification card so the copy never drifts between surfaces.
+ */
+export function cancelReasonLabel(reason: string | null | undefined, t: (key: string) => string): string {
+  const key = CANCEL_REASON_MESSAGE_KEYS[reason ?? '']
+  return t(key ?? 'cancelReasons.unknown')
+}
+
 const triggerTypeLabelKeys: Record<string, string> = {
   manual: 'common.trigger_types.manual',
   webhook: 'common.trigger_types.webhook',

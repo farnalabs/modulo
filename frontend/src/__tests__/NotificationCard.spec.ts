@@ -83,7 +83,8 @@ describe('NotificationCard', () => {
 
     const state = wrapper.get('[data-testid="notification-run-state"]')
     expect(state.text()).toContain('cancelled')
-    expect(state.text()).toContain('Cancelled by an operator.')
+    // Shared `cancelReasonLabel` copy (FAR-1233) — identical to RunDetailView.
+    expect(state.text()).toContain('An operator cancelled it on request.')
     // Dynamic status must be announced, not silently injected (WCAG 4.1.3).
     expect(state.attributes('role')).toBe('status')
     expect(state.attributes('aria-live')).toBe('polite')
