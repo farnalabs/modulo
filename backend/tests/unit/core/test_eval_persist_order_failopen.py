@@ -17,7 +17,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -30,9 +30,12 @@ from modulo.core.eval_engine.policy_gate import (
     PolicyGateView,
     resolve_policy_gate,
 )
+from modulo.core.pipeline_engine import eval_persist_order
 from modulo.core.pipeline_engine.eval_persist_order import (
     EvalDefDTO,
+    _classify_persistence_failure,
     _persist_decision_row,
+    _record_decision_persist_failure,
     run_evals_persist_before_decide,
 )
 
@@ -98,6 +101,144 @@ def _failing_savepoint_session(failure: BaseException) -> MagicMock:
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=_cm(raise_on_enter=failure))
     return session
+
+
+def _ok_session() -> MagicMock:
+    """A session whose transactions/savepoints all enter and exit cleanly."""
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=_cm())
+    session.begin_nested = MagicMock(return_value=_cm())
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    return session
+
+
+class TestClassifyPersistenceFailure:
+    """``_classify_persistence_failure`` separates referential from transient."""
+
+    def test_exact_constraint_is_referential(self) -> None:
+        exc = IntegrityError("stmt", {}, Exception("fk violation"))
+        exc.constraint_name = "fk_policy_gate_decisions_gate_org"
+        assert _classify_persistence_failure(exc) == "referential"
+
+    def test_substring_match_is_referential(self) -> None:
+        # A driver that reports the name in a different case/spelling but still
+        # names the policy_gate_decisions table.
+        exc = IntegrityError("stmt", {}, Exception("fk violation"))
+        exc.constraint_name = "RS_POLICY_GATE_DECISIONS_EVAL_ORG"
+        assert _classify_persistence_failure(exc) == "referential"
+
+    def test_unrelated_constraint_is_transient(self) -> None:
+        exc = IntegrityError("stmt", {}, Exception("fk violation"))
+        exc.constraint_name = "fk_eval_results_run_org"
+        assert _classify_persistence_failure(exc) == "transient"
+
+    def test_non_integrity_error_is_transient(self) -> None:
+        assert _classify_persistence_failure(RuntimeError("connection reset")) == "transient"
+
+
+class TestRecordDecisionPersistFailureMetrics:
+    """``_record_decision_persist_failure`` is best-effort and never raises."""
+
+    def test_counter_incremented_when_available(self) -> None:
+        counter = MagicMock()
+        with patch.object(eval_persist_order, "_decision_record_persist_failures_total", counter):
+            _record_decision_persist_failure(resolved_action="continue", failure_class="transient")
+
+        counter.add.assert_called_once_with(
+            1,
+            {"resolved_action": "continue", "failure_class": "transient"},
+        )
+
+    def test_no_counter_increment_when_unavailable(self) -> None:
+        with (
+            patch.object(eval_persist_order, "_ensure_metrics", MagicMock()),
+            patch.object(eval_persist_order, "_decision_record_persist_failures_total", None),
+        ):
+            # Must be a no-op (and never raise) when metrics are unavailable.
+            _record_decision_persist_failure(resolved_action="continue", failure_class="transient")
+
+    def test_metrics_error_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch.object(eval_persist_order, "_ensure_metrics", MagicMock(side_effect=RuntimeError("otel down"))),
+            caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER),
+        ):
+            _record_decision_persist_failure(resolved_action="block", failure_class="referential")
+
+        records = [r for r in caplog.records if r.message == "eval_persist_order.metrics_unavailable"]
+        assert len(records) == 1
+
+
+class TestDecisionRecordPersistSuccessPath:
+    """The happy path persists the decision row after setting RLS context."""
+
+    @pytest.mark.asyncio
+    async def test_sets_rls_and_adds_decision_row(self) -> None:
+        session = _ok_session()
+        with (
+            patch(
+                "modulo.core.pipeline_engine.eval_persist_order.set_rls_org",
+                AsyncMock(),
+            ) as set_org,
+            patch(
+                "modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context",
+                AsyncMock(),
+            ) as set_ctx,
+        ):
+            await _persist_decision_row(
+                _snapshot(),
+                _outcome(),
+                run_id,
+                session_factory=_session_factory(session),
+                org_id=org_id,
+            )
+
+        set_org.assert_awaited_once_with(session, org_id)
+        set_ctx.assert_awaited_once_with(session)
+        session.add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_warns_when_policy_gate_node_id_missing(self, caplog: pytest.LogCaptureFixture) -> None:
+        session = _ok_session()
+        eval_def = EvalDefDTO(
+            id=uuid.uuid4(),
+            org_id=org_id,
+            name="gate-eval",
+            eval_type="regex",
+            config={"pattern": "pass", "field": "text"},
+            failure_behaviour="warn",
+            node_id=str(uuid.uuid4()),
+            policy_gate_id=gate_id,
+            policy_gate_version=1,
+            policy_gate_node_id=None,
+        )
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.eval_persist_order.set_rls_org",
+                AsyncMock(),
+            ),
+            patch(
+                "modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context",
+                AsyncMock(),
+            ),
+            caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER),
+        ):
+            results = await run_evals_persist_before_decide(
+                eval_defs=[eval_def],
+                resolve_eval_target=lambda ed: {"text": "pass"},
+                run_id=run_id,
+                org_id=org_id,
+                session_factory=_session_factory(session),
+                node_id="node-1",
+            )
+
+        assert results["gate-eval"].passed is True
+        records = [r for r in caplog.records if r.message == "eval_persist_order.policy_gate_node_id_missing"]
+        assert len(records) == 1
 
 
 class TestFailOpenDoesNotPropagate:

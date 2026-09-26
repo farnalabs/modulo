@@ -61,6 +61,40 @@ class TestIsPolicyGateDecisionFkError:
         exc = IntegrityError("stmt", {}, Exception("violates foreign key constraint"))
         assert is_policy_gate_decision_fk_error(exc) is False
 
+    def test_constraint_name_on_orig_is_used(self) -> None:
+        """Some DBAPI adapters hang the name off ``exc.orig``, not the wrapper."""
+        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+
+        orig = Exception("violates foreign key constraint")
+        orig.constraint_name = "fk_policy_gate_decisions_eval_org"
+        exc = IntegrityError("stmt", {}, orig)
+
+        assert is_policy_gate_decision_fk_error(exc) is True
+
+    def test_missing_orig_is_not_classified(self) -> None:
+        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+
+        exc = IntegrityError("stmt", {}, None)
+        assert is_policy_gate_decision_fk_error(exc) is False
+
+    def test_asyncpg_message_constraint_name_is_parsed(self) -> None:
+        """asyncpg surfaces the name only in the error message text."""
+        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+
+        orig = Exception(
+            'insert or update on table "policy_gate_decisions" violates '
+            'foreign key constraint "fk_policy_gate_decisions_gate_org"'
+        )
+        exc = IntegrityError("stmt", {}, orig)
+
+        assert is_policy_gate_decision_fk_error(exc) is True
+
+    def test_asyncpg_message_without_closing_quote_is_not_classified(self) -> None:
+        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+
+        exc = IntegrityError("stmt", {}, Exception('violates foreign key constraint "unterminated'))
+        assert is_policy_gate_decision_fk_error(exc) is False
+
     def test_non_integrity_error_is_never_classified(self) -> None:
         from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
