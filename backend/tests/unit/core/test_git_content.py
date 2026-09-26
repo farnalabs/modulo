@@ -311,7 +311,7 @@ def test_git_content_values_covers_three_fields() -> None:
 def test_git_content_values_skips_non_string_and_non_list_fields() -> None:
     """A non-str scalar / non-list command field contributes no values."""
     node = {"agent_prompt": 7, "script_command": None, "agent_commands": "not-a-list"}
-    assert git_content_values(node) == []
+    assert not git_content_values(node)
 
 
 def test_pin_node_fields_pins_movable_via_resolver() -> None:
@@ -725,7 +725,7 @@ async def test_fetch_git_content_use_cache_false_skips_cache(monkeypatch: pytest
     out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path, use_cache=False)
     assert out == "PROMPT FROM GIT"
     assert calls.count("fetch (shallow+blobless)") == 1
-    assert await asyncio.to_thread(lambda: list(tmp_path.glob("*.json"))) == []
+    assert not await asyncio.to_thread(lambda: list(tmp_path.glob("*.json")))
 
 
 async def test_fetch_git_content_does_not_cache_oversized_value(
@@ -741,7 +741,7 @@ async def test_fetch_git_content_does_not_cache_oversized_value(
     monkeypatch.setattr(git_content, "_git", _fake_git)
     out = await fetch_git_content(_REPO, _SHA_A, "big.txt", cache_dir=tmp_path)
     assert len(out) == git_content.CONTENT_CACHE_MAX_VALUE_BYTES + 1
-    assert await asyncio.to_thread(lambda: list(tmp_path.glob("*.json"))) == []
+    assert not await asyncio.to_thread(lambda: list(tmp_path.glob("*.json")))
 
 
 async def test_fetch_git_content_oversized_clone_is_typed_error(
@@ -833,7 +833,7 @@ def test_cache_put_fails_open_on_oserror(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     monkeypatch.setattr(Path, "write_text", _boom)
     git_content._cache_put(_REPO, _SHA_A, "p.md", "content", cache_dir=tmp_path)
-    assert list(tmp_path.glob("*.json")) == []
+    assert not list(tmp_path.glob("*.json"))
 
 
 def test_mtime_or_zero_treats_stat_failure_as_zero(tmp_path: Path) -> None:
