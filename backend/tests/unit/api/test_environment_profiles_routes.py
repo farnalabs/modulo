@@ -5,6 +5,7 @@ surface (FAR-551 collapsed the duplicate `/api/v1/environments` router into it).
 These tests exercise the router in isolation with a mocked session + CRUD layer.
 """
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -641,10 +642,10 @@ def test_spec_egress_for_canonical_is_lossless(
 ) -> None:
     """FAR-1050 regression: canonical 'selected' must NOT collapse into the
     permissive 'outbound' (the ADR 040 fail-open defect class)."""
-    from modulo.api.routes.environment_profiles import _spec_egress_for_canonical
+    from modulo.core.pipeline_engine.egress import spec_egress_for_canonical
     from modulo.core.runtime_provider.e2b import _egress_allows_internet
 
-    mapped = _spec_egress_for_canonical(canonical)
+    mapped = spec_egress_for_canonical(canonical)
 
     assert mapped == expected_spec_value
     assert _egress_allows_internet(mapped) is expected_allows_internet
@@ -704,6 +705,10 @@ def test_build_workspace_spec_selected_produces_deny_internet_spec(
     # Guard against the pre-fix collapse: the spec value must never be the
     # permissive dialect value for a restrictive canonical policy.
     assert spec.egress_policy != "outbound"
+    # FAR-1050 review follow-up: the selected-mode allowlist must ride the
+    # WorkspaceSpec metadata carrier (the key the E2B provider reads), not be
+    # dropped — otherwise 'selected' would behave as deny_all.
+    assert json.loads(spec.workspace_metadata["egress_allowlist"]) == [{"host": "api.github.com", "port": 443}]
 
 
 def test_build_workspace_spec_selected_refuses_without_allowlist() -> None:

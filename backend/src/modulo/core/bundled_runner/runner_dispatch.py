@@ -242,7 +242,11 @@ def _workspace_spec_for_dispatch(
     considered, and ``selected`` without an allowlist or on a
     non-enforcing tier returns a refusal.
     """
-    from modulo.core.pipeline_engine.egress import resolve_egress
+    from modulo.core.pipeline_engine.egress import (
+        WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY,
+        resolve_egress,
+        spec_egress_for_canonical,
+    )
 
     cfg = getattr(profile, "config_json", None) or {}
     metadata: dict[str, str] = {
@@ -265,22 +269,20 @@ def _workspace_spec_for_dispatch(
         raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on Docker tier: {egress_resolved.refusal}")
 
     # Map canonical policy to WorkspaceSpec egress_policy vocabulary
-    # LOSSLESSLY (FAR-1050): None -> "outbound" (unrestricted), "deny_all" ->
-    # "none" (the spec dialect's deny value, consumed by
-    # DockerRuntimeProvider._resolve_network_mode), "selected" -> "selected"
-    # (restrictive — collapsing it into "outbound" would silently grant
-    # internet; ADR 040 defect class).  The Docker tier refuses "selected"
-    # above (tier capability), so only None/"deny_all" are reachable here
-    # today — the lossless mapping is defence-in-depth.  An unrecognised
-    # canonical value fails CLOSED to "none".
-    if egress_resolved.policy is None:
-        spec_egress = "outbound"
-    elif egress_resolved.policy == "deny_all":
-        spec_egress = "none"
-    elif egress_resolved.policy == "selected":
-        spec_egress = "selected"
-    else:
-        spec_egress = "none"  # fail closed
+    # LOSSLESSLY (FAR-1050): the shared helper is the single owner of this
+    # mapping — identical to the profile-path mapper in
+    # api/routes/environment_profiles.py, so the two cannot drift (ADR 040).
+    # The Docker tier refuses "selected" above (tier capability), so only
+    # None/"deny_all" are reachable here today — the lossless mapping is
+    # defence-in-depth.
+    spec_egress = spec_egress_for_canonical(egress_resolved.policy)
+    # FAR-1050 R5 parity: carry the selected-mode allowlist in the same
+    # metadata key the legacy E2B create path stamps and the E2B provider
+    # reads. Unreachable here today (Docker refuses "selected"), stamped as
+    # defence-in-depth against a future allowlist source silently behaving
+    # as deny_all.
+    if egress_resolved.policy == "selected" and egress_resolved.allowlist:
+        metadata[WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY] = json.dumps(egress_resolved.allowlist)
 
     # Defense-in-depth (FAR-1020): validate workspace_network at dispatch
     # even if the CRUD boundary already validated it — a value written

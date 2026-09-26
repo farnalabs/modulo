@@ -502,41 +502,12 @@ def _egress_tier_for_provider_type(provider_type: str) -> str | None:
     return None
 
 
-def _spec_egress_for_canonical(policy: str | None) -> str:
-    """Map a canonical egress policy onto ``WorkspaceSpec.egress_policy`` losslessly.
-
-    Input vocabulary (``resolve_egress`` output): ``None`` (provider default),
-    ``"deny_all"``, ``"selected"``.
-
-    Output vocabulary — the ``WorkspaceSpec`` dialect already established by
-    ``runner_dispatch._workspace_spec_for_dispatch`` and consumed by the
-    providers (``DockerRuntimeProvider._resolve_network_mode`` checks
-    ``== "none"``; ``E2BRuntimeProvider`` feeds the value to
-    ``_egress_allows_internet``):
-
-    - ``None``     -> ``"outbound"`` (unrestricted — the provider default)
-    - ``"deny_all"`` -> ``"none"`` (deny-internet, the spec dialect's deny value)
-    - ``"selected"`` -> ``"selected"`` (restrictive; ``_egress_allows_internet``
-      treats it as deny-internet and the host:port allowlist rides as sandbox
-      metadata)
-
-    Collapsing ``"selected"`` into ``"outbound"`` (the pre-FAR-1050 behaviour)
-    would silently grant unrestricted internet to a restrictive policy — the
-    exact defect class ADR 040 records as unacceptable. Unrecognised values
-    fail CLOSED to ``"none"``.
-    """
-    if policy is None:
-        return "outbound"
-    value = policy.strip().lower()
-    if value == "deny_all":
-        return "none"
-    if value == "selected":
-        return "selected"
-    return "none"  # fail closed — an unknown policy must never grant egress
-
-
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
-    from modulo.core.pipeline_engine.egress import resolve_egress
+    from modulo.core.pipeline_engine.egress import (
+        WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY,
+        resolve_egress,
+        spec_egress_for_canonical,
+    )
     from modulo.core.runtime_provider import WorkspaceSpec
 
     cfg = profile.config_json or {}
@@ -566,8 +537,17 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         )
     # Map the canonical policy to the WorkspaceSpec egress vocabulary
     # LOSSLESSLY (FAR-1050) — "selected" must stay "selected", never
-    # collapse into the permissive "outbound".
-    _spec_egress = _spec_egress_for_canonical(_egress.policy)
+    # collapse into the permissive "outbound". The shared helper is the
+    # single owner of this mapping (both mappers route through it).
+    _spec_egress = spec_egress_for_canonical(_egress.policy)
+    # FAR-1050 R5 parity: carry the selected-mode allowlist in the same
+    # metadata key the legacy E2B create path stamping and the E2B provider
+    # read. Unreachable today (no profile-level allowlist field exists and
+    # the resolver refuses "selected" without one), but stamped so a future
+    # profile-level allowlist cannot silently behave as deny_all.
+    _workspace_metadata: dict[str, str] = {}
+    if _egress.policy == "selected" and _egress.allowlist:
+        _workspace_metadata[WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY] = json.dumps(_egress.allowlist)
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=profile.organisation_id,
@@ -579,6 +559,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         egress_policy=_spec_egress,
         persistence_policy=profile.persistence_policy,
         labels={"profile_name": profile.name},
+        workspace_metadata=_workspace_metadata,
     )
 
 

@@ -7,6 +7,7 @@ the loud E2B dispatch-time timeout validation (GraphValidator parity), and
 the hardened WorkspaceSpec construction.
 """
 
+import json
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -292,6 +293,10 @@ def test_workspace_spec_selected_maps_losslessly_when_resolution_succeeds(
     )
 
     assert spec.egress_policy == "selected"
+    # FAR-1050 review follow-up: the selected-mode allowlist must ride the
+    # WorkspaceSpec metadata carrier (the key the E2B provider reads), not be
+    # dropped — otherwise 'selected' would behave as deny_all.
+    assert json.loads(spec.workspace_metadata["egress_allowlist"]) == [{"host": "api.github.com", "port": 443}]
 
 
 def test_workspace_spec_unknown_canonical_policy_fails_closed(
