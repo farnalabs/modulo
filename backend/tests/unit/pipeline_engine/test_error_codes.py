@@ -95,7 +95,6 @@ def test_map_legacy_code_legacy_aliases():
     assert map_legacy_code("runaway.tokens_exceeded") == "node.runaway"
     assert map_legacy_code("node_cancelled") == "node.cancelled"
     assert map_legacy_code("eval_blocked") == "eval.blocked"
-    assert map_legacy_code("eval_suite_blocked") == "eval.blocked"
     assert map_legacy_code("configuration_error") == "config.error"
     assert map_legacy_code("OperationalError") == "harness.db.connection_lost"
     assert map_legacy_code("TypeError") == "harness.state_serialization"

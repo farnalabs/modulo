@@ -38,9 +38,7 @@ _REGISTRY_FILES: set[Path] = {
 # orphan check documents the gap without failing on it.  When a deferred flag
 # gains a gate, remove it from this set; when a new flag is registered
 # without a gate, add it here.
-KNOWN_DEFERRED_FLAGS: set[str] = {
-    "eval_maturity",
-}
+KNOWN_DEFERRED_FLAGS: set[str] = set()
 
 # Patterns for backend gate references (production code only).
 _BACKEND_PATTERNS = [

@@ -35,9 +35,7 @@ What this migration does (additive, reversible, self-contained):
    OrgScoped table). The OrgScoped mixin alone is NOT sufficient — the policy
    is required so the runtime ``modulo_app`` role (non-owner) is filtered.
 
-``evaluate_suite()`` in the eval engine is intentionally NOT touched — it still
-resolves the legacy ``suite_id`` string internally, so all existing production
-call sites are byte-for-byte unchanged.
+``evaluate_suite()`` in the eval engine has been deleted by chunk 5c (FAR-1105).
 
 Downgrade drops the policy, the FK column, and the table, restoring the
 pre-migration schema exactly.
