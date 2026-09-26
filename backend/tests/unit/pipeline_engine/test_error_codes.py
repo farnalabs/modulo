@@ -95,6 +95,11 @@ def test_map_legacy_code_legacy_aliases():
     assert map_legacy_code("runaway.tokens_exceeded") == "node.runaway"
     assert map_legacy_code("node_cancelled") == "node.cancelled"
     assert map_legacy_code("eval_blocked") == "eval.blocked"
+    # Chunk 5c (FAR-1105) retired the suite-aggregate blocking mechanism, so
+    # ``eval_suite_blocked`` is no longer WRITTEN — but runs persisted before
+    # the retirement still carry the raw spelling in ``runs.error_code``, and
+    # this alias is how those historical rows canonicalize to ``eval.blocked``.
+    assert map_legacy_code("eval_suite_blocked") == "eval.blocked"
     assert map_legacy_code("configuration_error") == "config.error"
     assert map_legacy_code("OperationalError") == "harness.db.connection_lost"
     assert map_legacy_code("TypeError") == "harness.state_serialization"
