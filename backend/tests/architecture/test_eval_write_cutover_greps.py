@@ -127,9 +127,10 @@ def test_shared_guardrail_validator_still_present() -> None:
     # raise so the import is bound to a functioning function.
     from modulo.core.eval_engine.eval_definition_write import validate_guardrail_request
 
-    result = validate_guardrail_request(
-        eval_type="regex", failure_behaviour="warn", config_json={"action": "observe", "type": "regex"}
-    )
+    # FAR-1103 chunk 5a retired the ``failure_behaviour`` parameter from the
+    # shared validator (it is no longer part of the public request shape); the
+    # liveness probe now calls the reduced signature.
+    result = validate_guardrail_request(eval_type="regex", config_json={"action": "observe", "type": "regex"})
     assert result is None
 
 
@@ -294,8 +295,9 @@ def test_eval_def_to_dict_accepts_eval_row() -> None:
     )
     payload = _eval_def_to_dict(eval_row)
     assert payload["name"] == "r5-stub-eval"
-    # No gate -> failure_behaviour defaults to "warn" for non-gated rows.
-    assert payload["failure_behaviour"] == "warn"
+    # FAR-1103 chunk 5a retired ``failure_behaviour`` from the public response
+    # shape (it is an internal column, not exposed to callers).
+    assert "failure_behaviour" not in payload
 
 
 # ---------------------------------------------------------------------------
