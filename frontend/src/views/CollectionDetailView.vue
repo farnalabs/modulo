@@ -53,23 +53,46 @@
       >
         {{ installError }}
       </div>
+      <!--
+        FAR-1231: this warning is only actionable if it is ANNOUNCED. An
+        aria-live region is announced when it is ALREADY on the page and its
+        content changes — a region that enters the DOM in the same mutation as
+        its own text is silently missed (WCAG 4.1.3). So the announcing
+        container mounts unconditionally and stays empty, and only the warning
+        block is added once an install returns manifest warnings. Same shape as
+        the persistent status regions in AnalyzeRunButton / RunnerStatusStrip.
+
+        `empty:sr-only` is load-bearing, not cosmetic. While empty the region
+        must STAY EXPOSED to assistive tech but stay OUT OF FLOW, so
+        space-y-4 on the parent contributes no phantom gap. `empty:hidden`
+        would compile to `display: none`, which drops the region from the
+        accessibility tree and reinstates the exact bug above — no screen
+        reader announces a region that was display:none when it populated.
+        Once the warning lands the element is no longer :empty, so the rule
+        stops matching and the visible box lays out as a plain block div.
+      -->
       <div
-        v-if="installWarnings.length > 0"
-        class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning"
         aria-live="polite"
-        data-testid="collection-install-warnings"
+        class="empty:sr-only"
+        data-testid="collection-install-warnings-live"
       >
-        <h3 class="text-sm font-medium">
-          {{ $t('views.CollectionDetail.install_warnings_title') }}
-        </h3>
-        <p class="mt-1 text-sm">
-          {{ $t('views.CollectionDetail.install_warnings_action') }}
-        </p>
-        <ul class="mt-2 list-disc space-y-1 pl-5 text-sm">
-          <li v-for="(warning, index) in installWarnings" :key="`${index}-${warning}`">
-            {{ warning }}
-          </li>
-        </ul>
+        <div
+          v-if="installWarnings.length > 0"
+          class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning"
+          data-testid="collection-install-warnings"
+        >
+          <h3 class="text-sm font-medium">
+            {{ $t('views.CollectionDetail.install_warnings_title') }}
+          </h3>
+          <p class="mt-1 text-sm">
+            {{ $t('views.CollectionDetail.install_warnings_action') }}
+          </p>
+          <ul class="mt-2 list-disc space-y-1 pl-5 text-sm">
+            <li v-for="(warning, index) in installWarnings" :key="`${index}-${warning}`">
+              {{ warning }}
+            </li>
+          </ul>
+        </div>
       </div>
       <div v-if="collection.status === 'draft'" class="flex justify-end">
         <Button :disabled="publishing" data-testid="collection-publish" @click="publish">
@@ -293,6 +316,11 @@ async function loadInstalls() {
   if (!installErr && installData) {
     const listResp = installData as unknown as { items: CollectionInstall[] }
     installs.value = listResp.items || []
+    // The backend orders the list newest-first (created_at desc), so this is the
+    // most recent install's warnings. The guard is deliberate: install() has
+    // already rendered the warnings from the authoritative install RESPONSE, so
+    // only refresh when the list actually carries some — an empty or not-yet-
+    // visible refetch must not wipe a warning the operator is acting on.
     const listed = resolvedManifestWarnings(installs.value[0]?.resolved_manifest)
     if (listed.length > 0) installWarnings.value = listed
   }
@@ -318,7 +346,17 @@ async function install() {
     // Refetch so the installs section renders the new install record —
     // provenance, connector checklist, runnability, and for community-sourced
     // collections the default-deny state with its Grant Access control.
-    await loadInstalls()
+    //
+    // Guarded separately from the install above: this is a follow-up READ, not
+    // part of the install outcome. api.GET rejects on a transport failure, and
+    // letting that reach installError would report "install failed" for an
+    // install that succeeded — directly contradicting the re-provision warning
+    // already on screen. A failed refetch just leaves the previous records.
+    try {
+      await loadInstalls()
+    } catch {
+      // Non-fatal: the install succeeded and its warnings are already shown.
+    }
   } catch (e) {
     installError.value = formatApiError(e)
   } finally {
