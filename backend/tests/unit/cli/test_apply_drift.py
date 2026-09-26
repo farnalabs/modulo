@@ -366,7 +366,7 @@ class TestNonPipelineDriftDetail:
         current = {"trigger": {"sample/nightly": {"config_json": {"cron_expression": "0 3 * * *"}}}}
         report = {"updated": [{"kind": "trigger", "name": "sample/nightly"}]}
         # Marker-only difference between desired and current view -> no detail.
-        assert build_drift_detail(current, desired, report) == {}
+        assert not build_drift_detail(current, desired, report)
 
     def test_refresh_secret_marker_does_not_mask_real_field_drift(self) -> None:
         """Excluding the marker must not hide a genuine managed-field change."""
