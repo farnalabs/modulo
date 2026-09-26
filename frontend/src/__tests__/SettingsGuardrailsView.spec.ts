@@ -60,7 +60,6 @@ function guardrailItem(overrides: Record<string, unknown> = {}) {
       field: 'payload.card_number',
       pattern: '^4[0-9]{12}$',
     },
-    failure_behaviour: 'warn',
     ...overrides,
   }
 }

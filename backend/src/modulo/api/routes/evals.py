@@ -112,12 +112,13 @@ router = APIRouter(prefix="/api/v1", tags=["evals"])
 
 
 class CreateEvalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     pipeline_id: uuid.UUID
     node_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=255)
     eval_type: str = Field(pattern=_EVAL_TYPE_PATTERN)
     config_json: dict[str, Any] = Field(default_factory=dict)
-    failure_behaviour: str = "warn"
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
     suite_id: str | None = None
 
@@ -130,7 +131,6 @@ class EvalDefinitionResponse(BaseModel):
     name: str
     eval_type: str
     config_json: dict[str, Any]
-    failure_behaviour: str
     pass_threshold: float | None = None
     suite_id: str | None = None
     # Eval-definition version (FAR-382): additive/optional, defaults to 1 so
@@ -149,23 +149,12 @@ def _eval_def_to_dict(
     eval_row: Eval,
     *,
     policy_gate: PolicyGate | None = None,
-    failure_behaviour_override: str | None = None,
 ) -> dict[str, Any]:
-    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the legacy response shape.
+    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the response dict.
 
-    ``failure_behaviour`` is populated from ``PolicyGate.action`` for
-    node-scoped evals with a gate, else defaults to ``"warn"`` (guardrail-
-    typed or suite-scoped evals without a gate).  Callers that already know
-    the value (e.g. REST create paths that just set it) can pass
-    ``failure_behaviour_override`` to skip the gate lookup.
-
-    The field name ``failure_behaviour`` is retained for backward
-    compatibility — its retirement is chunk 5a's concern.
+    Returns the public fields only; ``failure_behaviour`` is excluded from the
+    response shape (it is an internal column, not exposed to callers).
     """
-    if failure_behaviour_override is not None:
-        failure_behaviour = failure_behaviour_override
-    else:
-        failure_behaviour = policy_gate.action if policy_gate is not None else "warn"
     return {
         "id": str(eval_row.id),
         "pipeline_id": str(eval_row.pipeline_id),
@@ -173,7 +162,6 @@ def _eval_def_to_dict(
         "name": eval_row.name,
         "eval_type": eval_row.eval_type,
         "config_json": eval_row.config_json,
-        "failure_behaviour": failure_behaviour,
         "pass_threshold": float(eval_row.pass_threshold) if eval_row.pass_threshold is not None else None,
         "suite_id": eval_row.suite_id,
         "account_id": str(eval_row.account_id),
@@ -185,27 +173,26 @@ def _eval_def_to_dict(
 def _validate_guardrail_request(
     *,
     eval_type: str,
-    failure_behaviour: str | None,
     config_json: dict[str, Any] | None,
 ) -> None:
     """Graph-save validation for guardrail definitions (FAR-208 item 5).
 
-    Delegates to the consolidated validator in eval_definition_write.
-    Kept as a thin wrapper for backward compatibility with existing callers.
+    Validates the config vocabulary and detection type, delegating to the
+    consolidated validator in ``eval_definition_write``.
     """
     validate_guardrail_request(
         eval_type=eval_type,
-        failure_behaviour=failure_behaviour,
         config_json=config_json,
     )
 
 
 class UpdateEvalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     node_id: uuid.UUID | None = None
     name: str | None = Field(None, min_length=1, max_length=255)
     eval_type: str | None = Field(None, pattern=_EVAL_TYPE_PATTERN)
     config_json: dict[str, Any] | None = None
-    failure_behaviour: str | None = None
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
     suite_id: str | None = None
 
@@ -276,7 +263,6 @@ async def create_eval_definition(
 
     _validate_guardrail_request(
         eval_type=req.eval_type,
-        failure_behaviour=req.failure_behaviour,
         config_json=req.config_json,
     )
 
@@ -306,7 +292,7 @@ async def create_eval_definition(
                     name=req.name,
                     eval_type=req.eval_type,
                     config_json=req.config_json,
-                    failure_behaviour=req.failure_behaviour,
+                    failure_behaviour="warn",
                     pass_threshold=req.pass_threshold,
                     suite_id=req.suite_id,
                 )
@@ -316,7 +302,7 @@ async def create_eval_definition(
                     detail=f"PolicyGate binding violation: {exc}",
                 ) from exc
             # Map Eval row to the legacy response shape
-            eval_def = _eval_def_to_dict(eval_row, failure_behaviour_override=req.failure_behaviour or "warn")
+            eval_def = _eval_def_to_dict(eval_row)
     except HTTPException:
         raise
     except IntegrityError:
@@ -365,10 +351,9 @@ async def list_eval_definitions(
 ) -> EvalDefinitionListResponse:
     """List eval definitions for the caller's organisation.
 
-    Reads from the ``evals`` table (chunk 3b cutover).  Each row's
-    ``failure_behaviour`` response field is populated from the associated
-    ``PolicyGate.action`` (node-scoped evals with a gate) or defaults to
-    ``"warn"`` (guardrail-typed / suite-scoped).
+    Reads from the ``evals`` table.  The ``failure_behaviour`` field is not
+    returned in the response — it is an internal column used by the pipeline
+    engine only.
     """
     from sqlalchemy import func as sa_func
 
@@ -1625,6 +1610,8 @@ async def update_eval_definition(
 
             # Resolve current failure_behaviour from the PolicyGate (if any),
             # falling back to "warn" for guardrail-typed / suite-scoped evals.
+            # failure_behaviour was retired from the public surface (FAR-1103
+            # chunk 5a) — always use the current gate value.
             current_gate_result = await session.execute(
                 select(PolicyGate).where(
                     PolicyGate.eval_id == eval_row.id,
@@ -1635,13 +1622,9 @@ async def update_eval_definition(
             current_gate = current_gate_result.scalar_one_or_none()
             current_failure_behaviour = current_gate.action if current_gate is not None else "warn"
 
-            new_behaviour = updates.get("failure_behaviour")
-            if new_behaviour is None:
-                new_behaviour = current_failure_behaviour
             new_config = updates.get("config_json", eval_row.config_json)
             _validate_guardrail_request(
                 eval_type=new_type,
-                failure_behaviour=new_behaviour,
                 config_json=new_config,
             )
             # Redirect to Eval+PolicyGate via the shared helper — version
@@ -1656,7 +1639,7 @@ async def update_eval_definition(
                     name=updates.get("name") or eval_row.name or "",
                     eval_type=new_type,
                     config_json=new_config,
-                    failure_behaviour=new_behaviour,
+                    failure_behaviour=current_failure_behaviour,
                     pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
                     suite_id=updates.get("suite_id", eval_row.suite_id),
                     eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
@@ -2322,7 +2305,8 @@ async def _insert_eval_definition(
     """Persist the new eval definition in its own transaction.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
-    Returns a legacy-compatible dict for the caller.
+    ``failure_behaviour`` is hardcoded to the ``"warn"`` default on this path,
+    so callers never set it directly.  Returns a response dict for the caller.
     """
     try:
         async with session.begin():
@@ -2349,7 +2333,7 @@ async def _insert_eval_definition(
                     detail=f"PolicyGate binding violation: {exc}",
                 ) from exc
             # Build a legacy-compatible dict for the caller
-            return _eval_def_to_dict(eval_row, failure_behaviour_override="warn")
+            return _eval_def_to_dict(eval_row)
     except HTTPException:
         raise
     except IntegrityError:

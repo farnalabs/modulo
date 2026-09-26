@@ -139,9 +139,7 @@ class TestGuardrailBranchDispatch:
 
         assert row.eval_type == "guardrail"
         assert row.node_id == node_id
-        mock_validator.assert_called_once_with(
-            eval_type="guardrail", failure_behaviour="block", config_json=_VALID_GUARDRAIL_CONFIG
-        )
+        mock_validator.assert_called_once_with(eval_type="guardrail", config_json=_VALID_GUARDRAIL_CONFIG)
         mock_gate_cls.assert_not_called()
         # Persisted Eval row only   no gate add, no binding validation.
         assert mock_binding.call_count == 0
@@ -149,23 +147,31 @@ class TestGuardrailBranchDispatch:
 
 
 class TestValidatorMatrix:
-    """Criterion 8   the shared guardrail config-vocabulary validator (5 checks)."""
+    """Criterion 8   the shared guardrail config-vocabulary validator (3 checks)."""
 
     def test_retry_failure_behaviour_rejected(self) -> None:
-        with pytest.raises(HTTPException) as excinfo:
-            validate_guardrail_request(eval_type="guardrail", failure_behaviour="retry", config_json=None)
-        assert excinfo.value.status_code == 422
+        # FAR-1103 chunk 5a retired ``failure_behaviour`` from the public write
+        # boundary: the shared validator no longer declares the parameter, so a
+        # caller cannot smuggle a guardrail-terminal "retry" through it at all.
+        with pytest.raises(TypeError):
+            validate_guardrail_request(
+                eval_type="guardrail",
+                failure_behaviour="retry",  # type: ignore[call-arg]
+                config_json=None,
+            )
 
     def test_unknown_failure_behaviour_rejected(self) -> None:
-        with pytest.raises(HTTPException) as excinfo:
-            validate_guardrail_request(eval_type="guardrail", failure_behaviour="purge", config_json=None)
-        assert excinfo.value.status_code == 422
+        with pytest.raises(TypeError):
+            validate_guardrail_request(
+                eval_type="guardrail",
+                failure_behaviour="purge",  # type: ignore[call-arg]
+                config_json=None,
+            )
 
     def test_invalid_action_rejected(self) -> None:
         with pytest.raises(HTTPException) as excinfo:
             validate_guardrail_request(
                 eval_type="guardrail",
-                failure_behaviour="block",
                 config_json={"action": "explode", "type": "regex"},
             )
         assert excinfo.value.status_code == 422
@@ -174,7 +180,6 @@ class TestValidatorMatrix:
         with pytest.raises(HTTPException) as excinfo:
             validate_guardrail_request(
                 eval_type="guardrail",
-                failure_behaviour="warn",
                 config_json={"action": "block", "type": "py_eval"},
             )
         assert excinfo.value.status_code == 422
@@ -183,28 +188,22 @@ class TestValidatorMatrix:
         with pytest.raises(HTTPException) as excinfo:
             validate_guardrail_request(
                 eval_type="guardrail",
-                failure_behaviour="warn",
                 config_json={"action": "block", "detection": {"type": "sql"}},
             )
         assert excinfo.value.status_code == 422
 
     def test_valid_config_passes(self) -> None:
-        result = validate_guardrail_request(
-            eval_type="guardrail", failure_behaviour="block", config_json=dict(_VALID_GUARDRAIL_CONFIG)
-        )
+        result = validate_guardrail_request(eval_type="guardrail", config_json=dict(_VALID_GUARDRAIL_CONFIG))
         assert result is None
 
-    def test_none_config_returns_early_without_vocabulary_checks(self) -> None:
-        # A guardrail with no config_json short-circuits after the
-        # failure_behaviour checks (chunk 3b: line 77-78 return).
-        result = validate_guardrail_request(eval_type="guardrail", failure_behaviour="warn", config_json=None)
+    def test_none_config_returns_early(self) -> None:
+        # A guardrail with no config_json returns immediately.
+        result = validate_guardrail_request(eval_type="guardrail", config_json=None)
         assert result is None
 
     def test_non_guardrail_eval_type_bypasses(self) -> None:
         # Non-guardrail eval types short-circuit regardless of payload shape.
-        result = validate_guardrail_request(
-            eval_type="regex", failure_behaviour="retry", config_json={"action": "explode"}
-        )
+        result = validate_guardrail_request(eval_type="regex", config_json={"action": "explode"})
         assert result is None
 
 

@@ -23,7 +23,6 @@ from modulo.api.mcp_server import (
     _assert_admin_scope,
     _assert_create_eval_definition_params,
     _assert_eval_type,
-    _assert_failure_behaviour,
     _assert_pass_threshold,
     _assert_update_eval_definition_params,
     _build_analytics_params,
@@ -699,14 +698,15 @@ class TestAssertEvalType:
 
 
 class TestAssertFailureBehaviour:
+    """FAR-1103 chunk 5a retired ``_assert_failure_behaviour`` from the public
+    MCP surface.  These tests pin the retirement so the helper cannot silently
+    reappear without its validation being restored alongside it."""
+
     def test_valid(self) -> None:
-        assert _assert_failure_behaviour("warn") is None
-        assert _assert_failure_behaviour("block") is None
+        assert not hasattr(ms, "_assert_failure_behaviour")
 
     def test_invalid(self) -> None:
-        err = _assert_failure_behaviour("crash")
-        assert err is not None
-        assert err["error"] == "invalid_failure_behaviour"
+        assert "_assert_failure_behaviour" not in dir(ms)
 
 
 class TestAssertPassThreshold:
@@ -1282,67 +1282,70 @@ class TestSanitizeCostBreakdownEntry:
 
 class TestAssertCreateEvalDefinitionParams:
     def test_empty_name(self) -> None:
-        err = _assert_create_eval_definition_params("", "llm_judge", "warn", None)
+        err = _assert_create_eval_definition_params("", "llm_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_whitespace_name(self) -> None:
-        err = _assert_create_eval_definition_params("   ", "llm_judge", "warn", None)
+        err = _assert_create_eval_definition_params("   ", "llm_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_name_too_long(self) -> None:
-        err = _assert_create_eval_definition_params("x" * 256, "llm_judge", "warn", None)
+        err = _assert_create_eval_definition_params("x" * 256, "llm_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_bad_eval_type(self) -> None:
-        err = _assert_create_eval_definition_params("test", "bogus", "warn", None)
+        err = _assert_create_eval_definition_params("test", "bogus", None)
         assert err is not None
         assert err["error"] == "invalid_eval_type"
 
     def test_bad_failure_behaviour(self) -> None:
-        err = _assert_create_eval_definition_params("test", "llm_judge", "crash", None)
-        assert err is not None
-        assert err["error"] == "invalid_failure_behaviour"
+        # Retired from the public surface (FAR-1103 chunk 5a): the parameter is
+        # gone, so supplying it is a TypeError rather than an error dict.
+        with pytest.raises(TypeError):
+            _assert_create_eval_definition_params("test", "llm_judge", "crash", None)  # type: ignore[call-arg]
 
     def test_bad_pass_threshold(self) -> None:
-        err = _assert_create_eval_definition_params("test", "llm_judge", "warn", 2.0)
+        err = _assert_create_eval_definition_params("test", "llm_judge", 2.0)
         assert err is not None
         assert err["error"] == "invalid_pass_threshold"
 
     def test_all_valid(self) -> None:
-        assert _assert_create_eval_definition_params("my eval", "llm_judge", "warn", 0.5) is None
+        assert _assert_create_eval_definition_params("my eval", "llm_judge", 0.5) is None
 
 
 class TestAssertUpdateEvalDefinitionParams:
     def test_bad_eval_type(self) -> None:
-        err = _assert_update_eval_definition_params("bogus", None, None, None)
+        err = _assert_update_eval_definition_params("bogus", None, None)
         assert err is not None
 
     def test_bad_failure_behaviour(self) -> None:
-        err = _assert_update_eval_definition_params(None, "crash", None, None)
-        assert err is not None
+        # Retired from the public surface (FAR-1103 chunk 5a): the parameter is
+        # gone, so supplying it is a TypeError rather than an error dict.
+        with pytest.raises(TypeError):
+            _assert_update_eval_definition_params(None, "crash", None, None)  # type: ignore[call-arg]
 
     def test_bad_pass_threshold(self) -> None:
-        err = _assert_update_eval_definition_params(None, None, -1.0, None)
+        err = _assert_update_eval_definition_params(None, -1.0, None)
         assert err is not None
 
     def test_empty_name(self) -> None:
-        err = _assert_update_eval_definition_params(None, None, None, "  ")
+        err = _assert_update_eval_definition_params(None, None, "  ")
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_name_too_long(self) -> None:
-        err = _assert_update_eval_definition_params(None, None, None, "x" * 256)
+        err = _assert_update_eval_definition_params(None, None, "x" * 256)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_all_valid(self) -> None:
-        assert _assert_update_eval_definition_params("llm_judge", "block", 0.8, "new name") is None
+        assert _assert_update_eval_definition_params("llm_judge", 0.8, "new name") is None
 
     def test_all_none(self) -> None:
-        assert _assert_update_eval_definition_params(None, None, None, None) is None
+        assert _assert_update_eval_definition_params(None, None, None) is None
 
 
 class TestCollectEvalDefinitionUpdates:
@@ -1354,14 +1357,12 @@ class TestCollectEvalDefinitionUpdates:
             name="test",
             eval_type="llm_judge",
             config_json={"key": "val"},
-            failure_behaviour="warn",
             pass_threshold=0.5,
             suite_id="suite-1",
         )
         assert updates["node_id"] == nid
         assert updates["name"] == "test"
         assert updates["eval_type"] == "llm_judge"
-        assert updates["failure_behaviour"] == "warn"
         assert updates["pass_threshold"] == 0.5
         assert updates["suite_id"] == "suite-1"
 
@@ -1372,7 +1373,6 @@ class TestCollectEvalDefinitionUpdates:
             name=None,
             eval_type=None,
             config_json=None,
-            failure_behaviour=None,
             pass_threshold=None,
             suite_id=None,
         )

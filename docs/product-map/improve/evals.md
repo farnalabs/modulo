@@ -43,7 +43,7 @@ status: covered
 Evaluation definitions, the eval engine that scores node outputs, eval suites
 with regression alerting, pipeline coverage gap analysis, leaderboards, and the
 eval-proposals queue. An eval is a typed definition (`llm_judge`, `regex`,
-`json_schema`, `custom_function`, or `human_set`) with a `failure_behaviour` of
+`json_schema`, `custom_function`, or `human_set`) with an internal-only `failure_behaviour` of
 `warn` or `block`; blocked evals raise `EvalBlockedError` and are the mechanism
 engine-side guardrails build on (`feat-guardrails` depends on this engine).
 Surfaces: `/evals/editor` and `/evals/proposals`.
@@ -59,7 +59,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       CONTENT---` framing with a data-not-instructions guard instruction, a
       content-length cap, and an embedded-judge-injection + ReDoS guard on
       regex patterns
-- [x] Each eval carries a configurable `failure_behaviour` (`warn` | `block`);
+- [x] Each eval carries an internal-only `failure_behaviour` (`warn` | `block`);
       a blocked eval raises `EvalBlockedError` which terminalizes the run as
       `eval_failed`, and eval-generated guardrail blocks surface in the run
       detail UI
@@ -139,7 +139,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   (14 scenarios, registered in CI alongside the repaired step-rot modules).
   The steps drive the real `EvalEngine` so they lock the scorer contracts:
   regex scoring against an output field (incl. numeric coercion and nested
-  patterns), `warn` vs `block` `failure_behaviour`
+  patterns), `warn` vs `block` internal `failure_behaviour`
   (`EvalBlockedError` + `eval_failed` run transition), the llm_judge callable
   wiring (pass-below-threshold verdicts, no-callable fail path), a dedicated
   judge `model_backend_id`, and the guarded rubric prompt with the

@@ -732,7 +732,6 @@ class TestListEvalDefinitions(_AuthContext):
         assert result["data"][0]["name"] == "quality-eval"
         assert result["data"][0]["type"] == "json_schema"
         assert result["data"][0]["pipeline_id"] == str(definition.pipeline_id)
-        assert result["data"][0]["failure_behaviour"] == "block"
         assert result["data"][0]["pass_threshold"] is None
         assert result["total"] == 1
         assert result["next_cursor"] is None

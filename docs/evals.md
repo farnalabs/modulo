@@ -67,8 +67,7 @@ with:
   "config_json": {
     "set_name": "demo_classification",
     "field": "output"
-  },
-  "failure_behaviour": "block"
+  }
 }
 ```
 
