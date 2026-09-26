@@ -5141,8 +5141,7 @@ def make_hitl_gate_fn(
       used as before.
 
       If ``session_factory`` is provided, eval results are persisted to
-      the ``eval_results`` table so that post-run suite-level threshold
-      checks (``_check_eval_suites``) can read them.
+      the ``eval_results`` table.
 
     On resume (via ``aupdate_state`` + ``astream_events(None, config)``),
     the node is re-invoked with ``state["_hitl_decision"]`` populated.

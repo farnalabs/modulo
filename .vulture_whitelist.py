@@ -136,10 +136,6 @@ __all__ = [
     "_parse_saml_datetime",
     "_require_runner",
     "build_tool_definitions_for_text",
-    # --- FAR-374 Phase 1 eval-suite feature flag (referenced by tests; production
-    #     callers that read it land in later phases, so vulture cannot see a
-    #     prod call site yet) ---
-    "eval_maturity_enabled",
     # --- CRUD functions referenced only by tests ---
     # FAR-795: create-time refs read used by test_work_item_refs_slice2b.py;
     # the node-runner injection site now reads the same semantics via the

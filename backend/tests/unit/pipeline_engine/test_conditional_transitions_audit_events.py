@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.eval_engine import EvalBlockedError, EvalSuiteBlockedError
+from modulo.core.eval_engine import EvalBlockedError
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 
 # ---------------------------------------------------------------------------
@@ -171,41 +171,6 @@ async def test_eval_blocked_records_audit_event(mock_append: AsyncMock):
     call_kwargs = mock_append.call_args[1]
     assert call_kwargs["event_type"] == "eval.blocked"
     assert call_kwargs["resource_type"] == "run"
-
-
-@pytest.mark.asyncio
-@patch("modulo.core.pipeline_engine.executor.append_audit_event", new_callable=AsyncMock)
-async def test_eval_suite_blocked_records_audit_event(mock_append: AsyncMock):
-    """EvalSuiteBlockedError from post-run suite check triggers an audit event."""
-    run = _make_run()
-    final_run = _make_run(run_id=run.id, status="failed")
-    snapshot = _make_snapshot()
-    session = _make_session(snapshot)
-    factory = _make_session_factory(session)
-    compiled = _make_compiled()
-    registry = _make_registry()
-    suite_blocked = EvalSuiteBlockedError("suite-1", 0.3, 0.8)
-
-    with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch.object(PipelineExecutor, "_check_eval_suites", AsyncMock(side_effect=suite_blocked)),
-    ):
-        executor = PipelineExecutor(MagicMock())
-        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
-
-    mock_append.assert_called_once()
-    call_kwargs = mock_append.call_args[1]
-    assert call_kwargs["event_type"] == "eval.suite_blocked"
-    assert call_kwargs["resource_type"] == "run"
-    assert call_kwargs["payload_json"]["suite_id"] == "suite-1"
 
 
 @pytest.mark.asyncio

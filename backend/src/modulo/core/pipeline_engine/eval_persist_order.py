@@ -72,7 +72,6 @@ _log = logging.getLogger(__name__)
 # Metrics — OTel counters for persistence failures and suite completeness
 # ---------------------------------------------------------------------------
 _eval_result_persist_failures_total: Any = None
-_eval_suite_incomplete_total: Any = None
 
 
 def _get_otel_meter() -> Any:
@@ -89,9 +88,9 @@ def _get_otel_meter() -> Any:
 
 
 def _ensure_metrics() -> None:
-    """Lazily initialise the persistence-failure and suite-incomplete counters (idempotent)."""
-    global _eval_result_persist_failures_total, _eval_suite_incomplete_total
-    if _eval_result_persist_failures_total is not None and _eval_suite_incomplete_total is not None:
+    """Lazily initialise the persistence-failure counter (idempotent)."""
+    global _eval_result_persist_failures_total
+    if _eval_result_persist_failures_total is not None:
         return
     meter = _get_otel_meter()
     if meter is None:
@@ -102,12 +101,6 @@ def _ensure_metrics() -> None:
             description="EvalResult persistence failures, by failure_behaviour",
             unit="1",
         )
-    if _eval_suite_incomplete_total is None:
-        _eval_suite_incomplete_total = meter.create_counter(
-            name="modulo_eval_suite_incomplete_total",
-            description="Eval suite aggregate blocked: expected eval ids missing from persisted set",
-            unit="1",
-        )
 
 
 def _record_persist_failure(*, failure_behaviour: str) -> None:
@@ -116,20 +109,6 @@ def _record_persist_failure(*, failure_behaviour: str) -> None:
         _ensure_metrics()
         if _eval_result_persist_failures_total is not None:
             _eval_result_persist_failures_total.add(1, {"failure_behaviour": failure_behaviour})
-    except Exception:
-        _log.warning("eval_persist_order.metrics_unavailable", exc_info=True)
-
-
-def _record_suite_incomplete(*, reason: str) -> None:
-    """Best-effort counter increment when a suite's expected eval id set is not fully persisted.
-
-    Args:
-        reason: Label attribute for the counter (e.g. ``"incomplete_suite_set"``).
-    """
-    try:
-        _ensure_metrics()
-        if _eval_suite_incomplete_total is not None:
-            _eval_suite_incomplete_total.add(1, {"reason": reason})
     except Exception:
         _log.warning("eval_persist_order.metrics_unavailable", exc_info=True)
 

@@ -15,7 +15,6 @@ Blocked evals raise EvalBlockedError.
 import asyncio
 import logging
 import re
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, ClassVar, Literal, Protocol
@@ -65,23 +64,6 @@ class EvalType(StrEnum):
     HUMAN_SET = "human_set"
 
 
-class SuiteOutcome(StrEnum):
-    """Outcome of a suite-aggregate evaluation (FAR-971 §4.7).
-
-    * ``PASSED`` — all expected eval ids were persisted and the suite ratio
-      meets or exceeds the threshold (or no threshold was set).
-    * ``FAILED`` — all expected eval ids were persisted but the ratio is
-      below the threshold.
-    * ``INDETERMINATE`` — the suite's persisted eval id set does not cover
-      every expected eval id; the ratio is not computed and the suite
-      fails closed.
-    """
-
-    PASSED = "passed"
-    FAILED = "failed"
-    INDETERMINATE = "indeterminate"
-
-
 FailureBehaviour = Literal["warn", "block"]
 
 
@@ -126,16 +108,6 @@ class EvalBlockedError(RuntimeError):
         self.detail = detail
 
 
-class EvalSuiteBlockedError(RuntimeError):
-    """Raised when an eval suite's aggregate score is below pass_threshold."""
-
-    def __init__(self, suite_id: str, score: float, threshold: float) -> None:
-        super().__init__(f"Eval suite {suite_id!r} blocked pipeline: score {score:.2f} < threshold {threshold:.2f}")
-        self.suite_id = suite_id
-        self.score = score
-        self.threshold = threshold
-
-
 class UnknownEvalTypeError(ValueError):
     """Raised when an eval type is not recognized."""
 
@@ -156,18 +128,6 @@ class GuardrailMisroutedError(RuntimeError):
     def __init__(self, eval_name: str) -> None:
         super().__init__(f"Guardrail {eval_name!r} must not be routed through EvalEngine.evaluate")
         self.eval_name = eval_name
-
-
-class SuiteEvalResult(BaseModel):
-    """Aggregate result for an eval suite."""
-
-    suite_id: str
-    total_evals: int
-    passed_evals: int
-    aggregate_score: float = Field(ge=0.0, le=1.0)  # 0.0-1.0
-    passed: bool
-    blocking_failures: list[str]
-    outcome: SuiteOutcome = SuiteOutcome.PASSED
 
 
 class LLMJudgeCallable(Protocol):
@@ -707,67 +667,15 @@ class EvalEngine:
         return cls().evaluate(output, eval_def)
 
 
-def evaluate_suite(
-    eval_results: Sequence[EvalResult],
-    suite_id: str,
-    pass_threshold: float | None,
-) -> SuiteEvalResult:
-    """Aggregate eval results for a suite and check against pass_threshold.
-
-    Args:
-        eval_results: Individual eval results belonging to this suite.
-        suite_id: The suite identifier.
-        pass_threshold: Minimum pass rate (0.0-1.0). If None, the suite
-            never blocks but still returns an aggregate result.
-
-    Returns:
-        SuiteEvalResult with aggregate score and pass/fail decision.
-
-    """
-    total = len(eval_results)
-    if total == 0:
-        return SuiteEvalResult(
-            suite_id=suite_id,
-            total_evals=0,
-            passed_evals=0,
-            aggregate_score=0.0,
-            passed=True,
-            blocking_failures=[],
-        )
-    passed_evals = sum(1 for r in eval_results if r.passed)
-    aggregate_score = passed_evals / total
-    blocking_failures = [f"{r.eval_id}: {r.detail}" for r in eval_results if not r.passed]
-
-    suite_passed = True
-    if pass_threshold is not None:
-        suite_passed = aggregate_score >= pass_threshold
-
-    outcome = SuiteOutcome.PASSED if suite_passed else SuiteOutcome.FAILED
-
-    return SuiteEvalResult(
-        suite_id=suite_id,
-        total_evals=total,
-        passed_evals=passed_evals,
-        aggregate_score=aggregate_score,
-        passed=suite_passed,
-        blocking_failures=blocking_failures,
-        outcome=outcome,
-    )
-
-
 __all__ = [
     "ContentTooLongError",
     "EvalBlockedError",
     "EvalDefinition",
     "EvalEngine",
     "EvalResult",
-    "EvalSuiteBlockedError",
     "EvalType",
     "FailureBehaviour",
     "GuardrailMisroutedError",
     "LLMJudgeCallable",
-    "SuiteEvalResult",
-    "SuiteOutcome",
     "UnknownEvalTypeError",
-    "evaluate_suite",
 ]

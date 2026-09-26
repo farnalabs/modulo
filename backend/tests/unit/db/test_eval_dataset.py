@@ -278,4 +278,3 @@ def test_migration_standalone_no_eval_suite_dependency() -> None:
     # Phase 2 must not wire to a (possibly-unmerged) EvalSuite entity.
     assert "eval_suites" not in text_content
     assert "input_set_ref" not in text_content
-    assert "eval_maturity" not in text_content

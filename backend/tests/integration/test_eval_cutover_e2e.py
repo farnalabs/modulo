@@ -1,4 +1,4 @@
-"""Chunk-3 read-cutover behavioural tests (FAR-1100, spec §8 criteria 16-17).
+"""Chunk-3 read-cutover behavioural tests (FAR-1100, spec §8 criteria 16).
 
 Drives the PRODUCTION entry points against real Postgres (testcontainers):
 
@@ -8,10 +8,8 @@ Drives the PRODUCTION entry points against real Postgres (testcontainers):
   tables, and the persisted ``eval_results`` row's ``eval_id`` resolves
   against ``evals`` and NOT against ``eval_definitions``.
 
-* Criterion 17 — the suite completeness guard (``_check_eval_suites``) still
-  reads ``eval_definitions`` at this chunk (the suite read switch is chunk
-  5c, spec CO-3): all-pass results clear the guard, below-threshold results
-  raise ``EvalSuiteBlockedError``.
+* Criterion 17 (retired in chunk 5c, FAR-1105): the suite-aggregate blocking
+  mechanism (``_check_eval_suites``) has been deleted.
 """
 
 import json
@@ -22,10 +20,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import BaseMessage
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 import modulo.core.pipeline_execution as pe
-from modulo.core.eval_engine import EvalSuiteBlockedError
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import set_model_backend_hub
 from modulo.model_backends.base import ModelBackendBase
@@ -272,116 +269,3 @@ async def test_post_node_eval_persists_via_evals_cutover(
     assert stored_eval_id == eval_id, f"result must reference the evals-row eval {eval_id}, got {stored_eval_id}"
     assert in_evals is True, "persisted eval_id must resolve against evals (the cutover read path)"
     assert in_legacy is False, "persisted eval_id must NOT exist in eval_definitions (table is empty)"
-
-
-# ---------------------------------------------------------------------------
-# Criterion 17 — suite completeness guard still reads eval_definitions (CO-3)
-# ---------------------------------------------------------------------------
-
-
-async def test_eval_suite_guard_reads_evals_not_eval_definitions(
-    db_engine: AsyncEngine,
-    migrated_db_url: str,
-) -> None:
-    """``_check_eval_suites`` now reads from ``evals`` (not ``eval_definitions``).
-    An all-pass run clears the guard; a below-threshold run raises
-    ``EvalSuiteBlockedError``. The thresholds differ between tables so the
-    test can distinguish which table governs: if it reads ``evals`` (intended),
-    the 0.5 threshold governs; if it reads ``eval_definitions`` (wrong), the
-    0.8 threshold governs."""
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.settings import get_settings
-
-    org_id = await _seed_org(db_engine, "CutoverSuite")
-    account_id = await _seed_account(db_engine, org_id, "cutover-suite@test.local")
-    pipe = await _seed_pipeline(db_engine, org_id, "PipeCutoverSuite", account_id)
-    snap = await _seed_snapshot(db_engine, org_id, pipe, {"nodes": [], "edges": []})
-
-    # Suite-scoped evals (node_id NULL, suite_id + threshold set).
-    # eval_definitions rows use a DIFFERENT threshold (0.8) so the test can
-    # distinguish which table _check_eval_suites reads: if it reads
-    # evals (intended, chunk 3b), the 0.5 threshold governs;
-    # if it reads eval_definitions (wrong), the 0.8 threshold governs.
-    def_a = uuid.uuid4()
-    def_b = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        for eval_id, name in ((def_a, "suite-a"), (def_b, "suite-b")):
-            # eval_definitions row uses threshold 0.8 (the WRONG source
-            # for this chunk — if _check_eval_suites reads it, 0.8 governs)
-            await conn.execute(
-                text(
-                    "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, name, eval_type, "
-                    "config_json, failure_behaviour, pass_threshold, suite_id, account_id) "
-                    "VALUES (:id, :oid, :pid, :name, 'regex', '{}'::json, 'warn', 0.8, 'suite-17', :aid)"
-                ),
-                {
-                    "id": str(eval_id),
-                    "oid": str(org_id),
-                    "pid": str(pipe),
-                    "name": name,
-                    "aid": str(account_id),
-                },
-            )
-            # evals row uses threshold 0.5 (the CORRECT source for this chunk)
-            await conn.execute(
-                text(
-                    "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, "
-                    "config_json, pass_threshold, suite_id, account_id) "
-                    "VALUES (:id, :oid, :pid, NULL, :name, 'regex', '{}'::jsonb, 0.5, 'suite-17', :aid)"
-                ),
-                {
-                    "id": str(eval_id),
-                    "oid": str(org_id),
-                    "pid": str(pipe),
-                    "name": name,
-                    "aid": str(account_id),
-                },
-            )
-
-    settings = get_settings()
-    conn_string = str(settings.database_url).replace("+asyncpg", "").replace("+psycopg", "")
-    executor = PipelineExecutor(db_engine, checkpointer_conn_string=conn_string)
-    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
-
-    # All-pass run: full set coverage, aggregate 0.5 >= 0.5 (evals
-    # threshold) -> no raise.  If _check_eval_suites incorrectly read
-    # eval_definitions (threshold 0.8), the 0.5 aggregate would be below
-    # threshold and the guard would raise — this is the falsifiability check.
-    run_pass = await _seed_run(db_engine, org_id, pipe, snap, status="running")
-    async with db_engine.connect() as conn, conn.begin():
-        for eval_id in (def_a, def_b):
-            await conn.execute(
-                text(
-                    "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, score) "
-                    "VALUES (:id, :oid, :rid, :eid, true, 0.5)"
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "oid": str(org_id),
-                    "rid": str(run_pass),
-                    "eid": str(eval_id),
-                },
-            )
-    async with session_factory() as session:
-        suite_results = await executor._check_eval_suites(session, run_pass, pipe)
-    assert len(suite_results) == 1, f"expected one suite result, got {len(suite_results)}"
-
-    # All-fail run: full coverage but aggregate 0.0 < 0.5 -> blocked.
-    run_fail = await _seed_run(db_engine, org_id, pipe, snap, status="running")
-    async with db_engine.connect() as conn, conn.begin():
-        for eval_id in (def_a, def_b):
-            await conn.execute(
-                text(
-                    "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, score) "
-                    "VALUES (:id, :oid, :rid, :eid, false, 0.0)"
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "oid": str(org_id),
-                    "rid": str(run_fail),
-                    "eid": str(eval_id),
-                },
-            )
-    async with session_factory() as session:
-        with pytest.raises(EvalSuiteBlockedError):
-            await executor._check_eval_suites(session, run_fail, pipe)

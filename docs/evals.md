@@ -361,10 +361,7 @@ monitored error event to the Error Dashboard (source = `suite_run`). The SAQ
 
 ### Feature flag
 
-The SuiteRun / comparison ENDPOINTS and UI are gated behind the existing
-`eval_maturity` flag (`eval_maturity_enabled()`), fail-closed to the legacy
-suite path. The data layer is always present; only the new comparison surface is
-gated.
+The SuiteRun / comparison ENDPOINTS and UI are gated behind feature flags.
 
 ## Leaderboard / rollup read-model (FAR-378)
 

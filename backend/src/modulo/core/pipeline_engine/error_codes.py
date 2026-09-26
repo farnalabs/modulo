@@ -745,7 +745,13 @@ LEGACY_ALIASES: dict[str, str] = {
     "ProviderUnavailableError": "provider.unavailable",
     "AuthenticationError": "provider.authentication",
     "APIConnectionError": "provider.connection",
-    # Eval.
+    # Eval. Chunk 5c (FAR-1105) retired the suite-aggregate blocking machinery,
+    # so ``eval_suite_blocked`` is no longer WRITTEN — but runs that completed
+    # before the retirement still carry the raw spelling in ``runs.error_code``,
+    # and this read-/write-time alias is what canonicalizes them. Removing it
+    # would silently reclassify those historical rows as ``harness.unknown``
+    # (and drop them from the ``eval.blocked`` analytics slice), so it is kept
+    # deliberately alongside sibling backward-compat aliases.
     "eval_blocked": _CODE_EVAL_BLOCKED,
     "eval_suite_blocked": _CODE_EVAL_BLOCKED,
     # Config.
