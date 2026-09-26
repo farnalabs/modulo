@@ -551,14 +551,17 @@ class PipelineEntity(BaseModel):
         the same id-space the API returns. Both keys are ALWAYS present:
         omission means null (declarative clear).
 
-        Secret-shaped graph entries (sensitive node/edge keys, or values the
-        server masks on read — e.g. a credential in a node's ``env_vars``/
-        ``context_files``) are stripped before hashing, symmetrically with the
+        Secret-shaped graph entries (values the server masks on read — e.g. a
+        credential in a node's ``env_vars``/``context_files``) are REDACTED
+        through the server mask tiers before hashing (``strip_secret_shaped_graph``
+        — mirror of ``mask_pipeline_graph_node``), symmetrically with the
         current side (see ``_pipeline_current_view``). The server masks stored
         secrets on read, so hashing the raw declared value against the masked
         stored value would make ``apply`` report permanent false drift and
-        re-PATCH the graph on every run. The WRITE payload still carries the
-        declared values (only the hash comparison strips them).
+        re-PATCH the graph on every run. Redaction is idempotent (an already
+        masked read hashes unchanged), so the two sides hash equal whenever the
+        declaration matches stored state. The WRITE payload still carries the
+        declared values (only the hash comparison redacts).
         """
         view: dict[str, Any] = {
             "description": self.description,
@@ -577,8 +580,15 @@ class PipelineEntity(BaseModel):
         if self.manages_max_autonomy:
             view["max_autonomy_level"] = self.max_autonomy_level
         if self.graph is not None:
-            graph_view = {"nodes": [], "edges": []} if graph is None else graph
-            view["graph"] = strip_secret_shaped_config(graph_view)
+            # FAR-1232: the DRIFT hash must compare the declared graph as the
+            # server will DISPLAY it — the API read path masks credential-
+            # bearing node fields (FAR-1181 mask_pipeline_graph_node), so an
+            # unmasked declaration hashes permanently-false drift against
+            # every masked fetch. Applied BEFORE this view is hashed; the
+            # WRITE path (executor apply_pipelines) sends the resolved true
+            # graph, so secrets still write through and `--refresh-secrets`
+            # re-sends secret-bearing graphs outright.
+            view["graph"] = {"nodes": [], "edges": []} if graph is None else strip_secret_shaped_graph(graph)
         return view
 
 
@@ -730,6 +740,12 @@ def is_sensitive_key(key: str) -> bool:
     return any(pattern in key_lower for pattern in _SENSITIVE_KEY_PATTERNS)
 
 
+# FAR-1232: the graph env tier classifies env keys through the same
+# middleware classifier (server side of the parity); the CLI re-export keeps
+# the twin surface explicit the way ``is_sensitive_key`` does.
+from modulo.core.secret_patterns import is_sensitive_env_key  # noqa: E402
+
+
 def _is_secret_shaped(key: str, value: str) -> bool:
     """True when a config value is treated as a secret by the masking policy.
 
@@ -829,6 +845,236 @@ def config_declares_secrets(config: dict[str, Any]) -> bool:
     plan — the executor's ``--refresh-secrets`` flag re-sends such configs.
     """
     return any(_is_secret_shaped(path[-1], value) for path, value in _walk_config_strings(config))
+
+
+# The pipeline-graph node fields the API mask's graph masking tiers cover
+# (api.middleware.sensitive_mask._GRAPH_NODE_SECRET_FIELDS, FAR-1181).
+_GRAPH_SECRET_FIELDS: tuple[str, ...] = (
+    "env_vars",
+    "context_files",
+    "composite_parameter_values",
+    "parameter_overrides",
+)
+
+
+def _mask_graph_env_vars_for_hash(env_vars: dict[str, Any]) -> dict[str, Any]:
+    """CLI mirror of the API mask's env_vars value handling.
+
+    An env key classified sensitive (``is_sensitive_env_key``) gets its whole
+    value masked; remaining keys are value-compiled
+    (:func:`mask_secret_values_in_text`) so an opaque token under a
+    non-sensitive key is masked too. Non-string values pass through. Like the
+    middleware's ``mask_sensitive_value``, a falsy (empty) value under a
+    sensitive key stays UNmasked — the server displays ``""``, not the
+    sentinel, and the hash view must match what the server displays.
+    """
+    from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, mask_secret_values_in_text
+
+    masked: dict[str, Any] = {}
+    for key, value in env_vars.items():
+        if isinstance(value, str):
+            if is_sensitive_env_key(str(key)):
+                # mask_sensitive_value: falsy values are left as-is.
+                masked[key] = SENSITIVE_VALUE_MASK if value else value
+            else:
+                masked[key] = mask_secret_values_in_text(value)
+        else:
+            masked[key] = value
+    return masked
+
+
+def _mask_graph_context_files_for_hash(context_files: dict[str, Any]) -> dict[str, Any]:
+    """CLI mirror of the API mask's context-file value tier (in-place redact)."""
+    from modulo.core.secret_patterns import mask_secret_values_in_text
+
+    return {
+        key: mask_secret_values_in_text(value) if isinstance(value, str) else value
+        for key, value in context_files.items()
+    }
+
+
+def _mask_graph_deep_config_for_hash(values: dict[str, Any], key: str | None = None) -> Any:
+    """CLI-local mirror of the middleware's ``mask_config_json``.
+
+    Recursing deep-dict masking identical to
+    ``api.middleware.sensitive_mask._mask_config_value`` — a string leaf whose
+    LEAF key is sensitive gets the whole-value mask (falsy values left
+    unmasked, mirroring ``mask_sensitive_value``), and every OTHER string leaf
+    is value-compiled with :func:`mask_secret_values_in_text`, so a
+    secret-shaped value under a NON-sensitive deep key (an embedded token in
+    ``base_url``, a ``headers.Authorization``) is redacted on the desired side
+    exactly as the server redacts it on read. Non-string leaves pass through.
+    Replicated locally so the CLI never imports the FastAPI/DB-heavy
+    middleware module (same rationale as the ``_SENSITIVE_KEY_PATTERNS`` twin
+    above); the pairing is pinned by tests/unit/cli/test_apply_models.py.
+    """
+    from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, is_sensitive_key, mask_secret_values_in_text
+
+    if isinstance(values, dict):
+        return {k: _mask_graph_deep_config_for_hash(v, str(k)) for k, v in values.items()}
+    if isinstance(values, list):
+        return [_mask_graph_deep_config_for_hash(v, key) for v in values]
+    if isinstance(values, str):
+        if key is not None and is_sensitive_key(key):
+            # mask_sensitive_value: falsy values are left as-is.
+            return SENSITIVE_VALUE_MASK if values else values
+        return mask_secret_values_in_text(values)
+    return values
+
+
+def _scrubbed_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    """Fail-closed scrub: every secret-field value replaced by the mask sentinel."""
+    from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+    nodes = graph.get("nodes") if isinstance(graph, dict) else []
+    scrub_nodes: list[Any] = []
+    for node in nodes or []:
+        if isinstance(node, dict):
+            copy_node = dict(node)
+            for field in _GRAPH_SECRET_FIELDS:
+                values = copy_node.get(field)
+                if isinstance(values, dict):
+                    copy_node[field] = {k: SENSITIVE_VALUE_MASK for k in values if isinstance(k, str)}
+            scrub_nodes.append(copy_node)
+        else:
+            scrub_nodes.append(node)
+    edges = graph.get("edges") if isinstance(graph, dict) else []
+    return {"nodes": scrub_nodes, "edges": edges or []}
+
+
+def strip_secret_shaped_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    """FAR-1232: symmetric graph REDACTION for pipeline drift-hash views.
+
+    The API graph surfaces mask credential-bearing node fields on read
+    (FAR-1181, ``mask_pipeline_graph_node``), so comparing an UNmasked
+    declared graph against the masked current graph produces
+    permanently-false drift. This helper is applied SYMMETRICALLY to both
+    views before hashing:
+
+    - the DESIRED view (``PipelineEntity.managed_view``): the declared graph
+      is masked with the same tiers the server will display it with;
+    - the CURRENT view (plan/drift/apply fetches): the received graph is
+      already API-masked, and re-masking an already-masked string is
+      unchanged (``mask_secret_values_in_text`` is idempotent). Whole-mask
+      sentinels re-mask to themselves.
+
+    Tiers mirror the API mask exactly but stay CLI-local (core imports
+    only — the middleware module pulls FastAPI/DB): ``env_vars`` whole-
+    masked under ``is_sensitive_env_key`` and value-compiled otherwise;
+    ``context_files`` value-compiled (file contents, in place);
+    ``composite_parameter_values`` / ``parameter_overrides`` deep-masked
+    (``_mask_graph_deep_config_for_hash``). Like the trigger precedent
+    (``strip_secret_shaped_config``), the consequence is that secret-only
+    graph rotation is invisible to the hash — the executor's
+    ``--refresh-secrets`` flag re-sends the declared graph for such
+    pipelines.
+
+    NOTE the difference from ``strip_secret_shaped_config``: this REDACTS in
+    place rather than DROPPING entries. The value tier rewrites only the
+    secret's inner span, so a drop would lose the surrounding content the
+    server keeps — and a whole-masked sentinel entry still pins that the
+    key exists (a drop would hide it from the hash entirely).
+
+    Fail-closed: if any masker raises, the graph's secret-bearing node
+    fields are scrubbed wholesale (``_scrubbed_graph``) instead of leaking
+    raw declared values into the hash; the resulting inequality with the
+    (masked) current view surfaces as an ``updated`` decision and the
+    write-path re-send repairs the org.
+    """
+    try:
+        nodes = graph.get("nodes") if isinstance(graph, dict) else []
+        masked_nodes: list[Any] = []
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                masked_nodes.append(node)
+                continue
+            masked_node = dict(node)
+            env = node.get("env_vars")
+            if isinstance(env, dict):
+                masked_node["env_vars"] = _mask_graph_env_vars_for_hash(env)
+            contexts = node.get("context_files")
+            if isinstance(contexts, dict):
+                masked_node["context_files"] = _mask_graph_context_files_for_hash(contexts)
+            for field in ("composite_parameter_values", "parameter_overrides"):
+                deep = node.get(field)
+                if isinstance(deep, dict):
+                    masked_node[field] = _mask_graph_deep_config_for_hash(deep)
+            masked_nodes.append(masked_node)
+        edges = graph.get("edges") if isinstance(graph, dict) else []
+        return {"nodes": masked_nodes, "edges": edges or []}
+    except Exception:
+        return _scrubbed_graph(graph)
+
+
+def graph_declares_secrets(graph: dict[str, Any]) -> bool:
+    """True when a declared pipeline graph carries any secret-shaped entry.
+
+    Refresh-criterion mirror of :func:`config_declares_secrets`: a graph
+    entry the drift hash REDACTS (whole or in place) cannot be compared
+    against stored state, so its rotation is invisible to the plan — the
+    executor's ``--refresh-secrets`` flag re-sends such graphs with the
+    declared real values. Runs on the TRUE declared graph, never a masked
+    read (a masked read's values contain no matching secret patterns, so it
+    returns False by design).
+
+    Detection tiers (the same classes the API mask honours):
+    - ``env_vars``: the env KEY is sensitive (``is_sensitive_env_key`` —
+      whole-value mask on read) OR the value the canonical value patterns
+      would redact;
+    - ``context_files``: the content the value patterns would redact;
+    - ``composite_parameter_values`` / ``parameter_overrides``: any leaf
+      string the mask would change (sensitive key or value pattern).
+    """
+    nodes = graph.get("nodes") if isinstance(graph, dict) else []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        env = node.get("env_vars")
+        if isinstance(env, dict):
+            for key, value in env.items():
+                if _graph_env_value_is_secret(str(key), value):
+                    return True
+        contexts = node.get("context_files")
+        if isinstance(contexts, dict):
+            for value in contexts.values():
+                if _graph_string_value_is_secret(None, value):
+                    return True
+        for field in ("composite_parameter_values", "parameter_overrides"):
+            deep = node.get(field)
+            if isinstance(deep, dict) and _deep_secret_detect(deep):
+                return True
+    return False
+
+
+def _graph_env_value_is_secret(key: str, value: Any) -> bool:
+    """env-tier secret detection: sensitive ENV key, or value-pattern match."""
+    from modulo.core.secret_patterns import mask_secret_values_in_text
+
+    if not isinstance(value, str) or not value:
+        return False
+    if is_sensitive_env_key(key):
+        return True
+    return mask_secret_values_in_text(value) != value
+
+
+def _graph_string_value_is_secret(key: str | None, value: Any) -> bool:
+    """Value-and-optional-key-tier string detection (deep-field leaves)."""
+    from modulo.core.secret_patterns import is_sensitive_key, mask_secret_values_in_text
+
+    if not isinstance(value, str) or not value:
+        return False
+    if key is not None and is_sensitive_key(key):
+        return True
+    return mask_secret_values_in_text(value) != value
+
+
+def _deep_secret_detect(values: Any, key: str | None = None) -> bool:
+    """Recursive (key-tier/value-tier) leaf-string detector inside deep fields."""
+    if isinstance(values, dict):
+        return any(_deep_secret_detect(v, str(k)) for k, v in values.items())
+    if isinstance(values, list):
+        return any(_deep_secret_detect(v, key) for v in values)
+    return _graph_string_value_is_secret(key, values)
 
 
 def _reject_composite_separator(label: str, value: str) -> str:

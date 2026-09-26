@@ -590,8 +590,11 @@ class ApplyExecutor:
         trigger). Pipeline/trigger resolution failures enter ``blocked`` with
         per-entity containment identical to the slice-1 kinds. With
         ``refresh_secrets`` set, triggers whose raw config declares
-        secret-shaped entries always re-send their config (secret-only
-        rotation is invisible to the drift hash otherwise).
+        secret-shaped entries always re-send their config, and pipelines
+        whose resolved graph declares secret-shaped entries (FAR-1232)
+        always re-send their declared graph — secret-only rotation is
+        invisible to the drift hash because the server masks stored secrets
+        on read.
 
         With ``drift`` set the run NEVER writes: it returns after the plan
         phase with the report labelled ``"mode": "drift"`` plus the
@@ -629,7 +632,7 @@ class ApplyExecutor:
             KIND_TRIGGER: [],
         }
         desired, blocked = pipeline_apply.build_desired_views(
-            config.entities, current_entities, desired, blocked, blocked_keys
+            config.entities, current_entities, desired, blocked, blocked_keys, refresh_secrets=refresh_secrets
         )
         # The pipeline build phase appended its own blocked entries AFTER
         # blocked_keys was computed — recompute so trigger planning sees the
@@ -660,7 +663,9 @@ class ApplyExecutor:
             return report
         self.apply_schemas(entities, current_entities, report)
         self.apply_backends(entities, current_entities, resolved_api_keys, report)
-        pipeline_ids = pipeline_apply.apply_pipelines(self, entities, current_entities, report)
+        pipeline_ids = pipeline_apply.apply_pipelines(
+            self, entities, current_entities, report, refresh_secrets=refresh_secrets
+        )
         trigger_apply.apply_triggers(self, entities, current_entities, report, pipeline_ids, resolved_trigger_configs)
         return report
 

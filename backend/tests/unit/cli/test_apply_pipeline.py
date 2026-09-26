@@ -60,7 +60,7 @@ entities:
       stdout_retention_config: {mode: tail, max_bytes: 1000}
 """
 
-GRAPH_SECRET_CONFIG_TEXT = """
+_GRAPH_SECRET_CONFIG_TEXT = """
 api_version: modulo.dev/v1
 entities:
   pipelines:
@@ -75,10 +75,35 @@ entities:
             label: Do work
             position: {x: 0, y: 0}
             env_vars:
-              OPENAI_API_KEY: sk-abcdefghijklmnopqrstuvwxyz123456
-              REGION: us-east-1
+              MODULO_USERS: admin:pw123
+              LOG_LEVEL: debug
+            context_files:
+              runbook.md: token ghp_00112233445566778899aabbccddeeff00112233
+            parameter_overrides:
+              nested:
+                api_key: s3cr3t
         edges: []
 """
+
+# What mask_pipeline_graph_node leaves on the API read of the same stored
+# graph: env tier = whole-value sentinel, value tier = in-place redaction,
+# deep tier = whole mask under the sensitive leaf key.
+_MASKED_SECRET_GRAPH = {
+    "nodes": [
+        {
+            "id": "00000000-0000-0000-0000-0000000000a1",
+            "node_type": "agent",
+            "agent_id": "00000000-0000-0000-0000-0000000000ff",
+            "label": "Do work",
+            "position": {"x": 0, "y": 0},
+            "env_vars": {"MODULO_USERS": "••••••", "LOG_LEVEL": "debug"},
+            "context_files": {"runbook.md": "token ••••••"},
+            "parameter_overrides": {"nested": {"api_key": "••••••"}},
+        }
+    ],
+    "edges": [],
+    "validation_issues": [],
+}
 
 _AGENT_ID = "00000000-0000-0000-0000-0000000000ff"
 _AGENT_LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE)}
@@ -118,29 +143,6 @@ def _graph_payload(agent_id: str, node_id: str) -> dict:
                 "agent_id": agent_id,
                 "label": "Do work",
                 "position": {"x": 0, "y": 0},
-            }
-        ],
-        "edges": [],
-        "validation_issues": [],
-    }
-
-
-def _graph_with_env_vars(*, openai_value: str, region: str = "us-east-1") -> dict:
-    """Live ``/pipelines/{id}/graph`` payload carrying node env_vars.
-
-    Mirrors the real read shape: the API masks credential-bearing env values
-    (``openai_value`` is normally ``SENSITIVE_VALUE_MASK``) while leaving a
-    non-sensitive key like ``REGION`` intact.
-    """
-    return {
-        "nodes": [
-            {
-                "id": "00000000-0000-0000-0000-0000000000a1",
-                "node_type": "agent",
-                "agent_id": _AGENT_ID,
-                "label": "Do work",
-                "position": {"x": 0, "y": 0},
-                "env_vars": {"OPENAI_API_KEY": openai_value, "REGION": region},
             }
         ],
         "edges": [],
@@ -413,6 +415,137 @@ entities:
         assert "invalid pipeline graph" in blocked[0]["reason"]
         assert not report["created"]
         assert not report["failed"]
+
+
+class TestGraphSecretParity:
+    """FAR-1232: a declared graph carrying secret-shaped entries must hash
+    equal to the API's masked read of the same graph — otherwise every plan
+    run reports updated and re-sends the graph (snapshot churn per run)."""
+
+    @respx.mock
+    def test_masked_server_graph_plans_unchanged(self) -> None:
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines(
+            [existing],
+            graphs={"sample": _MASKED_SECRET_GRAPH},
+        )
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        unchanged = [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"]
+        assert unchanged == ["sample"]
+        assert not report["updated"]
+
+    @respx.mock
+    def test_masked_server_graph_origin_never_reapplies(self) -> None:
+        """Acceptance: no graph PATCH fires for a masked current read when the
+        declaration matches stored state (the pre-fix behaviour churned the
+        snapshot on every run)."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        routes = _mock_current_with_pipelines(
+            [existing],
+            graphs={"sample": _MASKED_SECRET_GRAPH},
+        )
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        assert [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"] == ["sample"]
+        assert routes["pipeline_patch"].call_count == 0
+
+    @respx.mock
+    def test_true_secret_rotation_re_differs(self) -> None:
+        """A REAL change (the raw declaration differs from the stored graph
+        read beyond masking) still drifts — the parity must not hide genuine
+        edits."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        drifted = dict(_MASKED_SECRET_GRAPH)
+        drifted_node = dict(drifted["nodes"][0])
+        drifted_node["label"] = "Renamed elsewhere"
+        drifted["nodes"] = [drifted_node]
+        _mock_current_with_pipelines([existing], graphs={"sample": drifted})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated == ["sample"]
+
+
+class TestGraphRefreshSecrets:
+    """FAR-1232: secret-only rotation is invisible to the drift hash (the
+    server masks stored secrets on read). Default stays 'unchanged';
+    --refresh-secrets re-sends the declared graph for pipelines whose
+    resolved graph declares secret-shaped entries."""
+
+    @respx.mock
+    def test_refresh_secrets_re_sends_secret_graph_json(self) -> None:
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        routes = _mock_current_with_pipelines(
+            [existing],
+            graphs={"sample": _MASKED_SECRET_GRAPH},
+        )
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, refresh_secrets=True)
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated == ["sample"]
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        update = PipelineUpdate.model_validate(patch_payload)
+        assert update.graph_json is not None
+        agent_nodes = [n for n in update.graph_json.nodes if n.node_type == "agent"]
+        # The TRUE declared values (not the masked sentinel) write through.
+        assert agent_nodes[0].env_vars["MODULO_USERS"] == "admin:pw123"
+        assert agent_nodes[0].env_vars["LOG_LEVEL"] == "debug"
+
+    @respx.mock
+    def test_refresh_secrets_leaves_secret_free_graphs_unchanged(self) -> None:
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        routes = _mock_current_with_pipelines(
+            [existing],
+            graphs={"sample": _graph_payload(_AGENT_ID, "00000000-0000-0000-0000-0000000000a1")},
+        )
+        config = parse_apply_documents(CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, refresh_secrets=True)
+        assert not report["failed"]
+        unchanged = [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"]
+        assert unchanged == ["sample"]
+        assert routes["pipeline_patch"].call_count == 0
+
+    @respx.mock
+    def test_drift_refresh_secrets_reports_updated_without_node_noise(self) -> None:
+        """--diff --refresh-secrets: the secret-declaring pipeline reports
+        updated (a write would re-send it) but drift_detail carries no phantom
+        node 'modified' entry — the graph is unchanged beyond masking."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines([existing], graphs={"sample": _MASKED_SECRET_GRAPH})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, drift=True, refresh_secrets=True)
+        assert report["mode"] == "drift"
+        assert [e["name"] for e in report["updated"] if e["kind"] == "pipeline"] == ["sample"]
+        assert "sample" not in report["drift_detail"]
+
+    @respx.mock
+    def test_drift_refresh_secrets_secret_free_pipeline_unchanged(self) -> None:
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines(
+            [existing],
+            graphs={"sample": _graph_payload(_AGENT_ID, "00000000-0000-0000-0000-0000000000a1")},
+        )
+        config = parse_apply_documents(CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, drift=True, refresh_secrets=True)
+        assert [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"] == ["sample"]
+        assert not report["updated"]
+        assert not report["drift_detail"]
 
 
 class TestExecution:
@@ -698,69 +831,58 @@ class TestStdoutRetentionConfigPayloads:
 
 
 class TestGraphSecretEnvVarConvergence:
-    """FAR-1181 review (MAJOR): read-path masking must not make declarative
-    apply drift forever on graph env_vars.
+    """FAR-1181 review (MAJOR) / FAR-1232: read-path masking must not make
+    declarative apply drift forever on graph env_vars.
 
     The server masks stored credentials on read, so hashing the declared
     credential against the masked stored value would report ``updated`` on
-    every run and re-PATCH the graph each time. Both sides are stripped
+    every run and re-PATCH the graph each time. Both sides are redacted
     symmetrically before hashing; the write payload keeps the declared values.
     """
 
     @respx.mock
     def test_masked_graph_secret_env_var_reports_unchanged(self) -> None:
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-
-        row = _pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa")
-        _mock_current_with_pipelines(
-            [row],
-            graphs={"sample": _graph_with_env_vars(openai_value=SENSITIVE_VALUE_MASK)},
-        )
-        config = parse_apply_documents(GRAPH_SECRET_CONFIG_TEXT)
+        """A masked stored credential plans unchanged against a matching
+        declaration (restored after the FAR-1232 signature change)."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines([existing], graphs={"sample": _MASKED_SECRET_GRAPH})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=True)
         assert not report["blocked"]
         assert not report["failed"]
-        unchanged = [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"]
-        assert unchanged == ["sample"]
+        assert [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"] == ["sample"]
         assert not report["updated"]
 
     @respx.mock
     def test_masked_graph_secret_env_var_does_not_re_patch_graph(self) -> None:
         """Top-level drift still PATCHes, but the unchanged graph is omitted —
         a masked credential must not churn a snapshot on every run."""
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-
         existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
         existing["max_concurrent_runs"] = 5
-        routes = _mock_current_with_pipelines(
-            [existing],
-            graphs={"sample": _graph_with_env_vars(openai_value=SENSITIVE_VALUE_MASK)},
-        )
-        config = parse_apply_documents(GRAPH_SECRET_CONFIG_TEXT)
+        routes = _mock_current_with_pipelines([existing], graphs={"sample": _MASKED_SECRET_GRAPH})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False)
         assert not report["failed"]
-        updated = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
-        assert updated == ["sample"]
+        assert [e["name"] for e in report["updated"] if e["kind"] == "pipeline"] == ["sample"]
         assert routes["pipeline_patch"].call_count == 1
         patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
         assert "graph_json" not in patch_payload
 
     @respx.mock
     def test_non_secret_graph_env_drift_still_patches_graph(self) -> None:
-        """Stripping secret-shaped entries must not hide a REAL change: a
+        """Redacting secret-shaped entries must not hide a REAL change: a
         non-secret env value difference still writes the graph."""
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-
-        row = _pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa")
-        routes = _mock_current_with_pipelines(
-            [row],
-            graphs={"sample": _graph_with_env_vars(openai_value=SENSITIVE_VALUE_MASK, region="eu-west-1")},
-        )
-        config = parse_apply_documents(GRAPH_SECRET_CONFIG_TEXT)
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        drifted = dict(_MASKED_SECRET_GRAPH)
+        drifted_node = dict(drifted["nodes"][0])
+        drifted_node["env_vars"] = {"MODULO_USERS": "••••••", "LOG_LEVEL": "info"}
+        drifted["nodes"] = [drifted_node]
+        routes = _mock_current_with_pipelines([existing], graphs={"sample": drifted})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False)
@@ -773,10 +895,10 @@ class TestGraphSecretEnvVarConvergence:
 
     @respx.mock
     def test_created_graph_secret_env_var_writes_declared_value(self) -> None:
-        """The write path is NOT stripped: a newly-created pipeline's graph
-        PATCH carries the real declared credential (only the hash strips)."""
+        """The write path is NOT redacted: a newly-created pipeline's graph
+        PATCH carries the real declared credential (only the hash redacts)."""
         routes = _mock_current_with_pipelines([])
-        config = parse_apply_documents(GRAPH_SECRET_CONFIG_TEXT)
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False)
@@ -786,7 +908,7 @@ class TestGraphSecretEnvVarConvergence:
         assert update.graph_json is not None
         env_vars = update.graph_json.nodes[0].env_vars
         assert env_vars is not None
-        assert env_vars["OPENAI_API_KEY"] == "sk-abcdefghijklmnopqrstuvwxyz123456"
+        assert env_vars["MODULO_USERS"] == "admin:pw123"
 
 
 class TestFailureIsolation:
