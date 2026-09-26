@@ -150,10 +150,10 @@ def _eval_def_to_dict(
     *,
     policy_gate: PolicyGate | None = None,
 ) -> dict[str, Any]:
-    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the legacy response shape.
+    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the response dict.
 
-    The ``failure_behaviour`` field was retired from the public surface in
-    FAR-1103 chunk 5a — it is no longer returned in the response dict.
+    Returns the public fields only; ``failure_behaviour`` is excluded from the
+    response shape (it is an internal column, not exposed to callers).
     """
     return {
         "id": str(eval_row.id),
@@ -177,9 +177,8 @@ def _validate_guardrail_request(
 ) -> None:
     """Graph-save validation for guardrail definitions (FAR-208 item 5).
 
-    Delegates to the consolidated validator in eval_definition_write.
-    The ``failure_behaviour`` parameter was retired from the public surface
-    in FAR-1103 chunk 5a.
+    Validates the config vocabulary and detection type, delegating to the
+    consolidated validator in ``eval_definition_write``.
     """
     validate_guardrail_request(
         eval_type=eval_type,
@@ -352,9 +351,9 @@ async def list_eval_definitions(
 ) -> EvalDefinitionListResponse:
     """List eval definitions for the caller's organisation.
 
-    Reads from the ``evals`` table (chunk 3b cutover).  The
-    ``failure_behaviour`` field was retired from the public surface in
-    FAR-1103 chunk 5a.
+    Reads from the ``evals`` table.  The ``failure_behaviour`` field is not
+    returned in the response — it is an internal column used by the pipeline
+    engine only.
     """
     from sqlalchemy import func as sa_func
 
@@ -2306,7 +2305,8 @@ async def _insert_eval_definition(
     """Persist the new eval definition in its own transaction.
 
     Redirected to write to Eval+PolicyGate via the shared helper (FAR-1101 chunk 3b).
-    Returns a legacy-compatible dict for the caller.
+    ``failure_behaviour`` is hardcoded to the ``"warn"`` default on this path,
+    so callers never set it directly.  Returns a response dict for the caller.
     """
     try:
         async with session.begin():

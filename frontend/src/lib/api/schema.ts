@@ -6716,10 +6716,9 @@ export interface paths {
          * List Eval Definitions
          * @description List eval definitions for the caller's organisation.
          *
-         *     Reads from the ``evals`` table (chunk 3b cutover).  Each row's
-         *     ``failure_behaviour`` response field is populated from the associated
-         *     ``PolicyGate.action`` (node-scoped evals with a gate) or defaults to
-         *     ``"warn"`` (guardrail-typed / suite-scoped).
+         *     Reads from the ``evals`` table.  The ``failure_behaviour`` field is not
+         *     returned in the response — it is an internal column used by the pipeline
+         *     engine only.
          */
         get: operations["list_eval_definitions_api_v1_evals_get"];
         put?: never;
