@@ -40,21 +40,19 @@ def _load_env_as_alembic_does() -> ModuleType:
     return load_module_py("env_py", str(Path(cached_env.__file__)))
 
 
-class _ExplodingEngine:
-    def connect(self) -> Any:
-        raise AssertionError("env.py opened a lock connection although the caller already holds it")
-
-
 def test_caller_held_flag_reaches_freshly_loaded_env_module() -> None:
     cached_env.set_lock_held_by_caller(True)
     env_py = _load_env_as_alembic_does()
 
+    engine = _RecordingEngine()
     # With the caller holding the lock, env.py must skip acquisition entirely and
     # never touch the engine. Before the fix the fresh copy read its own
     # module-global ``False`` and called engine.connect() here, blocking on the
     # advisory lock the caller already held until the 240s poll timed out.
-    with env_py._migration_advisory_lock(_ExplodingEngine(), "postgresql+psycopg://u:p@h:5432/db"):
+    with env_py._migration_advisory_lock(engine, "postgresql+psycopg://u:p@h:5432/db"):
         pass
+
+    assert engine.conn.executed is False, "env.py must not acquire the lock when the caller already holds it"
 
 
 class _Result:
