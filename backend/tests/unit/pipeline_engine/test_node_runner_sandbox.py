@@ -2233,7 +2233,7 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     """
     node_def = _base_node_def(
         timeout_seconds=30,
-        stall_timeout_seconds=1.0,
+        stall_timeout_seconds=3.0,
         enable_heartbeat=False,
         watch_log_path="/home/user/progress.log",
     )
@@ -2244,25 +2244,39 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     cmd_result.stdout = ""
     cmd_result.stderr = ""
 
-    # The command stays "running" for 44 tick slices (each ~0.03s) before
-    # completing on the 45th, so the run lasts ~1.35s in total. That EXCEEDS
-    # the 1.0s stall window: without the log-growth detector the idle watchdog
-    # fires mid-run and this test fails in every environment, not just a loaded
-    # one. With the detector the log-growth touch on every tick keeps the run
-    # alive to completion. The stall window (1.0s) is kept 20x wider than the
-    # patched tick interval (0.05s) so a loaded event loop can never stretch a
-    # single tick past it and trip the idle watchdog spuriously — the original
-    # 0.1s window (only 2x the 0.05s tick) flaked ~50-70% under suite load
-    # because the per-iteration gap is bounded by the wait_for timeout, so only
-    # a generous window-to-tick ratio gives real safety (FAR-320). The
-    # no-detector stall case is proven separately by
+    # The command stays "running" for 199 tick slices (each ~0.03s wall) before
+    # completing on the 200th, so the run lasts ~6.0s in total. That EXCEEDS
+    # the 3.0s stall window with a 2x window-to-run margin: without the
+    # log-growth detector the idle watchdog fires at ~3.0s, mid-run and on an
+    # unloaded host, so this test genuinely fails when the detector is removed
+    # (verified: with the probe stubbed to stop touching, the run raises
+    # SandboxNodeFailedError). With the detector the log-growth touch on every
+    # tick keeps the run alive to completion.
+    #
+    # FAR-320 (second fix): the previous shape used a 1.0s window against a
+    # ~1.35s run — a 20x window-to-TICK ratio, but only a ~1.35x
+    # window-to-RUN ratio. Measured under load the run actually takes
+    # 1.9-2.8s (event-loop contention), so a single scheduling stall longer
+    # than the 1.0s window tripped the watchdog and the test flaked ~1-in-4
+    # full-directory runs. The first fix widened the window to 3.0s but left
+    # the run at ~2.7s, so the run no longer exceeded the window and removing
+    # the detector did NOT fail the test — a no-op trap (FAR-320 review).
+    # Both margins must hold:
+    #   - window-to-tick: 3.0s / 0.05s = 60x. The 0.05s tick_interval is only
+    #     the wait_for cap, not the per-iteration cost; a tick actually costs
+    #     ~0.03s (the mock's asyncio.sleep, whose TimeoutError propagates
+    #     through wait_for first), so a single tick can never trip the window.
+    #   - window-to-run:  the run (~6.0s) is 2x the 3.0s window, so a broken
+    #     detector still fails this test on an unloaded host — the detector is
+    #     genuinely exercised end-to-end (199 ticks against a ~100-tick window).
+    # The no-detector stall case is proven separately by
     # test_heartbeat_off_no_detector_stalls_end_to_end.
     wait_calls = {"n": 0}
 
     async def _wait():
         wait_calls["n"] += 1
         await asyncio.sleep(0.03)
-        if wait_calls["n"] < 45:
+        if wait_calls["n"] < 200:
             raise TimeoutError
         return cmd_result
 
