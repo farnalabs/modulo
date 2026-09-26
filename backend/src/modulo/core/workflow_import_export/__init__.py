@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
+from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.runner_bindings import BindingValidationError, validate_binding_pair
 from modulo.core.secret_patterns import is_sensitive_env_key, is_sensitive_key, mask_secret_values_in_text
 from modulo.db.crud.account import get_account_by_email
@@ -1827,6 +1828,11 @@ async def _materialize_agents(
         existing_agent_names.add(aname)
 
         agent_args = _base_agent_args(ctx, aname, ad)
+        try:
+            validate_agent_git_content_values(prompt_template=agent_args.get("prompt_template"))
+        except GitContentRefError as exc:
+            msg = f"Agent '{aname}' prompt_template git content ref was rejected: {exc}"
+            raise GitContentRefError(msg) from exc
         _apply_agent_references(
             agent_args,
             ad,
