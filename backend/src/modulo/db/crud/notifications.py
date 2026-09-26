@@ -5,7 +5,10 @@ All functions enforce org scoping via organisation_id filter.
 
 from __future__ import annotations
 
+import re
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -15,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 LEVEL_RANK: dict[str, int] = {
     "debug": 0,
@@ -26,6 +30,95 @@ LEVEL_RANK: dict[str, int] = {
 DASHBOARD_LIMIT_MAX = 50
 NOTIFICATIONS_LIMIT_MAX = 200
 _DEFAULT_EXPIRY_DAYS = 90
+
+# FAR-1234 — run-linked notifications are enriched AT READ TIME with the run's
+# CURRENT state. A notification row is written when the event fires and is
+# never re-stamped, so a ``hitl.awaiting`` raised against a run that was later
+# cancelled still reads as a live request. Every read path therefore resolves
+# the linked run fresh and the API reports what actually happened.
+#
+# The link is the run deep-link written by the event mapper
+# (``/runs/{run_id}``) — there is deliberately no run FK on ``notifications``.
+_RUN_LINK_RE = re.compile(
+    r"^/runs/(?P<run_id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:[/?#].*)?$"
+)
+
+
+@dataclass(frozen=True)
+class LinkedRunState:
+    """Point-in-time state of a notification's linked run (FAR-1234)."""
+
+    run_id: uuid.UUID
+    status: str
+    cancel_reason: str | None = None
+
+    @property
+    def terminal(self) -> bool:
+        """Whether the run has reached a terminal state (``TERMINAL_STATUSES``)."""
+        return self.status in TERMINAL_STATUSES
+
+
+def linked_run_id(action_url: str | None) -> uuid.UUID | None:
+    """Extract the run UUID from a run deep-link ``action_url``.
+
+    Returns ``None`` for a missing/absent URL, a non-run deep link
+    (``/evals``, ``/feedback/inbox``, …) or a template that never resolved
+    (``/runs/[unknown]``).
+    """
+    if not action_url:
+        return None
+    match = _RUN_LINK_RE.match(action_url)
+    if match is None:
+        return None
+    try:
+        return uuid.UUID(match.group("run_id"))
+    except ValueError:  # pragma: no cover - regex already constrains the shape
+        return None
+
+
+async def get_linked_run_states(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    notifications: Sequence[Notification],
+) -> dict[uuid.UUID, LinkedRunState]:
+    """Resolve the CURRENT run state for each run-linked notification.
+
+    Returns a map keyed by ``Notification.id`` containing ONLY the
+    notifications whose linked run row could be read (org-scoped). A
+    notification with no run link, an unresolvable template, a deleted run or
+    an invisible run is simply absent — callers degrade to "no run metadata"
+    rather than failing the read.
+
+    One batched query regardless of page size; the ``runs`` table carries the
+    org-isolation RLS policy so this read never crosses a tenant.
+    """
+    run_link_by_notification: dict[uuid.UUID, uuid.UUID] = {}
+    for notification in notifications:
+        run_id = linked_run_id(notification.action_url)
+        if run_id is not None:
+            run_link_by_notification[notification.id] = run_id
+    if not run_link_by_notification:
+        return {}
+
+    result = await session.execute(
+        select(Run.id, Run.status, Run.cancel_reason).where(
+            Run.organisation_id == org_id,
+            Run.id.in_(set(run_link_by_notification.values())),
+        )
+    )
+    states: dict[uuid.UUID, LinkedRunState] = {}
+    for run_id_raw, status_raw, cancel_reason_raw in result.all():
+        states[uuid.UUID(str(run_id_raw))] = LinkedRunState(
+            run_id=uuid.UUID(str(run_id_raw)),
+            status=str(status_raw),
+            cancel_reason=None if cancel_reason_raw is None else str(cancel_reason_raw),
+        )
+    return {
+        notification_id: states[run_id]
+        for notification_id, run_id in run_link_by_notification.items()
+        if run_id in states
+    }
 
 
 def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:

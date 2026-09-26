@@ -13,6 +13,17 @@ export interface NotificationResponse {
   dismissible_at_scope: boolean
   created_at: string
   scope_label: string
+  /**
+   * FAR-1234 — point-in-time state of the linked run, resolved by the server
+   * at READ time (the notification row itself is unchanged). Null when the
+   * notification is not run-linked or the run could not be resolved.
+   * Field names/types mirror the generated OpenAPI types exactly
+   * (`pnpm run generate:api`).
+   */
+  run_id?: string | null
+  run_status?: string | null
+  run_terminal: boolean
+  run_cancel_reason?: string | null
 }
 
 export interface DashboardNotificationResponse {

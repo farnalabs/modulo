@@ -23,11 +23,13 @@ from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.db.crud.notifications import LinkedRunState
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _NOTIFICATION_ID = uuid.uuid4()
+_RUN_ID = uuid.uuid4()
 _BASE = "/api/v1/notifications/in-app"
 
 _PATCHES = [
@@ -38,6 +40,7 @@ _PATCHES = [
     "get_notifications_for_user",
     "count_notifications_for_user",
     "get_notification",
+    "get_linked_run_states",
     "dismiss_notification",
     "review_later",
     "get_opted_out_categories",
@@ -94,6 +97,9 @@ class _TestHarness:
     def __enter__(self) -> Self:
         for p in self.patches:
             p.start()
+        # FAR-1234: run-state enrichment defaults to "no linked run" so the
+        # pre-existing route tests keep exercising the shape they already pin.
+        self.stub("get_linked_run_states", AsyncMock(return_value={}))
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -287,6 +293,79 @@ def test_list_notifications_sqlalchemy_error_maps_to_500(client: tuple[TestClien
     resp = http.get(_BASE)
 
     assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# FAR-1234 — point-in-time run metadata (contract round-trip)
+# ---------------------------------------------------------------------------
+
+
+def test_list_includes_point_in_time_run_metadata(client: tuple[TestClient, _TestHarness]) -> None:
+    """The read path surfaces the run's CURRENT state alongside the row.
+
+    PROVE-THE-FIX: without the enrichment the response carries none of these
+    keys, so this assertion fails on the pre-change payload shape.
+    """
+    http, harness = client
+    row = _notification_row()
+    row.action_url = f"/runs/{_RUN_ID}"
+    harness.stub("get_notifications_for_user", AsyncMock(return_value=[row]))
+    harness.stub("count_notifications_for_user", AsyncMock(return_value=1))
+    harness.stub(
+        "get_linked_run_states",
+        AsyncMock(
+            return_value={row.id: LinkedRunState(run_id=_RUN_ID, status="cancelled", cancel_reason="user_requested")}
+        ),
+    )
+
+    resp = http.get(_BASE)
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["run_id"] == str(_RUN_ID)
+    assert item["run_status"] == "cancelled"
+    assert item["run_terminal"] is True
+    assert item["run_cancel_reason"] == "user_requested"
+
+
+def test_dashboard_includes_point_in_time_run_metadata(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    row = _notification_row()
+    row.action_url = f"/runs/{_RUN_ID}"
+    harness.stub("get_dashboard_notifications", AsyncMock(return_value=[row]))
+    harness.stub(
+        "get_linked_run_states",
+        AsyncMock(return_value={row.id: LinkedRunState(run_id=_RUN_ID, status="running")}),
+    )
+
+    resp = http.get(f"{_BASE}/dashboard")
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["notifications"][0]
+    assert item["run_id"] == str(_RUN_ID)
+    assert item["run_status"] == "running"
+    assert item["run_terminal"] is False
+    assert item["run_cancel_reason"] is None
+
+
+def test_notification_without_resolvable_run_reports_null_metadata(client: tuple[TestClient, _TestHarness]) -> None:
+    """A non-run deep link (or an unresolvable run) degrades to nulls, never a
+    missing key — the wire contract must always carry all four fields."""
+    http, harness = client
+    row = _notification_row()
+    row.action_url = "/evals"
+    harness.stub("get_notifications_for_user", AsyncMock(return_value=[row]))
+    harness.stub("count_notifications_for_user", AsyncMock(return_value=1))
+    harness.stub("get_linked_run_states", AsyncMock(return_value={}))
+
+    resp = http.get(_BASE)
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["run_id"] is None
+    assert item["run_status"] is None
+    assert item["run_terminal"] is False
+    assert item["run_cancel_reason"] is None
 
 
 # ---------------------------------------------------------------------------
