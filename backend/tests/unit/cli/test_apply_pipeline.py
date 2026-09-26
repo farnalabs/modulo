@@ -517,6 +517,36 @@ class TestGraphRefreshSecrets:
         assert unchanged == ["sample"]
         assert routes["pipeline_patch"].call_count == 0
 
+    @respx.mock
+    def test_drift_refresh_secrets_reports_updated_without_node_noise(self) -> None:
+        """--diff --refresh-secrets: the secret-declaring pipeline reports
+        updated (a write would re-send it) but drift_detail carries no phantom
+        node 'modified' entry — the graph is unchanged beyond masking."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines([existing], graphs={"sample": _MASKED_SECRET_GRAPH})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, drift=True, refresh_secrets=True)
+        assert report["mode"] == "drift"
+        assert [e["name"] for e in report["updated"] if e["kind"] == "pipeline"] == ["sample"]
+        assert "sample" not in report["drift_detail"]
+
+    @respx.mock
+    def test_drift_refresh_secrets_secret_free_pipeline_unchanged(self) -> None:
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines(
+            [existing],
+            graphs={"sample": _graph_payload(_AGENT_ID, "00000000-0000-0000-0000-0000000000a1")},
+        )
+        config = parse_apply_documents(CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, drift=True, refresh_secrets=True)
+        assert [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"] == ["sample"]
+        assert not report["updated"]
+        assert not report["drift_detail"]
+
 
 class TestExecution:
     @respx.mock
@@ -809,6 +839,38 @@ class TestGraphSecretEnvVarConvergence:
     every run and re-PATCH the graph each time. Both sides are redacted
     symmetrically before hashing; the write payload keeps the declared values.
     """
+
+    @respx.mock
+    def test_masked_graph_secret_env_var_reports_unchanged(self) -> None:
+        """A masked stored credential plans unchanged against a matching
+        declaration (restored after the FAR-1232 signature change)."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines([existing], graphs={"sample": _MASKED_SECRET_GRAPH})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        assert not report["blocked"]
+        assert not report["failed"]
+        assert [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"] == ["sample"]
+        assert not report["updated"]
+
+    @respx.mock
+    def test_masked_graph_secret_env_var_does_not_re_patch_graph(self) -> None:
+        """Top-level drift still PATCHes, but the unchanged graph is omitted —
+        a masked credential must not churn a snapshot on every run."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        existing["max_concurrent_runs"] = 5
+        routes = _mock_current_with_pipelines([existing], graphs={"sample": _MASKED_SECRET_GRAPH})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        assert [e["name"] for e in report["updated"] if e["kind"] == "pipeline"] == ["sample"]
+        assert routes["pipeline_patch"].call_count == 1
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert "graph_json" not in patch_payload
 
     @respx.mock
     def test_non_secret_graph_env_drift_still_patches_graph(self) -> None:

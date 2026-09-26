@@ -34,6 +34,13 @@ from modulo.cli.apply.plan import (
     _trigger_current_view,
 )
 
+# Plan-only marker keys (FAR-1232 ``--refresh-secrets``) that participate in
+# the drift HASH — so the entity reports ``updated`` and the write path
+# re-sends it — but are NOT managed fields. They are stripped from the
+# managed-field breakdown so a refresh sweep never renders as
+# ``secrets_refresh: modified`` operator noise.
+_REFRESH_MARKER_KEYS: frozenset[str] = frozenset({"secrets_refresh"})
+
 
 def _diff_graph(
     desired_graph: dict[str, Any],
@@ -237,7 +244,12 @@ def build_drift_detail(
             current_view = _managed_current_view(kind, name, view, current_entities)
             if current_view is None:
                 continue
-            fields = _diff_fields(view, current_view)
+            # Exclude plan-only refresh markers on both sides: the marker drives
+            # the hash decision (report says updated) but is not a managed field,
+            # so it must not surface in the field breakdown.
+            diffable_view = {key: value for key, value in view.items() if key not in _REFRESH_MARKER_KEYS}
+            diffable_current = {key: value for key, value in current_view.items() if key not in _REFRESH_MARKER_KEYS}
+            fields = _diff_fields(diffable_view, diffable_current)
             if any(fields.values()):
                 detail[f"{kind}:{name}"] = {"fields": fields}
     return detail

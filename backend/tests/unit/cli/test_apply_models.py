@@ -802,6 +802,192 @@ class TestPipelineGraphSecretParity:
         assert graph_declares_secrets(clean) is False
         assert graph_declares_secrets({"nodes": [], "edges": []}) is False
 
+    def test_declared_view_equals_hand_pinned_mask(self) -> None:
+        """Input-independent pin (review finding): the CLI output is compared
+        to LITERAL expected values, not to another masker. Comparing against
+        ``server_view()`` proves the two implementations agree; this proves
+        the agreed-upon output is the intended one, so a change that broke
+        BOTH maskers identically cannot silently redefine 'parity'."""
+        from modulo.cli.apply.models import strip_secret_shaped_graph
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        node = strip_secret_shaped_graph(self.DECLARED)["nodes"][0]
+        assert node["env_vars"] == {
+            "MODULO_USERS": SENSITIVE_VALUE_MASK,
+            "LOG_LEVEL": "debug",
+            "PYPI_TOKEN": "",
+        }
+        assert node["context_files"] == {"runbook.md": f"token {SENSITIVE_VALUE_MASK}"}
+        assert node["parameter_overrides"]["nested"] == {
+            "db_password": SENSITIVE_VALUE_MASK,
+            "signing_secret": "",
+        }
+        assert node["parameter_overrides"]["base_url"] == f"https://api.example.com/v1?token={SENSITIVE_VALUE_MASK}"
+
+
+class TestGraphMaskHelpers:
+    """Direct unit coverage for the CLI graph-mask helpers (FAR-1232): shapes
+    the parity sample does not exercise — non-string values, list leaves,
+    non-dict nodes, and the fail-closed scrub."""
+
+    def test_env_non_string_value_passthrough(self) -> None:
+        from modulo.cli.apply.models import _mask_graph_env_vars_for_hash
+
+        assert _mask_graph_env_vars_for_hash({"REPLICAS": 3, "ENABLED": True, "LOG_LEVEL": "debug"}) == {
+            "REPLICAS": 3,
+            "ENABLED": True,
+            "LOG_LEVEL": "debug",
+        }
+
+    def test_context_files_non_string_value_passthrough(self) -> None:
+        from modulo.cli.apply.models import _mask_graph_context_files_for_hash
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        masked = _mask_graph_context_files_for_hash(
+            {"notes": "token ghp_00112233445566778899aabbccddeeff00112233", "binary": 42}
+        )
+        assert masked["notes"] == f"token {SENSITIVE_VALUE_MASK}"
+        assert masked["binary"] == 42
+
+    def test_deep_config_list_and_non_string_leaves(self) -> None:
+        from modulo.cli.apply.models import _mask_graph_deep_config_for_hash
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        masked = _mask_graph_deep_config_for_hash(
+            {
+                "items": ["clean", "ghp_00112233445566778899aabbccddeeff00112233", 7, None],
+                "nested": {"api_key": "s3cr3t", "empty": ""},
+                "count": 5,
+            }
+        )
+        assert masked["items"][0] == "clean"
+        assert masked["items"][1] == SENSITIVE_VALUE_MASK
+        assert masked["items"][2] == 7
+        assert masked["items"][3] is None
+        assert masked["nested"] == {"api_key": SENSITIVE_VALUE_MASK, "empty": ""}
+        assert masked["count"] == 5
+
+    def test_strip_graph_preserves_non_dict_nodes(self) -> None:
+        from modulo.cli.apply.models import strip_secret_shaped_graph
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        graph = {
+            "nodes": ["raw-node", {"id": "n1", "env_vars": {"TOKEN": "value"}}],
+            "edges": [{"id": "e1"}],
+        }
+        stripped = strip_secret_shaped_graph(graph)
+        assert stripped["nodes"][0] == "raw-node"
+        assert stripped["nodes"][1]["env_vars"] == {"TOKEN": SENSITIVE_VALUE_MASK}
+        assert stripped["edges"] == [{"id": "e1"}]
+
+    def test_strip_graph_handles_missing_and_non_dict_fields(self) -> None:
+        from modulo.cli.apply.models import strip_secret_shaped_graph
+
+        graph = {
+            "nodes": [
+                {"id": "n1"},
+                {"id": "n2", "env_vars": ["not", "a", "dict"], "context_files": "no"},
+            ],
+            "edges": [],
+        }
+        assert strip_secret_shaped_graph(graph) == graph
+        assert strip_secret_shaped_graph({"nodes": [], "edges": []}) == {"nodes": [], "edges": []}
+
+    def test_strip_graph_fail_closed_when_a_masker_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A masker exception must NEVER leak raw declared values: the graph's
+        secret-bearing fields are scrubbed wholesale, other fields preserved."""
+        from modulo.cli.apply import models
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        def _boom(_env_vars: dict) -> dict:
+            raise RuntimeError("masker exploded")
+
+        monkeypatch.setattr(models, "_mask_graph_env_vars_for_hash", _boom)
+        graph = {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "label": "keep",
+                    "env_vars": {"TOKEN": "raw-secret"},
+                    "parameter_overrides": {"k": "v"},
+                }
+            ],
+            "edges": [],
+        }
+        stripped = models.strip_secret_shaped_graph(graph)
+        assert stripped["nodes"][0]["env_vars"] == {"TOKEN": SENSITIVE_VALUE_MASK}
+        assert stripped["nodes"][0]["parameter_overrides"] == {"k": SENSITIVE_VALUE_MASK}
+        assert stripped["nodes"][0]["label"] == "keep"
+
+    def test_scrubbed_graph_direct(self) -> None:
+        from modulo.cli.apply.models import _scrubbed_graph
+        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+
+        scrubbed = _scrubbed_graph(
+            {
+                "nodes": [
+                    {"id": "n1", "label": "keep", "env_vars": {"A": "x", "B": "y"}, "context_files": {"c": "d"}},
+                    "raw",
+                ],
+                "edges": [{"id": "e1"}],
+            }
+        )
+        assert scrubbed["nodes"][0]["label"] == "keep"
+        assert scrubbed["nodes"][0]["env_vars"] == {"A": SENSITIVE_VALUE_MASK, "B": SENSITIVE_VALUE_MASK}
+        assert scrubbed["nodes"][0]["context_files"] == {"c": SENSITIVE_VALUE_MASK}
+        assert scrubbed["nodes"][1] == "raw"
+        assert scrubbed["edges"] == [{"id": "e1"}]
+        assert _scrubbed_graph({}) == {"nodes": [], "edges": []}
+
+    def test_scrubbed_graph_non_dict_field_values_pass_through(self) -> None:
+        from modulo.cli.apply.models import _scrubbed_graph
+
+        scrubbed = _scrubbed_graph({"nodes": [{"id": "n", "env_vars": ["not-a-dict"]}], "edges": []})
+        assert scrubbed["nodes"][0]["env_vars"] == ["not-a-dict"]
+
+    def test_graph_declares_secrets_context_and_deep_tiers(self) -> None:
+        from modulo.cli.apply.models import graph_declares_secrets
+
+        assert graph_declares_secrets(
+            {
+                "nodes": [{"id": "n", "context_files": {"a": "token ghp_00112233445566778899aabbccddeeff00112233"}}],
+                "edges": [],
+            }
+        )
+        assert graph_declares_secrets(
+            {"nodes": [{"id": "n", "parameter_overrides": {"nested": {"api_key": "s3cr3t"}}}], "edges": []}
+        )
+        assert graph_declares_secrets(
+            {"nodes": [{"id": "n", "composite_parameter_values": {"password": "x"}}], "edges": []}
+        )
+        # value-pattern leaf inside a list inside a deep field
+        assert graph_declares_secrets(
+            {
+                "nodes": [
+                    {
+                        "id": "n",
+                        "parameter_overrides": {"items": ["ghp_00112233445566778899aabbccddeeff00112233"]},
+                    }
+                ],
+                "edges": [],
+            }
+        )
+
+    def test_graph_declares_secrets_ignores_non_dict_and_non_string(self) -> None:
+        from modulo.cli.apply.models import graph_declares_secrets
+
+        assert graph_declares_secrets({"nodes": ["raw", 42], "edges": []}) is False
+        assert graph_declares_secrets({"nodes": [{"id": "n", "env_vars": {"REPLICAS": 3}}], "edges": []}) is False
+        assert graph_declares_secrets({"nodes": [{"id": "n", "env_vars": {"MODULO_USERS": ""}}], "edges": []}) is False
+        assert graph_declares_secrets({"nodes": [{"id": "n", "context_files": {"a": 42}}], "edges": []}) is False
+        assert (
+            graph_declares_secrets(
+                {"nodes": [{"id": "n", "parameter_overrides": {"items": ["clean", 5]}}], "edges": []}
+            )
+            is False
+        )
+        assert graph_declares_secrets({"nodes": [{"id": "n", "context_files": {}}], "edges": []}) is False
+
 
 class TestForwardReferenceMergeGate:
     def test_trigger_pipeline_in_later_document_rejected(self) -> None:

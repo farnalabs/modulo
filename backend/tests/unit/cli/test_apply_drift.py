@@ -351,6 +351,40 @@ class TestNonPipelineDriftDetail:
             is None
         )
 
+    def test_refresh_secret_marker_excluded_from_field_breakdown(self) -> None:
+        """FAR-1232: ``secrets_refresh`` is a plan-only marker that drives the
+        hash (the entity reports updated) but is not a managed field. It must
+        never render as ``secrets_refresh: modified`` operator noise."""
+        desired = {
+            "trigger": [
+                (
+                    "sample/nightly",
+                    {"config_json": {"cron_expression": "0 3 * * *"}, "secrets_refresh": True},
+                )
+            ]
+        }
+        current = {"trigger": {"sample/nightly": {"config_json": {"cron_expression": "0 3 * * *"}}}}
+        report = {"updated": [{"kind": "trigger", "name": "sample/nightly"}]}
+        # Marker-only difference between desired and current view -> no detail.
+        assert build_drift_detail(current, desired, report) == {}
+
+    def test_refresh_secret_marker_does_not_mask_real_field_drift(self) -> None:
+        """Excluding the marker must not hide a genuine managed-field change."""
+        desired = {
+            "trigger": [
+                (
+                    "sample/nightly",
+                    {"config_json": {"cron_expression": "0 3 * * *"}, "secrets_refresh": True},
+                )
+            ]
+        }
+        current = {"trigger": {"sample/nightly": {"config_json": {"cron_expression": "0 9 * * *"}}}}
+        report = {"updated": [{"kind": "trigger", "name": "sample/nightly"}]}
+        detail = build_drift_detail(current, desired, report)
+        assert detail == {
+            "trigger:sample/nightly": {"fields": {"added": [], "removed": [], "modified": ["config_json"]}}
+        }
+
 
 class TestDiffNeverWrites:
     @respx.mock
