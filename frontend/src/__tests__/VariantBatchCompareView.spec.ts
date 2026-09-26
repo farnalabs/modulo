@@ -355,6 +355,39 @@ describe('VariantBatchCompareView', () => {
     expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(false)
   })
 
+  it('hides the cost column when the run total cost is omitted from the payload', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            total_cost_usd: undefined,
+            total_tokens: 100,
+            node_token_usage: { planner: { total_tokens: 100 } },
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    // An omitted total_cost_usd (`undefined`) is false under the loose `!= null`
+    // guard, so the column stays hidden rather than rendering a spurious Cost header.
+    expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(false)
+    expect(breakdown.text()).not.toContain('0.000000')
+  })
+
   it('re-fires the batch from the frozen batch', async () => {
     const wrapper = mount(VariantBatchCompareView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
