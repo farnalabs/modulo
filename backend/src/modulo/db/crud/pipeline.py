@@ -646,16 +646,6 @@ async def restore_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pip
     return result.scalar_one_or_none()
 
 
-async def delete_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> bool:
-    """Hard-delete a pipeline. Only call from admin cleanup, not from user-facing API."""
-    pipeline = await get_pipeline(session, pipeline_id, include_deleted=True)
-    if pipeline is None:
-        return False
-    await session.delete(pipeline)
-    await session.flush()
-    return True
-
-
 async def archive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
     pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:

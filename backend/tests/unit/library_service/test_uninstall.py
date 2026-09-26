@@ -99,6 +99,27 @@ def _mock_scalar_result(entity) -> MagicMock:
     return result
 
 
+class _FakeSavepoint:
+    """Async context manager standing in for ``AsyncSession.begin_nested()``.
+
+    The delete path wraps each entity deletion in a savepoint; a bare
+    ``AsyncMock`` returns a coroutine from ``begin_nested()``, which does not
+    support the asynchronous context-manager protocol.
+    """
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def _configure_savepoints(session: AsyncMock) -> AsyncMock:
+    """Give a mocked session a working ``begin_nested()`` savepoint."""
+    session.begin_nested = MagicMock(return_value=_FakeSavepoint())
+    return session
+
+
 # ---------------------------------------------------------------------------
 # _load_install
 # ---------------------------------------------------------------------------
@@ -512,6 +533,7 @@ class TestUninstallCollection:
         session.scalar = AsyncMock(side_effect=_scalar)
         session.delete = AsyncMock()
         session.flush = AsyncMock()
+        _configure_savepoints(session)
 
         result = await uninstall_collection(session, org, iid)
         assert len(result["deleted"]) == 2
@@ -600,6 +622,7 @@ class TestUninstallCollection:
         session.scalar = AsyncMock(return_value=MagicMock(collection_install_id=iid))
         session.delete = AsyncMock()
         session.flush = AsyncMock()
+        _configure_savepoints(session)
 
         await uninstall_collection(session, org, iid)
         # The install itself is deleted last — verify it was called
@@ -681,6 +704,7 @@ class TestUninstallCollection:
         session.scalar = AsyncMock(side_effect=_scalar)
         session.delete = AsyncMock()
         session.flush = AsyncMock()
+        _configure_savepoints(session)
 
         result = await uninstall_collection(session, org, iid)
         assert len(result["deleted"]) == 1

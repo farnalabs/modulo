@@ -17,6 +17,7 @@ from modulo.api.constants import (
 from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
+from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, purge_terminal_checkpoints
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -162,12 +163,25 @@ async def perform_cleanup(
                             if obj is not None:
                                 await session.delete(obj)
                                 deleted_count += 1
-                    except IntegrityError:
+                    except IntegrityError as exc:
                         _log.exception("admin_housekeeping.perform_cleanup")
                         _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
-                        errors.append(
-                            {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
-                        )
+                        if is_policy_gate_decision_fk_error(exc):
+                            errors.append(
+                                {
+                                    "id": eid,
+                                    "entity_type": entity_type,
+                                    "error": (
+                                        f"Cannot delete {entity_type} {eid}: governance decision records present"
+                                        " — archive or purge policy_gate_decisions first"
+                                    ),
+                                    "blocked_by": "policy_gate_decisions",
+                                }
+                            )
+                        else:
+                            errors.append(
+                                {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
+                            )
     except ProgrammingError:
         _log.exception("admin_housekeeping.perform_cleanup")
         raise HTTPException(

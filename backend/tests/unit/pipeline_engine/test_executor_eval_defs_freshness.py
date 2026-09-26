@@ -178,7 +178,16 @@ def _eval_row_with_gate(
 ) -> tuple[SimpleNamespace, SimpleNamespace]:
     """Return (Eval, PolicyGate) tuple — what the new _load_eval_defs_for_pipeline returns."""
     row = _eval_row(config, eval_id)
-    gate = SimpleNamespace(action="warn", deleted_at=None)
+    # PolicyGate ORM shape: _build_eval_defs_by_node reads .action for
+    # failure_behaviour and .id/.version/.node_id for the decision-record
+    # metadata (FAR-1102 chunk 4).
+    gate = SimpleNamespace(
+        id=uuid.uuid4(),
+        action="warn",
+        deleted_at=None,
+        version=1,
+        node_id=uuid.uuid4(),
+    )
     return (row, gate)
 
 

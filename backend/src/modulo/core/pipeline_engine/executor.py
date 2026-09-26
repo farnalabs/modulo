@@ -2364,6 +2364,12 @@ class PipelineExecutor:
                     pass_threshold=eval_row.pass_threshold,
                     suite_id=eval_row.suite_id,
                     version=eval_row.version,
+                    # FAR-1102 chunk 4: PolicyGate metadata for decision-record
+                    # construction.  None when no gate exists (guardrail-typed
+                    # Evals or backfill-rejected bindings).
+                    policy_gate_id=policy_gate.id if policy_gate is not None else None,
+                    policy_gate_version=policy_gate.version if policy_gate is not None else None,
+                    policy_gate_node_id=policy_gate.node_id if policy_gate is not None else None,
                 )
             )
         return eval_defs_by_node

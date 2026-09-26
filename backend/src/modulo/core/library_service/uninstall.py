@@ -7,7 +7,8 @@ is detached from provenance rather than deleted.
 
 In reverse topological order (pipelines → agents → schemas): unmodified
 entities are deleted; modified entities have their provenance detached.
-All-or-nothing: any failure rolls back the entire uninstall.
+Per-item savepoints: a blocked deletion (e.g. governance decision records
+present) is reported and the batch continues.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models import Agent, CollectionInstall, CollectionInstallEntity, Pipeline, Schema
@@ -159,17 +161,20 @@ async def uninstall_collection(
     install_id: uuid.UUID,
     collection_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    """Uninstall a collection, removing or deterring entities as appropriate.
+    """Uninstall a collection, removing or detaching entities as appropriate.
 
-    Returns a report dict with ``deleted`` and ``detached`` entity lists.
-    Modified entities (whose ``collection_install_id`` was already cleared)
-    are detached rather than deleted.
+    Returns a report dict with ``deleted``, ``detached``, and ``blocked`` entity
+    lists.  Modified entities (whose ``collection_install_id`` was already
+    cleared) are detached rather than deleted.  A deletion blocked by a RESTRICT
+    FK violation (e.g. governance decision records present) is reported as
+    ``blocked`` and the batch continues to the next item.
 
     When ``collection_id`` is supplied it is validated against the install's
     owning collection so an install cannot be uninstalled through the wrong
     collection URL.
 
-    All-or-nothing: if any step fails, the entire uninstall is rolled back.
+    Per-item savepoints: each pipeline deletion is wrapped in a savepoint so a
+    blocked item does not roll back the rest of the batch.
     """
     install = await _load_install(session, org_id, install_id)
     if collection_id is not None and install.collection_id != collection_id:
@@ -186,6 +191,7 @@ async def uninstall_collection(
 
     deleted: list[dict[str, str]] = []
     detached: list[dict[str, str]] = []
+    blocked: list[dict[str, str]] = []
 
     for entity_row in sorted_entities:
         # The underlying entity may have been removed out-of-band. Skip it:
@@ -207,13 +213,33 @@ async def uninstall_collection(
         )
 
         if is_unmodified:
-            await _delete_entity(session, entity_row.entity_type, entity_row.entity_id)
-            deleted.append(
-                {
-                    "entity_type": entity_row.entity_type,
-                    "entity_id": str(entity_row.entity_id),
-                }
-            )
+            try:
+                async with session.begin_nested():
+                    await _delete_entity(session, entity_row.entity_type, entity_row.entity_id)
+                deleted.append(
+                    {
+                        "entity_type": entity_row.entity_type,
+                        "entity_id": str(entity_row.entity_id),
+                    }
+                )
+            except IntegrityError as exc:
+                from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+
+                if is_policy_gate_decision_fk_error(exc):
+                    blocked.append(
+                        {
+                            "entity_type": entity_row.entity_type,
+                            "entity_id": str(entity_row.entity_id),
+                            "blocked_by": "policy_gate_decisions",
+                            "error": (
+                                f"Cannot delete {entity_row.entity_type} {entity_row.entity_id}: "
+                                "governance decision records present — "
+                                "archive or purge policy_gate_decisions first"
+                            ),
+                        }
+                    )
+                else:
+                    raise
         else:
             await _detach_entity(session, entity_row.entity_type, entity_row.entity_id)
             detached.append(
@@ -231,4 +257,5 @@ async def uninstall_collection(
         "install_id": str(install_id),
         "deleted": deleted,
         "detached": detached,
+        "blocked": blocked,
     }

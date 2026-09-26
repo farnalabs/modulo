@@ -24,7 +24,10 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from modulo.db.models.policy_gate_decision import PolicyGateDecision
 
 GUARDRAIL_EVAL_TYPE = "guardrail"
 
@@ -159,6 +162,42 @@ def resolve_policy_gate(snapshot: EvalPolicySnapshot) -> Outcome:
         action=pg.action,
         eval_result_id=er.id,
         error=None,
+    )
+
+
+def build_decision_row(
+    snapshot: EvalPolicySnapshot,
+    outcome: Outcome,
+    run_id: uuid.UUID,
+) -> PolicyGateDecision:
+    """Construct a ``PolicyGateDecision`` ORM row from an evaluation outcome.
+
+    Pure construction — never touches a database or a repository.
+    Persistence, and the fail-open wrapper around it, are the write-path
+    concern (``eval_persist_order.run_evals_persist_before_decide``).
+
+    The row carries the PolicyGate's OWN denormalized ``node_id`` (from the
+    snapshot), not a fresh read.  This preserves what the gate BELIEVED its
+    node_id was at evaluation time, which is the correct audit-trail value.
+    """
+    from modulo.db.models.policy_gate_decision import PolicyGateDecision
+
+    pg_org = snapshot.policy_gate.organisation_id
+    ev_org = snapshot.eval.organisation_id
+    assert pg_org == ev_org, (
+        f"cross-tenancy sanity check failed: policy_gate.organisation_id={pg_org} != eval.organisation_id={ev_org}"
+    )
+
+    return PolicyGateDecision(
+        organisation_id=pg_org,
+        policy_gate_id=snapshot.policy_gate.id,
+        eval_id=snapshot.eval.id,
+        resolved_action=outcome.action,
+        error_detail=outcome.error,
+        node_id=snapshot.policy_gate.node_id,
+        eval_result_id=outcome.eval_result_id,
+        run_id=run_id,
+        policy_gate_version=snapshot.policy_gate.version,
     )
 
 

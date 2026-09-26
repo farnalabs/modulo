@@ -22,7 +22,6 @@ from modulo.db.crud.pipeline import (
     archive_pipeline,
     check_pipeline_name_available,
     create_pipeline,
-    delete_pipeline,
     get_pipeline,
     get_pipeline_graph,
     list_pipelines,
@@ -231,18 +230,6 @@ class TestRestorePipeline:
     async def test_returns_none_when_not_found(self) -> None:
         session = _mock_session(MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         assert await restore_pipeline(session, uuid.uuid4()) is None
-
-
-@pytest.mark.asyncio
-class TestDeletePipeline:
-    async def test_returns_false_when_not_found(self) -> None:
-        session = _mock_session(MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        assert await delete_pipeline(session, uuid.uuid4()) is False
-
-    async def test_deletes_when_found(self) -> None:
-        pipeline = MagicMock()
-        session = _mock_session(MagicMock(scalar_one_or_none=MagicMock(return_value=pipeline)))
-        assert await delete_pipeline(session, uuid.uuid4()) is True
 
 
 @pytest.mark.asyncio

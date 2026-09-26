@@ -84,6 +84,11 @@ class EvalDefinition(BaseModel):
     # ``EvalResult`` write sites can stamp ``eval_definition_version``.
     version: int = 1
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # Policy-gate linkage (FAR-1102 chunk 4) — optional; when present the
+    # eval-loop persists a PolicyGateDecision audit row after each eval.
+    policy_gate_id: UUID | None = None
+    policy_gate_version: int | None = None
+    policy_gate_node_id: UUID | None = None
 
 
 class EvalResult(BaseModel):
