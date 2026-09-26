@@ -9,6 +9,8 @@ code:
   - backend/src/modulo/core/eval_engine/execute_suite_run.py
   - backend/src/modulo/core/eval_engine/coverage_gap.py
   - backend/src/modulo/core/eval_engine/regression.py
+  - backend/src/modulo/core/eval_engine/policy_gate.py
+  - backend/src/modulo/core/pipeline_engine/eval_persist_order.py
   - backend/src/modulo/api/routes/feedback.py
   - frontend/src/views/EvalEditorView.vue
   - frontend/src/views/EvalProposalsQueueView.vue
@@ -20,6 +22,8 @@ unit-tests:
   - backend/tests/unit/api/test_eval_leaderboards.py
   - backend/tests/unit/core/test_eval_engine.py
   - backend/tests/unit/core/test_eval_suite.py
+  - backend/tests/unit/core/test_eval_persist_order_failopen.py
+  - backend/tests/unit/core/eval_engine/test_policy_gate_decision_row.py
   - backend/tests/unit/db/test_eval_suite_run.py
   - frontend/src/__tests__/EvalEditorView.spec.ts
   - frontend/src/__tests__/EvalProposalsQueueView.spec.ts
@@ -43,9 +47,12 @@ status: covered
 Evaluation definitions, the eval engine that scores node outputs, eval suites
 with regression alerting, pipeline coverage gap analysis, leaderboards, and the
 eval-proposals queue. An eval is a typed definition (`llm_judge`, `regex`,
-`json_schema`, `custom_function`, or `human_set`) with an internal-only `failure_behaviour` of
-`warn` or `block`; blocked evals raise `EvalBlockedError` and are the mechanism
-engine-side guardrails build on (`feat-guardrails` depends on this engine).
+`json_schema`, `custom_function`, or `human_set`) carrying an engine-internal
+`failure_behaviour` of `warn` or `block` (retired from the public REST/MCP
+surface + generated types on 2026-09-26 — FAR-1103 chunk 5a; it is no longer
+writable/readable through the API or the generated frontend types); blocked
+evals raise `EvalBlockedError` and are the mechanism engine-side guardrails
+build on (`feat-guardrails` depends on this engine).
 Surfaces: `/evals/editor` and `/evals/proposals`.
 
 ## Behaviours
@@ -63,6 +70,18 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       a blocked eval raises `EvalBlockedError` which terminalizes the run as
       `eval_failed`, and eval-generated guardrail blocks surface in the run
       detail UI
+- [x] Policy-gate decision records (`PolicyGateDecision`, FAR-1060 / FAR-1102):
+      the eval loop persists one decision-record row per policy-gate evaluation,
+      built by `build_decision_row` (`core/eval_engine/policy_gate.py`) with the
+      six payload columns `resolved_action` (`continue`|`warn`|`block`) /
+      `error_detail` / `node_id` / `eval_result_id` / `run_id` /
+      `policy_gate_version`; writes go fail-open through
+      `eval_persist_order.py` (transient vs referential failure classified,
+      the run continues when persistence fails) and a purged guardrail eval whose
+      decision rows still reference it hard-deletes to 409 (RESTRICT FK mapped
+      to 409); org-deletion purges decision rows child-most
+      (`test_policy_gate_decision_row.py`, `test_eval_persist_order_failopen.py`,
+      `test_admin_housekeeping_decision_block.py`)
 - [x] Eval definitions are org-scoped admin CRUD (`POST/GET/PUT/DELETE
       /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) with pagination and
       pipeline / eval_type filters, plus `POST /api/v1/evals/from-run` to
@@ -89,8 +108,8 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       publish`) — a non-eval-gap feedback record is refused — while the
       `/evals/proposals` view supports publish / dismiss
 - [x] The `/evals/editor` view authors evals against a pipeline + node with a
-      type selector, JSON config editor, pass threshold and failure-warn /
-      failure-block thresholds, save / edit / delete
+      type selector, JSON config editor, and pass threshold, save / edit /
+      delete
 
 ## Known Gaps
 
@@ -101,6 +120,16 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
+- 2026-09-26: **Improve Architecture product-map walk** — reconciled the
+  tracker with the FAR-1103 chunk 5a retirement: `failure_behaviour` was
+  removed from the public surface (REST payloads + MCP params + generated
+  frontend types) and is now engine-internal only (verified against
+  `api/routes/evals.py` "public fields only, failure_behaviour excluded" and
+  the absence of the field in `frontend/src/types/`); the `/evals/editor`
+  behaviour dropped the "failure-warn / failure-block thresholds" the retired
+  UI had removed along with the `eval-editor-failure-*` elements. Tracked the
+  FAR-1102/1060 `PolicyGateDecision` surface (write + purge + delete-block)
+  that shipped without a product-map home.
 - 2026-09-25: **Improve Architecture product-map walk** — closed the stale
   `feat-evals` registry gap: manifest now `status: covered` and ticks the
   comparison surface that #972 had left unchecked — `GET /api/v1/runs/{run_id}/evals`
