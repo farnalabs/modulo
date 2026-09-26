@@ -316,6 +316,9 @@ describe('VariantBatchCompareView', () => {
     expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(true)
     // Nodes missing individual figures render an em dash rather than crashing.
     expect(breakdown.text()).toContain('—')
+    // The tfoot Total-row cost cell must render an em dash when the run total is
+    // unknown — never $0.000000, which would imply a real zero cost.
+    expect(breakdown.text()).not.toContain('0.000000')
     // The node_count aggregate and the all-null usage entry are filtered out.
     expect(breakdown.text()).not.toContain('node_count')
     expect(breakdown.text()).not.toContain('stray')

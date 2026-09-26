@@ -164,7 +164,7 @@
                     <td class="py-1 pr-3" />
                     <td class="py-1 pr-3" />
                     <td class="py-1 pr-3 text-right tabular-nums">{{ run.total_tokens }}</td>
-                    <td v-if="run.total_cost_usd !== null || hasNodeCost(run)" class="py-1 text-right tabular-nums">{{ formatMoney(Number(run.total_cost_usd), currencyCode, 6) }}</td>
+                    <td v-if="run.total_cost_usd !== null || hasNodeCost(run)" class="py-1 text-right tabular-nums">{{ run.total_cost_usd !== null ? formatMoney(Number(run.total_cost_usd), currencyCode, 6) : '—' }}</td>
                   </tr>
                 </tfoot>
               </table>
