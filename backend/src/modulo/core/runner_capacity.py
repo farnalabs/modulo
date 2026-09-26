@@ -161,7 +161,7 @@ HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset({RUNNER_PROVIDER_DOCKER, RUN
 # whose attempt key merely contains the literal.
 
 
-def build_dispatch_marker(attempt_key: str, provider: str) -> str:
+def build_dispatch_marker(attempt_key: str, provider: str, *, via_provider: bool | None = None) -> str:
     """The structured ``runs.sandbox_dispatch_state`` dispatch marker (D8 shape).
 
     Base shape (unchanged, fence-compatible — ``_script_lease_probe_ok`` /
@@ -171,6 +171,16 @@ def build_dispatch_marker(attempt_key: str, provider: str) -> str:
     and ``"written_at"`` for every tier.  ``provider`` is REQUIRED — every
     call site must pass its value explicitly so the type-checker enforces
     correct attribution (FAR-995).
+
+    ``via_provider`` (FAR-1050 R4 follow-up) stamps the
+    ``MODULO_E2B_VIA_PROVIDER`` flag state onto the marker AT BUILD TIME so
+    the capacity gate's own primary-acquire write is attributable to
+    legacy-vs-provider execution from the marker alone (ADR 040 "Flag and
+    revert observability") instead of waiting for the post-create rewrite.
+    Optional and defaulting to ``None`` = OMITTED, so every existing call
+    site keeps its exact prior payload; a supplied ``True``/``False`` is
+    stored as a JSON boolean. The extra key is fence-neutral: marker readers
+    only ever read named keys (ADR 040 marker-schema unknown-field rule).
 
     Raises :class:`ValueError` if ``provider`` is empty or whitespace-only —
     a syntactically valid but meaningless marker is worse than a loud failure.
@@ -183,6 +193,8 @@ def build_dispatch_marker(attempt_key: str, provider: str) -> str:
         "provider": provider,
         "written_at": datetime.now(UTC).isoformat(),
     }
+    if via_provider is not None:
+        marker["via_provider"] = bool(via_provider)
     return json.dumps(marker)
 
 
@@ -388,6 +400,7 @@ async def acquire_runner_dispatch_slot(
     claim_token: str | None,
     node_id: str,
     provider: str,
+    via_provider: bool | None = None,
 ) -> RunnerDispatchSlot:
     """The atomic runner dispatch gate (D8) — check and reserve in ONE transaction.
 
@@ -405,7 +418,9 @@ async def acquire_runner_dispatch_slot(
        tier filter for the Docker-tier default) + cap read.
     5. Decide: deny → :class:`RunnerCapacityDeniedError` (the transaction
        rolls back — no marker, no slot); admit → the fenced marker UPDATE
-       commits the reservation (provider + written_at ride the marker).
+       commits the reservation (provider + written_at ride the marker; the
+       optional ``via_provider`` FAR-1050 flag state rides it too when the
+       caller supplies one, see :func:`build_dispatch_marker`).
 
     The lock is NEVER held across workspace-create I/O — the caller provisions
     after this transaction commits.
@@ -518,7 +533,7 @@ async def acquire_runner_dispatch_slot(
                     "rid": run_id,
                     "oid": str(org_id),
                     "tok": claim_token,
-                    "marker": build_dispatch_marker(attempt_key, provider),
+                    "marker": build_dispatch_marker(attempt_key, provider, via_provider=via_provider),
                 },
             )
             if marker_result.fetchone() is None:
