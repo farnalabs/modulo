@@ -81,7 +81,11 @@ if TYPE_CHECKING:
 
     from modulo.core.artifacts.streaming import StreamingArtifactWriter
     from modulo.core.artifacts.writer import ArtifactWriter
-    from modulo.core.runtime_provider import RuntimeProvider, WorkspaceFileInfo
+    from modulo.core.runtime_provider import (
+        RuntimeProvider,
+        WorkspaceFileInfo,
+        WorkspaceSpec,
+    )
 
 import typing
 
@@ -1352,6 +1356,233 @@ async def _list_fs_entries_via_provider(
             continue
         entries.append(await provider.get_info(ref, raw_path))
     return entries
+
+
+# ---------------------------------------------------------------------------
+# FAR-1050 R4 — the dispatch rewire (create / stream / kill)
+# ---------------------------------------------------------------------------
+#
+# The R4 gate shape mirrors R1/R2b/R3 (``MODULO_E2B_VIA_PROVIDER``, default
+# OFF): with the flag OFF every branch below is unreachable and the legacy
+# direct path stays byte-for-byte unchanged. Unlike the file/log/isolation
+# sites, create-stream-kill are ONE atomic sequence — a settings flip between
+# create and kill would strand a sandbox (provider-created, legacy-killed, or
+# vice versa) — so the dispatch reads the flag ONCE per dispatch and threads
+# that local through its own sites. It is still a runtime read (never
+# captured at import), so a flip takes effect on the next dispatch.
+
+
+def _dispatch_via_provider_enabled() -> bool:
+    """Read ``MODULO_E2B_VIA_PROVIDER`` at the R4 dispatch seam (FAR-1050).
+
+    Fail-open shell identical to :func:`_file_io_via_provider_enabled`: an
+    unreadable settings store resolves to the flag's default (OFF = the
+    legacy direct path), so a settings outage can never take a dispatch down.
+    """
+    try:
+        return bool(get_settings().modulo_e2b_via_provider)
+    except Exception:
+        _log.warning(
+            "sandbox_agent.dispatch_flag_read_failed",
+            exc_info=True,
+        )
+        return False
+
+
+async def _build_dispatch_provider() -> "RuntimeProvider | None":
+    """FAR-1050 R4 flag-ON dispatch: resolve the E2B RuntimeProvider.
+
+    Builds a PER-DISPATCH fresh hub through :func:`build_hub` — the same
+    shape the Docker route uses in ``resolve_sandbox_dispatch_route`` — and
+    returns its registered ``e2b`` provider. Returns ``None`` when the E2B
+    provider is not registered (no ``MODULO_E2B_API_KEY`` / runtime
+    override) or the hub cannot be constructed; the caller fails CLOSED with
+    a typed error rather than silently falling back to ``AsyncSandbox.create``.
+
+    Test seam: unit tests substitute a ``FakeRuntimeProvider`` by patching
+    THIS name (the hub is never constructed in that case). The ephemeral
+    hub's other registrations hold no external resources until used, so the
+    returned provider is the only handle the dispatch needs to dispose.
+    """
+    from modulo.core.runtime_provider import build_hub
+
+    try:
+        provider_hub = build_hub()
+    except Exception:
+        _log.warning("sandbox_agent.dispatch_hub_build_failed", exc_info=True)
+        return None
+    return provider_hub.get("e2b")
+
+
+def _require_dispatch_provider(provider: "RuntimeProvider | None") -> "RuntimeProvider":
+    """Narrow a resolved dispatch provider, failing CLOSED when it is missing.
+
+    The ``None`` case is already refused at resolution time; this helper keeps
+    that refusal typed AND gives the type-checker a non-Optional handle at the
+    create / stream call sites (a flag-ON dispatch must never reach them with
+    no provider — there is no silent fall back to ``AsyncSandbox.create``).
+    """
+    from modulo.core.runtime_provider import RuntimeProviderError
+
+    if provider is None:
+        raise RuntimeProviderError(
+            "FAR-1050 flag-ON dispatch could not resolve the E2B runtime provider "
+            "(set MODULO_E2B_API_KEY and restart) — refusing to fall back to AsyncSandbox.create"
+        )
+    return provider
+
+
+def _require_dispatch_spec(spec: "WorkspaceSpec | None") -> "WorkspaceSpec":
+    """Narrow the flag-ON create spec (built just above the create loop)."""
+    from modulo.core.runtime_provider import RuntimeProviderError
+
+    if spec is None:
+        raise RuntimeProviderError("FAR-1050 flag-ON dispatch create spec was not built before create")
+    return spec
+
+
+def _is_rate_limited_error(exc: BaseException) -> bool:
+    """True when *exc* is (or wraps) a rate-limit failure (FAR-1050 R4 T8).
+
+    The provider's typed :class:`RateLimitedError` matches directly. The E2B
+    provider's ``create_workspace`` wraps every SDK failure in a
+    ``RuntimeError(... from exc)``, so the original ``RateLimitException``
+    travels on ``__cause__`` — walked here so a REAL 429 still enters the
+    existing backoff loop on the flag-ON path instead of degrading to a
+    terminal ``harness.unknown`` (retry classification does not move, ADR 040).
+    """
+    from modulo.core.runtime_provider import RateLimitedError
+
+    if isinstance(exc, RateLimitedError):
+        return True
+    try:
+        from e2b.exceptions import RateLimitException
+    except ImportError:  # pragma: no cover — e2b is a hard dispatch dependency
+        return False
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, RateLimitException):
+            return True
+        seen.add(id(current))
+        current = current.__cause__
+    return False
+
+
+def _translate_provider_dispatch_error(exc: BaseException) -> BaseException:
+    """FAR-1050 R4 T8/T9: map typed provider failures onto the EXISTING taxonomy.
+
+    Additive translation ONLY — no re-parenting (ADR 040): the provider's
+    ``RateLimitedError`` / ``ProvisionTimeoutError`` are not made subclasses
+    of the sandbox taxonomy and the sandbox classes are not made subclasses of
+    the provider family. Instead the dispatch re-raises the pre-existing
+    retryable classes, so the executor's classifier publishes exactly the
+    codes it always did (``sandbox.rate_limited`` /
+    ``sandbox.queue_timeout``) and a flag-ON rate limit can never surface as
+    ``harness.unknown``. Returns *exc* itself when nothing translates.
+    """
+    from modulo.core.runtime_provider import ProvisionTimeoutError, RateLimitedError
+
+    if isinstance(exc, RateLimitedError):
+        return SandboxRateLimitedError(str(exc)[:_MAX_ERROR_MSG])
+    if isinstance(exc, ProvisionTimeoutError):
+        return SandboxQueueTimeoutError(str(exc)[:_MAX_ERROR_MSG])
+    return exc
+
+
+def _dispatch_marker_json(attempt_key: str, provider: str, *, via_provider: bool) -> str:
+    """Dispatch/lease marker JSON carrying the tier AND the FAR-1050 flag state.
+
+    Builds on the canonical :func:`runner_capacity.build_dispatch_marker`
+    payload and adds ``via_provider`` so any run can be attributed to
+    legacy-vs-provider execution from the marker alone (ADR 040 "Flag and
+    revert observability"). Marker readers only ever read named keys
+    (``state`` / ``attempt_key`` / ``provider``), so the extra field is
+    tolerated on read — the ADR 040 marker-schema unknown-field rule.
+    """
+    from modulo.core.runner_capacity import build_dispatch_marker
+
+    payload = json.loads(build_dispatch_marker(attempt_key, provider))
+    payload["via_provider"] = bool(via_provider)
+    return json.dumps(payload)
+
+
+class _ProviderCommands:
+    """``sandbox.commands`` stand-in on the FAR-1050 R4 flag-ON path.
+
+    Exposes ONLY the collect-then-return ``run(script, timeout=...)`` shape the
+    duck-typed workspace-input helpers call (T10 ``provision_workspace_inputs_
+    in_sandbox`` and ``detect_workspace_input_drift``), routed through the ABC's
+    ``exec_command``. A non-zero exit RAISES, matching the E2B SDK behaviour
+    those helpers rely on (``commands.run`` raises ``CommandExitException``) —
+    the ABC returns an ``ExecResult`` instead, so without this the helper would
+    silently accept a failed clone.
+    """
+
+    def __init__(self, provider: "RuntimeProvider", provider_ref: str) -> None:
+        self._provider = provider
+        self._provider_ref = provider_ref
+
+    async def run(
+        self,
+        command: str,
+        *,
+        timeout: float | None = None,  # noqa: ASYNC109 — mirrors the SDK command signature the T10 helpers call
+        background: bool = False,
+        **_kwargs: Any,
+    ) -> Any:
+        if background:
+            # The streaming start is dispatched through ``exec_command_stream``
+            # at the T3 gate; a background request on this handle is a bug, not
+            # a downgrade path.
+            raise RuntimeError("background command start is dispatched through exec_command_stream (FAR-1050 R4)")
+        result = await self._provider.exec_command(
+            self._provider_ref,
+            ["sh", "-c", command],
+            cmd_timeout=int(timeout) if timeout else None,
+        )
+        if result.exit_code != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"command exited with code {result.exit_code}" + (f": {detail[:500]}" if detail else ""))
+        return result
+
+
+class _ProviderMediatedHandle:
+    """The ABC-mediated sandbox handle on the FAR-1050 R4 flag-ON path.
+
+    Presents the subset of the legacy ``AsyncSandbox`` surface the dispatch
+    body and its duck-typed helpers consume, with every method routed through
+    the :class:`RuntimeProvider` ABC:
+
+    - ``sandbox_id`` — the provider ref returned by ``create_workspace``;
+    - ``kill(...)`` — ``destroy_workspace`` (T5 budget + stall kills);
+    - ``commands.run(script, timeout=...)`` — ``exec_command`` (T10 workspace
+      inputs + drift probe).
+
+    Deliberately ABSENT: ``files`` (every file site is gated onto the ABC
+    primitives by FAR-1050 R2b) and ``get_metrics`` (the ABC models no
+    metrics primitive — the resource-cap killer fails OPEN through its
+    existing "metrics unavailable" branch, exactly as it does when the SDK
+    reports no metrics). Touching ``files`` therefore means only one thing: a
+    flag read that flipped MID-dispatch, which must be loud, never a silent
+    legacy downgrade.
+    """
+
+    def __init__(self, provider: "RuntimeProvider", provider_ref: str) -> None:
+        self._provider = provider
+        self.sandbox_id = provider_ref
+        self.commands = _ProviderCommands(provider, provider_ref)
+
+    @property
+    def files(self) -> Any:
+        raise RuntimeError(
+            "FAR-1050 flag-ON dispatch handle has no legacy files surface "
+            "(MODULO_E2B_VIA_PROVIDER flipped mid-dispatch?)"
+        )
+
+    async def kill(self, **_kwargs: Any) -> None:
+        """T5 kill site: ``destroy_workspace`` on the provider that created it."""
+        await self._provider.destroy_workspace(self.sandbox_id)
 
 
 def _bounded_tail(text: str, limit: int) -> str:
@@ -5804,6 +6035,148 @@ async def _wait_command_with_idle_watchdog(
                 return None, f"agent produced no output for {idle_timeout:.0f}s"
 
 
+@dataclass
+class _ExecStreamOutcome:
+    """What the flag-ON wait returns on a healthy (or failed) stream end.
+
+    Mirrors the shape the dispatch reads off the legacy command result
+    (``exit_code`` / ``stdout`` / ``stderr``) plus the one thing the legacy
+    handle could not express: ``stream_error``, set only when the ABC stream
+    itself dropped (engine/proxy). ``exit_code`` is NEVER a fabricated zero on
+    that path — it is ``-1`` (ADR 040 "Streaming parity").
+    """
+
+    exit_code: int
+    stdout: str
+    stderr: str
+    stream_error: str | None = None
+
+
+async def _wait_command_with_exec_process(
+    process: Any,
+    *,
+    total_timeout: float,
+    idle_timeout: float,
+    last_activity: Callable[[], float],
+    on_tick: Callable[[], Awaitable[None]] | None = None,
+    tick_interval: float | None = None,
+    on_stdout: Callable[[str], Awaitable[None]] | None = None,
+    on_stderr: Callable[[str], Awaitable[None]] | None = None,
+) -> tuple[Any, str | None]:
+    """FAR-1050 R4: the idle watchdog re-expressed over ``ExecProcess``.
+
+    The flag-ON sibling of :func:`_wait_command_with_idle_watchdog`: same
+    contract (total-timeout raise, idle-window kill + ``stall_reason``,
+    per-tick ``on_tick``), with the E2B ``handle.wait()`` / ``handle.kill()``
+    pair replaced by the ABC's ``ExecProcess.done`` / ``ExecProcess.kill`` and
+    the SDK's ``on_stdout`` / ``on_stderr`` callbacks replaced by an explicit
+    pump over ``ExecProcess.chunks``.
+
+    Invariants carried over from the legacy helper:
+
+    - **Slice timeouts never cancel the underlying wait.** Each poll slice is
+      ``asyncio.wait({done_waiter}, timeout=...)`` over ONE persistent waiter
+      task; ``asyncio.wait`` neither cancels its futures on timeout nor on
+      cancellation of the caller, so a slice timeout leaves the waiter (and
+      the current task's ``cancelling()`` counter) untouched — the FAR-97/98
+      ``cancelling()==0`` invariant the legacy shield exists to protect.
+    - **Chunk order is preserved.** The pump awaits the watchdog callback for
+      chunk *n* before asking the stream for chunk *n+1*, so activity
+      tracking, the live-stream broker and the artifact writer see the same
+      sequence the legacy callback stream delivered.
+    - **No fabricated zero exit.** A stream ERROR (engine/proxy drop) or an
+      end with no exit code returns ``exit_code = -1`` with ``stream_error``
+      set; only a healthy stream end carries the real exit code.
+
+    Returns ``(outcome, None)`` on a stream end, ``(None, stall_reason)``
+    when the idle watchdog fired.
+    """
+    if tick_interval is None:
+        tick_interval = _SANDBOX_TAIL_INTERVAL
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    async def _pump() -> None:
+        async for chunk in process.chunks:
+            data = getattr(chunk, "data", "")
+            if getattr(chunk, "stream", "stdout") == "stderr":
+                stderr_parts.append(data)
+                if on_stderr is not None:
+                    await on_stderr(data)
+            else:
+                stdout_parts.append(data)
+                if on_stdout is not None:
+                    await on_stdout(data)
+
+    # nosemgrep: create-task-without-guard — this helper is an async def, so a
+    # running event loop always exists (same exclusion as the other in-module
+    # task creations).
+    pump = asyncio.ensure_future(_pump())  # nosemgrep: create-task-without-guard
+    # One persistent waiter for ``done``: reused across slices so a slice
+    # timeout cancels nothing (see the invariant above).
+    done_waiter = asyncio.ensure_future(process.done.wait())  # nosemgrep: create-task-without-guard
+    deadline = time.monotonic() + total_timeout
+    reached_done = False
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"command exceeded total timeout of {total_timeout:.0f}s")
+            if on_tick is not None:
+                await on_tick()
+            _, pending = await asyncio.wait({done_waiter}, timeout=min(tick_interval, remaining))
+            if not pending:
+                reached_done = True
+                break
+            if time.monotonic() - last_activity() >= idle_timeout:
+                # Kill the command so the still-running agent cannot write a
+                # fabricated /home/user/output.json, then fail fast.
+                try:
+                    await asyncio.wait_for(process.kill(), timeout=10.0)
+                except Exception:
+                    _log.exception("sandbox_agent.idle_watchdog_kill_failed")
+                return None, f"agent produced no output for {idle_timeout:.0f}s"
+    finally:
+        if not done_waiter.done():
+            done_waiter.cancel()
+        if reached_done:
+            # ``done`` fires from the chunk generator's finally, one hop after
+            # the LAST chunk has been fed to the watchdog callbacks — join the
+            # pump (bounded) so no callback is still pending when we return.
+            try:
+                await asyncio.wait_for(pump, timeout=_SANDBOX_TAIL_READ_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.debug("sandbox_agent.stream_pump_failed", exc_info=True)
+        if not pump.done():
+            pump.cancel()
+
+    error = getattr(process, "error", None)
+    exit_code = getattr(process, "exit_code", None)
+    stdout = "".join(stdout_parts)
+    stderr = "".join(stderr_parts)
+    if error is not None or exit_code is None:
+        stream_error = str(error) if error else "stream ended without an exit code"
+        _log.warning(
+            "sandbox_agent.stream_error",
+            extra={"stream_error": stream_error[:_MAX_ERROR_MSG]},
+        )
+        return (
+            _ExecStreamOutcome(
+                exit_code=-1,
+                stdout=stdout,
+                stderr=stderr,
+                stream_error=stream_error,
+            ),
+            None,
+        )
+    return (
+        _ExecStreamOutcome(exit_code=int(exit_code), stdout=stdout, stderr=stderr),
+        None,
+    )
+
+
 class _StallDetector:
     """Per-channel liveness tracking for the sandbox_agent idle watchdog (FAR-306).
 
@@ -6005,6 +6378,7 @@ async def _sandbox_acquire_dispatch_marker(
     run_id: str,
     node_id: str,
     provider: str,
+    via_provider: bool = False,
 ) -> str | None:
     """D8 atomic dispatch gate + marker (FAR-594): check capacity and claim the
     dispatch slot in ONE transaction, immediately before provisioning.
@@ -6018,6 +6392,10 @@ async def _sandbox_acquire_dispatch_marker(
 
     ``provider`` is REQUIRED (FAR-995) — every call site must pass its value
     explicitly so the type-checker enforces correct attribution.
+    ``via_provider`` (FAR-1050) is threaded to the node-runner-owned marker
+    writes below; the capacity gate's own marker is built inside
+    ``runner_capacity`` and is re-stamped with the flag by the post-create
+    ``_sandbox_store_dispatch_marker_sandbox`` rewrite.
 
     Returns the attempt key on success, ``None`` when fenced (claim superseded
     or run not running — the caller MUST NOT create a sandbox). Raises
@@ -6069,6 +6447,7 @@ async def _sandbox_acquire_dispatch_marker(
         run_id=run_id,
         node_id=node_id,
         provider=provider,
+        via_provider=via_provider,
     )
 
 
@@ -6080,6 +6459,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     run_id: str,
     node_id: str,
     provider: str,
+    via_provider: bool = False,
 ) -> str | None:
     """The legacy best-effort dispatch-marker write (pre-D8 shape, provider-aware).
 
@@ -6108,8 +6488,6 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     dispatch over a marker write would turn a DB hiccup into a dispatch
     outage.
     """
-    from modulo.core.runner_capacity import build_dispatch_marker
-
     if session_factory is None or not claim_lease:
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
     org_id_raw = org_id
@@ -6150,7 +6528,7 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
                     "oid": str(org_uuid),
                     "tok": claim_lease,
                     "sid": None,
-                    "marker": build_dispatch_marker(key, provider),
+                    "marker": _dispatch_marker_json(key, provider, via_provider=via_provider),
                 },
             )
             if result.fetchone() is None:
@@ -6184,11 +6562,15 @@ async def _sandbox_store_dispatch_marker_sandbox(
     run_id: str,
     attempt_key: str | None,
     provider: str,
+    via_provider: bool = False,
 ) -> None:
     """Persist the real sandbox id onto the runs row after a successful create.
 
     ``provider`` re-stamps the D8 tier attribution on the rewritten marker.
     Required (FAR-995) — every call site must pass its value explicitly.
+    ``via_provider`` (FAR-1050) stamps the ``MODULO_E2B_VIA_PROVIDER`` state
+    onto the SAME marker, so a flag-ON and a flag-OFF run are distinguishable
+    from the persisted dispatch marker alone (ADR 040 revert observability).
     """
     if session_factory is None or not claim_lease:
         return
@@ -6201,7 +6583,6 @@ async def _sandbox_store_dispatch_marker_sandbox(
         return
     from sqlalchemy import text as _sql_text
 
-    from modulo.core.runner_capacity import build_dispatch_marker
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
@@ -6217,7 +6598,7 @@ async def _sandbox_store_dispatch_marker_sandbox(
                 "oid": str(org_uuid),
                 "tok": claim_lease,
                 "sid": sandbox_id_value,
-                "marker": build_dispatch_marker(attempt_key or "", provider),
+                "marker": _dispatch_marker_json(attempt_key or "", provider, via_provider=via_provider),
             },
         )
 
@@ -6230,6 +6611,7 @@ async def _sandbox_store_script_lease(
     run_id: str,
     attempt_key: str | None,
     provider: str,
+    via_provider: bool = False,
 ) -> None:
     """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
 
@@ -6242,7 +6624,8 @@ async def _sandbox_store_script_lease(
     row. Fail-open (no session factory / claim lease / org) — the lease
     is a safety backstop, never a correctness dependency. ``provider``
     re-stamps the D8 tier attribution.  Required (FAR-995) — every call
-    site must pass its value explicitly.
+    site must pass its value explicitly. ``via_provider`` carries the
+    FAR-1050 flag state alongside it.
     """
     if session_factory is None or not claim_lease:
         return
@@ -6277,6 +6660,7 @@ async def _sandbox_store_script_lease(
                         "state": MARKER_STATE_SCRIPT_EXECUTING,
                         "attempt_key": attempt_key or "",
                         "provider": provider,
+                        "via_provider": bool(via_provider),
                         "written_at": datetime.now(UTC).isoformat(),
                     }
                 ),
@@ -7165,6 +7549,8 @@ def _build_sandbox_node_envelope(
     node_id: str,
     output: _SandboxNodeOutput,
     exclude_from_output: frozenset[str] = frozenset(),
+    provider: str = "",
+    via_provider: bool = False,
 ) -> dict[str, Any]:
     """Assemble a sandbox_agent node envelope from grouped output fields.
 
@@ -7181,6 +7567,14 @@ def _build_sandbox_node_envelope(
     marker key at all, and the marker is deliberately NOT in
     ``exclude_from_output`` so it survives into the persisted telemetry view
     (and, after the P1b split, into ``node_telemetry_json``).
+
+    FAR-1050 (ADR 040 "Flag and revert observability"): passing a non-empty
+    ``provider`` stamps BOTH the resolved tier and the ``MODULO_E2B_VIA_PROVIDER``
+    state (``via_provider``) onto the envelope, which the P1b splitter folds
+    into ``node_telemetry_json`` verbatim — every run is then attributable to
+    legacy-vs-provider execution. Both keys are emitted together and on BOTH
+    flag states; callers that pass no tier (the Bundled Runner route) get
+    neither, so their envelope key set is unchanged.
     """
     inner: dict[str, Any] = {
         "status": output.status,
@@ -7191,6 +7585,9 @@ def _build_sandbox_node_envelope(
         **_build_model_cost_fields(output.cost_source),
         **_build_token_usage_fields(output.cost_source),
     }
+    if provider:
+        inner["provider"] = provider
+        inner["via_provider"] = bool(via_provider)
     if output.output_json is not _UNSET:
         inner["output_json"] = output.output_json
     inner["agent_stdout"] = output.agent_stdout
@@ -7716,6 +8113,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         resolve_agent_bindings,
     )
 
+    # FAR-1050 R4: the provider-neutral vocabulary the flag-ON dispatch path
+    # builds its WorkspaceSpec and typed refusals from (runtime import so the
+    # names are bound in THIS function's scope on every path).
+    from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceSpec
+
     # FAR-215: mid-run capability re-check at node start (block -> HITL).
     # The gate raises a LangGraph interrupt on block; control only reaches
     # the sandbox body when the node may proceed. node_def is forwarded so
@@ -7874,7 +8276,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
 
     start_time = time.monotonic()
-    sandbox: AsyncSandbox | None = None
+    sandbox: AsyncSandbox | _ProviderMediatedHandle | None = None
+    # FAR-1050 R4: the dispatch flag resolved ONCE per dispatch (never at
+    # import). Create / stream / kill are one atomic sequence — a settings
+    # flip between them would strand a sandbox (provider-created but
+    # legacy-killed, or the reverse) — so every R4 site below reads THIS
+    # local instead of re-reading settings mid-dispatch. Pre-bound at
+    # function scope so the finally-block teardown can read it no matter
+    # where the dispatch failed.
+    _via_provider_dispatch = _dispatch_via_provider_enabled()
+    # The flag-ON provider + its per-dispatch hub-less handle; None on the
+    # legacy path (and before create resolves one on the flag-ON path).
+    _dispatch_provider: RuntimeProvider | None = None
     # The executor's CAPTURED claim token (seeded into LangGraph state as
     # ``_claim_lease`` at execute/resume start). Used to fence the DB-atomic
     # dispatch marker so a superseded original cannot set a marker / create a
@@ -7981,6 +8394,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             run_id=run_id,
             node_id=node_id,
             provider=_resolved_provider,
+            via_provider=_via_provider_dispatch,
         )
 
     async def _store_dispatch_marker_sandbox(sandbox_id_value: str | None) -> None:
@@ -7993,6 +8407,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             run_id=run_id,
             attempt_key=attempt_key,
             provider=_resolved_provider,
+            via_provider=_via_provider_dispatch,
         )
 
     async def _store_script_lease() -> None:
@@ -8014,6 +8429,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             run_id=run_id,
             attempt_key=attempt_key,
             provider=_resolved_provider,
+            via_provider=_via_provider_dispatch,
         )
 
     async def _mint_run_api_key_for_sandbox() -> str | None:
@@ -8311,49 +8727,114 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         }
 
         _provision_timeout = _sandbox_provisioning_timeout()
+        _dispatch_spec: WorkspaceSpec | None = None
+        _dispatch_ref: str | None = None
+        if _via_provider_dispatch:
+            # FAR-1050 R4 flag-ON (T2): resolve the E2B RuntimeProvider through
+            # a per-dispatch fresh hub (build_hub) — the same shape the Docker
+            # route uses — BEFORE the create loop, so an unresolvable provider
+            # never reaches ``AsyncSandbox.create``. Fails CLOSED: there is no
+            # silent per-call downgrade back to the direct path (revert = flag
+            # OFF, never a mid-dispatch fallback).
+            _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider())
+            if _egress_resolved.policy is not None:
+                # ADR 040 records the egress defect class as "an operator could
+                # configure a restrictive policy and receive permissive egress,
+                # silently" and rules the refusal path part of the contract.
+                # ``E2BRuntimeProvider.create_workspace`` does not yet carry
+                # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
+                # (that carrier is outside this slice's footprint), so the
+                # flag-ON path CANNOT express deny_all/selected at provision
+                # time — refuse with the terminal named code rather than grant
+                # permissive egress. Follow-up: extend the E2B provider to
+                # honour ``spec.egress_policy``, then drop this refusal.
+                raise SandboxTierRefusedError(
+                    f"MODULO_E2B_VIA_PROVIDER is ON and node '{node_id}' resolves egress policy "
+                    f"{_egress_resolved.policy!r}, which the runtime-provider create path cannot yet "
+                    "enforce (E2B create_workspace does not carry spec.egress_policy). "
+                    "Set MODULO_E2B_VIA_PROVIDER=false (revert) until the provider honours the spec."
+                )
+            _dispatch_spec = WorkspaceSpec(
+                environment_profile_id=_runner_binding_env_profile_id() or uuid.UUID(int=0),
+                organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
+                run_id=_parse_uuid_opt(run_id),
+                # T2 parity with the legacy create kwargs: same template, same
+                # strictly-greater-than-command lifetime (FAR-487/FAR-489).
+                image_ref=template_id,
+                timeout_seconds=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
+                resource_limits=dict(resource_limits or {}),
+                egress_policy=_egress_resolved.policy,
+                workspace_metadata=dict(_metadata),
+            )
         try:
             while True:
                 try:
-                    sandbox = await asyncio.wait_for(
-                        AsyncSandbox.create(
-                            template=template_id,
-                            # FAR-1171: pass the runtime-config-resolved key
-                            # explicitly, reusing the SAME resolver as the
-                            # enforcement gate so the gate and the live create
-                            # call can never disagree. Without it the e2b SDK
-                            # falls back to the legacy ``E2B_API_KEY`` env var,
-                            # so a rotation via PUT /api/v1/admin/runtime-config
-                            # would reach the gate but not the credential
-                            # actually used to provision the sandbox.
-                            api_key=_resolved_e2b_key_for_enforcement(),
-                            # FAR-487: lifetime STRICTLY greater than the command
-                            # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
-                            # endAt kill can never preempt the runner's own timeout
-                            # path — a mid-command sandbox death fabricated a
-                            # zero-exit completion and misreported the failure as
-                            # "no parseable output.json (exit code 0)".
-                            # FAR-489: int() — the e2b SDK's attrs model does NOT
-                            # coerce a float, and E2B's Go server rejects
-                            # "1320.0" with 400 (int32 unmarshal), instantly
-                            # failing every sandbox create.
-                            timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
-                            allow_internet_access=(_egress_resolved.policy is None),
-                            # deny_all/selected -> no internet; default/None ->
-                            # internet allowed (e2b default). IMPORTANT
-                            # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
-                            # at this boolean level — the host:port egress_allowlist
-                            # is carried only as metadata and is NOT yet honored by
-                            # any enforcement point (no template-side mechanism
-                            # exists; the e2b SDK has no native allowlist control).
-                            # ``selected`` is functionally equivalent to ``deny_all``
-                            # until that point lands.
-                            envs=_schema_dir_for_sandbox,
-                            metadata=_metadata or None,
-                        ),
-                        timeout=min(sandbox_timeout, _provision_timeout),
-                    )
+                    if _via_provider_dispatch:
+                        # FAR-1050 R4 (T2): create through the ABC primitive.
+                        # The provider owns the credential (T8) — no api_key=
+                        # is passed here, and the same
+                        # min(sandbox_timeout, _provision_timeout) bound is
+                        # threaded OUTSIDE so the FAR-766 provisioning
+                        # watchdog behaves identically.
+                        _dispatch_ref = await asyncio.wait_for(
+                            _require_dispatch_provider(_dispatch_provider).create_workspace(
+                                _require_dispatch_spec(_dispatch_spec)
+                            ),
+                            timeout=min(sandbox_timeout, _provision_timeout),
+                        )
+                    else:
+                        sandbox = await asyncio.wait_for(
+                            AsyncSandbox.create(
+                                template=template_id,
+                                # FAR-1171: pass the runtime-config-resolved key
+                                # explicitly, reusing the SAME resolver as the
+                                # enforcement gate so the gate and the live create
+                                # call can never disagree. Without it the e2b SDK
+                                # falls back to the legacy ``E2B_API_KEY`` env var,
+                                # so a rotation via PUT /api/v1/admin/runtime-config
+                                # would reach the gate but not the credential
+                                # actually used to provision the sandbox.
+                                api_key=_resolved_e2b_key_for_enforcement(),
+                                # FAR-487: lifetime STRICTLY greater than the command
+                                # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
+                                # endAt kill can never preempt the runner's own timeout
+                                # path — a mid-command sandbox death fabricated a
+                                # zero-exit completion and misreported the failure as
+                                # "no parseable output.json (exit code 0)".
+                                # FAR-489: int() — the e2b SDK's attrs model does NOT
+                                # coerce a float, and E2B's Go server rejects
+                                # "1320.0" with 400 (int32 unmarshal), instantly
+                                # failing every sandbox create.
+                                timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
+                                allow_internet_access=(_egress_resolved.policy is None),
+                                # deny_all/selected -> no internet; default/None ->
+                                # internet allowed (e2b default). IMPORTANT
+                                # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
+                                # at this boolean level — the host:port egress_allowlist
+                                # is carried only as metadata and is NOT yet honored by
+                                # any enforcement point (no template-side mechanism
+                                # exists; the e2b SDK has no native allowlist control).
+                                # ``selected`` is functionally equivalent to ``deny_all``
+                                # until that point lands.
+                                envs=_schema_dir_for_sandbox,
+                                metadata=_metadata or None,
+                            ),
+                            timeout=min(sandbox_timeout, _provision_timeout),
+                        )
                     break
-                except RateLimitException as _rle:
+                except Exception as _rle:
+                    # Flag-OFF: the predicate below reduces to exactly the
+                    # legacy ``isinstance(_rle, RateLimitException)`` — the
+                    # legacy rate-limit arm, unchanged. Flag-ON adds the
+                    # provider's typed RateLimitedError AND the RateLimitException
+                    # the E2B provider wraps onto ``__cause__`` (T8), so a real
+                    # 429 still enters this backoff instead of degrading to a
+                    # terminal ``harness.unknown``.
+                    _rate_limited = isinstance(_rle, RateLimitException) or (
+                        _via_provider_dispatch and _is_rate_limited_error(_rle)
+                    )
+                    if not _rate_limited:
+                        raise
                     _rate_limit_attempt += 1
                     if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
                         raise SandboxQueueTimeoutError(
@@ -8395,9 +8876,19 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 f"Sandbox provisioning for node '{node_id}' exceeded {_provision_timeout}s bound "
                 "(AsyncSandbox.create never returned — stuck dispatching; provider may be degraded)"
             ) from None
-        if sandbox is None:
-            raise RuntimeError("Sandbox was not created before use")
-        _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
+        if _via_provider_dispatch:
+            # FAR-1050 R4: the dispatch holds a provider-neutral handle from
+            # here on — the ABC ref plus a mediated sandbox surface. Every
+            # downstream site (file I/O, isolation, log tail, kill, T10)
+            # addresses the workspace through it or through the ref.
+            if _dispatch_provider is None or _dispatch_ref is None or not _dispatch_ref:
+                raise RuntimeProviderError("FAR-1050 flag-ON dispatch lost its runtime provider after create")
+            _sandbox_id = _dispatch_ref
+            sandbox = _ProviderMediatedHandle(_dispatch_provider, _sandbox_id)
+        else:
+            if sandbox is None:
+                raise RuntimeError("Sandbox was not created before use")
+            _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
         _emit_script_span_event(
             "script.provisioned",
             {
@@ -8825,6 +9316,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 env_vars_extra=env_vars_extra,
                 runner_bindings=_runner_bindings,
             )
+            if _via_provider_dispatch:
+                # FAR-1050 R4: the ABC create has no sandbox-lifetime env
+                # carrier (WorkspaceSpec.labels is Docker-only), so the
+                # advisory MODULO_SCHEMA_DIR rides on the agent command's
+                # environment instead — same value, same consumer, still
+                # present for anything that checks it. Node envs merge LAST,
+                # so an explicit node override still wins.
+                sandbox_envs = {**_schema_dir_for_sandbox, **sandbox_envs}
             # FAR-296 Phase 4a: wall-clock spend budget — non-tick path. A very
             # slow provisioning sequence may already have consumed the budget
             # before the script process starts. Even though no side effects
@@ -8982,17 +9481,37 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 node_id=node_id,
             )
             wrapped_command = _wrap_sandbox_command_with_log_redirect(_bridge_wrapped_command, _SANDBOX_LOG_PATH)
-            cmd_handle = await asyncio.wait_for(
-                sandbox.commands.run(
-                    wrapped_command,
-                    background=True,
-                    on_stdout=watchdog.on_stdout,
-                    on_stderr=watchdog.on_stderr,
-                    timeout=sandbox_timeout,
-                    envs=sandbox_envs,
-                ),
-                timeout=min(sandbox_timeout, 120),
-            )
+            _cmd_start_bound = min(sandbox_timeout, 120)
+            _exec_process: Any = None
+            if _via_provider_dispatch:
+                # FAR-1050 R4 (T3): start the agent command through the ABC
+                # streaming primitive instead of ``commands.run(background=True)``.
+                # The dispatch owns the deadline (the ABC stream is
+                # unbounded by design — ADR 040), so the same
+                # min(sandbox_timeout, 120) start bound is threaded outside,
+                # and envs ride on ``environment`` exactly as they did on
+                # ``envs=``.
+                _exec_process = await asyncio.wait_for(
+                    _require_dispatch_provider(_dispatch_provider).exec_command_stream(
+                        _sandbox_id or "",
+                        ["sh", "-c", wrapped_command],
+                        environment=sandbox_envs,
+                    ),
+                    timeout=_cmd_start_bound,
+                )
+                cmd_handle: Any = _exec_process
+            else:
+                cmd_handle = await asyncio.wait_for(
+                    sandbox.commands.run(
+                        wrapped_command,
+                        background=True,
+                        on_stdout=watchdog.on_stdout,
+                        on_stderr=watchdog.on_stderr,
+                        timeout=sandbox_timeout,
+                        envs=sandbox_envs,
+                    ),
+                    timeout=_cmd_start_bound,
+                )
             _emit_script_span_event(
                 "script.command_started",
                 {
@@ -9001,16 +9520,31 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "command": rendered_agent_command[:200] if sandbox_mode == "script" else "llm",
                 },
             )
-            cmd_result, stall_reason = await _wait_command_with_idle_watchdog(
-                cmd_handle,
-                total_timeout=sandbox_timeout,
-                idle_timeout=stall_timeout,
-                # FAR-306: last_activity is the max across all ENABLED
-                # channels (heartbeat + any opt-in detectors).
-                last_activity=_stall.last_activity,
-                on_tick=watchdog.tick,
-                tick_interval=_SANDBOX_TAIL_INTERVAL,
-            )
+            if _via_provider_dispatch:
+                # FAR-1050 R4: the idle watchdog re-expressed over
+                # ``ExecProcess.done/chunks/kill`` — same stall / total-timeout
+                # contract, chunks feeding the watchdog callbacks in order.
+                cmd_result, stall_reason = await _wait_command_with_exec_process(
+                    cmd_handle,
+                    total_timeout=sandbox_timeout,
+                    idle_timeout=stall_timeout,
+                    last_activity=_stall.last_activity,
+                    on_tick=watchdog.tick,
+                    tick_interval=_SANDBOX_TAIL_INTERVAL,
+                    on_stdout=watchdog.on_stdout,
+                    on_stderr=watchdog.on_stderr,
+                )
+            else:
+                cmd_result, stall_reason = await _wait_command_with_idle_watchdog(
+                    cmd_handle,
+                    total_timeout=sandbox_timeout,
+                    idle_timeout=stall_timeout,
+                    # FAR-306: last_activity is the max across all ENABLED
+                    # channels (heartbeat + any opt-in detectors).
+                    last_activity=_stall.last_activity,
+                    on_tick=watchdog.tick,
+                    tick_interval=_SANDBOX_TAIL_INTERVAL,
+                )
         except asyncio.CancelledError:
             raise
         except TimeoutError:
@@ -9821,6 +10355,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 workspace_drift_detected=(any(d.drift_detected for d in _drift_results) if _drift_results else _UNSET),
             ),
             exclude_from_output=frozenset({"changed_files", "pr_url"}),
+            provider=_resolved_provider,
+            via_provider=_via_provider_dispatch,
         )
 
     except asyncio.CancelledError:
@@ -9894,6 +10430,19 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # output dict that would let the run land 'complete'.
         raise
     except Exception as _exc:
+        if _via_provider_dispatch:
+            # FAR-1050 R4 (T8/T9): typed provider failures are translated onto
+            # the EXISTING retry taxonomy BEFORE the generic envelope is built
+            # (no re-parenting — see ``_translate_provider_dispatch_error``).
+            # Raising the pre-existing retryable class from here propagates it
+            # past this handler to the executor's classifier, so a flag-ON
+            # rate limit publishes ``sandbox.rate_limited`` /
+            # ``sandbox.queue_timeout`` and can never become
+            # ``harness.unknown``. A non-provider exception translates to
+            # itself and falls through to the legacy envelope unchanged.
+            _translated = _translate_provider_dispatch_error(_exc)
+            if _translated is not _exc:
+                raise _translated from _exc
         elapsed = time.monotonic() - start_time
         _exc_type = type(_exc).__name__
         # FAR-511: surface the provider error in the run output. The generic
@@ -9902,7 +10451,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # than 1 hours``) was only visible in Fly logs as a bare
         # "Sandbox agent execution failed". For an e2b SandboxException also pull
         # the provider response body so the 400 detail is visible via get_run_output.
-        _exc_msg = _format_sandbox_provider_error(_exc, SandboxException)
+        _exc_msg = _format_sandbox_provider_error(
+            _exc,
+            # FAR-1050 R4 (T9): the flag-ON path never holds an SDK exception —
+            # provider failures arrive as typed ``RuntimeProviderError`` members
+            # (or a provider-wrapped RuntimeError), so the SDK isinstance probe
+            # is skipped entirely and the message is the provider's own.
+            None if _via_provider_dispatch else SandboxException,
+        )
         _log.exception(
             "sandbox_agent.execution_failed",
             extra={
@@ -10023,6 +10579,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # envelope now carries the provider error (e.g. the e2b 400 detail)
             # instead of masking it as a bare "Sandbox agent execution failed".
             exclude_from_output=frozenset(),
+            provider=_resolved_provider,
+            via_provider=_via_provider_dispatch,
         )
     finally:
         # FAR-211: stop the loop-interception callback server. Best-effort
@@ -10052,16 +10610,44 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 )
         if sandbox is not None:
             try:
-                # Shield the kill so a second CancelledError cannot abort the
-                # sandbox teardown (dist/runtime-core A3).
-                await asyncio.wait_for(
-                    asyncio.shield(sandbox.kill(request_timeout=_OUTPUT_READ_TIMEOUT)),
-                    timeout=_OUTPUT_READ_TIMEOUT,
-                )
+                if _via_provider_dispatch and _dispatch_provider is not None and _sandbox_id:
+                    # FAR-1050 R4 (T5): teardown-of-record through the ABC
+                    # by-ref primitive — idempotent, and it works from the
+                    # persisted ``runs.sandbox_id`` alone (ADR 040's stated
+                    # reclamation use), so the sandbox dies even if the
+                    # in-process handle map is gone. The budget/stall kills
+                    # above use ``destroy_workspace`` on the live handle.
+                    await asyncio.wait_for(
+                        asyncio.shield(
+                            _dispatch_provider.destroy_workspace_by_ref(_sandbox_id),
+                        ),
+                        timeout=_OUTPUT_READ_TIMEOUT,
+                    )
+                else:
+                    # Shield the kill so a second CancelledError cannot abort the
+                    # sandbox teardown (dist/runtime-core A3).
+                    await asyncio.wait_for(
+                        asyncio.shield(sandbox.kill(request_timeout=_OUTPUT_READ_TIMEOUT)),
+                        timeout=_OUTPUT_READ_TIMEOUT,
+                    )
             except Exception:
                 _log.exception(
                     "sandbox_agent.kill_failed",
                     extra={"node_id": node_id},
+                )
+        if _dispatch_provider is not None:
+            # FAR-1050 R4: dispose the per-dispatch provider exactly as the
+            # Docker route disposes its per-dispatch hub — bounded,
+            # best-effort, and after the kill so ``close()`` normally finds an
+            # empty workspace map (no second API round trip).
+            try:
+                await asyncio.wait_for(_dispatch_provider.close(), timeout=_OUTPUT_READ_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.dispatch_provider_close_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
                 )
         # Fenced dispatch-marker clear (3.11): runs in a finally REGARDLESS
         # of whether ``sandbox`` was assigned (covers the cancel-during-create

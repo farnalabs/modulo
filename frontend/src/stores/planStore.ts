@@ -1,9 +1,11 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { api } from "../lib/api/client";
+import { api, getAccessToken } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { formatApiError } from "../lib/api/formatError";
 import { registerSyncHandlers, disposeSyncHandlers } from "./syncRegistry";
+import { flagCacheKey, parseFlagCache, serializeFlagCache } from "../config/flagCache";
+import { decodeJwtPayload } from "../lib/jwt";
 import type { EventBusEvent } from "@/types/events";
 
 interface ApiResult<T> {
@@ -45,9 +47,67 @@ function runPlanSource<T>(
   }
 }
 
+/**
+ * The org the current access token belongs to, read synchronously from the
+ * JWT `org_id` claim. Being synchronous matters: the flag cache must be
+ * scoped per org BEFORE first paint, when no server payload has landed yet
+ * (FAR-1237 review finding: the cache was per-origin, so signing into org B
+ * first-painted org A's resolved chrome). Returns null when the token is
+ * absent/opaque — those sessions share the `unknown` bucket.
+ */
+function currentOrgId(): string | null {
+  try {
+    const payload = decodeJwtPayload(getAccessToken());
+    const orgId = payload?.org_id;
+    return typeof orgId === "string" && orgId.length > 0 ? orgId : null;
+  } catch {
+    // No storage / no token helper available: fall back to the unknown bucket.
+    return null;
+  }
+}
+
+/**
+ * Synchronous read of the persisted flag map for `orgId` (FAR-1237). Runs at
+ * store creation — before first paint — so flag-driven decisions (mobile nav
+ * layout, gated surfaces) start from the LAST RESOLVED value for THIS org
+ * instead of an empty "everything off" map that later flips when the request
+ * lands.
+ */
+function readFlagCache(orgId: string | null): Record<string, boolean> | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return parseFlagCache(localStorage.getItem(flagCacheKey(orgId)));
+  } catch {
+    // Storage blocked (private mode, disabled cookies): behave as uncached.
+    return null;
+  }
+}
+
+/** Best-effort persist — quota/private-mode failures must not break the fetch path. */
+function writeFlagCache(flags: Record<string, boolean>): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(flagCacheKey(currentOrgId()), serializeFlagCache(flags));
+  } catch (err) {
+    // Best-effort only: the in-memory map is already correct without it.
+    console.warn("[plan] Failed to persist flag cache", err);
+  }
+}
+
 export const usePlanStore = defineStore("plan", () => {
+  const cachedFlags = readFlagCache(currentOrgId());
   const currentTier = ref("community");
-  const features = ref<Record<string, boolean>>({});
+  const features = ref<Record<string, boolean>>(cachedFlags ?? {});
+  // Where the current flag map came from. 'none' = nothing has ever resolved,
+  // the ONLY state in which a flag value is unknown (layout consumers render
+  // their 'pending' placeholder then). Write-once: neither a cache hit nor a
+  // server payload ever returns it to 'none', so a resolved layout can never
+  // fall back to the unresolved state mid-session (FAR-1237 guard). Note
+  // `loaded` stays false on a cache hit — it means "fetched from the server",
+  // which the router's tier guard relies on.
+  const flagsSource = ref<"none" | "cache" | "server">(
+    cachedFlags ? "cache" : "none",
+  );
   const devMode = ref(false);
   const isLoading = ref(false);
   const loaded = ref(false);
@@ -97,7 +157,9 @@ export const usePlanStore = defineStore("plan", () => {
         map[flag.name] = flag.currently_active;
       }
       features.value = map;
+      flagsSource.value = "server";
       loaded.value = true;
+      writeFlagCache(map);
     }
   }
 
@@ -241,6 +303,7 @@ export const usePlanStore = defineStore("plan", () => {
   return {
     currentTier,
     features,
+    flagsSource,
     devMode,
     isLoading,
     loaded,

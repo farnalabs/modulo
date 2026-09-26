@@ -29,6 +29,7 @@ from modulo.core.pipeline_engine.node_runner import (
 )
 from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
 from modulo.settings import Settings, get_settings
+from tests.unit.pipeline_engine.conftest import install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -247,11 +248,10 @@ async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.Monke
     fn = make_sandbox_agent_fn(_base_node_def())
     sandbox = await _completed_no_output_sandbox("sbx-flagon")
     events: list[str] = []
-
-    def _record_kill(*args: Any, **kwargs: Any) -> None:
-        events.append("kill")
-
-    sandbox.kill.side_effect = _record_kill
+    # FAR-1050 R4: flag ON tears down through the ABC by-ref primitive, so the
+    # pre-kill ordering probe is wired to the dispatch seam's own kill marker
+    # (the legacy ``sandbox.kill`` handle is unreachable on this path).
+    install_fake_dispatch(monkeypatch, ref="sbx-flagon", kill_events=events)
     fake_orig_read = fake.read_log_tail
 
     async def _recording_read(provider_ref: str, *, max_bytes: int) -> bytes:
@@ -304,6 +304,14 @@ async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.Monke
     sandbox.commands.run = AsyncMock(side_effect=TimeoutError("command timed out"))
     sandbox.files.read = AsyncMock(side_effect=TimeoutError("no output.json"))
     sandbox.kill = AsyncMock()
+    # FAR-1050 R4: flag ON starts the command through the ABC stream primitive;
+    # a start-time TimeoutError lands on the same stall/timeout arm the legacy
+    # background-command start bound produces.
+    install_fake_dispatch(
+        monkeypatch,
+        ref="sbx-timeout",
+        stream_start_exception=TimeoutError("command timed out"),
+    )
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
@@ -337,6 +345,7 @@ async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.Mon
     node_def = _base_node_def(timeout_seconds=30, output_schema_json={"required": ["status", "summary"]})
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _sandbox_with_completed_command("sbx-schema", '{"summary": "done"}')
+    install_fake_dispatch(monkeypatch, ref="sbx-schema", exit_code=0)
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
@@ -375,6 +384,7 @@ async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.
     sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
     sandbox.commands.run = AsyncMock()
     sandbox.kill = AsyncMock()
+    install_fake_dispatch(monkeypatch, ref="sbx-exc")
 
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())

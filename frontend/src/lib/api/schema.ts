@@ -16821,6 +16821,10 @@ export interface components {
             error_detail?: string | null;
             /** Error Code */
             error_code?: string | null;
+            /** Cancel Reason */
+            cancel_reason?: string | null;
+            /** Cancelled By */
+            cancelled_by?: string | null;
             /** Known Fixes */
             known_fixes?: {
                 [key: string]: unknown;

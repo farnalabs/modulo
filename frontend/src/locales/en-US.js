@@ -1640,6 +1640,14 @@ export default {
       "stop": "Stop Run",
       "stopping": "Stopping...",
       "cancel_failed": "Failed to cancel:",
+      "cancel_reason_title": "Why this run was cancelled",
+      "cancel_reason_user_requested": "An operator cancelled it on request.",
+      "cancel_reason_agent_requested": "An agent cancelled it through the API.",
+      "cancel_reason_hitl_gate_expired": "It was cancelled automatically: the human review gate expired without a decision.",
+      "cancel_reason_hitl_gate_missing": "It was cancelled automatically: the human review gate was never created.",
+      "cancel_reason_unknown": "Reason not recorded.",
+      "cancelled_by_system": "Cancelled by the system",
+      "cancelled_by_actor": "Cancelled by {actor}",
       "rerun": "Re-run",
       "rerun_confirm": "Confirm re-run?",
       "rerunning": "Re-running...",
@@ -3378,6 +3386,21 @@ export default {
       "one_warning": "1 warning",
       "n_warnings": "{count} warnings"
     },
+    "AnalyzeRunButton": {
+      "analyze": "Analyze",
+      "checking_configuration": "Checking the Assistant configuration...",
+      "assistant_not_configured": "The Assistant is not configured. Add a model backend with credentials in Model Backends to enable analysis.",
+      "assistant_busy": "The Assistant is already responding. Wait for it to finish, then try again.",
+      "session_name": "Analyze run {run}",
+      "status_starting": "Starting a root-cause analysis conversation...",
+      "status_started": "Root-cause analysis started for {pipeline}. Follow it in the Assistant panel.",
+      "status_failed": "Failed to start the analysis: {message}",
+      "seed_header": "Please do a root-cause analysis of a failed run.\nRun: {run}\nPipeline: {pipeline}\nStatus: {status}",
+      "seed_error_code": "Error code: {code}",
+      "seed_error_detail": "Error detail:\n{detail}",
+      "seed_failing_node": "Failing node: {node}",
+      "seed_request": "Work out the most likely root cause of this failure, cite the evidence in the run, and suggest concrete fixes."
+    },
     "ViewToggle": {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."
@@ -3548,7 +3571,8 @@ export default {
       "collapse_sidebar": "Collapse sidebar",
       "expand_sidebar": "Expand sidebar",
       "user_profile": "User profile",
-      "main_navigation": "Main navigation"
+      "main_navigation": "Main navigation",
+      "loading_navigation": "Loading navigation"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",

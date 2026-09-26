@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }))
@@ -101,6 +102,9 @@ function mountView(run: unknown = guardrailBlockedRun(), attachTo = false) {
   return mount(RunDetailView, {
     attachTo: attachTo ? document.body : undefined,
     global: {
+      // The Analyze action (FAR-1235) reads plan/assistant stores, so the
+      // view's test host needs an active Pinia.
+      plugins: [createPinia()],
       stubs: {
         Dialog: {
           template: '<div class="p-dialog"><slot name="header" /><slot /><slot name="footer" /></div>',

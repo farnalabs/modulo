@@ -41,7 +41,7 @@ from modulo.core.pipeline_engine.node_runner import (
 )
 from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo
 from modulo.settings import Settings, get_settings
-from tests.unit.pipeline_engine.conftest import FakeFileIOProvider
+from tests.unit.pipeline_engine.conftest import FakeFileIOProvider, install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -250,6 +250,10 @@ async def test_flag_on_writes_land_before_the_agent_command(monkeypatch: pytest.
         return await original_run(*args, **kwargs)
 
     sandbox.commands.run = AsyncMock(side_effect=_run_and_record)
+    # FAR-1050 R4: flag ON no longer reaches ``AsyncSandbox.create`` — the
+    # command starts through the ABC stream primitive, so the ordering probe
+    # is wired to the dispatch seam's own "command" milestone.
+    install_fake_dispatch(monkeypatch, ref="sbx-order", command_events=order)
 
     fn = make_sandbox_agent_fn(_base_node_def())
     with (
@@ -335,12 +339,16 @@ async def test_no_sandbox_files_call_is_reachable_when_the_flag_is_on(
     """The legacy handle is unreachable flag-ON — even where a failure is swallowed.
 
     ``_ForbiddenFiles`` records every attribute touch, so an arm that catches
-    its own AssertionError cannot make this test pass vacuously.
+    its own AssertionError cannot make this test pass vacuously. FAR-1050 R4
+    additionally routes the dispatch through the provider seam, so the only
+    handle the body ever holds is the ABC-mediated one (whose ``files``
+    surface raises by construction).
     """
     _enable_flag(monkeypatch)
     sandbox = _sandbox_mock("sbx-forbidden")
     forbidden = _ForbiddenFiles()
     sandbox.files = forbidden
+    install_fake_dispatch(monkeypatch, ref="sbx-forbidden")
 
     fn = make_sandbox_agent_fn(_base_node_def())
     with (
@@ -653,6 +661,10 @@ async def test_flag_on_context_files_land_through_the_provider(monkeypatch: pyte
     _enable_flag(monkeypatch)
     sandbox = _sandbox_mock("sbx-ctx")
     node_def = _base_node_def(context_files={"/home/user/context/notes.txt": "ctx-body"})
+    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # seam, so the dispatch must be a fake (the command still fails, as the
+    # empty fixture sandbox does, keeping the SandboxNodeFailedError arm).
+    install_fake_dispatch(monkeypatch, ref="sbx-ctx")
 
     fn = make_sandbox_agent_fn(node_def)
     with (
@@ -673,6 +685,9 @@ async def test_flag_on_script_mode_input_json_lands_through_the_provider(
     _enable_flag(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = b'{"result": "ok"}'
     sandbox = _script_sandbox_mock("sbx-script")
+    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # seam; the scripted command completes with exit code 0.
+    install_fake_dispatch(monkeypatch, ref="sbx-script", exit_code=0)
 
     fn = make_sandbox_agent_fn(_script_node_def())
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
@@ -688,6 +703,9 @@ async def test_flag_on_bridge_writes_land_through_the_provider(monkeypatch: pyte
     _enable_flag(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = b'{"summary": "done"}'
     sandbox = _script_sandbox_mock("sbx-bridge")
+    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # seam; the scripted command completes with exit code 0.
+    install_fake_dispatch(monkeypatch, ref="sbx-bridge", exit_code=0)
 
     server = MagicMock()
     server.start = AsyncMock(return_value=47591)

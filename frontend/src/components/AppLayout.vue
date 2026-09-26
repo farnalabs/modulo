@@ -75,11 +75,12 @@ const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
 const isLight = ref(document.documentElement.classList.contains("light"));
 
-// The mobile hamburger header (drawn by AppSidebar when the mobile rail flag is
-// OFF) is a fixed h-14 overlay, so main content needs a pt-14 offset on mobile
-// only when that header is shown. When the mobile rail flag is ON there is no
-// fixed header — the rail is in-flow — so no offset. Shared with AppSidebar via
-// useSidebarMode so the two can't drift.
+// The fixed mobile chrome — the legacy hamburger header AND the neutral
+// pending placeholder AppSidebar draws while the nav flag is unresolved
+// (FAR-1237) — is a fixed h-14 overlay, so main content needs a pt-14 offset
+// on mobile whenever that chrome is shown. When the resolved mode is the left
+// rail there is no fixed header (the rail is in-flow) so no offset. Shared
+// with AppSidebar via useSidebarMode so the two can't drift.
 const { showMobileHeader } = useSidebarMode();
 
 // Single mutually-exclusive padding source: the fixed mobile header (3.5rem)

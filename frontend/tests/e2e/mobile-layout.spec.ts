@@ -1,4 +1,4 @@
-import { devices, type Page } from '@playwright/test'
+import { devices, type Page, type Response } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import yaml from 'js-yaml'
 import fs from 'node:fs'
@@ -68,14 +68,47 @@ function isCanvasRoute(route: string): boolean {
   return route.includes('/editor') || route.includes('/composites/')
 }
 
+// Bound the app-mount wait. The full sweep walks every manifest route, so an
+// unbounded wait (Playwright defaults to the 180s test timeout) turns one dead
+// target into 71 x 180s = ~3.5h, overrunning the 90-min staging-E2E job and
+// getting the run cancelled with no actionable signal. A hung run is reported
+// as 'cancelled' and re-dispatches the Branch Fixer, so fail fast and loud
+// instead.
+const APP_MOUNT_TIMEOUT_MS = 30_000
+
+// Wait for the Vue app to mount, failing fast with the HTTP status whenever the
+// target serves an error/non-SPA page instead of the app shell. A 5xx edge
+// response (the app is down) is detected immediately rather than after the
+// mount timeout.
+async function waitForAppMount(page: Page, route: string, response: Response | null): Promise<void> {
+  if (response && response.status() >= 500) {
+    throw new Error(
+      `[mobile-layout] ${route} returned HTTP ${response.status()} (${page.url()}) — ` +
+        'the target is not serving the SPA; aborting route checks.',
+    )
+  }
+  try {
+    await page.waitForFunction(
+      () => (document.querySelector('#app')?.children.length ?? 0) > 0,
+      undefined,
+      { timeout: APP_MOUNT_TIMEOUT_MS },
+    )
+  } catch {
+    throw new Error(
+      `[mobile-layout] ${route} did not mount within ${APP_MOUNT_TIMEOUT_MS}ms (${page.url()}) — ` +
+        'the target returned an error/non-SPA page; aborting route checks.',
+    )
+  }
+}
+
 // Navigate, wait for the Vue app to mount and data to settle, then bail out
 // gracefully when an unauthenticated route redirects to /login. Returns false
 // to signal the caller to skip the checks without failing.
 async function preparePage(page: Page, route: string, env: TestEnv): Promise<boolean> {
-  await page.goto(route)
+  const response = await page.goto(route)
   await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
-  await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+  await waitForAppMount(page, route, response)
 
   // Content settle — not every route renders a data-loading marker.
   await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
@@ -91,16 +124,16 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<boo
         localStorage.setItem('modulo_access_token', token)
         localStorage.setItem('modulo_refresh_token', refresh)
       }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
-      await page.goto(route)
-      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      const remount = await page.goto(route)
+      await waitForAppMount(page, route, remount)
       await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
     }
   } else if (page.url().includes('/login') && route !== '/login') {
     // storageState may have expired — fall back to a single real login, then
     // retry the route and re-run the mount/settle waits before proceeding.
     await loginAsAdmin(page, env)
-    await page.goto(route)
-    await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+    const retry = await page.goto(route)
+    await waitForAppMount(page, route, retry)
     await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
   }
 

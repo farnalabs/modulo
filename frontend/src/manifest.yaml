@@ -940,6 +940,9 @@ elements:
       - testid: collection-install-warnings
         type: element
         dynamic_testid: false
+      - testid: collection-install-warnings-live
+        type: element
+        dynamic_testid: false
       - testid: collection-publish
         type: button
         dynamic_testid: false
@@ -3391,6 +3394,15 @@ elements:
       - testid: run-detail-cancel
         type: button
         dynamic_testid: false
+      - testid: run-detail-cancel-reason
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-cancel-reason-message
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-cancelled-by
+        type: element
+        dynamic_testid: false
       - testid: run-detail-copy-trace-id
         type: button
         dynamic_testid: false
@@ -3525,6 +3537,18 @@ elements:
         dynamic_testid: false
       - testid: run-rerun
         type: button
+        dynamic_testid: false
+      - testid: run-detail-analyze
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-analyze-button
+        type: button
+        dynamic_testid: false
+      - testid: run-detail-analyze-tooltip
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-analyze-status
+        type: element
         dynamic_testid: false
       - testid: error-alert-dismiss
         type: button
@@ -5101,13 +5125,11 @@ features:
             - "Onboarding telemetry preferences are tracked under feat-onboarding / feat-product-analytics"
     feat-org:
         description: Organization settings and feature flags
-        status: partial
+        status: covered
         behaviours:
             - "[x] Organization settings are configurable with team management and member roles"
             - "[x] Feature flags can be toggled per organisation"
-            - "[ ] Org-level feature flag governance and audit is partially wired"
-        deferrals:
-            - "Org-level feature flag governance and audit is tracked under feat-org"
+            - "[x] Org-level feature-flag override governance is auditable end to end: every set/clear/toggle of an org feature_overrides entry (PUT /api/v1/admin/feature-flags/{flag}, PUT/DELETE /{flag}/org-override) appends a tamper-evident audit event to the org chain (feature_flag_override_set / feature_flag_override_cleared, resource_type org, payload {flag_name, enabled}) — fail-open, so a broken audit append never rolls back the already-committed override (backend/src/modulo/api/routes/admin_feature_flags.py, backend/tests/unit/api/test_admin_feature_flags.py)"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories
         status: covered
@@ -5160,6 +5182,9 @@ features:
             - "[x] Migration 0212 widens the runs and run_daily_facts trigger-vocabulary CHECK constraints with 'rerun' (drop + re-add NOT VALID + VALIDATE) so analytics bucket the new trigger type without a table rewrite"
             - "[x] The run detail page shows a Re-run button for terminal runs; when every node in the pipeline's graph is flagged idempotent the click fires the request directly, otherwise the button requires a second confirm click with a warning that a non-idempotent re-run may repeat side effects; an unreadable or empty graph falls back to the confirm path; success navigates to the new run's detail page"
             - "[x] The runs list shows a per-row Re-run button for terminal runs with a two-click confirm (the list never fetches per-row pipeline idempotency); success navigates to the new run's detail page and failures render inline"
+            # Analyze action: root-cause analysis handoff to the Assistant (FAR-1235)
+            - "[x] The run detail page shows an Analyze button for failed runs - every terminal failure status (failed, eval_failed, stalled, budget_exceeded, cost_ceiling_exceeded, router_no_match, compensation_failed) but never complete or cancelled - and only when the assistant feature flag is active and dev mode is on (the only environment where an Assistant conversation surface exists); with the assistant enabled but no model backend holding credentials the button stays visible but aria-disabled, focusable, with a hover/focus tooltip explaining that the Assistant is not configured"
+            - "[x] Pressing Analyze creates a NEW assistant session titled with the run label, seeds it with the run identity (run, pipeline, status), the error (code, detail capped at 4000 chars, failing node when per-node telemetry recorded one) and a root-cause-analysis request, opens the Assistant panel, and streams the reply through the existing POST /api/v1/assistant/sessions/{session_id}/stream path - no new backend endpoint; a busy Assistant (stream already running) blocks a second press with its own tooltip and an aria-live status line reports starting/started/failed"
             # Run-level cost warnings (missing self-report surfacing)
             - "[x] A self_reported cost component with at least one eligible sandbox node but no agent report is a CLEAR non-billing state: its breakdown entry stays visible (source self_reported, missing_self_report true, missing_self_report_reason agent_not_reported) but never renders as a normal $0.000000 money line in the run detail breakdown (no numeric basis, no phantom reported=0/node_count=0)"
             - "[x] The run detail response (GET /api/v1/runs/{id}) surfaces a structured warnings list ({\"code\", \"severity\", \"message\"}) derived from the run's cost_breakdown; a missing agent model-cost self-report emits code missing_self_report with severity warning"

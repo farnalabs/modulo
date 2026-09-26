@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
-import { nextTick } from 'vue'
+import { createPinia, type Pinia } from 'pinia'
+import { nextTick, type Plugin } from 'vue'
+import { usePlanStore } from '../stores/planStore'
 
 let mockRunStatus = 'complete'
+let mockModelBackends: { items: Array<{ has_credentials: boolean }> } | null = null
 let mockInputPayload: Record<string, unknown> | null = null
 let mockTriggerActor: string | null = null
 let mockTriggerType: string | null = 'manual'
@@ -58,6 +61,9 @@ vi.mock('../lib/api/client', () => {
   return {
     api: {
       GET: vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/v1/model-backends') {
+          return Promise.resolve({ data: mockModelBackends, error: undefined })
+        }
         if (url === '/api/v1/runs/{run_id}') {
           return Promise.resolve({
             data: {
@@ -173,6 +179,7 @@ describe('RunDetailView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockRunStatus = 'complete'
+    mockModelBackends = null
     mockInputPayload = null
     mockTriggerActor = null
     mockTriggerType = 'manual'
@@ -200,12 +207,15 @@ describe('RunDetailView', () => {
     vi.unstubAllGlobals()
   })
 
-  function createWrapper() {
+  function createWrapper(...extraPlugins: Plugin[]) {
     const div = document.createElement('div')
     div.id = 'root'
     document.body.appendChild(div)
+    // The Analyze action (FAR-1235) reads plan/assistant stores, so every
+    // mount gets a Pinia — a caller can pass its own to preset store state.
+    const stores: Plugin[] = extraPlugins.length ? extraPlugins : [createPinia()]
     return mount(RunDetailView, {
-      global: { plugins: [router] },
+      global: { plugins: [router, ...stores] },
       attachTo: div
     })
   }
@@ -1894,12 +1904,15 @@ function baseDetail() {
   }
 }
 
-function createWrapper() {
+function createWrapper(...extraPlugins: Plugin[]) {
   const div = document.createElement('div')
   div.id = 'root'
   document.body.appendChild(div)
+  // See the first createWrapper: the Analyze action reads plan/assistant
+  // stores, so every mount gets a Pinia unless the caller supplies one.
+  const stores: Plugin[] = extraPlugins.length ? extraPlugins : [createPinia()]
   return mount(RunDetailView, {
-    global: { plugins: [router] },
+    global: { plugins: [router, ...stores] },
     attachTo: div
   })
 }
@@ -2629,6 +2642,192 @@ describe('RunDetailView FAR-582 artifact listing', () => {
 
     expect(wrapper.find('[data-testid="run-detail-artifact-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="run-detail-node-artifacts"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('RunDetailView Analyze action (FAR-1235)', () => {
+  function runDetail(status: string) {
+    return {
+      run_id: 'test-run-id',
+      run_number: 7,
+      pipeline_id: 'test-pipeline',
+      pipeline_name: 'Deploy pipeline',
+      status,
+      error_code: 'harness.worker_failed',
+      error_detail: 'node "build" exited with code 1',
+      total_cost_usd: '1.23',
+      token_consumption: null,
+      node_token_usage: null,
+      trace_id: null,
+    }
+  }
+
+  function enableAssistant(pinia: Pinia, { devMode = true }: { devMode?: boolean } = {}) {
+    const plan = usePlanStore(pinia)
+    plan.features = { assistant: true }
+    plan.devMode = devMode
+    plan.loaded = true
+  }
+
+  async function mountRun(status: string, pinia: Pinia) {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: runDetail(status), error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io')
+        return Promise.resolve({ data: { outputs_json: null, input_payload: null, node_telemetry: {} }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
+      if (url === '/api/v1/model-backends') return Promise.resolve({ data: mockModelBackends, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper(pinia)
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    await flushPromises()
+    return wrapper
+  }
+
+  beforeEach(() => {
+    mockRunStatus = 'failed'
+    mockModelBackends = { items: [] }
+  })
+
+  it('shows a disabled Analyze button with the not-configured tooltip when no backend has credentials', async () => {
+    const pinia = createPinia()
+    enableAssistant(pinia)
+    const wrapper = await mountRun('failed', pinia)
+
+    const button = wrapper.find('[data-testid="run-detail-analyze-button"]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toContain('Analyze')
+    expect(button.attributes('aria-disabled')).toBe('true')
+
+    const tooltip = wrapper.find('[data-testid="run-detail-analyze-tooltip"]')
+    expect(tooltip.exists()).toBe(true)
+    expect(tooltip.text()).toContain('not configured')
+    expect(button.attributes('aria-describedby')).toBe(tooltip.attributes('id'))
+    wrapper.unmount()
+  })
+
+  it('enables the Analyze button when a model backend holds credentials', async () => {
+    const pinia = createPinia()
+    enableAssistant(pinia)
+    mockModelBackends = { items: [{ has_credentials: true }] }
+    const wrapper = await mountRun('failed', pinia)
+
+    const button = wrapper.find('[data-testid="run-detail-analyze-button"]')
+    expect(button.exists()).toBe(true)
+    expect(button.attributes('aria-disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="run-detail-analyze-tooltip"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('hides the Analyze action when the assistant is not reachable (dev mode off)', async () => {
+    const pinia = createPinia()
+    enableAssistant(pinia, { devMode: false })
+    const wrapper = await mountRun('failed', pinia)
+    expect(wrapper.find('[data-testid="run-detail-analyze"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('hides the Analyze action for a successful run even with the assistant enabled', async () => {
+    const pinia = createPinia()
+    enableAssistant(pinia)
+    const wrapper = await mountRun('complete', pinia)
+    expect(wrapper.find('[data-testid="run-detail-analyze"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FAR-1233 cancellation transparency: a distinct human-readable message per
+// cancel-reason code, plus the neutral fallback for runs cancelled before the
+// reason columns shipped (cancel_reason = null).
+// ---------------------------------------------------------------------------
+describe('RunDetailView cancellation reason (FAR-1233)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function cancelledDetail(cancelReason: string | null, cancelledBy: string | null = 'system') {
+    return {
+      run_id: 'test-run-id',
+      pipeline_id: 'test-pipeline',
+      status: 'cancelled',
+      total_cost_usd: 1.23,
+      token_consumption: null,
+      node_token_usage: null,
+      trace_id: null,
+      cancel_reason: cancelReason,
+      cancelled_by: cancelledBy,
+    }
+  }
+
+  async function mountCancelled(data: Record<string, unknown>) {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') {
+        return Promise.resolve({ data: { gates: [] }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/work-items/enrichment') {
+        return Promise.resolve({ data: null, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('renders a distinct message for each cancel reason', async () => {
+    const expected: Record<string, string> = {
+      user_requested: 'An operator cancelled it on request.',
+      agent_requested: 'An agent cancelled it through the API.',
+      hitl_gate_expired: 'It was cancelled automatically: the human review gate expired without a decision.',
+      hitl_gate_missing: 'It was cancelled automatically: the human review gate was never created.',
+    }
+    for (const [reason, message] of Object.entries(expected)) {
+      const wrapper = await mountCancelled(cancelledDetail(reason))
+      const el = wrapper.find('[data-testid="run-detail-cancel-reason-message"]')
+      expect(el.exists()).toBe(true)
+      expect(el.text()).toBe(message)
+      wrapper.unmount()
+    }
+  })
+
+  it('falls back to the neutral message when no reason was recorded', async () => {
+    const wrapper = await mountCancelled(cancelledDetail(null, null))
+    const el = wrapper.find('[data-testid="run-detail-cancel-reason-message"]')
+    expect(el.exists()).toBe(true)
+    expect(el.text()).toBe('Reason not recorded.')
+    wrapper.unmount()
+  })
+
+  it('attributes a system-owned cancellation', async () => {
+    const wrapper = await mountCancelled(cancelledDetail('hitl_gate_expired', 'system'))
+    expect(wrapper.find('[data-testid="run-detail-cancelled-by"]').text()).toBe('Cancelled by the system')
+    wrapper.unmount()
+  })
+
+  it('attributes a cancellation to a named actor by shortened id', async () => {
+    const wrapper = await mountCancelled(cancelledDetail('user_requested', 'user-abc-123-def'))
+    expect(wrapper.find('[data-testid="run-detail-cancelled-by"]').text()).toBe('Cancelled by #user-abc')
+    wrapper.unmount()
+  })
+
+  it('hides the cancellation panel for a run that is not cancelled', async () => {
+    const wrapper = await mountCancelled({ ...cancelledDetail('user_requested'), status: 'complete' })
+    expect(wrapper.find('[data-testid="run-detail-cancel-reason"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

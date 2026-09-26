@@ -52,6 +52,30 @@ function makeCollection(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function makeInstall() {
+  return {
+    install_id: 'install-1',
+    collection_id: 'col-1',
+    collection_version: '1.0',
+    organisation_id: 'org-1',
+    status: 'installed',
+    community_sourced: false,
+    agents_granted: false,
+    resolved_manifest: null,
+    connector_checklist: null,
+    installed_entities: null,
+    runnable: true,
+    created_at: '2026-09-13T00:00:00Z',
+  }
+}
+
+function mockPublishedCollection(installItems: unknown[] = []) {
+  getMock.mockImplementation(async (path: string) => {
+    if (String(path).includes('/installs')) return { items: installItems }
+    return makeCollection({ status: 'published' })
+  })
+}
+
 describe('CollectionDetailView (FAR-760)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -125,30 +149,6 @@ describe('CollectionDetailView (FAR-760)', () => {
 })
 
 describe('CollectionDetailView install action (FAR-826)', () => {
-  function makeInstall() {
-    return {
-      install_id: 'install-1',
-      collection_id: 'col-1',
-      collection_version: '1.0',
-      organisation_id: 'org-1',
-      status: 'installed',
-      community_sourced: false,
-      agents_granted: false,
-      resolved_manifest: null,
-      connector_checklist: null,
-      installed_entities: null,
-      runnable: true,
-      created_at: '2026-09-13T00:00:00Z',
-    }
-  }
-
-  function mockPublishedCollection(installItems: unknown[] = []) {
-    getMock.mockImplementation(async (path: string) => {
-      if (String(path).includes('/installs')) return { items: installItems }
-      return makeCollection({ status: 'published' })
-    })
-  }
-
   beforeEach(() => {
     vi.clearAllMocks()
     getMock.mockImplementation(makeCollection)
@@ -228,8 +228,15 @@ describe('CollectionDetailView install action (FAR-826)', () => {
 
     const region = wrapper.find('[data-testid="collection-install-warnings"]')
     expect(region.exists()).toBe(true)
-    expect(region.attributes('aria-live')).toBe('polite')
+    // The styled block now renders inside the always-mounted polite live
+    // region, so its politeness is inherited from the container.
+    expect(region.attributes('aria-live')).toBeUndefined()
     expect(region.attributes('role')).toBeUndefined()
+    expect(
+      wrapper
+        .find('[data-testid="collection-install-warnings-live"]')
+        .element.contains(region.element as HTMLElement),
+    ).toBe(true)
     expect(region.text()).toContain('This collection installed with warnings')
     expect(region.text()).toContain('Review each warning below')
     expect(region.text()).toContain(warning)
@@ -391,5 +398,145 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="collection-install-error"][role="alert"]').exists()).toBe(true)
+  })
+})
+
+
+// WCAG 4.1.3 (Status Messages): a status message must be announced without
+// moving focus. An aria-live region that enters the DOM in the same mutation
+// as its own content is not reliably announced, so the announcing container
+// has to pre-exist and stay empty while the install is still in flight — only
+// then can the re-provision warning reach a screen-reader user who never looks
+// at the top of the page.
+describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
+  const LIVE_REGION = '[data-testid="collection-install-warnings-live"]'
+  const WARNING_REGION = '[data-testid="collection-install-warnings"]'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    postMock.mockResolvedValue({ status: 'published' })
+  })
+
+  it('mounts the polite live region empty before an install is attempted', async () => {
+    mockPublishedCollection([])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const live = wrapper.find(LIVE_REGION)
+    expect(live.exists()).toBe(true)
+    expect(live.attributes('aria-live')).toBe('polite')
+    // Nothing rendered yet, and nothing in the accessibility tree removed.
+    expect(live.element.children.length).toBe(0)
+    expect(live.text()).toBe('')
+    expect(live.attributes('hidden')).toBeUndefined()
+    expect(live.attributes('aria-hidden')).toBeUndefined()
+    expect(wrapper.find(WARNING_REGION).exists()).toBe(false)
+  })
+
+  it('keeps the empty live region exposed to assistive tech', async () => {
+    mockPublishedCollection([])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    // The empty container must be out of flow WITHOUT leaving the a11y tree.
+    // `empty:hidden` compiles to `display: none`, and no screen reader
+    // announces a live region that was display:none when it populated — which
+    // would reinstate the exact bug this change exists to fix. `empty:sr-only`
+    // is position:absolute (no phantom space-y-4 gap) but still exposed.
+    //
+    // Asserted on the class rather than computed style: vite.config.ts
+    // deliberately injects only the two JsonViewer stylesheets into jsdom
+    // (test.css.include), so Tailwind output is not available here.
+    const live = wrapper.find(LIVE_REGION)
+    expect(live.classes()).toContain('empty:sr-only')
+    expect(live.classes()).not.toContain('empty:hidden')
+    expect(live.classes()).not.toContain('hidden')
+  })
+
+  it('adds the warning text to the already-mounted live region after install', async () => {
+    mockPublishedCollection([])
+    const warning =
+      '2 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.API_KEY, node.env.OTHER_KEY.'
+    postMock.mockResolvedValue({
+      ...makeInstall(),
+      resolved_manifest: { warnings: [warning] },
+    })
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const live = wrapper.find(LIVE_REGION)
+    expect(live.element.children.length).toBe(0)
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    // Same DOM node throughout: content was inserted into a live region that
+    // was already on the page, which is what gets announced.
+    expect(wrapper.find(LIVE_REGION).element).toBe(live.element)
+    expect(wrapper.find(WARNING_REGION).exists()).toBe(true)
+    expect(wrapper.find(LIVE_REGION).text()).toContain(warning)
+    // The element is no longer `:empty`, so the sr-only rule stops matching
+    // and the warning box lays out normally.
+  })
+
+  it('leaves the live region empty when the installed bundle stripped nothing', async () => {
+    mockPublishedCollection([])
+    postMock.mockResolvedValue({ ...makeInstall(), resolved_manifest: { warnings: [] } })
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find(WARNING_REGION).exists()).toBe(false)
+    expect(wrapper.find(LIVE_REGION).element.children.length).toBe(0)
+  })
+
+  it('does not report an install failure when only the follow-up refetch fails', async () => {
+    const warning =
+      '1 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.API_KEY.'
+    // The mount-time installs GET succeeds; the refetch after the install POST
+    // rejects the way api.GET does on a transport failure.
+    let installListCalls = 0
+    getMock.mockImplementation(async (path: string) => {
+      if (String(path).includes('/installs')) {
+        installListCalls += 1
+        if (installListCalls > 1) throw new Error('network down')
+        return { items: [] }
+      }
+      return makeCollection({ status: 'published' })
+    })
+    postMock.mockResolvedValue({ ...makeInstall(), resolved_manifest: { warnings: [warning] } })
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    // The install itself succeeded, so a red "install failed" would contradict
+    // the re-provision warning sitting right above it.
+    expect(wrapper.find('[data-testid="collection-install-error"]').exists()).toBe(false)
+    expect(wrapper.find(WARNING_REGION).text()).toContain(warning)
   })
 })

@@ -4,16 +4,16 @@ Six descriptive payload columns added to the identity/constraint surface
 created by chunk 1 (0250_eval_policy_gate).  The CHECK constraint on
 ``resolved_action`` is Postgres-only (dialect-guarded).
 
-Revision ID: 0260_decision_record_payload
-Revises: 0259_pipeline_snapshot_max_autonomy_check
+Revision ID: 0261_decision_record_payload
+Revises: 0260_run_cancel_reason
 Create Date: 2026-09-24
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0260_decision_record_payload"
-down_revision = "0259_pipeline_snapshot_max_autonomy_check"
+revision = "0261_decision_record_payload"
+down_revision = "0260_run_cancel_reason"
 branch_labels = None
 depends_on = None
 

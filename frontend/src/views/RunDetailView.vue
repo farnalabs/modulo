@@ -269,6 +269,9 @@
         <span v-if="rerunError" role="alert" class="ml-3 text-xs text-destructive">{{ rerunError }}</span>
       </div>
 
+      <!-- Analyze with the Assistant: root-cause analysis handoff for failed runs (FAR-1235) -->
+      <AnalyzeRunButton v-if="analyzeRunInfo && isAnalyzableFailure(analyzeRunInfo.status)" :run="analyzeRunInfo" />
+
       <!-- Trace ID -->
       <div v-if="run.trace_id" class="flex items-center gap-2">
         <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
@@ -327,6 +330,29 @@
           />
         </div>
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
+      </div>
+
+      <!-- Cancellation reason (FAR-1233): WHY this run was cancelled.
+           Rendered for every cancelled run — the reason itself degrades to a
+           neutral "not recorded" message when the run predates the
+           cancel-reason columns (cancelReasonMessage handles the fallback). -->
+      <div
+        v-if="run.status === 'cancelled'"
+        data-testid="run-detail-cancel-reason"
+        class="mb-4 rounded-lg border border-border bg-muted/40 p-4"
+      >
+        <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.cancel_reason_title') }}</h3>
+        <p
+          data-testid="run-detail-cancel-reason-message"
+          role="status"
+          aria-live="polite"
+          class="text-sm text-muted-foreground"
+        >{{ cancelReasonMessage }}</p>
+        <p
+          v-if="cancelledByLabel"
+          data-testid="run-detail-cancelled-by"
+          class="mt-1 text-xs text-muted-foreground"
+        >{{ cancelledByLabel }}</p>
       </div>
 
       <!-- FAR-706: curated known-fix entries matched against the raw error detail -->
@@ -823,6 +849,8 @@ import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
+import AnalyzeRunButton from '../components/runs/AnalyzeRunButton.vue'
+import { isAnalyzableFailure, type AnalyzeRunInfo } from '../components/runs/analyzeRun'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
@@ -1523,6 +1551,64 @@ const isTerminal = computed(() => run.value != null && isTerminalStatus(run.valu
 const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
 
 const canRerun = computed(() => isTerminal.value && !!run.value?.pipeline_id)
+
+/**
+ * Best-effort "which node failed" for the Analyze handoff (FAR-1235):
+ * per-node telemetry first (present for runs loaded from the API), then the
+ * live WebSocket state for a run this page watched fail. null when neither
+ * recorded a failure for a specific node.
+ */
+const failingNodeName = computed<string | null>(() => {
+  const telemetry = runIO.value?.node_telemetry as Record<string, unknown> | null ?? {}
+  for (const [name, value] of Object.entries(telemetry)) {
+    const status = (value as { status?: unknown } | null)?.status
+    if (status === 'failed') return name
+  }
+  const liveFailed = Object.entries(liveNodeStates.value).find(([, state]) => state === 'failed')
+  return liveFailed ? liveFailed[0] : null
+})
+
+/** Payload for the Analyze button — null until the run detail has loaded. */
+const analyzeRunInfo = computed<AnalyzeRunInfo | null>(() => {
+  const r = run.value
+  if (!r) return null
+  return {
+    runId: r.run_id,
+    runNumber: r.run_number ?? null,
+    pipelineId: r.pipeline_id,
+    pipelineName: r.pipeline_name ?? null,
+    status: r.status,
+    errorCode: r.error_code ?? null,
+    errorDetail: typeof r.error_detail === 'string' ? r.error_detail : null,
+    failingNode: failingNodeName.value,
+  }
+})
+
+// FAR-1233 cancellation transparency: one message per cancel-reason code
+// (the backend's closed vocabulary), keyed to i18n entries so no code or raw
+// backend string is ever rendered to the user. An unknown/absent reason —
+// every run cancelled before the columns shipped — falls back to the neutral
+// "reason not recorded" message rather than guessing a cause.
+const CANCEL_REASON_MESSAGE_KEYS: Record<string, string> = {
+  user_requested: 'views.RunDetailView.cancel_reason_user_requested',
+  agent_requested: 'views.RunDetailView.cancel_reason_agent_requested',
+  hitl_gate_expired: 'views.RunDetailView.cancel_reason_hitl_gate_expired',
+  hitl_gate_missing: 'views.RunDetailView.cancel_reason_hitl_gate_missing',
+}
+
+const cancelReasonMessage = computed(() => {
+  const key = CANCEL_REASON_MESSAGE_KEYS[run.value?.cancel_reason ?? '']
+  return t(key ?? 'views.RunDetailView.cancel_reason_unknown')
+})
+
+// Attribution line under the reason: the ``system`` sentinel gets its own
+// copy; an acting account id is shortened like every other id on this page.
+const cancelledByLabel = computed(() => {
+  const by = run.value?.cancelled_by
+  if (!by) return ''
+  if (by === 'system') return t('views.RunDetailView.cancelled_by_system')
+  return t('views.RunDetailView.cancelled_by_actor', { actor: shortId(by) })
+})
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
   return statusBadgeClassFor(node.status)

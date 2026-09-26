@@ -208,6 +208,24 @@ async def _run_state(
         return (row.status, row.error_code) if row else ("missing", None)
 
 
+async def _run_cancel_reason(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> tuple[str | None, str | None]:
+    """FAR-1233: the recorded ``(cancel_reason, cancelled_by)`` pair — the
+    terminalizers must have written it in the same UPDATE as the status flip."""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        result = await session.execute(
+            text("SELECT cancel_reason, cancelled_by FROM runs WHERE id = :rid"),
+            {"rid": str(run_id)},
+        )
+        row = result.first()
+        return (row.cancel_reason, row.cancelled_by) if row else (None, None)
+
+
 async def _run_heartbeat(
     db_engine: AsyncEngine,
     org_id: uuid.UUID,
@@ -1320,6 +1338,11 @@ async def test_expired_unclaimed_gate_terminalizes_awaiting_human_run(
     assert status == "cancelled"
     assert code == "hitl_gate_expired"
 
+    # FAR-1233: the watchdog records WHY/WHO with the status flip.
+    reason, actor = await _run_cancel_reason(db_engine, org_id, run)
+    assert reason == "hitl_gate_expired"
+    assert actor == "system"
+
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
@@ -1542,6 +1565,11 @@ async def test_zero_claim_awaiting_human_older_than_grace_terminalizes(
     status, code = await _run_state(db_engine, org_id, run)
     assert status == "cancelled"
     assert code == "hitl_gate_missing"
+
+    # FAR-1233: the watchdog records WHY/WHO with the status flip.
+    reason, actor = await _run_cancel_reason(db_engine, org_id, run)
+    assert reason == "hitl_gate_missing"
+    assert actor == "system"
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

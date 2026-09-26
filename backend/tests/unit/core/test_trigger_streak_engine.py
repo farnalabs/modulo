@@ -370,9 +370,10 @@ class TestMigrationBackfillGrace:
         # 0257_rename_remy_to_assistant, and
         # 0259_pipeline_snapshot_max_autonomy_check (FAR-1223) chains on top of
         # 0258_pipeline_accountability_owners, and so on for subsequent
-        # migrations.  The assertion is intentionally head-agnostic: the real
-        # invariant is that the migration chain has exactly ONE head
-        # (i.e. is linear), regardless of which migration is newest.
+        # migrations (0260_run_cancel_reason, then 0261_decision_record_payload).
+        # The assertion is intentionally head-agnostic: the real invariant is
+        # that the migration chain has exactly ONE head (i.e. is linear),
+        # regardless of which migration is newest.
         assert len(heads) == 1, f"expected a single linear head, got {heads}"
 
 

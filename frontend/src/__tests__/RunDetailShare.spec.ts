@@ -5,6 +5,28 @@ import { nextTick } from 'vue'
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { id: 'test-run-id' } }),
   useRouter: () => ({ push: vi.fn() }),
+  // RunDetailView pulls in the Analyze action (FAR-1235), whose assistant
+  // store chain imports @/router — that module builds a router on import, so
+  // the mock has to satisfy it.
+  createRouter: vi.fn(() => ({
+    install: vi.fn(),
+    push: vi.fn(),
+    replace: vi.fn(),
+    resolve: vi.fn(),
+    go: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    onError: vi.fn(),
+    currentRoute: { value: {} },
+    getRoutes: vi.fn(() => []),
+    addRoute: vi.fn(),
+    removeRoute: vi.fn(),
+    hasRoute: vi.fn(() => false),
+    isReady: vi.fn(() => Promise.resolve(true)),
+  })),
+  createWebHistory: vi.fn(() => ({})),
 }))
 
 vi.mock('../lib/api/client', () => ({

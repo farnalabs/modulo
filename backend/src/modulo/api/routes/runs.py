@@ -105,7 +105,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run import CANCEL_REASON_USER_REQUESTED, TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -739,6 +739,14 @@ class RunResponse(BaseModel):
     snapshot_id: uuid.UUID | None = None
     error_detail: str | None = None
     error_code: str | None = None
+    # FAR-1233 cancellation transparency: WHY this run was cancelled (one of
+    # the closed cancel-reason vocabulary, e.g. ``user_requested`` /
+    # ``hitl_gate_expired``) and WHO cancelled it (account id, or ``system``).
+    # Both NULL for runs cancelled before the columns shipped — the UI renders
+    # a neutral "reason not recorded" fallback. Additive/nullable: existing
+    # consumers are unaffected.
+    cancel_reason: str | None = None
+    cancelled_by: str | None = None
     # FAR-706: curated known-fix entries whose raw signature matched this run's
     # error detail (matched server-side by error_codes.match_known_fixes).
     # Empty list when nothing matches — display-only, never gates the response.
@@ -879,6 +887,17 @@ def _resolve_token_consumption(run: Any) -> dict[str, Any] | None:
     return {"total_tokens": run.total_tokens}
 
 
+def _optional_str(value: Any) -> str | None:
+    """Coerce a run attribute to a plain ``str`` or ``None`` (FAR-1233).
+
+    The run row is a plain ORM entity in production, but unit tests pass
+    ``MagicMock`` run stand-ins whose unset attributes resolve to a mock —
+    which must degrade to ``None`` (reason not recorded) instead of failing
+    response validation.
+    """
+    return value if isinstance(value, str) else None
+
+
 def _resolve_trace_display(run: Any, otlp_endpoint: str | None) -> tuple[str | None, str | None]:
     """Return ``(trace_id, trace_url)`` — the OTLP deep-link pair for a run.
 
@@ -962,6 +981,8 @@ def _build_run_response(
         snapshot_id=snapshot_id,
         error_detail=error_detail,
         error_code=error_code,
+        cancel_reason=_optional_str(getattr(run, "cancel_reason", None)),
+        cancelled_by=_optional_str(getattr(run, "cancelled_by", None)),
         known_fixes=known_fixes,
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
@@ -1596,7 +1617,14 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
     # after expiry), so cancelling it must NOT run finalize_cost (the run
     # holds no accrued-spend accounting the cancel path owns).
     was_paused = run.status in ("awaiting_human", "claimed", "hitl_parked")
-    await request_cancellation(session, run_id)
+    # FAR-1233: record WHY (an operator asked) and WHO (the acting account)
+    # in the same write that flips the run cancelled.
+    await request_cancellation(
+        session,
+        run_id,
+        reason=CANCEL_REASON_USER_REQUESTED,
+        actor=str(principal.account_id),
+    )
     if not was_paused:
         from modulo.core.cost_controller.finalize import finalize_cancelled_run
 

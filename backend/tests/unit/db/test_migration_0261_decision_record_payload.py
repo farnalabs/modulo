@@ -1,4 +1,4 @@
-"""Drive migration ``0260_decision_record_payload`` temporary uniqueness index.
+"""Drive migration ``0261_decision_record_payload`` temporary uniqueness index.
 
 FAR-1102 chunk 4 adds a temporary unique index
 ``ix_tmp_policy_gate_decisions_run_gate_result`` on ``(run_id,
@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-_MIGRATION_NAME = "0260_decision_record_payload"
+_MIGRATION_NAME = "0261_decision_record_payload"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
