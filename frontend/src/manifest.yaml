@@ -2442,12 +2442,6 @@ elements:
       - testid: eval-editor-pass-threshold
         type: input
         dynamic_testid: false
-      - testid: eval-editor-failure-warn
-        type: input
-        dynamic_testid: false
-      - testid: eval-editor-failure-block
-        type: input
-        dynamic_testid: false
       - testid: eval-editor-save
         type: button
         dynamic_testid: false

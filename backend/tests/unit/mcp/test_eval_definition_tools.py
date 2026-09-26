@@ -29,7 +29,6 @@ def _make_eval_def(**kwargs: object) -> SimpleNamespace:
         "name": "eval",
         "eval_type": "regex",
         "config_json": {},
-        "failure_behaviour": "warn",
         "pass_threshold": None,
         "suite_id": None,
         "account_id": _PLACEHOLDER_USER_ID,

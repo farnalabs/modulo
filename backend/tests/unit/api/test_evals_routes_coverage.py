@@ -244,8 +244,6 @@ def test_create_eval_non_admin_returns_403() -> None:
 @pytest.mark.parametrize(
     ("payload_overrides", "detail_fragment"),
     [
-        ({"eval_type": "guardrail", "failure_behaviour": "retry"}, "never use failure_behaviour='retry'"),
-        ({"eval_type": "guardrail", "failure_behaviour": "explode"}, "must be 'warn' or 'block'"),
         ({"eval_type": "guardrail", "config_json": {"action": "delete"}}, "action must be one of"),
         ({"eval_type": "guardrail", "config_json": {"type": "llm"}}, "detection must be regex|json_schema"),
         (

@@ -55,7 +55,7 @@ compensation, and single-node self-correction. Built on the eval engine
       discards + logs a would-block result (shadow mode); `warn` logs the
       violation and the run continues; `block` transitions the run to the
       TERMINAL `eval_failed` state; `redact` masks-only field-scoped redaction
-      at the ingestion edge — `failure_behaviour='retry'` is never expressible
+      at the ingestion edge — `failure_behaviour='retry'` was never expressible
       on a guardrail row (block semantics are guardrail-owned, not eval-owned)
 - [x] The interception pass runs at run-creation BEFORE `input_payload` is
       persisted, in two phases: evaluate ALL bound guardrails against an

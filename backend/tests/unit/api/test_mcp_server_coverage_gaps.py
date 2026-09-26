@@ -25,7 +25,6 @@ import modulo.api.mcp_server as ms
 from modulo.api.mcp_server import (
     _analytics_deep_link,
     _append_mcp_hitl_denial_audit,
-    _assert_failure_behaviour,
     _assert_pass_threshold,
     _authenticate_api_key,
     _authenticate_oauth_jwt,
@@ -1825,7 +1824,9 @@ class TestTriggerPipelinePaths(_AuthContext):
 
 class TestEvalDefinitionTools(_AdminContext):
     def test_assert_failure_behaviour_rejects_unknown(self) -> None:
-        assert _assert_failure_behaviour("retry") is not None
+        # FAR-1103 chunk 5a retired the helper; the symbol must not reappear
+        # without restoring its validation coverage alongside it.
+        assert not hasattr(ms, "_assert_failure_behaviour")
 
     def test_assert_pass_threshold_rejects_out_of_range(self) -> None:
         assert _assert_pass_threshold(1.5) is not None
@@ -1841,11 +1842,14 @@ class TestEvalDefinitionTools(_AdminContext):
         assert result["error"] == "invalid_name"
 
     async def test_create_rejects_bad_failure_behaviour(self) -> None:
+        # Retired from the public tool signature (FAR-1103 chunk 5a): the tool
+        # shell no longer accepts the parameter, so the call fails rather than
+        # silently applying an unvalidated behaviour.
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
             result = await create_eval_definition(
                 pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge", failure_behaviour="retry"
             )
-        assert result["error"] == "invalid_failure_behaviour"
+        assert result.get("error"), result
 
     async def test_create_rejects_bad_pass_threshold(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
@@ -1981,9 +1985,12 @@ class TestEvalDefinitionTools(_AdminContext):
         assert result["error"] == "invalid_eval_type"
 
     async def test_update_rejects_bad_failure_behaviour(self) -> None:
+        # Retired from the public tool signature (FAR-1103 chunk 5a): the tool
+        # shell no longer accepts the parameter, so the call fails rather than
+        # silently applying an unvalidated behaviour.
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
             result = await update_eval_definition(eval_id=str(uuid.uuid4()), failure_behaviour="retry")
-        assert result["error"] == "invalid_failure_behaviour"
+        assert result.get("error"), result
 
     async def test_update_rejects_bad_pass_threshold(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
@@ -2038,7 +2045,6 @@ class TestEvalDefinitionTools(_AdminContext):
                 name="new-name",
                 eval_type="llm_judge",
                 config_json={"k": "v"},
-                failure_behaviour="warn",
                 pass_threshold=0.5,
                 suite_id="suite-1",
             )

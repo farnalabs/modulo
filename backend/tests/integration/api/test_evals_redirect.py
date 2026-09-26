@@ -352,7 +352,6 @@ async def test_w1_rest_create_persists_eval_and_gate(env: Chunk3bEnv, client: As
         "name": f"w1-node-eval-{env.org_id.hex[:6]}",
         "eval_type": "regex",
         "config_json": {"field": "output", "pattern": "ok"},
-        "failure_behaviour": "warn",
     }
     resp = await client.post("/api/v1/evals", json=payload, headers=env.headers)
     assert resp.status_code == 201, resp.text
@@ -479,7 +478,6 @@ async def test_w4_rest_update_bumps_version_and_updates_gate(env: Chunk3bEnv, cl
         "name": f"w5-guardrail-{env.org_id.hex[:6]}",
         "eval_type": "guardrail",
         "config_json": {"action": "block", "type": "regex"},
-        "failure_behaviour": "block",
     }
     resp = await client.post("/api/v1/evals", json=payload, headers=env.headers)
     assert resp.status_code == 201, resp.text
@@ -500,7 +498,6 @@ async def test_w6_guardrail_update_still_has_no_gate(env: Chunk3bEnv, client: As
             "name": f"w6-guardrail-{env.org_id.hex[:6]}",
             "eval_type": "guardrail",
             "config_json": {"action": "observe", "type": "regex"},
-            "failure_behaviour": "warn",
         },
         headers=env.headers,
     )
@@ -539,7 +536,6 @@ async def test_w1_create_eval_actually_evaluates(env: Chunk3bEnv, client: AsyncC
         "name": name,
         "eval_type": "regex",
         "config_json": {"field": "output", "pattern": "hello"},
-        "failure_behaviour": "warn",
     }
     resp = await client.post("/api/v1/evals", json=payload, headers=env.headers)
     assert resp.status_code == 201, resp.text
