@@ -11,10 +11,13 @@ code:
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/core/runtime_config/store.py
   - backend/src/modulo/core/runtime_config/key_bridge.py
+  - backend/src/modulo/db/crud/policy_gate_decision.py
 unit-tests:
   - backend/tests/unit/api/test_admin_runtime_config.py
   - backend/tests/unit/api/test_admin_housekeeping.py
+  - backend/tests/unit/api/test_admin_housekeeping_decision_block.py
   - backend/tests/unit/api/test_admin_run_retention.py
+  - backend/tests/unit/mcp/test_housekeeping_decision_block.py
   - backend/tests/unit/rate_limiter/test_admin_rate_limits_api.py
   - backend/tests/unit/core/test_housekeeping.py
   - backend/tests/unit/core/runtime_config/test_key_registry.py
@@ -60,6 +63,17 @@ purging old run data.
 - [x] Housekeeping scan returns cleanup candidates grouped by category;
       cleanup deletes selected candidates; checkpoint purge reclaims DB volume
       (`backend/tests/bdd/features/admin/housekeeping.feature`)
+- [x] Housekeeping deletes fail closed with a typed `blocked_by` reason when a
+      candidate row is parented by `policy_gate_decisions` RESTRICT FKs
+      (FAR-1102): both the REST cleanup (`perform_cleanup` in
+      `api/routes/admin_housekeeping.py`) and the MCP
+      `_delete_housekeeping_group` surface classify the IntegrityError via
+      `is_policy_gate_decision_fk_error` (`db/crud/policy_gate_decision.py`)
+      and return `blocked_by: "policy_gate_decisions"` with the actionable
+      "archive or purge policy_gate_decisions first" message instead of a
+      generic FK-violation, so an admin can see *why* an entity cannot be
+      removed (`test_admin_housekeeping_decision_block.py`,
+      `test_housekeeping_decision_block.py`)
 - [x] Run retention lists candidates with estimated byte sizes, exports as
       NDJSON, and purges terminal runs cascading to checkpoints; requires
       `confirm: true` (`run_retention.feature`)
@@ -70,6 +84,12 @@ purging old run data.
 ## Known Gaps
 
 ## QA History
+- 2026-09-26: **Improve Architecture product-map walk** — tracked the
+  FAR-1102 decision-record housekeeping block surface that shipped without a
+  product-map home: the typed `blocked_by: policy_gate_decisions` response on
+  the REST + MCP housekeeping delete paths (with the shared
+  `is_policy_gate_decision_fk_error` classification) is now a behaviour line
+  with unit-test citations.
 - 2026-09-14: **product-map review pass** — closed the "no BDD for
   rate-limit middleware integration with specific endpoint types" gap: wired
   `rate_limiting/rate_limiting.feature` into the executing suite via
