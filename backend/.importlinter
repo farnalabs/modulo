@@ -149,6 +149,13 @@ ignore_imports =
     # only invokes it (same cross-boundary wiring category as the classify.py /
     # audit_logger exceptions above).
     modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.pipeline_impact
+    # FAR-220: the prompt-rollback restore write re-uses the shared Agent save
+    # gate (validate_agent_git_content_values) so a legacy history entry
+    # carrying an unpinned git content ref cannot re-poison a clean Agent row.
+    # Same narrow cross-boundary category as the pure-decision-function
+    # exemptions above: the CRUD layer only invokes the pure validation
+    # function; the gate semantics stay in core.
+    modulo.db.crud.agent -> modulo.core.pipeline_engine.git_content
     # FAR-535 — the demo auto-login gate (kill switch + demo-org slug/role
     # constants) lives in modulo.core.demo as the neutral surface shared by the
     # auth route and this boot seed. The seed only READS the constants/config

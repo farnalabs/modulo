@@ -62,6 +62,7 @@ from modulo.core.capability_scope import (
     validate_no_self_tools,
 )
 from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
+from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.pipeline_engine.scatter_join import (
     FanOutConfig,
     JoinAggregateSpec,
@@ -2506,10 +2507,26 @@ async def _sync_agent_row_commands(
     the row value (no-op — including a multi-item list already matching the
     node, so re-saving an unchanged multi-item bound node does NOT drop items).
     Returns the number of Agent rows updated.
+
+    FAR-220: every incoming command list passes the shared Agent save gate
+    (:func:`validate_agent_git_content_values`) BEFORE any write. The graph
+    validator's git-content gate runs only for ``sandbox_agent`` nodes, so an
+    ``agent``-type node could otherwise carry an unpinned ``git+`` ref into
+    this sync and overwrite a gated Agent row ungated — validation would pass
+    and the poisoned row would flow into bound sandbox nodes at snapshot time
+    via ``_apply_agent_fields``. The typed :class:`GitContentRefError`
+    propagates out of the enclosing transaction, so the graph write rolls back
+    and the route handlers map it to 422.
     """
     updates = _extract_agent_command_sync_updates(nodes)
     if not updates:
         return 0
+    # Fail closed before any read or write: an unpinned ref is invalid input
+    # regardless of the row's current value, so even a no-op PATCH carrying
+    # one is rejected (the row itself must be remediated through the gated
+    # Agent save paths first).
+    for incoming_commands in updates.values():
+        validate_agent_git_content_values(agent_commands=incoming_commands)
     result = await session.execute(select(Agent).where(Agent.id.in_(list(updates)), Agent.organisation_id == org_id))
     changed = 0
     for agent in result.scalars():
@@ -2609,6 +2626,12 @@ async def replace_pipeline_graph_endpoint(
             pipeline_id=pipeline_id,
             exc=exc,
         )
+    except GitContentRefError as exc:
+        # FAR-220: the Agent-row command sync validated an unpinned git
+        # content ref and failed closed INSIDE the transaction — the graph
+        # write is rolled back with it. Surface 422 instead of the decorator's
+        # 500.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -2998,6 +3021,12 @@ async def update_pipeline_endpoint(
         await _deny_threshold_change(session, principal=principal, pipeline_id=pipeline_id, exc=exc)
     except PipelineHasActiveRunsError as exc:
         _raise_active_runs_conflict(exc)
+    except GitContentRefError as exc:
+        # FAR-220: the graph_json path's Agent-row command sync validated an
+        # unpinned git content ref and failed closed INSIDE the transaction —
+        # the write rolls back with it. Surface 422 instead of the decorator's
+        # 500.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -3922,7 +3951,7 @@ async def _finalize_locked_graph_save(
 
     ``HitlGateWeakeningDenied`` is recorded (the guarded write already rolled
     back) and control returns to the caller, which then raises the 404
-    saved-graph response. The other two errors are translated directly into an
+    saved-graph response. The other errors are translated directly into an
     ``HTTPException``. Shared by the convert-to-agent and revert-to-manual
     endpoints, which only differ in how they prepare ``nodes``/``edges``.
     """
@@ -3940,6 +3969,15 @@ async def _finalize_locked_graph_save(
         raise HTTPException(
             status_code=denial_http_status(exc.reason_code),
             detail=exc.detail,
+        ) from exc
+    if isinstance(exc, GitContentRefError):
+        # FAR-220: the node-conversion save's Agent-row command sync validated
+        # an unpinned git content ref and failed closed INSIDE the transaction
+        # — the write rolls back with it. Surface 422 instead of the
+        # decorator's 500.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
         ) from exc
     if isinstance(exc, ProgrammingError):
         logger.error(_CODE_ROUTES_PIPELINES, exc_info=exc)
@@ -4043,7 +4081,7 @@ async def convert_node_to_agent_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
-    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, ProgrammingError) as exc:
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
@@ -4136,7 +4174,7 @@ async def revert_node_to_manual_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
-    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, ProgrammingError) as exc:
+    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:

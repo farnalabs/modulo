@@ -695,6 +695,30 @@ class TestInstallCollectionEndpoint:
             )
         assert resp.status_code == 422
 
+    def test_install_git_content_ref_rejected(self, client: TestClient) -> None:
+        """An unpinned/malformed git-content agent prompt maps to 422 (FAR-220).
+
+        The materialized collection import raises the typed
+        ``GitContentRefError``; without this clause it would escape the
+        endpoint as a raw 500 because it is not a DB error.
+        """
+        from modulo.core.pipeline_engine.git_content import GitContentRefError
+
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.install_collection",
+            new_callable=AsyncMock,
+            side_effect=GitContentRefError(
+                "Agent 'Ref Agent' prompt_template git content ref "
+                "'git+https://github.com/org/repo#prompts/ref.md' is not pinned"
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/install",
+            )
+        assert resp.status_code == 422
+        assert "not pinned" in resp.json()["detail"]
+
     def test_install_generic_error(self, client: TestClient) -> None:
         from modulo.core.library_service.install import CollectionInstallError
 

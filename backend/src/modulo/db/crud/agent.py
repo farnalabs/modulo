@@ -244,6 +244,17 @@ async def rollback_prompt_version(
     if not target_template:
         return None
 
+    # FAR-220: a legacy history entry can carry an unpinned git content ref
+    # (pre-gate data or a direct DB write). Restoring it would re-poison a
+    # clean Agent row — the same ungated-write defect the graph-command sync
+    # had — so the restored template passes the same save gate every other
+    # Agent write path uses. Fail closed BEFORE any mutation: the typed
+    # GitContentRefError propagates (the route maps it to 422) and the row is
+    # left untouched.
+    from modulo.core.pipeline_engine.git_content import validate_agent_git_content_values
+
+    validate_agent_git_content_values(prompt_template=target_template)
+
     prev_version = agent.prompt_version_history[-1]["version"] if agent.prompt_version_history else "current"
     notes = f"Rolled back from {prev_version} to {target_version}"
 

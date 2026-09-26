@@ -73,6 +73,64 @@ class TestCreateAgentErrors(AuthContext):
 
         assert result["error"] == "internal_error"
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_rejects_unpinned_git_content_ref_before_db_write(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-220: the MCP tool must run the same Agent save gate as the REST
+        routes — an unpinned ``git+`` ref returns ``validation_failed`` and
+        never reaches ``db_create_agent`` (prove-the-fix)."""
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await create_agent(
+            name="qa",
+            prompt_template="git+https://github.com/example/repo.git@main#prompts/x.md",
+        )
+        assert result["error"] == "validation_failed"
+        assert "not pinned" in result["detail"]
+        mock_create.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_rejects_malformed_git_content_ref_before_db_write(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await create_agent(
+            name="qa",
+            prompt_template="git+https://github.com/example/repo.git",
+        )
+        assert result["error"] == "validation_failed"
+        assert "invalid git content ref" in result["detail"]
+        mock_create.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_rejects_git_ref_among_several_commands_before_db_write(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await create_agent(
+            name="qa",
+            prompt_template="Review PRs",
+            agent_commands=["echo hi", f"git+https://github.com/example/repo.git@{'a' * 40}#cmd.sh"],
+        )
+        assert result["error"] == "validation_failed"
+        assert "whole field" in result["detail"]
+        mock_create.assert_not_called()
+
 
 class TestCreateAgentSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

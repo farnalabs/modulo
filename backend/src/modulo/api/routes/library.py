@@ -69,6 +69,7 @@ from modulo.core.lifecycle_map.import_export import (
     materialize_map_from_primitive,
 )
 from modulo.core.lifecycle_map.validation import LifecycleMapContentError, LifecycleMapPipelineConflictError
+from modulo.core.pipeline_engine.git_content import GitContentRefError
 from modulo.core.workflow_import_export import (
     export_pipeline_bundle,
     export_pipeline_bundle_v2,
@@ -1384,6 +1385,12 @@ async def confirm_import_endpoint(
                 schema_version_overrides=req.schema_version_overrides,
                 connector_instance_overrides=req.connector_overrides,
             )
+    except GitContentRefError as exc:
+        _log.warning("confirm_import_endpoint: unpinned git-content agent prompt rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
     except IntegrityError:
         _log.exception("library.confirm_import_endpoint")
         raise _conflict_error() from None
@@ -2184,6 +2191,12 @@ async def install_collection_endpoint(
                 created_by=principal.account_id,
                 collection_id=primitive_id,
             )
+    except GitContentRefError as exc:
+        _log.warning("install_collection_endpoint: unpinned git-content agent prompt rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
     except CollectionNotPublishedError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
