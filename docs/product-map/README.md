@@ -82,7 +82,7 @@ Every registered manifest feature, its description, and the routes that referenc
 Fresh entries for these features are added to the graph below as behaviour trackers.
 
 ### Build
-- **feat-dashboard** - Home dashboard and metrics overview (Saved Views deferred from the MVP nav — hidden via private_preview; see FAR-546) - routes: `/`
+- **feat-dashboard** - Home dashboard and metrics overview (Saved Views ship as the private_preview `/admin/views` CRUD surface behind `view_modes`; the apply-to-list `ViewToggle` is not yet wired into list pages — see FAR-546) - routes: `/`
 - **feat-pipelines** - Visual pipeline editor and composite editor (Node Categories deferred from the MVP nav — hidden via private_preview; see FAR-545) - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`
 - **feat-router** - Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A) - routes: `/pipelines`
 - **feat-library** - Reusable pipeline templates, the community library, and library collections (collection authoring/publishing is flag-gated behind `library_collection`; see FAR-760) - routes: `/library/:id/create-pipeline`, `/library`, `/library/collections/new`, `/library/collections/:id`

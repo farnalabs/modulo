@@ -52,6 +52,19 @@ listed org roles always granted).
       manage the extra context injected into the assistant window
 - [x] Access control: the access list grants explicit user ids and org roles, admins
       always have access, and blocked users are refused (`assistant_access_control.feature`)
+- [x] Auto-execute thresholds ship end to end: the org assistant config carries
+      `auto_execute_threshold` (default 0.8, `AssistantConfig` in
+      `core/assistant/config_service.py`); in `full_auto` permission mode a proposed
+      action whose reported confidence is below the threshold is demoted to
+      `requires_approval` (`_default_tool_permission` in `api/routes/assistant.py`);
+      the `/admin/assistant` safety panel reads and writes the field and explains it
+      via the auto-execute-threshold description (`AdminAssistantView.vue`,
+      `AdminAssistantView.spec.ts`)
+- [x] Guidance tuning ships end to end: `additional_guidance` is a first-class field on
+      the admin assistant config (`GET/PUT /api/v1/admin/assistant/config`, model in
+      `core/assistant/config_service.py`), edited through the Additional Guidance
+      textarea in the admin settings view and asserted on the PUT body
+      (`AdminAssistantView.spec.ts`)
 - [x] BDD coverage across sessions, messages, context window, context sources, skills,
       admin config, UI commands and access control (`backend/tests/bdd/features/assistant/`)
 
@@ -64,6 +77,15 @@ listed org roles always granted).
   `backend/tests/unit/api/test_me_assistant_skills.py` only.
 
 ## QA History
+- 2026-09-26: **Improve Architecture product-map walk** — closed `feat-assistant`'s
+  stale "auto-execute thresholds and guidance tuning are partially wired" gap. Both
+  surfaces ship end to end: `auto_execute_threshold` (AssistantConfig default 0.8)
+  is enforced in `_default_tool_permission` (`api/routes/assistant.py`) — a
+  `full_auto` action below the threshold is demoted to `requires_approval` — and is
+  read/written by the `/admin/assistant` safety panel; `additional_guidance` is a
+  first-class `GET/PUT /api/v1/admin/assistant/config` field edited from the
+  Additional Guidance textarea. The manifest registry entry is now `status: covered`
+  with both behaviours ticked.
 - 2026-09-12: **product-map review pass** — registered the shared
   `AnalyticsChart` surface (`components/analytics/AnalyticsChart.vue` static testids
   `analytics-chart` / `analytics-chart-canvas` / `analytics-chart-empty`) in the
