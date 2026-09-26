@@ -112,6 +112,35 @@ describe('NotificationCard', () => {
     expect(wrapper.find('[data-testid="notification-run-state"]').exists()).toBe(false)
   })
 
+  it('humanises an unmapped run status rather than rendering the raw i18n key', () => {
+    const wrapper = mount(NotificationCard, {
+      props: {
+        notification: makeNotification({
+          run_id: 'r-1',
+          run_status: 'quarantined_by_guard',
+          run_terminal: false,
+        }),
+      },
+    })
+
+    // The locale map is closed, but the backend can add a status before the
+    // client ships its translation: show readable text, never `run_statuses.…`.
+    const state = wrapper.get('[data-testid="notification-run-state"]')
+    expect(state.text()).toContain('quarantined by guard')
+    expect(state.text()).not.toContain('run_statuses')
+  })
+
+  it('resolves an empty status word when the notification is not run-linked', () => {
+    const wrapper = mount(NotificationCard, {
+      props: { notification: makeNotification({ run_status: null }) },
+    })
+
+    // `hasRunState` hides the run-state line, but runStateLabel is still a
+    // public computed and must stay safe (and empty) with no linked run.
+    const vm = wrapper.vm as unknown as { runStateLabel: string }
+    expect(vm.runStateLabel).toBe('')
+  })
+
   // FAR-1234 — demote stale HITL requests ---------------------------------
 
   it('demotes a hitl.awaiting notification whose run is terminal (never presented as live work)', () => {
