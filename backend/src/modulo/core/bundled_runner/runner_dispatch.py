@@ -264,9 +264,23 @@ def _workspace_spec_for_dispatch(
 
         raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on Docker tier: {egress_resolved.refusal}")
 
-    # Map canonical policy to WorkspaceSpec egress_policy vocabulary.
-    # WorkspaceSpec uses: "none" for deny_all, "outbound" for allow/default.
-    spec_egress = "none" if egress_resolved.policy == "deny_all" else "outbound"
+    # Map canonical policy to WorkspaceSpec egress_policy vocabulary
+    # LOSSLESSLY (FAR-1050): None -> "outbound" (unrestricted), "deny_all" ->
+    # "none" (the spec dialect's deny value, consumed by
+    # DockerRuntimeProvider._resolve_network_mode), "selected" -> "selected"
+    # (restrictive — collapsing it into "outbound" would silently grant
+    # internet; ADR 040 defect class).  The Docker tier refuses "selected"
+    # above (tier capability), so only None/"deny_all" are reachable here
+    # today — the lossless mapping is defence-in-depth.  An unrecognised
+    # canonical value fails CLOSED to "none".
+    if egress_resolved.policy is None:
+        spec_egress = "outbound"
+    elif egress_resolved.policy == "deny_all":
+        spec_egress = "none"
+    elif egress_resolved.policy == "selected":
+        spec_egress = "selected"
+    else:
+        spec_egress = "none"  # fail closed
 
     # Defense-in-depth (FAR-1020): validate workspace_network at dispatch
     # even if the CRUD boundary already validated it — a value written

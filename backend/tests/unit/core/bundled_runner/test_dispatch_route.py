@@ -264,6 +264,55 @@ def test_workspace_spec_selected_egress_refused_on_docker_tier() -> None:
         )
 
 
+def test_workspace_spec_selected_maps_losslessly_when_resolution_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1050: when egress resolution succeeds with 'selected' (allowlist
+    present), the WorkspaceSpec must carry 'selected' — never collapse it
+    into the permissive 'outbound' (the ADR 040 fail-open defect class).
+
+    The Docker tier refuses 'selected' upstream today (tier capability —
+    see the test above), so this exercises the defence-in-depth mapping
+    branch directly.
+    """
+    from modulo.core.pipeline_engine.egress import EgressResolution
+
+    selected_with_allowlist = EgressResolution(
+        policy="selected",
+        allowlist=[{"host": "api.github.com", "port": 443}],
+        refusal=None,
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.egress.resolve_egress",
+        lambda **_kwargs: selected_with_allowlist,
+    )
+
+    spec = _workspace_spec_for_dispatch(
+        _profile("runner_docker"), org_id=_ORG, run_id="run-123", node_id="node-9", run_uuid=uuid.uuid4()
+    )
+
+    assert spec.egress_policy == "selected"
+
+
+def test_workspace_spec_unknown_canonical_policy_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrecognised canonical policy must map to the deny value, never to
+    the permissive 'outbound'."""
+    from modulo.core.pipeline_engine.egress import EgressResolution
+
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.egress.resolve_egress",
+        lambda **_kwargs: EgressResolution(policy="bogus_policy", allowlist=None, refusal=None),
+    )
+
+    spec = _workspace_spec_for_dispatch(
+        _profile("runner_docker"), org_id=_ORG, run_id="run-123", node_id="node-9", run_uuid=uuid.uuid4()
+    )
+
+    assert spec.egress_policy == "none"
+
+
 def test_workspace_spec_blank_metadata_values_dropped() -> None:
     spec = _workspace_spec_for_dispatch(
         _profile("runner_docker"), org_id=None, run_id="", node_id="node-9", run_uuid=None

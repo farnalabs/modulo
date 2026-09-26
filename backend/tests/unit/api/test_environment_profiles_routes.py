@@ -618,3 +618,100 @@ def test_egress_tier_for_provider_type_skips_unimportable_provider(monkeypatch: 
 
     assert _egress_tier_for_provider_type("e2b") is None
     assert _egress_tier_for_provider_type("local_docker") == "docker"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1050: canonical -> WorkspaceSpec egress mapping must be LOSSLESS
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("canonical", "expected_spec_value", "expected_allows_internet"),
+    [
+        pytest.param(None, "outbound", True, id="default-allows"),
+        pytest.param("deny_all", "none", False, id="deny-all-denies"),
+        pytest.param("selected", "selected", False, id="selected-denies"),
+        pytest.param("bogus_policy", "none", False, id="unknown-fails-closed"),
+    ],
+)
+def test_spec_egress_for_canonical_is_lossless(
+    canonical: str | None,
+    expected_spec_value: str,
+    expected_allows_internet: bool,
+) -> None:
+    """FAR-1050 regression: canonical 'selected' must NOT collapse into the
+    permissive 'outbound' (the ADR 040 fail-open defect class)."""
+    from modulo.api.routes.environment_profiles import _spec_egress_for_canonical
+    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+
+    mapped = _spec_egress_for_canonical(canonical)
+
+    assert mapped == expected_spec_value
+    assert _egress_allows_internet(mapped) is expected_allows_internet
+
+
+def test_build_workspace_spec_profile_none_denies_internet() -> None:
+    """profile network_policy='none' -> canonical deny_all -> spec 'none' -> E2B denies internet."""
+    from modulo.api.routes.environment_profiles import _build_workspace_spec
+    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+
+    spec = _build_workspace_spec(_fake_profile(network_policy="none", provider_type="e2b"))
+
+    assert spec.egress_policy == "none"
+    assert _egress_allows_internet(spec.egress_policy) is False
+
+
+def test_build_workspace_spec_profile_outbound_allows_internet() -> None:
+    """profile network_policy='outbound' -> canonical None -> spec 'outbound' -> E2B allows internet."""
+    from modulo.api.routes.environment_profiles import _build_workspace_spec
+    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+
+    spec = _build_workspace_spec(_fake_profile(network_policy="outbound", provider_type="e2b"))
+
+    assert spec.egress_policy == "outbound"
+    assert _egress_allows_internet(spec.egress_policy) is True
+
+
+def test_build_workspace_spec_selected_produces_deny_internet_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1050 end-to-end: a profile with network_policy='selected' must
+    produce a WorkspaceSpec whose egress_policy makes
+    _egress_allows_internet() return False � never 'outbound'.
+
+    resolve_egress is stubbed to a NON-refusing 'selected' resolution
+    (allowlist present) because the sandbox-test route carries no
+    profile-level allowlist today, so the real upstream refuses 'selected'
+    before the mapper runs. The mapper is what is under test here; the
+    refusal behaviour itself is asserted separately by
+    test_build_workspace_spec_selected_refuses_without_allowlist.
+    """
+    from modulo.api.routes.environment_profiles import _build_workspace_spec
+    from modulo.core.pipeline_engine.egress import EgressResolution
+    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+
+    selected_with_allowlist = EgressResolution(
+        policy="selected",
+        allowlist=[{"host": "api.github.com", "port": 443}],
+        refusal=None,
+    )
+    monkeypatch.setattr("modulo.core.pipeline_engine.egress.resolve_egress", lambda **_kwargs: selected_with_allowlist)
+
+    spec = _build_workspace_spec(_fake_profile(network_policy="selected", provider_type="e2b"))
+
+    assert spec.egress_policy == "selected"
+    assert _egress_allows_internet(spec.egress_policy) is False
+    # Guard against the pre-fix collapse: the spec value must never be the
+    # permissive dialect value for a restrictive canonical policy.
+    assert spec.egress_policy != "outbound"
+
+
+def test_build_workspace_spec_selected_refuses_without_allowlist() -> None:
+    """Current real-path behaviour: with no profile-level allowlist the
+    upstream resolver refuses 'selected' BEFORE the mapper runs � a loud
+    refusal, never a silently permissive spec."""
+    from modulo.api.routes.environment_profiles import _build_workspace_spec
+    from modulo.core.pipeline_engine.sandbox_errors import SandboxTierRefusedError
+
+    with pytest.raises(SandboxTierRefusedError, match="non-empty allowlist"):
+        _build_workspace_spec(_fake_profile(network_policy="selected", provider_type="e2b"))
