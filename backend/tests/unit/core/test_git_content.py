@@ -11,6 +11,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,6 +30,7 @@ from modulo.core.pipeline_engine.git_content import (
     resolve_against_ls_remote,
     resolve_git_content_field,
     run_git_ls_remote,
+    validate_agent_git_content_values,
 )
 
 _SHA_A = "a" * 40
@@ -537,6 +539,52 @@ async def test_git_timeout_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> No
     assert proc.kill_called
 
 
+async def test_git_spawn_carries_prompts_off_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fetch-path git seam runs with the prompts-off env (prove-the-fix).
+
+    ``run_git_ls_remote`` already passed ``env=_git_process_env()``; ``_git``
+    (init / remote add / every fetch attempt / show) must apply the same gate
+    so an auth-walled host exits non-zero instead of hanging on a credential
+    prompt.
+    """
+    captured: dict[str, Any] = {}
+
+    async def _exec(*_args: object, **kwargs: Any) -> _FakeProc:
+        captured["env"] = kwargs.get("env")
+        return _FakeProc(stdout=b"file bytes")
+
+    monkeypatch.setattr(git_content.asyncio, "create_subprocess_exec", _exec)
+    out = await _git(("show", f"{_SHA_A}:prompts/x.md"), cwd="/tmp", timeout_seconds=5, what="show", repo_url=_REPO)
+    assert out == b"file bytes"
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+
+
+async def test_fetch_git_content_spawns_git_with_prompts_off_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every subprocess of the full fetch flow carries the prompts-off env (prove-the-fix)."""
+    _allow_all_hosts(monkeypatch)
+    envs: list[dict[str, str]] = []
+
+    async def _exec(*args: object, **kwargs: Any) -> _FakeProc:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        envs.append(env)
+        is_show = args[:2] == ("git", "show")
+        return _FakeProc(stdout=b"PROMPT FROM GIT" if is_show else b"")
+
+    monkeypatch.setattr(git_content.asyncio, "create_subprocess_exec", _exec)
+    out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+    assert out == "PROMPT FROM GIT"
+    assert envs  # init, remote add, fetch, show all spawned through the seam
+    for env in envs:
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+
+
 async def test_fetch_git_content_shallow_blobless_strategy_first(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -711,6 +759,42 @@ def test_cache_get_missing_file_is_none(tmp_path: Path) -> None:
 
 def test_default_content_cache_dir_is_namespaced() -> None:
     assert git_content.default_content_cache_dir().name == "modulo-git-content-cache"
+
+
+# ---------------------------------------------------------------------------
+# validate_agent_git_content_values — shared Agent save gate (REST + MCP)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_agent_git_content_values_accepts_inline_and_pinned() -> None:
+    assert validate_agent_git_content_values(prompt_template="inline prompt", agent_commands=["echo hi"]) is None
+    assert validate_agent_git_content_values(prompt_template=_PINNED) is None
+    assert validate_agent_git_content_values() is None
+
+
+def test_validate_agent_git_content_values_allows_single_command_ref() -> None:
+    """A single-item agent_commands list whose only entry is the ref is legal."""
+    assert validate_agent_git_content_values(agent_commands=[f"git+{_REPO}@{_SHA_A}#cmd.sh"]) is None
+
+
+def test_validate_agent_git_content_values_rejects_unpinned_prompt_ref() -> None:
+    with pytest.raises(GitContentRefError, match="prompt_template"):
+        validate_agent_git_content_values(prompt_template="git+https://github.com/ex/repo.git@main#p.md")
+
+
+def test_validate_agent_git_content_values_rejects_malformed_prompt_ref() -> None:
+    with pytest.raises(GitContentRefError, match="invalid git content ref"):
+        validate_agent_git_content_values(prompt_template="git+https://github.com/ex/repo.git")
+
+
+def test_validate_agent_git_content_values_rejects_unpinned_command_ref() -> None:
+    with pytest.raises(GitContentRefError, match=r"agent_commands\[0\]"):
+        validate_agent_git_content_values(agent_commands=["git+https://github.com/ex/repo.git@main#cmd.sh"])
+
+
+def test_validate_agent_git_content_values_rejects_ref_among_several_commands() -> None:
+    with pytest.raises(GitContentRefError, match="whole field"):
+        validate_agent_git_content_values(agent_commands=["echo hi", f"git+{_REPO}@{_SHA_A}#cmd.sh"])
 
 
 # ---------------------------------------------------------------------------

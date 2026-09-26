@@ -7223,6 +7223,20 @@ async def create_agent(
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("create_agent")
 
+        # FAR-220: the REST Agent save paths run the git-content pin gate; this
+        # tool must not bypass it (an unpinned ``git+`` ref saved here would
+        # only fail closed at render time). Same shared helper, tool-error on
+        # failure — no DB session is opened for invalid content.
+        from modulo.core.pipeline_engine.git_content import GitContentRefError
+        from modulo.core.pipeline_engine.git_content import (
+            validate_agent_git_content_values as _validate_agent_git_content_values,
+        )
+
+        try:
+            _validate_agent_git_content_values(prompt_template=prompt_template, agent_commands=agent_commands)
+        except GitContentRefError as exc:
+            return {"error": "validation_failed", "detail": str(exc)}
+
         from modulo.db.crud.agent import create_agent as db_create_agent
 
         org_id = _ctx_org_id_val()

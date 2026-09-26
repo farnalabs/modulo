@@ -652,6 +652,7 @@ async def _git(
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=_git_process_env(),
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_seconds)
@@ -726,6 +727,58 @@ def git_content_values(node: dict[str, Any]) -> list[tuple[str, str]]:
     return values
 
 
+def validate_agent_git_content_values(
+    prompt_template: str | None = None,
+    agent_commands: list[str] | None = None,
+) -> None:
+    """Save-time pin gate for git-sourced content refs on Agent rows (FAR-220).
+
+    Shared, non-HTTP validation called by BOTH Agent write surfaces: the REST
+    save paths (``routes/agents.py`` -> HTTP 422) and the MCP ``create_agent``
+    tool (-> tool error dict). An ``Agent`` row carries the same content fields
+    a ``sandbox_agent`` node does (``prompt_template``/``agent_prompt`` and
+    ``agent_commands``), and the graph-save gate never sees an Agent's own
+    values — they flow into nodes at run time. Without this gate a write path
+    could store an unpinned ``git+`` ref that only fails closed (typed error)
+    at render. The semantics mirror the graph validator's three fail-closed
+    codes:
+
+    * whole-field ``agent_commands`` (a ref may not be one command of several);
+    * ``git+`` values must parse;
+    * parsed refs must be pinned to a 40-hex SHA.
+    """
+    if (
+        agent_commands is not None
+        and len(agent_commands) > 1
+        and any(isinstance(item, str) and GIT_CONTENT_PREFIX in item for item in agent_commands)
+    ):
+        raise GitContentRefError(
+            "agent_commands contains a git content ref among several commands — git content "
+            "refs must be the whole field, not one command of several (use a single-item "
+            "agent_commands list whose only entry is the ref, or inline the content)"
+        )
+
+    values: list[tuple[str, str]] = []
+    if isinstance(prompt_template, str):
+        values.append(("prompt_template", prompt_template))
+    if agent_commands:
+        values.extend((f"agent_commands[{i}]", item) for i, item in enumerate(agent_commands) if isinstance(item, str))
+    for label, value in values:
+        if not is_git_content_ref(value):
+            continue
+        try:
+            ref = parse_git_content_ref(value)
+        except GitContentRefError as exc:
+            raise GitContentRefError(f"{label} has an invalid git content ref: {exc}") from None
+        if not ref.is_pinned:
+            raise GitContentRefError(
+                f"{label} git content ref {value.strip()!r} is not pinned to a commit SHA — "
+                "Agent prompts and commands must use git+<repo>@<40-hex-sha>#<path> so runs "
+                "carry the resolved SHA for audit ('modulo apply' resolves and pins movable "
+                "refs automatically)"
+            )
+
+
 def pin_git_content_node_fields(
     node_data: dict[str, Any],
     *,
@@ -794,4 +847,5 @@ __all__ = [
     "resolve_against_ls_remote",
     "resolve_git_content_field",
     "run_git_ls_remote",
+    "validate_agent_git_content_values",
 ]

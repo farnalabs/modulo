@@ -345,64 +345,21 @@ def _validate_agent_git_content(
 ) -> None:
     """Save-time pin gate for git-sourced content refs on Agent rows (FAR-220).
 
-    An ``Agent`` row carries the same content fields a ``sandbox_agent`` node
-    does (``prompt_template``/``agent_prompt`` and ``agent_commands``), and the
-    graph-save gate never sees an Agent's own values — they flow into nodes at
-    run time. Without this gate a write path could store an unpinned ``git+``
-    ref that only fails closed (typed error) at render. Reuses the shipped
-    parse/is-ref helpers; the semantics mirror the graph validator's three
-    fail-closed codes:
-
-    * whole-field ``agent_commands`` (a ref may not be one command of several);
-    * ``git+`` values must parse;
-    * parsed refs must be pinned to a 40-hex SHA.
+    REST wrapper: delegates to the shared core helper
+    (:func:`modulo.core.pipeline_engine.git_content.validate_agent_git_content_values`,
+    also called by the MCP ``create_agent`` tool so that surface cannot bypass
+    the gate) and converts the typed :class:`GitContentRefError` to HTTP 422.
+    The three fail-closed codes and their messages live in the shared helper.
     """
+    from modulo.core.pipeline_engine.git_content import GitContentRefError
     from modulo.core.pipeline_engine.git_content import (
-        GIT_CONTENT_PREFIX,
-        GitContentRefError,
-        is_git_content_ref,
-        parse_git_content_ref,
+        validate_agent_git_content_values as _validate_agent_git_content_values,
     )
 
-    if (
-        agent_commands is not None
-        and len(agent_commands) > 1
-        and any(isinstance(item, str) and GIT_CONTENT_PREFIX in item for item in agent_commands)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                "agent_commands contains a git content ref among several commands — git content "
-                "refs must be the whole field, not one command of several (use a single-item "
-                "agent_commands list whose only entry is the ref, or inline the content)"
-            ),
-        )
-
-    values: list[tuple[str, str]] = []
-    if isinstance(prompt_template, str):
-        values.append(("prompt_template", prompt_template))
-    if agent_commands:
-        values.extend((f"agent_commands[{i}]", item) for i, item in enumerate(agent_commands) if isinstance(item, str))
-    for label, value in values:
-        if not is_git_content_ref(value):
-            continue
-        try:
-            ref = parse_git_content_ref(value)
-        except GitContentRefError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"{label} has an invalid git content ref: {exc}",
-            ) from None
-        if not ref.is_pinned:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    f"{label} git content ref {value.strip()!r} is not pinned to a commit SHA — "
-                    "Agent prompts and commands must use git+<repo>@<40-hex-sha>#<path> so runs "
-                    "carry the resolved SHA for audit ('modulo apply' resolves and pins movable "
-                    "refs automatically)"
-                ),
-            )
+    try:
+        _validate_agent_git_content_values(prompt_template=prompt_template, agent_commands=agent_commands)
+    except GitContentRefError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
 
 
 @router.get("")
