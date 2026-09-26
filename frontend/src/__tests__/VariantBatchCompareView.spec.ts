@@ -312,7 +312,7 @@ describe('VariantBatchCompareView', () => {
     const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
     expect(breakdown.exists()).toBe(true)
     // The cost column appears even though the run total is null, because a node
-    // recorded a cost (hasNodeCost(run)).
+    // recorded a cost (showCostColumn(run)).
     expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(true)
     // Nodes missing individual figures render an em dash rather than crashing.
     expect(breakdown.text()).toContain('—')

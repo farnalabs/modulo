@@ -146,7 +146,7 @@
                     <th class="py-1 pr-3 text-right font-medium tabular-nums">{{ $t('views.variantBatch.inputTokens') }}</th>
                     <th class="py-1 pr-3 text-right font-medium tabular-nums">{{ $t('views.variantBatch.outputTokens') }}</th>
                     <th class="py-1 pr-3 text-right font-medium tabular-nums">{{ $t('views.variantBatch.totalTokens') }}</th>
-                    <th v-if="run.total_cost_usd != null || hasNodeCost(run)" class="py-1 text-right font-medium tabular-nums">{{ $t('views.variantBatch.cost') }}</th>
+                    <th v-if="showCostColumn(run)" class="py-1 text-right font-medium tabular-nums">{{ $t('views.variantBatch.cost') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -155,7 +155,7 @@
                     <td class="py-1 pr-3 text-right tabular-nums">{{ row.input_tokens ?? '—' }}</td>
                     <td class="py-1 pr-3 text-right tabular-nums">{{ row.output_tokens ?? '—' }}</td>
                     <td class="py-1 pr-3 text-right font-medium tabular-nums">{{ row.total_tokens ?? '—' }}</td>
-                    <td v-if="run.total_cost_usd != null || hasNodeCost(run)" class="py-1 text-right tabular-nums">{{ row.cost_usd !== null ? formatMoney(Number(row.cost_usd), currencyCode, 6) : '—' }}</td>
+                    <td v-if="showCostColumn(run)" class="py-1 text-right tabular-nums">{{ row.cost_usd !== null ? formatMoney(Number(row.cost_usd), currencyCode, 6) : '—' }}</td>
                   </tr>
                 </tbody>
                 <tfoot v-if="run.total_tokens !== null">
@@ -164,7 +164,7 @@
                     <td class="py-1 pr-3" />
                     <td class="py-1 pr-3" />
                     <td class="py-1 pr-3 text-right tabular-nums">{{ run.total_tokens }}</td>
-                    <td v-if="run.total_cost_usd != null || hasNodeCost(run)" class="py-1 text-right tabular-nums">{{ run.total_cost_usd != null ? formatMoney(Number(run.total_cost_usd), currencyCode, 6) : '—' }}</td>
+                    <td v-if="showCostColumn(run)" class="py-1 text-right tabular-nums">{{ run.total_cost_usd != null ? formatMoney(Number(run.total_cost_usd), currencyCode, 6) : '—' }}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -371,7 +371,7 @@ interface TokenRow {
   cost_usd: number | null
 }
 
-function tokenRows(run: VariantBatchRun): TokenRow[] {
+function buildTokenRows(run: VariantBatchRun): TokenRow[] {
   if (!run.node_token_usage) return []
   return Object.entries(run.node_token_usage)
     .filter(([key]) => key !== 'node_count')
@@ -388,8 +388,32 @@ function tokenRows(run: VariantBatchRun): TokenRow[] {
     .filter(row => row.input_tokens !== null || row.output_tokens !== null || row.total_tokens !== null || row.cost_usd !== null)
 }
 
-function hasNodeCost(run: VariantBatchRun): boolean {
-  return tokenRows(run).some(row => row.cost_usd !== null)
+interface RunTokenView {
+  rows: TokenRow[]
+  showCost: boolean
+}
+
+// Memoise the per-run token view so thead/tbody/tfoot each read a single
+// computed value instead of rebuilding the rows array — and independently
+// deriving column visibility — on every re-render.
+const tokenViews = computed<Map<string, RunTokenView>>(() => {
+  const views = new Map<string, RunTokenView>()
+  for (const run of rankedRuns.value) {
+    const rows = buildTokenRows(run)
+    views.set(run.run_id, {
+      rows,
+      showCost: run.total_cost_usd != null || rows.some(row => row.cost_usd !== null),
+    })
+  }
+  return views
+})
+
+function tokenRows(run: VariantBatchRun): TokenRow[] {
+  return tokenViews.value.get(run.run_id)?.rows ?? []
+}
+
+function showCostColumn(run: VariantBatchRun): boolean {
+  return tokenViews.value.get(run.run_id)?.showCost ?? false
 }
 
 async function loadBatch(id: string) {
