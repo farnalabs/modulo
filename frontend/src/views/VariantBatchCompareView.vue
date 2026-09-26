@@ -409,11 +409,11 @@ const tokenViews = computed<Map<string, RunTokenView>>(() => {
 })
 
 function tokenRows(run: VariantBatchRun): TokenRow[] {
-  return tokenViews.value.get(run.run_id)?.rows ?? []
+  return tokenViews.value.get(run.run_id)!.rows
 }
 
 function showCostColumn(run: VariantBatchRun): boolean {
-  return tokenViews.value.get(run.run_id)?.showCost ?? false
+  return tokenViews.value.get(run.run_id)!.showCost
 }
 
 async function loadBatch(id: string) {
