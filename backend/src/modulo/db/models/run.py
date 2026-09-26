@@ -69,6 +69,38 @@ ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
     {"pending", "running", "awaiting_human", "claimed", "unknown", "hitl_parked"}
 )
 
+# ---------------------------------------------------------------------------
+# FAR-1233 — WHY a run was cancelled. The CLOSED vocabulary behind
+# ``runs.cancel_reason``, enforced at the DB by ``ck_runs_cancel_reason``
+# (migration 0260).
+#
+# ``NULL`` is a first-class value: every run cancelled BEFORE 0260 has no
+# reason recorded and the run detail page renders a neutral
+# "reason not recorded" fallback rather than guessing.
+#
+# Adding a cause means adding the constant here, the CHECK value in
+# ``ck_runs_cancel_reason`` (migration 0260 — migration-owned, per the repo
+# parity rule: the DB-side vocabulary backstop is not duplicated in the ORM),
+# and the write site — together, never as a follow-up.
+# ---------------------------------------------------------------------------
+CANCEL_REASON_USER_REQUESTED: Final[str] = "user_requested"
+CANCEL_REASON_AGENT_REQUESTED: Final[str] = "agent_requested"
+CANCEL_REASON_HITL_GATE_EXPIRED: Final[str] = "hitl_gate_expired"
+CANCEL_REASON_HITL_GATE_MISSING: Final[str] = "hitl_gate_missing"
+CANCEL_REASON_VALUES: frozenset[str] = frozenset(
+    {
+        CANCEL_REASON_USER_REQUESTED,
+        CANCEL_REASON_AGENT_REQUESTED,
+        CANCEL_REASON_HITL_GATE_EXPIRED,
+        CANCEL_REASON_HITL_GATE_MISSING,
+    }
+)
+
+# ``runs.cancelled_by`` sentinel for a system-owned cancellation (a watchdog /
+# terminalizer, or a caller with no authenticated account in scope). Every
+# other value is the acting account id rendered as text.
+CANCELLED_BY_SYSTEM: Final[str] = "system"
+
 # The canonical status literal (FAR-604 qa F15): every write site that names the
 # parked status binds/compares against this constant so a rename or a typo can
 # never desynchronise the park sweep, the un-park transitions, and the guard.
@@ -253,6 +285,15 @@ class Run(OrgScoped):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # FAR-1233 cancellation transparency: WHY and WHO. ``cancel_reason`` is one
+    # of CANCEL_REASON_VALUES (DB backstop ``ck_runs_cancel_reason``, migration
+    # 0260); NULL for every run cancelled before 0260 — the API serves NULL
+    # as-is and the UI renders a neutral "reason not recorded" fallback.
+    # ``cancelled_by`` is the acting account id (text) or CANCELLED_BY_SYSTEM.
+    # Nullable and additive: existing rows and existing API consumers are
+    # unaffected.
+    cancel_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cancelled_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Execution heartbeats + dispatch tracking (migration 0027). Used by the
     # shared claim logic and dispatcher_reconcile (SAQ, PR B-2).
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

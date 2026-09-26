@@ -730,6 +730,7 @@ class TestPersistenceHook:
         session: AsyncSession,
     ) -> None:
         from modulo.db.crud.run import request_cancellation
+        from modulo.db.models.run import CANCEL_REASON_USER_REQUESTED, CANCELLED_BY_SYSTEM
 
         run_id = uuid.uuid4()
         async with session.begin():
@@ -737,6 +738,10 @@ class TestPersistenceHook:
             run = await request_cancellation(session, run_id)
         assert run is not None
         assert run.status == "cancelled"
+        # FAR-1233: WHY/WHO land in the SAME write as the status flip (real
+        # Postgres — this also proves the new columns migrate + persist).
+        assert run.cancel_reason == CANCEL_REASON_USER_REQUESTED
+        assert run.cancelled_by == CANCELLED_BY_SYSTEM
         record = await _read_classification(engine, run_id)
         assert record is not None
         assert record["value"] == "excluded"

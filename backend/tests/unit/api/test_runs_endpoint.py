@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -103,6 +104,8 @@ def _make_run(
     total_tokens: int | None = None,
     node_token_usage: dict[str, Any] | None = None,
     cost_breakdown: list[dict[str, Any]] | None = None,
+    cancel_reason: str | None = None,
+    cancelled_by: str | None = None,
 ) -> MagicMock:
     r = MagicMock()
     r.id = _RUN_ID
@@ -113,6 +116,9 @@ def _make_run(
     r.langgraph_thread_id = _THREAD_ID
     r.error_detail = error_detail
     r.error_code = error_code
+    # FAR-1233 cancellation transparency (None = reason not recorded)
+    r.cancel_reason = cancel_reason
+    r.cancelled_by = cancelled_by
     r.total_cost_usd = total_cost_usd
     r.total_tokens = total_tokens
     r.node_token_usage = node_token_usage
@@ -684,6 +690,30 @@ def test_cancel_run_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/runs/{run_id}/cancel — FAR-1233 reason/actor recording
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_run_records_reason_and_actor(client: TestClient) -> None:
+    """The operator cancel leg stamps ``user_requested`` + the acting account
+    in the SAME ``request_cancellation`` call that flips the run cancelled."""
+    run = _make_run(status="running")
+
+    with (
+        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs.request_cancellation") as mock_cancel,
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
+
+    assert resp.status_code == 202
+    mock_cancel.assert_awaited_once()
+    kwargs = mock_cancel.await_args.kwargs
+    assert kwargs["reason"] == "user_requested"
+    assert kwargs["actor"] == str(_USER_ID)
+
+
+# ---------------------------------------------------------------------------
 # RunResponse — new field serialization
 # ---------------------------------------------------------------------------
 
@@ -717,6 +747,81 @@ def test_run_response_error_detail_none_when_run_succeeded(client: TestClient) -
     body = resp.json()
     assert body["error_detail"] is None
     assert body["error_code"] is None
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/runs/{run_id} — FAR-1233 cancellation reason
+# ---------------------------------------------------------------------------
+
+
+def test_run_response_exposes_cancel_reason_and_actor(client: TestClient) -> None:
+    """The detail response carries WHY/WHO the run was cancelled."""
+    run = _make_run(status="cancelled", cancel_reason="hitl_gate_expired", cancelled_by="system")
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cancel_reason"] == "hitl_gate_expired"
+    assert body["cancelled_by"] == "system"
+
+
+def test_run_response_cancel_reason_null_when_not_recorded(client: TestClient) -> None:
+    """Backward compatibility: a run cancelled before the columns shipped
+    serves NULL and the UI renders the neutral fallback — never a 500."""
+    run = _make_run(status="cancelled", cancel_reason=None, cancelled_by=None)
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cancel_reason"] is None
+    assert body["cancelled_by"] is None
+
+
+def test_run_response_cancel_reason_degrades_for_non_string_value(client: TestClient) -> None:
+    """Defensive coercion: a malformed/unexpected column value degrades to
+    ``None`` (reason not recorded) instead of failing response validation."""
+    run = _make_run(status="cancelled")
+    run.cancel_reason = object()
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["cancel_reason"] is None
+
+
+def test_cancel_reason_contract_matches_generated_frontend_schema() -> None:
+    """Contract round-trip (FAR-1233): the backend response field and the
+    generated OpenAPI->TypeScript type carry the SAME name and nullability.
+
+    ``frontend/src/lib/api/schema.ts`` is produced from this model's OpenAPI
+    schema (``pnpm run generate:api``) and CI's schema-freshness gate diffs
+    it, so the assertion below is the fast local half of that gate: a rename
+    on either side fails here before review.
+    """
+    from modulo.api.routes.runs import RunResponse
+
+    repo_root = Path(__file__).resolve().parents[4]
+    props = RunResponse.model_json_schema()["properties"]
+
+    assert "cancel_reason" in props
+    assert {"type": "null"} in props["cancel_reason"]["anyOf"]
+    assert "cancelled_by" in props
+    assert {"type": "null"} in props["cancelled_by"]["anyOf"]
+
+    schema_ts = (repo_root / "frontend" / "src" / "lib" / "api" / "schema.ts").read_text(encoding="utf-8")
+    assert "cancel_reason?: string | null;" in schema_ts
+    assert "cancelled_by?: string | null;" in schema_ts
 
 
 def test_run_response_gate_fired_false_for_plain_complete(client: TestClient) -> None:

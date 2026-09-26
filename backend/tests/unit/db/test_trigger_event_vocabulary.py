@@ -123,11 +123,12 @@ _MIGRATION_PATH = (
 # (FAR-1196 Tier 3) chained onto 0256_pipeline_max_autonomy_level, and
 # 0258_pipeline_accountability_owners (FAR-1161) chained onto
 # 0257_rename_remy_to_assistant, and 0259_pipeline_snapshot_max_autonomy_check
-# (FAR-1223) chained onto 0258_pipeline_accountability_owners as the chain
+# (FAR-1223) chained onto 0258_pipeline_accountability_owners, and
+# 0260_run_cancel_reason (FAR-1233) chained onto 0259 as the chain
 # head. (_MIGRATION_NAME above
 # stays pinned to 0255 — that is the constraint-owning migration under test,
 # not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0259_pipeline_snapshot_max_autonomy_check"
+_CHAIN_HEAD_MIGRATION_NAME = "0260_run_cancel_reason"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
