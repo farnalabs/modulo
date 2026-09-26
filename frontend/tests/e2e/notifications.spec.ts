@@ -163,4 +163,71 @@ test.describe('Notifications', { tag: "@regression" }, () => {
     // Should show next button
     await expect(page.locator('[data-testid="panel-next-page"]')).toBeVisible()
   })
+
+  // FAR-1234 — a stale HITL request for a stopped run must not read as live,
+  // and must be clearable end to end.
+  test('stale HITL notification for a cancelled run shows run state and can be dismissed', { tag: "@regression" }, async ({ page, env }) => {
+    const runId = '2fdb083f-518a-4e71-8a5d-ffb573602f7a'
+    let dismissed = false
+
+    const staleHitl = {
+      id: 'n-stale',
+      scope: 'org',
+      level: 'info',
+      category: 'hitl.awaiting',
+      title: 'HITL review needed — Improve Security',
+      body: 'Pipeline "Improve Security" is waiting for human review.',
+      action_url: `/runs/${runId}`,
+      dismiss_strategy: 'any_scope',
+      dismissible_at_scope: true,
+      created_at: '2026-09-25T13:02:50Z',
+      expires_at: '2026-09-28T13:02:50Z',
+      scope_label: 'Org-wide',
+      run_id: runId,
+      run_status: 'cancelled',
+      run_terminal: true,
+      run_cancel_reason: null,
+    }
+
+    const listPayload = () =>
+      dismissed
+        ? { items: [], total: 0, page: 1, page_size: 20 }
+        : { items: [staleHitl], total: 1, page: 1, page_size: 20 }
+
+    await loginAsAdmin(page, env)
+    // Registered AFTER the local mock API so this handler wins the precedence
+    // contest (Playwright matches the most recently registered route first).
+    await page.route('**/api/v1/notifications/in-app*', (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname.endsWith('/dismiss')) {
+        dismissed = true
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ status: 'dismissed_for_self' }),
+        })
+        return
+      }
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(listPayload()) })
+    })
+
+    await page.goto('/notifications')
+
+    const card = page.locator('.notification-card').first()
+    // Point-in-time metadata: the run's CURRENT state, not the trigger-time claim.
+    await expect(card.getByTestId('notification-run-state')).toContainText('cancelled')
+    // The HITL request is demoted: never presented as a pending review.
+    await expect(card).toContainText('No review needed')
+    await expect(card).not.toContainText('Awaiting your review')
+
+    // Dismiss it end to end (the controls reveal on hover on a pointer device).
+    await card.hover()
+    await card.getByRole('button', { name: 'Dismiss this notification' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Dismiss', exact: true }).click()
+
+    await expect(page.locator('.notification-card')).toHaveCount(0)
+    // An emptied inbox renders the empty state (the count/pagination row only
+    // exists while there is at least one item).
+    await expect(page.getByText('No notifications', { exact: true })).toBeVisible()
+  })
 })

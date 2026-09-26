@@ -23,9 +23,11 @@ from modulo.core.events.event_bus import get_event_bus
 from modulo.core.notifier.event_mapper import notification_categories
 from modulo.db.crud.account import AccountNotFoundError, get_account_by_id, update_account_preferences
 from modulo.db.crud.notifications import (
+    LinkedRunState,
     count_notifications_for_user,
     dismiss_notification,
     get_dashboard_notifications,
+    get_linked_run_states,
     get_notification,
     get_notifications_for_user,
     get_opted_out_categories,
@@ -67,6 +69,16 @@ class NotificationResponse(BaseModel):
     created_at: str
     expires_at: str | None = None
     scope_label: str = ""
+    # FAR-1234 — point-in-time run metadata resolved at READ time. The
+    # notification row itself is unchanged (it still says what the trigger
+    # knew); these fields report what the linked run looks like NOW, so a
+    # stale HITL request for a cancelled run is never presented as live.
+    # ``run_status``/``run_cancel_reason`` are null when the notification is
+    # not run-linked or the run row cannot be read.
+    run_id: str | None = None
+    run_status: str | None = None
+    run_terminal: bool = False
+    run_cancel_reason: str | None = None
 
 
 class DashboardNotificationResponse(BaseModel):
@@ -113,7 +125,10 @@ async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) ->
     return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "info"))
 
 
-def _notification_to_response(n: Notification) -> NotificationResponse:
+def _notification_to_response(
+    n: Notification,
+    run_state: LinkedRunState | None = None,
+) -> NotificationResponse:
     return NotificationResponse(
         id=n.id,
         scope=n.scope,
@@ -127,7 +142,18 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
         created_at=n.created_at.isoformat() if n.created_at else "",
         expires_at=n.expires_at.isoformat() if n.expires_at else None,
         scope_label=SCOPE_LABELS.get(n.scope, n.scope),
+        run_id=str(run_state.run_id) if run_state is not None else None,
+        run_status=run_state.status if run_state is not None else None,
+        run_terminal=run_state.terminal if run_state is not None else False,
+        run_cancel_reason=run_state.cancel_reason if run_state is not None else None,
     )
+
+
+def _responses(
+    notifications: list[Notification],
+    run_states: dict[uuid.UUID, LinkedRunState],
+) -> list[NotificationResponse]:
+    return [_notification_to_response(n, run_states.get(n.id)) for n in notifications]
 
 
 @router.get("/dashboard")
@@ -147,6 +173,11 @@ async def get_dashboard(
                 user_id=principal.account_id,
                 min_level=min_level,
                 limit=5,
+            )
+            run_states = await get_linked_run_states(
+                session=session,
+                org_id=principal.organisation_id,
+                notifications=notifications,
             )
             unread = await get_unread_count(
                 session=session,
@@ -172,7 +203,7 @@ async def get_dashboard(
             detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
     return DashboardNotificationResponse(
-        notifications=[_notification_to_response(n) for n in notifications],
+        notifications=_responses(notifications, run_states),
         total_unread=unread,
     )
 
@@ -241,6 +272,11 @@ async def list_notifications(
                 limit=page_size,
                 offset=offset,
             )
+            run_states = await get_linked_run_states(
+                session=session,
+                org_id=principal.organisation_id,
+                notifications=notifications,
+            )
             total = await count_notifications_for_user(
                 session=session,
                 org_id=principal.organisation_id,
@@ -269,7 +305,7 @@ async def list_notifications(
             detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
     return PaginatedNotificationsResponse(
-        items=[_notification_to_response(n) for n in notifications],
+        items=_responses(notifications, run_states),
         total=total,
         page=page,
         page_size=page_size,
@@ -408,6 +444,11 @@ async def get_notification_detail(
             )
             if n is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+            run_states = await get_linked_run_states(
+                session=session,
+                org_id=principal.organisation_id,
+                notifications=[n],
+            )
     except ProgrammingError:
         _log.exception(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
         raise HTTPException(
@@ -426,7 +467,7 @@ async def get_notification_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
-    return _notification_to_response(n)
+    return _notification_to_response(n, run_states.get(n.id))
 
 
 @router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)

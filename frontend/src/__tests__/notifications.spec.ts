@@ -33,6 +33,10 @@ const notification: NotificationResponse = {
   dismissible_at_scope: true,
   created_at: '2026-09-01T00:00:00Z',
   scope_label: 'Organisation',
+  run_id: null,
+  run_status: null,
+  run_terminal: false,
+  run_cancel_reason: null,
 }
 
 beforeEach(() => {

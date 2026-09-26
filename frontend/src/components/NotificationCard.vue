@@ -17,19 +17,48 @@
       <p class="mt-0.5 text-sm font-medium leading-snug text-foreground">{{ notification.title }}</p>
       <p v-if="showBody" class="mt-0.5 line-clamp-3 text-xs text-muted-foreground">{{ notification.body }}</p>
 
-      <!-- HITL awaiting affordance -->
-      <div
-        v-if="isHitlAwaiting"
-        class="mt-2 flex items-center gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground"
+      <!-- FAR-1234: point-in-time run metadata resolved when the list loads.
+           The notification body still says what the trigger knew; this line
+           says what the linked run looks like NOW. -->
+      <p
+        v-if="hasRunState"
+        data-testid="notification-run-state"
+        class="mt-1 flex flex-wrap items-center gap-x-1 text-xs"
+        :class="runStateClass"
         role="status"
         aria-live="polite"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0 text-muted-foreground" aria-hidden="true">
+        <span class="font-medium">{{ runStateLabel }}</span>
+        <span v-if="cancelReasonLabel" class="text-muted-foreground">{{ cancelReasonLabel }}</span>
+      </p>
+
+      <!-- HITL awaiting affordance: only while the linked run can still be
+           reviewed. A terminal run (cancelled/failed/…) demotes this to an
+           explanatory label so a stale request never reads as live work. -->
+      <div
+        v-if="hitlAffordance"
+        class="mt-2 flex items-center gap-2 rounded-md px-3 py-2 text-xs"
+        :class="hitlAffordanceClass"
+        role="status"
+        aria-live="polite"
+      >
+        <svg
+          v-if="isHitlActionable"
+          xmlns="http://www.w3.org/2000/svg"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          class="shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        >
           <circle cx="12" cy="12" r="10"/>
           <line x1="12" y1="8" x2="12" y2="12"/>
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <span>{{ $t('components.NotificationCard.awaiting_hitl') }}</span>
+        <span>{{ hitlAffordance }}</span>
       </div>
 
       <div class="mt-2 flex items-center gap-2">
@@ -42,7 +71,10 @@
         </router-link>
       </div>
     </div>
-    <div class="notification-actions absolute right-2 top-2 hidden gap-1 group-hover:flex">
+    <!-- FAR-1234: visibility is driven by the scoped rules below (hover,
+         focus-within, and no-hover pointers) — not by `hidden`+`group-hover`,
+         which left these controls out of the tab order entirely. -->
+    <div class="notification-actions absolute right-2 top-2 gap-1">
       <button
         type="button"
         class="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
@@ -73,6 +105,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import type { NotificationResponse } from "../lib/api/notifications";
 import { dismissNotification } from "../lib/api/notifications";
 import DismissDialog from "./DismissDialog.vue";
@@ -87,6 +120,8 @@ const emit = defineEmits<{
   dismissed: [id: string];
   "review-later": [id: string];
 }>();
+
+const { t } = useI18n();
 
 const showDismiss = ref(false);
 const dismissError = ref("");
@@ -112,17 +147,71 @@ const scopeLabel = computed(() => props.notification.scope_label);
 
 const relativeTime = computed(() => formatRelativeTime(props.notification.created_at));
 
+/** The run's CURRENT status, or null when the notification is not run-linked
+ *  (or the run could not be resolved at read time). */
+const runStatus = computed(() => props.notification.run_status ?? null);
+
+const hasRunState = computed(() => runStatus.value !== null);
+
+const runIsTerminal = computed(() => props.notification.run_terminal === true);
+
+/** Localised status word, resolved from the NotificationCard status map.
+ *  Unknown/absent statuses never render (hasRunState guards the block). */
+const runStateLabel = computed(() => {
+  const status = runStatus.value;
+  if (status === null) return "";
+  const key = `components.NotificationCard.run_statuses.${status}`;
+  const translated = t(key);
+  return translated === key ? status.replaceAll("_", " ") : translated;
+});
+
+const runStateClass = computed(() => {
+  if (runIsTerminal.value) return "text-muted-foreground";
+  return "text-primary";
+});
+
+/** Short cancel-reason phrase (FAR-1233 ``runs.cancel_reason``), shown only
+ *  alongside a cancelled run. A NULL/unknown reason is the first-class
+ *  "never recorded" case and is stated as such rather than guessed (mirrors
+ *  the run-detail fallback; the column vocabulary is closed by
+ *  ``ck_runs_cancel_reason``). */
+const cancelReasonLabel = computed(() => {
+  if (runStatus.value !== "cancelled") return "";
+  const reason = props.notification.run_cancel_reason ?? "";
+  const key = `components.NotificationCard.cancel_reasons.${reason}`;
+  const translated = t(key);
+  if (translated !== key) return translated;
+  return t("components.NotificationCard.cancel_reasons.unknown");
+});
+
 /**
  * HITL awaiting notifications (category === "hitl.awaiting") signal an open
  * human-in-the-loop gate for the linked run. The backend never retracts or
- * status-flips these notifications on gate resume, so we cannot reliably tell
- * from the notification alone whether the gate has since lapsed. We therefore
- * show a neutral "awaiting your review" affordance (never a "lapsed" claim),
- * which is accurate for every hitl.awaiting notification the user can see.
+ * status-flips these notifications on gate resume, so the notification alone
+ * cannot tell us whether the gate still stands — but FAR-1234 now resolves the
+ * linked run's CURRENT state at read time, so:
+ *   - terminal run  -> the request is stale: demote to an explanatory label;
+ *   - live/unresolved run -> keep the neutral "awaiting your review" wording
+ *     (never a "lapsed" claim, which would be a guess).
  */
 const isHitlAwaiting = computed(() => {
   const cat = props.notification.category || "";
   return cat === "hitl.awaiting";
+});
+
+const isHitlActionable = computed(
+  () => isHitlAwaiting.value && (!hasRunState.value || !runIsTerminal.value),
+);
+
+const hitlAffordance = computed(() => {
+  if (!isHitlAwaiting.value) return "";
+  if (isHitlActionable.value) return t("components.NotificationCard.awaiting_hitl");
+  return t("components.NotificationCard.hitl_run_terminal");
+});
+
+const hitlAffordanceClass = computed(() => {
+  if (isHitlActionable.value) return "bg-muted/60 text-muted-foreground";
+  return "bg-muted/40 text-muted-foreground";
 });
 
 async function onDismiss(scope: "self" | "scope") {
@@ -136,3 +225,40 @@ async function onDismiss(scope: "self" | "scope") {
   }
 }
 </script>
+
+<style scoped>
+/*
+ * FAR-1234 — these actions used to be `hidden group-hover:flex`.
+ * `display: none` removes an element from the tab order, so a keyboard (or
+ * assistive-tech) user had NO way to dismiss a notification, and a pointer
+ * without hover (touch) never revealed them at all. Reveal on card hover (the
+ * original behaviour), on focus-within (keyboard), and whenever the device
+ * cannot hover (touch).
+ */
+.notification-card .notification-actions {
+  display: none;
+}
+
+.notification-card:hover .notification-actions,
+.notification-card:focus-within .notification-actions {
+  display: flex;
+}
+
+@media (hover: none) {
+  /*
+   * Touch: the controls are always visible AND dropped into normal flow as a
+   * trailing full-width row — absolutely positioned over the card they would
+   * cover the title/body, which wraps to several lines on a narrow screen.
+   */
+  .notification-card {
+    flex-wrap: wrap;
+  }
+
+  .notification-card .notification-actions {
+    position: static;
+    display: flex;
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+</style>

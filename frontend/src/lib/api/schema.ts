@@ -14677,6 +14677,17 @@ export interface components {
              * @default
              */
             scope_label: string;
+            /** Run Id */
+            run_id?: string | null;
+            /** Run Status */
+            run_status?: string | null;
+            /**
+             * Run Terminal
+             * @default false
+             */
+            run_terminal: boolean;
+            /** Run Cancel Reason */
+            run_cancel_reason?: string | null;
         };
         /** OAuthClientItem */
         OAuthClientItem: {

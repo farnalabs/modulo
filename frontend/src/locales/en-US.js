@@ -3840,7 +3840,32 @@ export default {
       "just_now": "just now",
       "view": "View",
       "awaiting_hitl": "Awaiting your review \u2014 a human-in-the-loop gate is open for this run.",
-      "awaiting_hitl_view_run": "View run"
+      "awaiting_hitl_view_run": "View run",
+      "hitl_run_terminal": "No review needed \u2014 this run is no longer waiting for a decision.",
+      "run_statuses": {
+        "pending": "pending",
+        "running": "running",
+        "awaiting_human": "awaiting a human",
+        "claimed": "claimed",
+        "unknown": "in an unknown state",
+        "hitl_parked": "parked",
+        "complete": "completed",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "eval_failed": "blocked by a guardrail",
+        "stalled": "stalled",
+        "budget_exceeded": "stopped on token budget",
+        "router_no_match": "stopped with no matching route",
+        "cost_ceiling_exceeded": "stopped on the spend ceiling",
+        "compensation_failed": "failed with compensation"
+      },
+      "cancel_reasons": {
+        "user_requested": "Cancelled by an operator.",
+        "agent_requested": "Cancelled through the API.",
+        "hitl_gate_expired": "Cancelled automatically: the review gate expired without a decision.",
+        "hitl_gate_missing": "Cancelled automatically: the review gate was never created.",
+        "unknown": "Reason not recorded."
+      }
     },
     "NodeCategoryEditor": {
       "message_circle": "Message Circle",

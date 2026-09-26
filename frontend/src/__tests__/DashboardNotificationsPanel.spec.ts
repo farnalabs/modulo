@@ -61,6 +61,10 @@ function makeNotifications(count: number) {
     dismissible_at_scope: false,
     created_at: new Date().toISOString(),
     scope_label: 'Organization',
+    run_id: null,
+    run_status: null,
+    run_terminal: false,
+    run_cancel_reason: null,
   }))
 }
 
@@ -107,7 +111,7 @@ describe('DashboardNotificationsPanel', () => {
 
   it('renders the link when notifications are present', async () => {
     const wrapper = await mountAndExpand(
-      [{ id: 'n-1', title: 'Test', level: 'info', category: 'pipeline_run', scope: 'org', body: '', action_url: null, dismiss_strategy: 'user_only', dismissible_at_scope: false, created_at: '2025-06-01T10:00:00Z', scope_label: 'Organization' }],
+      [{ id: 'n-1', title: 'Test', level: 'info', category: 'pipeline_run', scope: 'org', body: '', action_url: null, dismiss_strategy: 'user_only', dismissible_at_scope: false, created_at: '2025-06-01T10:00:00Z', scope_label: 'Organization', run_id: null, run_status: null, run_terminal: false, run_cancel_reason: null }],
       1,
     )
 

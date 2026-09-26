@@ -425,3 +425,94 @@ class TestPreferences:
         assert added_list[0].organisation_id == _ORG_ID
         assert added_list[0].account_id == _USER_ID
         mock_session.flush.assert_awaited_once()
+
+
+class TestLinkedRunState:
+    """FAR-1234 — read-time resolution of a notification's linked run."""
+
+    def test_linked_run_id_parses_run_deep_links(self) -> None:
+        from modulo.db.crud.notifications import linked_run_id
+
+        run_id = uuid.uuid4()
+        assert linked_run_id(f"/runs/{run_id}") == run_id
+        assert linked_run_id(f"/runs/{run_id}?tab=output") == run_id
+        assert linked_run_id(f"/runs/{run_id}#node-3") == run_id
+
+    def test_linked_run_id_rejects_non_run_and_unresolved_links(self) -> None:
+        from modulo.db.crud.notifications import linked_run_id
+
+        run_id = uuid.uuid4()
+        assert linked_run_id(None) is None
+        assert linked_run_id("") is None
+        assert linked_run_id("/evals") is None
+        assert linked_run_id("/feedback/inbox") is None
+        # The mapper's missing-payload fallback must never resolve to a run.
+        assert linked_run_id("/runs/[unknown]") is None
+        # Only the app's own rooted deep link counts — an absolute URL to some
+        # other host must not be treated as a run reference.
+        assert linked_run_id(f"https://evil.example/runs/{run_id}") is None
+
+    async def test_no_run_link_short_circuits_without_a_query(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import get_linked_run_states
+
+        notification = _make_notification()
+        notification.action_url = "/evals"
+
+        states = await get_linked_run_states(mock_session, org_id=_ORG_ID, notifications=[notification])
+
+        assert states == {}
+        mock_session.execute.assert_not_awaited()
+
+    async def test_resolves_terminal_run_state_and_cancel_reason(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import get_linked_run_states
+
+        run_id = uuid.uuid4()
+        notification = _make_notification()
+        notification.action_url = f"/runs/{run_id}"
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[(run_id, "cancelled", "user_requested")])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        states = await get_linked_run_states(mock_session, org_id=_ORG_ID, notifications=[notification])
+
+        state = states[_NOTIF_ID]
+        assert state.run_id == run_id
+        assert state.status == "cancelled"
+        assert state.terminal is True
+        assert state.cancel_reason == "user_requested"
+        # The batched read is scoped to the caller's org — never cross-tenant.
+        where_clause = str(mock_session.execute.call_args.args[0].whereclause)
+        assert "organisation_id" in where_clause
+        assert "runs" in where_clause
+
+    async def test_non_terminal_run_is_not_marked_terminal(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import get_linked_run_states
+
+        run_id = uuid.uuid4()
+        notification = _make_notification()
+        notification.action_url = f"/runs/{run_id}"
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[(run_id, "awaiting_human", None)])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        states = await get_linked_run_states(mock_session, org_id=_ORG_ID, notifications=[notification])
+
+        assert states[_NOTIF_ID].terminal is False
+        assert states[_NOTIF_ID].cancel_reason is None
+
+    async def test_unreadable_run_degrades_to_no_metadata(self, mock_session: AsyncMock) -> None:
+        """A deleted / invisible run row must not fail the notification read."""
+        from modulo.db.crud.notifications import get_linked_run_states
+
+        notification = _make_notification()
+        notification.action_url = f"/runs/{uuid.uuid4()}"
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        states = await get_linked_run_states(mock_session, org_id=_ORG_ID, notifications=[notification])
+
+        assert states == {}
