@@ -117,7 +117,13 @@ async def test_create_workspace_creates_sandbox(
     ref = await provider.create_workspace(workspace_spec)
 
     assert ref == "sbx-e2b-test-001"
-    mock_sandbox_cls.create.assert_called_once_with(template="ubuntu-22.04", api_key="sk-test")
+    # egress_policy unset -> internet allowed (FAR-1050 R5 passes the
+    # permissive boolean explicitly rather than leaving it to the SDK default).
+    mock_sandbox_cls.create.assert_called_once_with(
+        template="ubuntu-22.04",
+        api_key="sk-test",
+        allow_internet_access=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -129,7 +135,11 @@ async def test_create_workspace_default_template(mock_sandbox_cls: MagicMock) ->
         image_ref="",
     )
     await provider.create_workspace(spec)
-    mock_sandbox_cls.create.assert_called_once_with(template="base", api_key="sk-test")
+    mock_sandbox_cls.create.assert_called_once_with(
+        template="base",
+        api_key="sk-test",
+        allow_internet_access=True,
+    )
 
 
 @pytest.mark.asyncio

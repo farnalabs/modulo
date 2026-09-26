@@ -42,7 +42,6 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     SandboxQueueTimeoutError,
     SandboxRateLimitedError,
-    SandboxTierRefusedError,
     _build_dispatch_provider,
     _dispatch_marker_json,
     _dispatch_via_provider_enabled,
@@ -686,36 +685,72 @@ async def test_flag_off_non_provider_failure_still_builds_the_legacy_envelope(
 
 
 # ---------------------------------------------------------------------------
-# 7. Egress fail-closed on the provider create path (ADR 040 egress rule)
+# 7. Egress carried into the provider create path (ADR 040 egress rule)
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_on_egress_restricted_policy_is_refused_not_granted(
+async def test_flag_on_restrictive_egress_reaches_the_provider_create(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
-    """The provider create cannot express ``allow_internet_access`` yet, so a
-    restrictive policy must REFUSE (terminal named code), never silently grant
-    permissive egress."""
+    """FAR-1050 R5: the stopgap refusal is GONE — a resolved ``deny_all`` is
+    carried into ``create_workspace(spec)`` (and from there into the SDK's
+    ``allow_internet_access``) instead of refusing the dispatch.
+
+    Fails on the pre-R5 code: the stopgap raised ``SandboxTierRefusedError``
+    whenever an egress policy was resolved, so no spec was ever built.
+    """
     _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
+    fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when flag ON"))
-    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-egress")
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-egress", exit_code=0)
 
     fn = make_sandbox_agent_fn(_base_node_def(egress_policy="deny_all"))
-    with (
-        patch("e2b.AsyncSandbox.create", new=legacy_create),
-        pytest.raises(SandboxTierRefusedError) as excinfo,
-    ):
-        await fn(_run_state())
+    with patch("e2b.AsyncSandbox.create", new=legacy_create):
+        result = await fn(_run_state())
 
+    assert result["output"]["status"] == "completed"
     legacy_create.assert_not_awaited()
-    assert "egress" in str(excinfo.value)
-    # The refusal is terminal (never a retry loop).
-    from modulo.core.pipeline_engine.runtime_retry import _NEVER_RETRYABLE_NAMES
+    assert "create" in dispatch.events
+    assert dispatch.created_spec is not None
+    # The restrictive policy reached the provider's own spec — the field the
+    # E2B provider maps onto allow_internet_access.
+    assert dispatch.created_spec.egress_policy == "deny_all"
 
-    assert "SandboxTierRefusedError" in _NEVER_RETRYABLE_NAMES
-    # No workspace was ever provisioned.
-    assert "create" not in dispatch.events
+
+async def test_flag_on_selected_allowlist_rides_the_spec_metadata(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """FAR-1050 R5: the selected-mode allowlist reaches the provider spec's
+    ``workspace_metadata`` under the LEGACY create's key (``egress_allowlist``),
+    and the dispatch is no longer refused for a resolved policy."""
+    _enable_flag(monkeypatch)
+    _install_log_tail(monkeypatch)
+    fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
+    legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when flag ON"))
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-egress-selected", exit_code=0)
+    # Keep the unit offline: allowlist pre-resolution is a DNS lookup on both
+    # paths, and the legacy resolution helper is unchanged by this slice.
+    monkeypatch.setattr(nr, "_resolve_egress_allowlist", AsyncMock(side_effect=lambda v: v))
+    # The selected-mode policy step routes through apply_isolation; a
+    # recording stand-in keeps the run on the fake dispatch (no network).
+    isolation = MagicMock(apply_isolation=AsyncMock())
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_isolation_provider",
+        AsyncMock(return_value=isolation),
+    )
+
+    allowlist = [{"host": "api.example.com", "port": 443}]
+    fn = make_sandbox_agent_fn(_base_node_def(egress_policy="selected", egress_allowlist=allowlist))
+    with patch("e2b.AsyncSandbox.create", new=legacy_create):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    legacy_create.assert_not_awaited()
+    assert dispatch.created_spec is not None
+    assert dispatch.created_spec.egress_policy == "selected"
+    assert json.loads(dispatch.created_spec.workspace_metadata["egress_allowlist"]) == allowlist
+    isolation.apply_isolation.assert_awaited_once()
 
 
 async def test_flag_off_egress_deny_all_still_uses_the_legacy_create(
@@ -731,6 +766,34 @@ async def test_flag_off_egress_deny_all_still_uses_the_legacy_create(
         await fn(_run_state())
 
     assert create.await_args.kwargs["allow_internet_access"] is False
+
+
+async def test_flag_off_egress_selected_still_denies_internet_with_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag OFF unchanged for the other restrictive policy: ``selected`` still
+    maps to ``allow_internet_access=False`` and the allowlist still rides the
+    legacy create's ``metadata`` kwarg under ``egress_allowlist``."""
+    _disable_flag(monkeypatch)
+    sandbox = _legacy_sandbox("sbx-egress-selected-off", _COMPLETED_OUTPUT)
+    create = AsyncMock(return_value=sandbox)
+    # Offline: allowlist pre-resolution is DNS, and the legacy in-sandbox
+    # policy step is patched out (it is not what this assertion covers).
+    monkeypatch.setattr(nr, "_resolve_egress_allowlist", AsyncMock(side_effect=lambda v: v))
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.sandbox_policy.apply_sandbox_policy",
+        AsyncMock(return_value=None),
+    )
+
+    allowlist = [{"host": "api.example.com", "port": 443}]
+    fn = make_sandbox_agent_fn(_base_node_def(egress_policy="selected", egress_allowlist=allowlist))
+    with patch("e2b.AsyncSandbox.create", new=create):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    kwargs = create.await_args.kwargs
+    assert kwargs["allow_internet_access"] is False
+    assert json.loads(kwargs["metadata"]["egress_allowlist"]) == allowlist
 
 
 # ---------------------------------------------------------------------------
