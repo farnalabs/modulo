@@ -38,17 +38,68 @@ Resolution / fetch
 The module is deliberately lightweight (stdlib + the sibling
 ``workspace_inputs`` ls-remote parser) so the graph validator, the run-time
 renderer, and the ``modulo apply`` CLI can all import it.
+
+Fetch bounds (host-side runs)
+----------------------------
+The run-time fetch (:func:`fetch_git_content`) does NOT clone the whole
+repository: it creates an empty working tree, adds the remote, and fetches the
+pinned commit with progressively larger bounded strategies —
+``fetch --depth 1 --filter=blob:none``, then ``--depth 1``, then a full fetch
+(bounded by :data:`FETCH_TIMEOUT_SECONDS`) — so a pinned-SHA-only run never
+transfers the repository's history. The shallow probes require the remote to
+support uploadpack reachability-by-SHA for ``fetch <sha>`` (GitHub/GitLab do);
+when they are refused, the full fetch is the fallback.
+
+Retention is additionally capped even after a *successful* transfer: if the
+fetched working tree exceeds :data:`REPO_MAX_CLONE_BYTES`, the content is
+refused (a fetched-but-unbounded artifact is still an exfiltration surface).
+``git`` runs with prompts disabled (``GIT_TERMINAL_PROMPT=0`` +
+``BatchMode=yes``) so a credential-hungry private URL fails closed instead of
+hanging the run.
+
+Repeated (repo, sha, path) renders are served from a small on-disk cache
+(default under ``tempfile.gettempdir()/modulo-git-content-cache``, per worker
+host): TTL :data:`CONTENT_CACHE_TTL_SECONDS`, entry cap
+:data:`CONTENT_CACHE_MAX_ENTRIES`, values larger than
+:data:`CONTENT_CACHE_MAX_VALUE_BYTES` are never cached, writes are atomic
+(TempFile + ``os.replace``), the directory is ``chmod 0o700`` where supported,
+and every key-carrying file binds its own ``(repo_url, sha, path)`` so a
+traversal into the cache cannot serve a wrong key's content. The SSRF host
+gate (below) runs BEFORE the cache is consulted — the boundary is
+unconditional.
+
+SSRF host pinning (best-effort for git transports)
+--------------------------------------------------
+Every host-side git invocation (:func:`run_git_ls_remote`,
+:func:`fetch_git_content`) validates the repository host through
+:func:`require_public_git_host` — the same ``modulo.core.ssrf`` resolver the
+HTTP connectors use (loopback/private/link-local/metadata addresses refused,
+DNS fail-closed). Residual: git spawns its own libcurl/ssh stack, which has no
+``CURLOPT_RESOLVE``-style IP pinning hook, so a TOCTOU DNS-rebinding window
+between this pre-spawn validation and git's own DNS lookup cannot be closed
+without breaking TLS SNI; compensating controls are the pre-spawn gate, the
+credential-free public-only scheme set, prompts-off transport env, and the
+fetch/transfer bounds. Closing it fully is tied to the private-repository
+credential increment (which must also re-consider credential handling —
+currently public-only and fail-closed).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
+import json
 import logging
+import os
 import re
 import shutil
 import tempfile
+import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -78,6 +129,16 @@ _SUPPORTED_URL_SCHEMES = ("https://", "ssh://", "git@")
 #: Bounds for host-side git invocations (fail closed, never hang a plan/run).
 LS_REMOTE_TIMEOUT_SECONDS = 30.0
 FETCH_TIMEOUT_SECONDS = 60.0
+
+#: Post-fetch retention cap for a fetched working tree (Minor 2 / FAR-220).
+#: Timeout bounds the transfer; this bounds what is RETAINED on disk.
+REPO_MAX_CLONE_BYTES = 512 * 1024 * 1024
+
+# Content-cache bounds (see the module docstring):
+CONTENT_CACHE_TTL_SECONDS = 24 * 3600.0
+CONTENT_CACHE_MAX_ENTRIES = 256
+CONTENT_CACHE_MAX_VALUE_BYTES = 1024 * 1024
+CONTENT_CACHE_DIR_NAME = "modulo-git-content-cache"
 
 
 class GitContentRefError(ValueError):
@@ -262,18 +323,84 @@ def pin_git_content_spec(ref: GitContentRef, sha: str) -> str:
     return ref.spec(_require_sha(sha, "resolver result"))
 
 
+def git_repository_host_url(repo_url: str) -> str:
+    """Host-bound pseudo-URL (``https://host[:port]``) for SSRF gate probing.
+
+    Mapping: ``https://host[:port]/...`` -> as-is; ``ssh://[user@]host[:port]/...``
+    -> ``https://host[:port]`` (userinfo stripped — :mod:`modulo.core.ssrf`
+    refuses userinfo; the HOST is what the gate validates); SCP-style
+    ``git@host:path`` -> ``https://host``.
+
+    Raises :class:`GitContentRefError` when no host can be extracted.
+    """
+    if repo_url.startswith("git@"):
+        host = repo_url[len("git@") :].partition(":")[0]
+        if not host:
+            msg = f"cannot extract the repository host from {repo_url!r}"
+            raise GitContentRefError(msg)
+        return f"https://{host}"
+    netloc = urlsplit(repo_url).netloc
+    if not netloc:
+        msg = f"cannot extract the repository host from {repo_url!r}"
+        raise GitContentRefError(msg)
+    if "@" in netloc:  # ssh://user@host[:port] — ssrf refuses userinfo; keep host[:port] only
+        netloc = netloc.rpartition("@")[2]
+    return f"https://{netloc}"
+
+
+async def require_public_git_host(repo_url: str) -> None:
+    """SSRF gate for the repository host — the SAME policy HTTP connectors use.
+
+    Maps *repo_url* to its host via :func:`git_repository_host_url`, then runs
+    the shared ``modulo.core.ssrf`` resolver (refuses loopback / private /
+    link-local / metadata addresses; DNS is fail-closed). The function-level
+    import avoids the (currently absent but easy to create) import cycle.
+
+    Every failure raises :class:`GitContentFetchError` — security boundaries
+    fail closed. This is a pre-spawn mitigation only; see the module docstring
+    for the residual DNS-TOCTOU window and its compensating controls.
+    """
+    from modulo.core.ssrf import resolve_pinned_ip
+
+    target = git_repository_host_url(repo_url)
+    try:
+        await resolve_pinned_ip(target)
+    except ValueError as exc:
+        msg = f"repository host refused (SSRF validation): {exc}"
+        raise GitContentFetchError(msg) from None
+
+
+def _git_process_env() -> dict[str, str]:
+    """Host-side git environment: refuse credential prompts / ssh hangs.
+
+    ``GIT_TERMINAL_PROMPT=0`` makes http(s) auth failures exit non-zero instead
+    of prompting; ``BatchMode=yes`` does the same for the ssh transport unless
+    an operator-provided ``GIT_SSH_COMMAND`` is already set. Public-only
+    repositories need no credentials, so both paths fail closed.
+    """
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if not env.get("GIT_SSH_COMMAND"):
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    return env
+
+
 async def run_git_ls_remote(repo_url: str, *, timeout_seconds: float = LS_REMOTE_TIMEOUT_SECONDS) -> str:
     """Run ``git ls-remote <repo_url>`` and return the raw output (bounded).
 
-    Raises :class:`GitContentRefError` on non-zero exit or timeout so a flaky
-    remote surfaces as a typed, observed failure instead of a hang.
+    Refuses internal/loopback hosts via :func:`require_public_git_host` first
+    (same gate the run-time fetch applies). Raises
+    :class:`GitContentRefError` on non-zero exit or timeout so a flaky remote
+    surfaces as a typed, observed failure instead of a hang.
     """
+    await require_public_git_host(repo_url)
     proc = await asyncio.create_subprocess_exec(
         "git",
         "ls-remote",
         repo_url,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=_git_process_env(),
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_seconds)
@@ -309,34 +436,50 @@ async def fetch_git_content(
     path: str,
     *,
     timeout_seconds: float = FETCH_TIMEOUT_SECONDS,
+    max_clone_bytes: int = REPO_MAX_CLONE_BYTES,
+    cache_dir: str | Path | None = None,
+    use_cache: bool = True,
 ) -> str:
     """Fetch the UTF-8 content of *path* at the pinned commit *sha*.
 
-    Host-side clone (``--no-checkout`` for objects only) + ``git show
+    Host-side fetch at the pinned SHA (see the module docstring for the
+    shallow-with-fallback strategy and its server-support caveat) + ``git show
     <sha>:<path>`` — the same host-side git pattern managed workspace inputs
-    use for ``ls-remote``. PUBLIC repositories only in this increment: no
-    credential material is ever placed in the clone URL or the process
-    environment, and every failure (clone, missing object/path, non-UTF-8
-    content, timeout) raises :class:`GitContentFetchError` — the caller fails
-    the node rather than dispatching the raw ref string.
+    use for ``ls-remote``. PUBLIC repositories only: no credential material is
+    ever placed in the remote URL or the process environment, prompts are
+    disabled, and every failure (host refused, fetch strategy exhausted,
+    missing object/path, oversized clone, non-UTF-8 content, timeout) raises
+    :class:`GitContentFetchError` — the caller fails the node rather than
+    dispatching the raw ref string.
 
-    NOTE: like the existing host-side ``ls-remote`` used by managed workspace
-    inputs, the URL is scheme-validated but not IP-pinned; private-repository
-    credential support is a later increment.
+    Results are served from an on-disk content cache keyed by
+    ``(repo_url, sha, path)`` (pinned content is immutable) so repeated runs
+    do not re-fetch; see the module docstring. The SSRF host gate runs before
+    the cache is consulted — the boundary is unconditional.
     """
     if not _SHA_RE.match(sha):
         msg = f"fetch_git_content requires a 40-hex pinned SHA, got {sha!r}"
         raise GitContentFetchError(msg)
+    await require_public_git_host(repo_url)
+    if use_cache:
+        cached = _cache_get(repo_url, sha, path, cache_dir=cache_dir)
+        if cached is not None:
+            return cached
     workdir = tempfile.mkdtemp(prefix="modulo-git-content-")
     try:
         await _git(
-            ("clone", "--quiet", "--no-checkout", repo_url, "."),
+            ("init", "--quiet", "."), cwd=workdir, timeout_seconds=timeout_seconds, what="init", repo_url=repo_url
+        )
+        await _git(
+            ("remote", "add", "origin", repo_url),
             cwd=workdir,
             timeout_seconds=timeout_seconds,
-            what="clone",
+            what="remote add",
             repo_url=repo_url,
         )
-        content = await _git(
+        await _bounded_fetch_attempts(sha, workdir=workdir, repo_url=repo_url, timeout_seconds=timeout_seconds)
+        _assert_clone_size_bounded(workdir, max_clone_bytes, repo_url)
+        raw = await _git(
             ("show", f"{sha.lower()}:{path}"),
             cwd=workdir,
             timeout_seconds=timeout_seconds,
@@ -344,12 +487,154 @@ async def fetch_git_content(
             repo_url=repo_url,
         )
         try:
-            return content.decode("utf-8")
+            content = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             msg = f"content at {path!r} (commit {sha}) of {repo_url!r} is not UTF-8 text: {exc}"
             raise GitContentFetchError(msg) from None
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+    if use_cache and len(content.encode("utf-8")) <= CONTENT_CACHE_MAX_VALUE_BYTES:
+        _cache_put(repo_url, sha, path, content, cache_dir=cache_dir)
+    return content
+
+
+async def _bounded_fetch_attempts(
+    sha: str,
+    *,
+    workdir: str,
+    repo_url: str,
+    timeout_seconds: float,
+) -> None:
+    """Fetch commit *sha* trying progressively larger bounded strategies.
+
+    Order (module docstring): shallow+blobless probe, plain shallow probe,
+    full fetch of the pinned SHA. First success wins; when all fail the typed
+    error lists every attempt — never a silent partial.
+    """
+    strategies: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("shallow+blobless", ("fetch", "--quiet", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", sha)),
+        ("shallow", ("fetch", "--quiet", "--depth", "1", "--no-tags", "origin", sha)),
+        ("full", ("fetch", "--quiet", "--no-tags", "origin", sha)),
+    )
+    failures: list[str] = []
+    for label, args in strategies:
+        try:
+            await _git(args, cwd=workdir, timeout_seconds=timeout_seconds, what=f"fetch ({label})", repo_url=repo_url)
+            return
+        except GitContentFetchError as exc:
+            # Best-effort progress log for each strategy the server refused;
+            # the eventual failure below is never silent.
+            _log.warning(
+                "git_content.fetch_attempt_failed",
+                extra={"attempt": label, "repo_url": repo_url, "error": str(exc)[:200]},
+            )
+            failures.append(f"{label}: {exc}")
+    msg = (
+        f"could not fetch commit {sha} of {repo_url!r} — every bounded fetch strategy failed "
+        "(shallow+blobless, shallow, full): " + " | ".join(failures)
+    )
+    raise GitContentFetchError(msg)
+
+
+def _assert_clone_size_bounded(workdir: str, max_clone_bytes: int, repo_url: str) -> None:
+    """Fail closed when the retained clone exceeds *max_clone_bytes*."""
+    total = 0
+    for root, _dirs, files in os.walk(workdir):
+        for name in files:
+            with contextlib.suppress(OSError):
+                total += (Path(root) / name).stat().st_size
+    if total > max_clone_bytes:
+        msg = (
+            f"fetched clone of {repo_url!r} is {total} bytes, exceeding the {max_clone_bytes}-byte "
+            "clone size cap — refusing to render git content from it"
+        )
+        raise GitContentFetchError(msg)
+
+
+def default_content_cache_dir() -> Path:
+    """Root of the on-disk content cache (namespaced under the user's tmp)."""
+    return Path(tempfile.gettempdir()) / CONTENT_CACHE_DIR_NAME
+
+
+def _cache_dir(root: str | Path | None) -> Path:
+    directory = Path(root) if root is not None else default_content_cache_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        directory.chmod(0o700)  # best-effort on platforms without POSIX modes
+    return directory
+
+
+def _cache_key(repo_url: str, sha: str, path: str) -> str:
+    payload = json.dumps([repo_url, sha.lower(), path]).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _cache_get(
+    repo_url: str,
+    sha: str,
+    path: str,
+    *,
+    cache_dir: str | Path | None = None,
+    ttl_seconds: float = CONTENT_CACHE_TTL_SECONDS,
+) -> str | None:
+    """Cached content for ``(repo, sha, path)``, or ``None`` on miss/TTL/staleness."""
+    entry = _cache_dir(cache_dir) / f"{_cache_key(repo_url, sha, path)}.json"
+    try:
+        data = json.loads(entry.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not (
+        isinstance(data, dict)
+        and data.get("repo_url") == repo_url
+        and data.get("sha") == sha.lower()
+        and data.get("path") == path
+        and isinstance(data.get("content"), str)
+        and isinstance(data.get("fetched_at"), (int, float))
+    ):
+        # Key-binding mismatch or malformed entry: treat as a miss AND drop it.
+        entry.unlink(missing_ok=True)
+        return None
+    if (time.time() - float(data["fetched_at"])) > ttl_seconds:
+        entry.unlink(missing_ok=True)
+        return None
+    return str(data["content"])
+
+
+def _cache_put(
+    repo_url: str,
+    sha: str,
+    path: str,
+    content: str,
+    *,
+    cache_dir: str | Path | None = None,
+    max_entries: int = CONTENT_CACHE_MAX_ENTRIES,
+) -> None:
+    """Persist the entry atomically; evict expired, then oldest-over-cap entries."""
+    directory = _cache_dir(cache_dir)
+    target = directory / f"{_cache_key(repo_url, sha, path)}.json"
+    tmp = directory / f".tmp-{uuid.uuid4().hex}"
+    tmp.write_text(
+        json.dumps(
+            {"repo_url": repo_url, "sha": sha.lower(), "path": path, "fetched_at": time.time(), "content": content}
+        ),
+        encoding="utf-8",
+    )
+    tmp.replace(target)
+    now = time.time()
+    # Drop TTL-expired entries first, then the oldest beyond the entry cap.
+    for candidate in directory.glob("*.json"):
+        if now - _mtime_or_zero(candidate) > CONTENT_CACHE_TTL_SECONDS:
+            candidate.unlink(missing_ok=True)
+    entries = sorted(directory.glob("*.json"), key=_mtime_or_zero)
+    for stale in entries[: max(0, len(entries) - max_entries)]:
+        stale.unlink(missing_ok=True)
+
+
+def _mtime_or_zero(entry: Path) -> float:
+    try:
+        return entry.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 async def _git(
@@ -485,19 +770,27 @@ def pin_git_content_node_fields(
 
 
 __all__ = [
+    "CONTENT_CACHE_DIR_NAME",
+    "CONTENT_CACHE_MAX_ENTRIES",
+    "CONTENT_CACHE_MAX_VALUE_BYTES",
+    "CONTENT_CACHE_TTL_SECONDS",
     "FETCH_TIMEOUT_SECONDS",
     "GIT_CONTENT_PREFIX",
     "LS_REMOTE_TIMEOUT_SECONDS",
+    "REPO_MAX_CLONE_BYTES",
     "GitContentFetchError",
     "GitContentRef",
     "GitContentRefError",
+    "default_content_cache_dir",
     "default_git_content_resolver",
     "fetch_git_content",
     "git_content_values",
+    "git_repository_host_url",
     "is_git_content_ref",
     "parse_git_content_ref",
     "pin_git_content_node_fields",
     "pin_git_content_spec",
+    "require_public_git_host",
     "resolve_against_ls_remote",
     "resolve_git_content_field",
     "run_git_ls_remote",

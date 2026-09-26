@@ -339,6 +339,72 @@ def _validate_generic_agent(
         )
 
 
+def _validate_agent_git_content(
+    prompt_template: str | None = None,
+    agent_commands: list[str] | None = None,
+) -> None:
+    """Save-time pin gate for git-sourced content refs on Agent rows (FAR-220).
+
+    An ``Agent`` row carries the same content fields a ``sandbox_agent`` node
+    does (``prompt_template``/``agent_prompt`` and ``agent_commands``), and the
+    graph-save gate never sees an Agent's own values — they flow into nodes at
+    run time. Without this gate a write path could store an unpinned ``git+``
+    ref that only fails closed (typed error) at render. Reuses the shipped
+    parse/is-ref helpers; the semantics mirror the graph validator's three
+    fail-closed codes:
+
+    * whole-field ``agent_commands`` (a ref may not be one command of several);
+    * ``git+`` values must parse;
+    * parsed refs must be pinned to a 40-hex SHA.
+    """
+    from modulo.core.pipeline_engine.git_content import (
+        GIT_CONTENT_PREFIX,
+        GitContentRefError,
+        is_git_content_ref,
+        parse_git_content_ref,
+    )
+
+    if (
+        agent_commands is not None
+        and len(agent_commands) > 1
+        and any(isinstance(item, str) and GIT_CONTENT_PREFIX in item for item in agent_commands)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "agent_commands contains a git content ref among several commands — git content "
+                "refs must be the whole field, not one command of several (use a single-item "
+                "agent_commands list whose only entry is the ref, or inline the content)"
+            ),
+        )
+
+    values: list[tuple[str, str]] = []
+    if isinstance(prompt_template, str):
+        values.append(("prompt_template", prompt_template))
+    if agent_commands:
+        values.extend((f"agent_commands[{i}]", item) for i, item in enumerate(agent_commands) if isinstance(item, str))
+    for label, value in values:
+        if not is_git_content_ref(value):
+            continue
+        try:
+            ref = parse_git_content_ref(value)
+        except GitContentRefError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"{label} has an invalid git content ref: {exc}",
+            ) from None
+        if not ref.is_pinned:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"{label} git content ref {value.strip()!r} is not pinned to a commit SHA — "
+                    "Agent prompts and commands must use git+<repo>@<40-hex-sha>#<path> so runs "
+                    "carry the resolved SHA for audit ('modulo apply' resolves and pins movable "
+                    "refs automatically)"
+                ),
+            )
+
+
 @router.get("")
 @handle_db_errors("agents.list_agents_endpoint")
 async def list_agents_endpoint(
@@ -399,6 +465,10 @@ async def create_agent_endpoint(
         evals=req.evals,
         library_id=req.library_id,
     )
+    # FAR-220: git-sourced content refs on Agent rows get the SAME save-time pin
+    # gate the pipeline graph gets (an Agent's prompt/commands never pass
+    # through the graph validator, only through here / the linked pipeline).
+    _validate_agent_git_content(prompt_template=req.prompt_template, agent_commands=req.agent_commands)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -545,6 +615,15 @@ async def update_agent_endpoint(
 
     updates = req.model_dump(exclude_unset=True)
     _normalise_schema_updates(updates)
+    # FAR-220: validate whichever content fields this PATCH actually sets.
+    # Previously persisted values are re-checked only when re-saved (a PATCH of
+    # an unrelated field must not retroactively fail because an OLD prompt
+    # carried a ref); run-time rendering stays fail-closed regardless.
+    if "prompt_template" in updates or "agent_commands" in updates:
+        _validate_agent_git_content(
+            prompt_template=updates.get("prompt_template"),
+            agent_commands=updates.get("agent_commands"),
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -756,6 +835,9 @@ async def apply_optimized_prompt(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> AgentResponse:
+    # The optimized prompt becomes the agent's prompt_template AND a stored
+    # prompt version, so the same save-time git-content pin gate applies.
+    _validate_agent_git_content(prompt_template=req.suggested_prompt)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
