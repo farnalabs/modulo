@@ -278,6 +278,80 @@ describe('VariantBatchCompareView', () => {
     expect(wrapper.find('[data-testid="variant-batch-token-breakdown"]').exists()).toBe(false)
   })
 
+  it('shows the cost column from per-node cost when the run total cost is absent', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            total_cost_usd: null,
+            total_tokens: 660,
+            node_token_usage: {
+              planner: { input_tokens: 150, output_tokens: 450, total_tokens: 600, cost_usd: 0.015 },
+              coder: { total_tokens: 50 },
+              legacy: { cost_usd: 0.001 },
+              stray: null,
+              node_count: 4,
+            },
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    // The cost column appears even though the run total is null, because a node
+    // recorded a cost (hasNodeCost(run)).
+    expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(true)
+    // Nodes missing individual figures render an em dash rather than crashing.
+    expect(breakdown.text()).toContain('—')
+    // The node_count aggregate and the all-null usage entry are filtered out.
+    expect(breakdown.text()).not.toContain('node_count')
+    expect(breakdown.text()).not.toContain('stray')
+  })
+
+  it('hides the cost column when neither the run total nor any node records a cost', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            total_cost_usd: null,
+            total_tokens: 100,
+            node_token_usage: { planner: { total_tokens: 100 } },
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    expect(breakdown.text()).toContain('planner')
+    expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(false)
+  })
+
   it('re-fires the batch from the frozen batch', async () => {
     const wrapper = mount(VariantBatchCompareView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },

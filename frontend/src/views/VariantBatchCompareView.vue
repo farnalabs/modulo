@@ -389,13 +389,7 @@ function tokenRows(run: VariantBatchRun): TokenRow[] {
 }
 
 function hasNodeCost(run: VariantBatchRun): boolean {
-  if (!run.node_token_usage) return false
-  return Object.entries(run.node_token_usage)
-    .filter(([key]) => key !== 'node_count')
-    .some(([, usage]) => {
-      const u = (usage ?? {}) as VariantNodeTokenUsage
-      return typeof u.cost_usd === 'number'
-    })
+  return tokenRows(run).some(row => row.cost_usd !== null)
 }
 
 async function loadBatch(id: string) {
