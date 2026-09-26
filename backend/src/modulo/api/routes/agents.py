@@ -339,6 +339,29 @@ def _validate_generic_agent(
         )
 
 
+def _validate_agent_git_content(
+    prompt_template: str | None = None,
+    agent_commands: list[str] | None = None,
+) -> None:
+    """Save-time pin gate for git-sourced content refs on Agent rows (FAR-220).
+
+    REST wrapper: delegates to the shared core helper
+    (:func:`modulo.core.pipeline_engine.git_content.validate_agent_git_content_values`,
+    also called by the MCP ``create_agent`` tool so that surface cannot bypass
+    the gate) and converts the typed :class:`GitContentRefError` to HTTP 422.
+    The three fail-closed codes and their messages live in the shared helper.
+    """
+    from modulo.core.pipeline_engine.git_content import GitContentRefError
+    from modulo.core.pipeline_engine.git_content import (
+        validate_agent_git_content_values as _validate_agent_git_content_values,
+    )
+
+    try:
+        _validate_agent_git_content_values(prompt_template=prompt_template, agent_commands=agent_commands)
+    except GitContentRefError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+
+
 @router.get("")
 @handle_db_errors("agents.list_agents_endpoint")
 async def list_agents_endpoint(
@@ -399,6 +422,10 @@ async def create_agent_endpoint(
         evals=req.evals,
         library_id=req.library_id,
     )
+    # FAR-220: git-sourced content refs on Agent rows get the SAME save-time pin
+    # gate the pipeline graph gets (an Agent's prompt/commands never pass
+    # through the graph validator, only through here / the linked pipeline).
+    _validate_agent_git_content(prompt_template=req.prompt_template, agent_commands=req.agent_commands)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -545,6 +572,15 @@ async def update_agent_endpoint(
 
     updates = req.model_dump(exclude_unset=True)
     _normalise_schema_updates(updates)
+    # FAR-220: validate whichever content fields this PATCH actually sets.
+    # Previously persisted values are re-checked only when re-saved (a PATCH of
+    # an unrelated field must not retroactively fail because an OLD prompt
+    # carried a ref); run-time rendering stays fail-closed regardless.
+    if "prompt_template" in updates or "agent_commands" in updates:
+        _validate_agent_git_content(
+            prompt_template=updates.get("prompt_template"),
+            agent_commands=updates.get("agent_commands"),
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -756,6 +792,9 @@ async def apply_optimized_prompt(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> AgentResponse:
+    # The optimized prompt becomes the agent's prompt_template AND a stored
+    # prompt version, so the same save-time git-content pin gate applies.
+    _validate_agent_git_content(prompt_template=req.suggested_prompt)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -904,6 +943,8 @@ async def rollback_prompt(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> PromptRollbackResponse:
+    from modulo.core.pipeline_engine.git_content import GitContentRefError
+
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -923,6 +964,11 @@ async def rollback_prompt(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
+    except GitContentRefError as exc:
+        # FAR-220: the restored template carried an unpinned git content ref;
+        # the CRUD gate failed closed before any mutation. Surface 422 instead
+        # of the generic-handler 500 (same mapping as the Agent save paths).
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     except SQLAlchemyError:
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(

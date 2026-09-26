@@ -8,7 +8,10 @@ pin-on-apply rewriting, and the render-point content substitution helper.
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,12 +30,28 @@ from modulo.core.pipeline_engine.git_content import (
     resolve_against_ls_remote,
     resolve_git_content_field,
     run_git_ls_remote,
+    validate_agent_git_content_values,
 )
 
 _SHA_A = "a" * 40
 _SHA_B = "B" * 40  # uppercase exercises canonical lowering
 _REPO = "https://github.com/example/repo.git"
 _PINNED = f"git+{_REPO}@{_SHA_A}#prompts/x.md"
+
+
+def _allow_all_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bypass the SSRF host gate for tests using hostname repo URLs.
+
+    REAL DNS resolution must never run in unit tests (offline-stable), so all
+    hostname-bearing flows patch the gate; the gate itself carries dedicated
+    literal-IP tests that exercise the real ``modulo.core.ssrf`` path
+    (deterministic, no DNS).
+    """
+
+    async def _allow(_repo_url: str) -> None:
+        return None
+
+    monkeypatch.setattr(git_content, "require_public_git_host", _allow)
 
 
 # ---------------------------------------------------------------------------
@@ -461,12 +480,14 @@ def _patch_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> None:
 
 
 async def test_run_git_ls_remote_returns_raw_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    _allow_all_hosts(monkeypatch)
     proc = _FakeProc(stdout=f"{_SHA_A}\trefs/heads/main\n".encode())
     _patch_exec(monkeypatch, proc)
     assert await run_git_ls_remote(_REPO) == f"{_SHA_A}\trefs/heads/main\n"
 
 
 async def test_run_git_ls_remote_nonzero_exit_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _allow_all_hosts(monkeypatch)
     proc = _FakeProc(stderr=b"fatal: repository not found\n", returncode=128)
     _patch_exec(monkeypatch, proc)
     with pytest.raises(GitContentRefError, match="ls-remote failed"):
@@ -474,11 +495,26 @@ async def test_run_git_ls_remote_nonzero_exit_is_typed_error(monkeypatch: pytest
 
 
 async def test_run_git_ls_remote_timeout_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _allow_all_hosts(monkeypatch)
     proc = _FakeProc(hang=True)
     _patch_exec(monkeypatch, proc)
     with pytest.raises(GitContentRefError, match="timed out"):
         await run_git_ls_remote(_REPO, timeout_seconds=0.01)
     assert proc.kill_called
+
+
+async def test_run_git_ls_remote_refuses_internal_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SSRF gate runs BEFORE any git subprocess is spawned (prove-the-fix)."""
+    spawned: list[object] = []
+
+    async def _exec(*args: object, **kwargs: object) -> _FakeProc:
+        spawned.append(args)
+        return _FakeProc(stdout=b"")
+
+    monkeypatch.setattr(git_content.asyncio, "create_subprocess_exec", _exec)
+    with pytest.raises(GitContentFetchError, match="repository host refused"):
+        await run_git_ls_remote("https://127.0.0.1/ci/repo.git")
+    assert not spawned
 
 
 async def test_git_returns_stdout_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -503,27 +539,297 @@ async def test_git_timeout_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> No
     assert proc.kill_called
 
 
-async def test_fetch_git_content_decodes_utf8_and_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[dict[str, object]] = []
+async def test_git_spawn_carries_prompts_off_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fetch-path git seam runs with the prompts-off env (prove-the-fix).
+
+    ``run_git_ls_remote`` already passed ``env=_git_process_env()``; ``_git``
+    (init / remote add / every fetch attempt / show) must apply the same gate
+    so an auth-walled host exits non-zero instead of hanging on a credential
+    prompt.
+    """
+    captured: dict[str, Any] = {}
+
+    async def _exec(*_args: object, **kwargs: Any) -> _FakeProc:
+        captured["env"] = kwargs.get("env")
+        return _FakeProc(stdout=b"file bytes")
+
+    monkeypatch.setattr(git_content.asyncio, "create_subprocess_exec", _exec)
+    out = await _git(("show", f"{_SHA_A}:prompts/x.md"), cwd="/tmp", timeout_seconds=5, what="show", repo_url=_REPO)
+    assert out == b"file bytes"
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+
+
+async def test_fetch_git_content_spawns_git_with_prompts_off_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every subprocess of the full fetch flow carries the prompts-off env (prove-the-fix)."""
+    _allow_all_hosts(monkeypatch)
+    envs: list[dict[str, str]] = []
+
+    async def _exec(*args: object, **kwargs: Any) -> _FakeProc:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        envs.append(env)
+        is_show = args[:2] == ("git", "show")
+        return _FakeProc(stdout=b"PROMPT FROM GIT" if is_show else b"")
+
+    monkeypatch.setattr(git_content.asyncio, "create_subprocess_exec", _exec)
+    out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+    assert out == "PROMPT FROM GIT"
+    assert envs  # init, remote add, fetch, show all spawned through the seam
+    for env in envs:
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+
+
+async def test_fetch_git_content_shallow_blobless_strategy_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pinned-SHA fetch: shallow + blobless probe leads; content served at the end."""
+    _allow_all_hosts(monkeypatch)
+    calls: list[object] = []
 
     async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
         calls.append({"args": args, "what": what, "cwd": cwd})
         return b"PROMPT FROM GIT" if what.startswith("show") else b""
 
     monkeypatch.setattr(git_content, "_git", _fake_git)
-    out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md")
+    out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
     assert out == "PROMPT FROM GIT"
-    assert calls[0]["what"] == "clone"
-    assert calls[0]["args"][0] == "clone"  # type: ignore[index]
-    assert calls[1]["what"] == "show prompts/x.md"
-    assert calls[1]["args"] == ("show", f"{_SHA_A}:prompts/x.md")
+    what = [call["what"] for call in calls]
+    assert what == ["init", "remote add", "fetch (shallow+blobless)", "show prompts/x.md"]
+    assert calls[0]["what"] == "init"
+    assert calls[1]["what"] == "remote add"
+    assert calls[2]["what"] == "fetch (shallow+blobless)"
+    assert calls[3]["what"] == "show prompts/x.md"
     assert not await asyncio.to_thread(Path(str(calls[0]["cwd"])).exists)
 
 
-async def test_fetch_git_content_non_utf8_is_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_git(*_args: object, **_kwargs: object) -> bytes:
+async def test_fetch_git_content_falls_back_to_larger_strategies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A server rejecting shallow/SHA-want fetches falls back — same bounds apply."""
+    _allow_all_hosts(monkeypatch)
+    seen_attempts: list[object] = []
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        if what.startswith("fetch"):
+            seen_attempts.append(what)
+        if what.startswith("fetch (shallow"):
+            raise GitContentFetchError("upstream: shallow not supported")
+        return b"PROMPT FROM GIT" if what.startswith("show") else b""
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+    assert out == "PROMPT FROM GIT"
+    assert "full" in str(seen_attempts)
+
+
+async def test_fetch_git_content_all_strategies_fail_is_typed_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _allow_all_hosts(monkeypatch)
+    show_called = False
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        nonlocal show_called
+        if what.startswith("show"):
+            show_called = True
+        if what.startswith("fetch"):
+            raise GitContentFetchError("fetch superfluous")
+        return b""
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    with pytest.raises(GitContentFetchError, match="every bounded fetch strategy failed"):
+        await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+    assert not show_called
+
+
+async def test_fetch_git_content_non_utf8_is_typed_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _allow_all_hosts(monkeypatch)
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
         return b"\xff\xfe\xfa"
 
     monkeypatch.setattr(git_content, "_git", _fake_git)
     with pytest.raises(GitContentFetchError, match="not UTF-8"):
-        await fetch_git_content(_REPO, _SHA_A, "prompts/x.md")
+        await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+
+
+async def test_fetch_git_content_reuses_cache_for_same_repo_ref_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same (repo, sha, path) is served from cache — no second clone (prove-the-fix)."""
+    _allow_all_hosts(monkeypatch)
+    calls: list[object] = []
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        calls.append(what)
+        return b"PROMPT FROM GIT" if what.startswith("show") else b""
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    first = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+    invocations_after_first = len(calls)
+    second = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+    assert first == "PROMPT FROM GIT"
+    assert second == "PROMPT FROM GIT"
+    assert len(calls) == invocations_after_first  # zero git invocations on the second fetch
+
+
+async def test_fetch_git_content_different_path_reclones(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _allow_all_hosts(monkeypatch)
+    calls: list[object] = []
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        calls.append(what)
+        return b"PROMPT FROM GIT" if what.startswith("show") else b""
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
+    await fetch_git_content(_REPO, _SHA_A, "other.md", cache_dir=tmp_path)
+    assert calls.count("fetch (shallow+blobless)") == 2
+
+
+async def test_fetch_git_content_oversized_clone_is_typed_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _allow_all_hosts(monkeypatch)
+    show_called = False
+    fetched: list[str] = []
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        nonlocal show_called
+        fetched.append(str(cwd))
+        if what.startswith("show"):
+            show_called = True
+        if what.startswith("fetch (shallow"):
+            # Shallow attempts must fail so the full fetch runs and retains
+            # the oversized pack the size cap then rejects.
+            raise GitContentFetchError("upstream: shallow not supported")
+        if what == "fetch (full)":
+            (Path(cwd) / "big.pack").write_bytes(b"0" * 4)
+        return b"irrelevant"
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    with pytest.raises(GitContentFetchError, match="clone size cap"):
+        await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path, max_clone_bytes=2)
+    assert not show_called
+
+
+def test_cache_get_misses_expired_entry(tmp_path: Path) -> None:
+    git_content._cache_put(_REPO, _SHA_A, "prompts/exp.md", "stale", cache_dir=tmp_path)
+    entry = tmp_path / f"{git_content._cache_key(_REPO, _SHA_A, 'prompts/exp.md')}.json"
+    data = json.loads(entry.read_text(encoding="utf-8"))
+    data["fetched_at"] = time.time() - 10.0  # beyond the test TTL below
+    entry.write_text(json.dumps(data), encoding="utf-8")
+    assert git_content._cache_get(_REPO, _SHA_A, "prompts/exp.md", cache_dir=tmp_path, ttl_seconds=5.0) is None
+    assert not entry.exists()
+
+
+def test_cache_put_evicts_beyond_entry_cap(tmp_path: Path) -> None:
+    for index in range(5):
+        git_content._cache_put(
+            f"https://github.com/ex/repo{index}.git", _SHA_A, "p.md", f"v{index}", cache_dir=tmp_path, max_entries=3
+        )
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 3
+    # The two oldest entries are evicted; traversal order does not matter.
+    contents = {json.loads(p.read_text(encoding="utf-8"))["content"] for p in files}
+    assert contents == {"v2", "v3", "v4"}
+
+
+def test_cache_get_rejects_key_binding_mismatch(tmp_path: Path) -> None:
+    """A cache entry whose stored metadata does not match its key is dropped."""
+    git_content._cache_put(_REPO, _SHA_A, "prompts/a.md", "content", cache_dir=tmp_path)
+    entry = tmp_path / f"{git_content._cache_key(_REPO, _SHA_A, 'prompts/a.md')}.json"
+    data = json.loads(entry.read_text(encoding="utf-8"))
+    data["content"] = "tampered content under a mismatched path?"
+    data["path"] = "prompts/tampered.md"
+    entry.write_text(json.dumps(data), encoding="utf-8")
+    assert git_content._cache_get(_REPO, _SHA_A, "prompts/a.md", cache_dir=tmp_path) is None
+    assert not entry.exists()
+
+
+def test_cache_get_missing_file_is_none(tmp_path: Path) -> None:
+    assert git_content._cache_get(_REPO, _SHA_A, "nothing.md", cache_dir=tmp_path) is None
+
+
+def test_default_content_cache_dir_is_namespaced() -> None:
+    assert git_content.default_content_cache_dir().name == "modulo-git-content-cache"
+
+
+# ---------------------------------------------------------------------------
+# validate_agent_git_content_values — shared Agent save gate (REST + MCP)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_agent_git_content_values_accepts_inline_and_pinned() -> None:
+    assert validate_agent_git_content_values(prompt_template="inline prompt", agent_commands=["echo hi"]) is None
+    assert validate_agent_git_content_values(prompt_template=_PINNED) is None
+    assert validate_agent_git_content_values() is None
+
+
+def test_validate_agent_git_content_values_allows_single_command_ref() -> None:
+    """A single-item agent_commands list whose only entry is the ref is legal."""
+    assert validate_agent_git_content_values(agent_commands=[f"git+{_REPO}@{_SHA_A}#cmd.sh"]) is None
+
+
+def test_validate_agent_git_content_values_rejects_unpinned_prompt_ref() -> None:
+    with pytest.raises(GitContentRefError, match="prompt_template"):
+        validate_agent_git_content_values(prompt_template="git+https://github.com/ex/repo.git@main#p.md")
+
+
+def test_validate_agent_git_content_values_rejects_malformed_prompt_ref() -> None:
+    with pytest.raises(GitContentRefError, match="invalid git content ref"):
+        validate_agent_git_content_values(prompt_template="git+https://github.com/ex/repo.git")
+
+
+def test_validate_agent_git_content_values_rejects_unpinned_command_ref() -> None:
+    with pytest.raises(GitContentRefError, match=r"agent_commands\[0\]"):
+        validate_agent_git_content_values(agent_commands=["git+https://github.com/ex/repo.git@main#cmd.sh"])
+
+
+def test_validate_agent_git_content_values_rejects_ref_among_several_commands() -> None:
+    with pytest.raises(GitContentRefError, match="whole field"):
+        validate_agent_git_content_values(agent_commands=["echo hi", f"git+{_REPO}@{_SHA_A}#cmd.sh"])
+
+
+# ---------------------------------------------------------------------------
+# SSRF host gate (modulo.core.ssrf parity) — real path, literal-IP only (no DNS)
+# ---------------------------------------------------------------------------
+
+
+def test_git_repository_host_url_forms() -> None:
+    assert git_content.git_repository_host_url("https://github.com/a/b.git") == "https://github.com"
+    assert git_content.git_repository_host_url("https://host.example:4443/a/b.git") == "https://host.example:4443"
+    assert git_content.git_repository_host_url("ssh://git@host.example:2222/a/b.git") == "https://host.example:2222"
+    assert git_content.git_repository_host_url("git@github.com:a/b.git") == "https://github.com"
+
+
+async def test_require_public_git_host_refuses_loopback_literal() -> None:
+    with pytest.raises(GitContentFetchError, match="repository host refused"):
+        await git_content.require_public_git_host("https://127.0.0.1/ci/repo.git")
+
+
+async def test_require_public_git_host_refuses_loopback_scp() -> None:
+    with pytest.raises(GitContentFetchError, match="repository host refused"):
+        await git_content.require_public_git_host("git@127.0.0.1:ci/repo.git")
+
+
+async def test_fetch_git_content_refuses_internal_host_before_spawning_git(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SSRF gate fires for the fetch path too — no subprocess, no cache write (prove-the-fix)."""
+    spawned: list[object] = []
+
+    async def _exec(*args: object, **kwargs: object) -> _FakeProc:
+        spawned.append(args)
+        return _FakeProc(stdout=b"")
+
+    monkeypatch.setattr(git_content.asyncio, "create_subprocess_exec", _exec)
+    with pytest.raises(GitContentFetchError, match="repository host refused"):
+        await fetch_git_content("https://127.0.0.1/ci/repo.git", _SHA_A, "prompts/x.md", use_cache=False)
+    assert not spawned

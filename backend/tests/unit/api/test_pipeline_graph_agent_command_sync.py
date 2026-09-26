@@ -15,13 +15,19 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
 from modulo.api.main import app
-from modulo.api.routes.pipelines import _extract_agent_command_sync_updates, _sync_agent_row_commands
+from modulo.api.routes.pipelines import (
+    _extract_agent_command_sync_updates,
+    _finalize_locked_graph_save,
+    _sync_agent_row_commands,
+)
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.pipeline_engine.git_content import GitContentRefError
 from modulo.db.crud.pipeline_snapshot import _apply_agent_fields
 from modulo.db.models.agent import Agent
 from modulo.settings import Settings
@@ -31,6 +37,11 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PIPELINE_ID = uuid.uuid4()
+
+_REPO = "https://github.com/example/repo.git"
+_SHA_A = "a" * 40
+_UNPINNED_REF = f"git+{_REPO}@main#prompts/x.md"
+_PINNED_REF = f"git+{_REPO}@{_SHA_A}#prompts/x.md"
 
 
 def _node(node_id: uuid.UUID, *, agent_id: uuid.UUID | None, agent_commands: list[str] | None = None) -> dict[str, Any]:
@@ -46,6 +57,20 @@ def _node(node_id: uuid.UUID, *, agent_id: uuid.UUID | None, agent_commands: lis
         node["agent_id"] = str(agent_id)
     if agent_commands is not None:
         node["agent_commands"] = agent_commands
+    return node
+
+
+def _agent_node(
+    node_id: uuid.UUID,
+    *,
+    agent_id: uuid.UUID,
+    agent_commands: list[str] | None = None,
+) -> dict[str, Any]:
+    """An ``agent``-type bound node — the node type the graph validator's
+    git-content gate does NOT check (it runs only for ``sandbox_agent``
+    nodes), which is exactly the ungated shape FAR-220 closes."""
+    node = _node(node_id, agent_id=agent_id, agent_commands=agent_commands)
+    node["node_type"] = "agent"
     return node
 
 
@@ -287,3 +312,143 @@ def test_patch_graph_endpoint_invokes_agent_commands_sync(client: TestClient) ->
     assert sync_mock.await_args.kwargs["org_id"] == _ORG_ID
     synced_nodes = sync_mock.await_args.kwargs["nodes"]
     assert any(node.get("agent_commands") == ["opencode run -- patched"] for node in synced_nodes)
+
+
+# ---------------------------------------------------------------------------
+# FAR-220: the sync write is a gated Agent write path
+# ---------------------------------------------------------------------------
+
+
+async def test_sync_rejects_unpinned_git_ref_from_agent_type_node() -> None:
+    """FAR-220 security regression: an ``agent``-type node (the node type the
+    graph validator's git-content gate does NOT check) carrying an unpinned
+    ``git+`` ref must NOT overwrite the bound Agent row. The sync fails closed
+    with the typed GitContentRefError and the row keeps its old value — this
+    test FAILS without the gate (the row is poisoned ungated)."""
+    agent_id = uuid.uuid4()
+    agent = SimpleNamespace(id=agent_id, agent_commands=["old-command"])
+    session = _session_returning([agent])
+    nodes = [_agent_node(uuid.uuid4(), agent_id=agent_id, agent_commands=[_UNPINNED_REF])]
+
+    with pytest.raises(GitContentRefError):
+        await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+
+    assert agent.agent_commands == ["old-command"]
+    session.execute.assert_not_awaited()
+
+
+async def test_sync_rejects_unpinned_git_ref_before_row_read_even_when_equal() -> None:
+    """An unpinned ref is invalid input regardless of the row's current value:
+    a PATCH whose node command list already mirrors an (already-poisoned) row
+    is still rejected, so the operator is pointed at the gated Agent save path
+    instead of silently re-affirming poisoned data."""
+    agent_id = uuid.uuid4()
+    agent = SimpleNamespace(id=agent_id, agent_commands=[_UNPINNED_REF])
+    session = _session_returning([agent])
+    nodes = [_agent_node(uuid.uuid4(), agent_id=agent_id, agent_commands=[_UNPINNED_REF])]
+
+    with pytest.raises(GitContentRefError):
+        await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+
+    session.execute.assert_not_awaited()
+
+
+async def test_sync_allows_pinned_git_ref_from_agent_type_node() -> None:
+    """The gate must not over-block: a single-item pinned ``git+`` ref syncs
+    to the bound Agent row exactly like an inline command."""
+    agent_id = uuid.uuid4()
+    agent = SimpleNamespace(id=agent_id, agent_commands=["old-command"])
+    session = _session_returning([agent])
+    nodes = [_agent_node(uuid.uuid4(), agent_id=agent_id, agent_commands=[_PINNED_REF])]
+
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+
+    assert changed == 1
+    assert agent.agent_commands == [_PINNED_REF]
+
+
+def test_patch_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:
+    """Wiring: when the Agent-row sync fails closed on an unpinned git content
+    ref, the PATCH /graph endpoint surfaces HTTP 422 (not the decorator's 500)
+    and the enclosing transaction rolls back the graph write."""
+    node_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    nodes = [_node(node_id, agent_id=agent_id, agent_commands=[_UNPINNED_REF])]
+    schema_pins: list[dict[str, Any]] = []
+    backend_pins: list[dict[str, Any]] = []
+    validation = MagicMock()
+    validation.issues = []
+    sync_error = GitContentRefError("agent_commands[0] git content ref ... is not pinned to a commit SHA")
+
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=(schema_pins, backend_pins)),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 422
+    assert "not pinned" in resp.json()["detail"]
+
+
+def test_update_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> None:
+    """Wiring: the graph_json-inside-PATCH-update path runs the same sync and
+    maps its GitContentRefError to HTTP 422 — a declarative apply cannot ship
+    an unpinned ref into an Agent row via this bypass either."""
+    node_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    node = {"id": str(node_id), "agent_id": str(agent_id), "position": {"x": 0, "y": 0}}
+    pipeline = MagicMock()
+    pipeline.owner_team_id = None
+    pipeline.graph_nodes_json = []
+    sync_error = GitContentRefError("agent_commands[0] git content ref ... is not pinned to a commit SHA")
+
+    with (
+        patch("modulo.api.routes.pipelines._get_pipeline_or_404", new=AsyncMock(return_value=pipeline)),
+        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("modulo.api.routes.pipelines._maybe_audit_autonomy_change", new=AsyncMock()),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"graph_json": {"nodes": [node], "edges": []}},
+        )
+
+    assert resp.status_code == 422
+    assert "not pinned" in resp.json()["detail"]
+
+
+async def test_finalize_locked_graph_save_maps_unpinned_ref_to_422() -> None:
+    """The convert-to-agent / revert-to-manual shared mapping translates the
+    sync's GitContentRefError into HTTP 422."""
+    principal = AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _finalize_locked_graph_save(
+            GitContentRefError("agent_commands[0] git content ref ... is not pinned to a commit SHA"),
+            AsyncMock(),
+            principal=principal,
+            pipeline_id=_PIPELINE_ID,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "not pinned" in exc_info.value.detail

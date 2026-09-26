@@ -644,6 +644,31 @@ def test_confirm_import_missing_table_returns_501(client: TestClient) -> None:
     assert resp.status_code == 501
 
 
+def test_confirm_import_git_content_ref_returns_422(client: TestClient) -> None:
+    """An unpinned/malformed git-content agent prompt maps to 422 (FAR-220).
+
+    The materialize path raises the typed ``GitContentRefError``; without the
+    endpoint mapping it would escape as a raw 500 because it is not a DB error.
+    """
+    from modulo.core.pipeline_engine.git_content import GitContentRefError
+
+    with (
+        patch(
+            "modulo.api.routes.library.materialize_import",
+            new_callable=AsyncMock,
+            side_effect=GitContentRefError(
+                "Agent 'Ref Agent' prompt_template git content ref "
+                "'git+https://github.com/org/repo#prompts/ref.md' is not pinned"
+            ),
+        ),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post("/api/v1/libraries/import/confirm", json={"bundle_json": "{}"})
+    assert resp.status_code == 422
+    assert "not pinned" in resp.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # ratings
 # ---------------------------------------------------------------------------

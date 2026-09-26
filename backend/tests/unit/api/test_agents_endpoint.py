@@ -615,3 +615,92 @@ def test_create_agent_schema_profile_none_by_default(client: TestClient) -> None
     assert resp.json()["schema_profile"] is None
     _, kwargs = mock_create.call_args
     assert kwargs.get("schema_profile") is None
+
+
+# ── FAR-220: save-time git-content pin gate for Agent rows ─────────────────
+
+
+def test_create_agent_with_unpinned_git_prompt_is_rejected(client: TestClient) -> None:
+    """Prove-the-fix: a movable ``git+`` ref in prompt_template used to persist
+    and only fail at render time; the save-time gate must 422 it instead."""
+    body = {
+        **_AGENT_BODY,
+        "prompt_template": "git+https://github.com/example/repo@main#prompts/x.md",
+    }
+    with patch("modulo.api.routes.agents.create_agent") as mock_create:
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 422
+    assert "not pinned" in resp.json()["detail"]
+    assert not mock_create.called
+
+
+def test_create_agent_with_malformed_git_prompt_is_rejected(client: TestClient) -> None:
+    body = {**_AGENT_BODY, "prompt_template": "git+https://github.com/example/repo"}
+    with patch("modulo.api.routes.agents.create_agent") as mock_create:
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 422
+    assert "invalid git content ref" in resp.json()["detail"]
+    assert not mock_create.called
+
+
+def test_create_agent_with_pinned_git_prompt_is_accepted(client: TestClient) -> None:
+    body = {
+        **_AGENT_BODY,
+        "prompt_template": "git+https://github.com/example/repo@" + "a" * 40 + "#prompts/x.md",
+        "agent_commands": ["git+https://github.com/example/other@" + "b" * 40 + "#cmd.sh"],
+    }
+    with (
+        patch("modulo.api.routes.agents.create_agent", return_value=_make_agent()),
+        patch("modulo.api.routes.agents.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 201
+
+
+def test_create_agent_with_git_ref_among_several_commands_is_rejected(client: TestClient) -> None:
+    body = {
+        **_AGENT_BODY,
+        "agent_commands": ["echo hi", "git+https://github.com/example/repo@" + "a" * 40 + "#cmd.sh"],
+    }
+    with patch("modulo.api.routes.agents.create_agent") as mock_create:
+        resp = client.post("/api/v1/agents", json=body)
+    assert resp.status_code == 422
+    assert "whole field" in resp.json()["detail"]
+    assert not mock_create.called
+
+
+def test_update_agent_with_unpinned_git_prompt_is_rejected(client: TestClient) -> None:
+    with patch("modulo.api.routes.agents.update_agent") as mock_update:
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={**_UPDATE_BODY, "prompt_template": "git+https://github.com/example/repo@main#prompts/x.md"},
+        )
+    assert resp.status_code == 422
+    assert "not pinned" in resp.json()["detail"]
+    assert not mock_update.called
+
+
+def test_update_agent_unrelated_field_with_stale_stored_prompt_is_not_retroactively_blocked(client: TestClient) -> None:
+    """A PATCH of a field OTHER than prompt/commands must not validate the OLD
+    stored prompt (exclude_unset semantics) — retroactive breakage of unrelated
+    edits is out of scope; run-time rendering stays fail-closed regardless."""
+    with (
+        patch("modulo.api.routes.agents.update_agent", return_value=_make_agent()),
+        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("modulo.api.routes.agents._validate_agent_git_content") as mock_gate,
+    ):
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={**_UPDATE_BODY, "name": "Renamed"})
+    assert resp.status_code == 200
+    assert not mock_gate.called
+
+
+def test_apply_optimized_prompt_with_unpinned_git_prompt_is_rejected(client: TestClient) -> None:
+    resp = client.post(
+        f"/api/v1/agents/{_AGENT_ID}/prompts/v1/apply",
+        json={
+            "suggested_prompt": "git+https://github.com/example/repo@main#prompts/x.md",
+            "eval_result_ids": [str(uuid.uuid4())],
+        },
+    )
+    assert resp.status_code == 422
+    assert "not pinned" in resp.json()["detail"]

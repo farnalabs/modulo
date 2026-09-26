@@ -710,6 +710,102 @@ async def test_v1_import_warns_that_exported_credentials_were_stripped(
     assert result["pipeline_name"] == "Secret Pipeline"
 
 
+# ---------------------------------------------------------------------------
+# Agent git-content save gate on the workflow/library import path (FAR-220)
+# ---------------------------------------------------------------------------
+
+_PINNED_GIT_SHA = "deadbeef" * 5
+_UNPINNED_GIT_PROMPT = "git+https://github.com/org/repo#prompts/ref.md"
+_MALFORMED_GIT_PROMPT = "git+ftp://github.invalid/org/repo#prompts/ref.md"
+_PINNED_GIT_PROMPT = f"git+https://github.com/org/repo@{_PINNED_GIT_SHA}#prompts/ref.md"
+
+
+def _git_prompt_bundle(prompt_template: str) -> dict[str, Any]:
+    """Minimal v1 bundle whose single agent carries a git-content prompt."""
+    return {
+        "format_version": "1",
+        "pipeline": {"name": "Git Prompt Pipeline", "graph_nodes_json": []},
+        "agents": [{"id": "agent-export-1", "name": "Ref Agent", "prompt_template": prompt_template}],
+        "schemas": [],
+        "edges": [],
+    }
+
+
+def _import_session(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Session fake + CRUD patches for materialize_import without a database."""
+    from modulo.core import workflow_import_export as wix
+
+    monkeypatch.setattr(wix, "create_pipeline", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
+    monkeypatch.setattr(wix, "create_library_primitive", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
+    monkeypatch.setattr(wix, "get_existing_agent_names", AsyncMock(return_value=set()))
+    monkeypatch.setattr(wix, "get_existing_pipeline_names", AsyncMock(return_value=set()))
+    monkeypatch.setattr(wix, "create_agent", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
+    session = AsyncMock()
+    session.flush = AsyncMock()
+    session.begin_nested = MagicMock(return_value=_AsyncNoopContext())
+    return session
+
+
+async def test_import_rejects_unpinned_git_content_agent_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An UNPINNED ``git+`` agent prompt ref fails the import (FAR-220).
+
+    The Agent REST + MCP save surfaces reject an unpinned pin gate with a 422;
+    the workflow/library import materializes agents through the same
+    ``create_agent`` contract, so it must fail closed the same way instead of
+    leaking an unpinned ref into the database where every later run dispatches
+    the raw movable ref.
+    """
+    from modulo.core import workflow_import_export as wix
+    from modulo.core.pipeline_engine.git_content import GitContentRefError
+
+    session = _import_session(monkeypatch)
+
+    with pytest.raises(GitContentRefError, match="Agent 'Ref Agent' prompt_template git content ref") as exc_info:
+        await wix.materialize_import(session, _ORG_ID, _USER_ID, _git_prompt_bundle(_UNPINNED_GIT_PROMPT))
+
+    assert _UNPINNED_GIT_PROMPT in str(exc_info.value)
+    assert "not pinned" in str(exc_info.value)
+    wix.create_agent.assert_not_called()
+
+
+async def test_import_rejects_malformed_git_content_agent_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``git+`` prompt ref that does not parse fails the import too (FAR-220).
+
+    Malformed ``git+`` values cannot be pinned or audited, so the same
+    fail-closed semantics apply: typed error, nothing materialized.
+    """
+    from modulo.core import workflow_import_export as wix
+    from modulo.core.pipeline_engine.git_content import GitContentRefError
+
+    session = _import_session(monkeypatch)
+
+    with pytest.raises(GitContentRefError, match="Agent 'Ref Agent' prompt_template git content ref") as exc_info:
+        await wix.materialize_import(session, _ORG_ID, _USER_ID, _git_prompt_bundle(_MALFORMED_GIT_PROMPT))
+
+    assert _MALFORMED_GIT_PROMPT in str(exc_info.value)
+    wix.create_agent.assert_not_called()
+
+
+async def test_import_accepts_pinned_git_content_agent_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pinned (40-hex SHA) ``git+`` agent prompt still imports (FAR-220).
+
+    Pins the tolerance boundary: the gate rejects only unpinned/malformed
+    refs; a properly pinned prompt persists unchanged with the rest of the
+    bundle.
+    """
+    from modulo.core import workflow_import_export as wix
+
+    session = _import_session(monkeypatch)
+
+    result = await wix.materialize_import(session, _ORG_ID, _USER_ID, _git_prompt_bundle(_PINNED_GIT_PROMPT))
+
+    wix.create_agent.assert_awaited_once()
+    assert wix.create_agent.await_args.kwargs["prompt_template"] == _PINNED_GIT_PROMPT
+    # The import still succeeds structurally.
+    assert result["pipeline_name"] == "Git Prompt Pipeline"
+    assert result["agent_count"] == 1
+
+
 def test_v2_export_carries_no_graph_nodes() -> None:
     """v2 (ADR 015) has no graph-node payload, so there is nothing to strip.
 

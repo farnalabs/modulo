@@ -15,6 +15,10 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _AGENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
+_REPO = "https://github.com/example/repo.git"
+_UNPINNED_REF = f"git+{_REPO}@main#prompts/x.md"
+_PINNED_REF = f"git+{_REPO}@{'a' * 40}#prompts/x.md"
+
 
 @pytest.fixture
 def mock_session() -> AsyncMock:
@@ -307,6 +311,38 @@ class TestRollbackPromptVersion:
         from modulo.db.crud.agent import rollback_prompt_version
 
         assert await rollback_prompt_version(mock_session, _AGENT_ID, "v1") is None
+
+    async def test_rollback_rejects_unpinned_git_ref_in_legacy_entry(self, mock_session: AsyncMock) -> None:
+        """FAR-220: a legacy history entry carrying an unpinned git content ref
+        (pre-gate data or a direct DB write) must not be restored — that would
+        re-poison a clean Agent row. The gate fails closed BEFORE any
+        mutation: no history entry is appended, the template is untouched, and
+        nothing is flushed. This test FAILS without the gate."""
+        agent = _make_agent(history=[{"version": "v1", "template": _UNPINNED_REF}])
+        agent.prompt_template = "new prompt"
+        mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
+        from modulo.core.pipeline_engine.git_content import GitContentRefError
+        from modulo.db.crud.agent import rollback_prompt_version
+
+        with pytest.raises(GitContentRefError):
+            await rollback_prompt_version(mock_session, _AGENT_ID, "v1")
+
+        assert agent.prompt_template == "new prompt"
+        assert len(agent.prompt_version_history) == 1
+        mock_session.flush.assert_not_awaited()
+
+    async def test_rollback_allows_pinned_git_ref_in_legacy_entry(self, mock_session: AsyncMock) -> None:
+        """The gate must not over-block: a PINNED git content ref in a legacy
+        entry restores like any inline template."""
+        agent = _make_agent(history=[{"version": "v1", "template": _PINNED_REF}])
+        agent.prompt_template = "new prompt"
+        mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=agent))
+        from modulo.db.crud.agent import rollback_prompt_version
+
+        result = await rollback_prompt_version(mock_session, _AGENT_ID, "v1")
+        assert result is agent
+        assert result.prompt_template == _PINNED_REF
+        mock_session.flush.assert_awaited_once()
 
 
 class TestGetEvalResultsWithDefs:
