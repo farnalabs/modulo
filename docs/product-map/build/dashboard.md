@@ -44,9 +44,14 @@ org/`days` to keep the landing page fast.
       status with default/custom `days` bounds (`test_daily_run_counts.py`)
 - [x] HITL volume / rejection-rate / correlation series over the trend window (§8.20)
       are asserted by `hitl_trends.feature`
-- _Saved Views (`/admin/views`, `GET/POST/DELETE /api/v1/views`) deferred from the MVP
-  nav (hidden via `visibility: private_preview`). Behaviour detail removed for the MVP
-  cut — restore from git history when re-enabling. See FAR-546._
+- [x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders
+      `AdminViewsView.vue` over `GET/POST/PATCH/DELETE /api/v1/views` (gated by the plan
+      `view_modes` feature flag) — name, view type, custom filters (JSON), column
+      layouts, and sort-by/order configuration for create/edit/delete, locked by
+      `views.feature` BDD + `test_view_endpoint.py`. The route is a `private_preview`
+      surface (hidden from the sidebar nav, FAR-546) and the plan `saved_views` toggle
+      defaults off; the `ViewToggle` 'apply to list' frontend component ships but is not
+      yet wired into the runs/pipelines list pages.
 - [x] All summary/trend endpoints are org-RLS scoped and permission-gated
       (`dashboard.summary` / `dashboard.trends`)
 
@@ -57,6 +62,17 @@ org/`days` to keep the landing page fast.
   headline pass rate does not reflect guardrail-blocked runs.
 
 ## QA History
+- 2026-09-26: **Improve Architecture product-map walk** — closed `feat-dashboard`'s
+  stale "Saved Views are configurable with custom filters and column layouts" gap:
+  the surface ships as the admin CRUD page `AdminViewsView.vue` over the full
+  `GET/POST/PATCH/DELETE /api/v1/views` API (gated by the `view_modes` feature),
+  covered by `views.feature` BDD + `test_view_endpoint.py` + the manifest `elements:`
+  inventory. The registry entry is now `status: covered`; the deferral is narrowed to
+  the actual remaining limitations: the route is a `private_preview` surface hidden
+  from the sidebar nav (FAR-546), the plan `saved_views` toggle is default-off, and
+  the shipped-but-orphaned `ViewToggle` component is not yet wired into the
+  runs/pipelines list pages (saved views are created/edited from `/admin/views` rather
+  than applied in-context).
 - 2026-09-18: **product-map review pass** — closed the "No BDD for
   `/summary` / `/trends` / `/daily-run-counts`" gap: registered
   `dashboard/dashboard_summary.feature` (+ colocated steps
