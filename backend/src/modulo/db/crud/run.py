@@ -54,6 +54,9 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import (
     ACTIVE_RUN_STATUSES,
     AWAITING_HUMAN_STATUS,
+    CANCEL_REASON_USER_REQUESTED,
+    CANCEL_REASON_VALUES,
+    CANCELLED_BY_SYSTEM,
     HITL_PARKED_STATUS,
     PIPELINE_CAPACITY_STATUSES,
     TERMINAL_STATUSES,
@@ -2826,13 +2829,37 @@ async def transition_run(
     return ok
 
 
-async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
+async def request_cancellation(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    reason: str = CANCEL_REASON_USER_REQUESTED,
+    actor: str | None = None,
+) -> Run | None:
+    """Flag *run_id* cancellation-requested and terminalise it ``cancelled``.
+
+    FAR-1233: the WHY/WHO are persisted in the SAME write — ``reason`` must be
+    one of :data:`~modulo.db.models.run.CANCEL_REASON_VALUES` (a closed
+    vocabulary the DB also backstops with ``ck_runs_cancel_reason``) and
+    ``actor`` is the acting account id, defaulting to
+    :data:`~modulo.db.models.run.CANCELLED_BY_SYSTEM` when the caller has no
+    authenticated account in scope.
+
+    Because ``cancellation_requested`` is written ONLY here, every later
+    CANCEL-WINS transition (the fenced UPDATE's cancel branch, the executor's
+    claim-time terminalisation, ``finalize._apply_cancel_wins``) lands on a row
+    whose ``cancel_reason`` is already recorded.
+    """
+    if reason not in CANCEL_REASON_VALUES:
+        raise ValueError(f"invalid cancel reason: {reason!r}")
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
     if run is None:
         return None
     run.cancellation_requested = True
     run.status = "cancelled"
+    run.cancel_reason = reason
+    run.cancelled_by = actor or CANCELLED_BY_SYSTEM
     run.completed_at = datetime.now(UTC)
     await session.flush()
     if run.status in TERMINAL_STATUSES:

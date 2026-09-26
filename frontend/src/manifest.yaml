@@ -940,6 +940,9 @@ elements:
       - testid: collection-install-warnings
         type: element
         dynamic_testid: false
+      - testid: collection-install-warnings-live
+        type: element
+        dynamic_testid: false
       - testid: collection-publish
         type: button
         dynamic_testid: false
@@ -3390,6 +3393,15 @@ elements:
         dynamic_testid: false
       - testid: run-detail-cancel
         type: button
+        dynamic_testid: false
+      - testid: run-detail-cancel-reason
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-cancel-reason-message
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-cancelled-by
+        type: element
         dynamic_testid: false
       - testid: run-detail-copy-trace-id
         type: button

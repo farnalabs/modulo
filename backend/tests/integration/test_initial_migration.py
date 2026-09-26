@@ -182,7 +182,11 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
     # different name (ck_run_node_outputs_meta_present) — matched below.
     # permanent (documented repo divergence)
     "run_node_outputs": frozenset({"ck_run_node_outputs_meta_shape"}),
-    "runs": frozenset({"ck_run_claim_count", "ck_run_node_attempt_count"}),
+    # ck_runs_cancel_reason (0260): the closed cancel-reason vocabulary is a
+    # migration-owned DB backstop — the ORM declares the Python constant set
+    # (db.models.run.CANCEL_REASON_VALUES), not a duplicate CHECK.
+    # permanent (documented repo divergence)
+    "runs": frozenset({"ck_run_claim_count", "ck_run_node_attempt_count", "ck_runs_cancel_reason"}),
     "spend_anomalies": frozenset({"ck_spend_anomalies_percent_above"}),
     "suite_runs": frozenset(
         {

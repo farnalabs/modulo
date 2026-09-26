@@ -61,6 +61,9 @@ from modulo.core.trigger_streak import (
 from modulo.db.models.run import (
     ACTIVE_RUN_STATUSES,
     AWAITING_HUMAN_STATUS,
+    CANCEL_REASON_HITL_GATE_EXPIRED,
+    CANCEL_REASON_HITL_GATE_MISSING,
+    CANCELLED_BY_SYSTEM,
     ONGOING_ACTIVE_STATUSES,
     TERMINAL_STATUSES,
     Run,
@@ -5056,7 +5059,8 @@ async def _terminalize_expired_hitl_gates(
     result = await session.execute(
         text(
             "UPDATE runs SET status='cancelled', error_code=:code, "
-            "error_detail=:detail, completed_at=now() "
+            "error_detail=:detail, cancel_reason=:reason, "
+            "cancelled_by=:actor, completed_at=now() "
             "WHERE ctid IN ("
             "  SELECT ctid FROM runs "
             "  WHERE organisation_id=:oid AND status=:awaiting_status "
@@ -5082,6 +5086,9 @@ async def _terminalize_expired_hitl_gates(
             "oid": str(org_id),
             "code": _HITL_GATE_EXPIRED_ERROR_CODE,
             "detail": _HITL_GATE_EXPIRED_ERROR_DETAIL,
+            # FAR-1233: the WHY/WHO ride the same UPDATE as the status flip.
+            "reason": CANCEL_REASON_HITL_GATE_EXPIRED,
+            "actor": CANCELLED_BY_SYSTEM,
             "grace_seconds": grace_seconds,
             "awaiting_status": AWAITING_HUMAN_STATUS,
             "max_rows": _terminalize_max_rows(max_rows),
@@ -5138,7 +5145,8 @@ async def _terminalize_hitl_gate_missing(
     result = await session.execute(
         text(
             "UPDATE runs SET status='cancelled', error_code=:code, "
-            "error_detail=:detail, completed_at=now() "
+            "error_detail=:detail, cancel_reason=:reason, "
+            "cancelled_by=:actor, completed_at=now() "
             "WHERE ctid IN ("
             "  SELECT ctid FROM runs "
             "  WHERE organisation_id=:oid AND status=:awaiting_status "
@@ -5155,6 +5163,9 @@ async def _terminalize_hitl_gate_missing(
             "oid": str(org_id),
             "code": _HITL_GATE_MISSING_ERROR_CODE,
             "detail": _HITL_GATE_MISSING_ERROR_DETAIL,
+            # FAR-1233: the WHY/WHO ride the same UPDATE as the status flip.
+            "reason": CANCEL_REASON_HITL_GATE_MISSING,
+            "actor": CANCELLED_BY_SYSTEM,
             "grace_seconds": grace_seconds,
             "awaiting_status": AWAITING_HUMAN_STATUS,
             "max_rows": _terminalize_max_rows(max_rows),
