@@ -197,7 +197,11 @@ test.describe('Notifications', { tag: "@regression" }, () => {
     await loginAsAdmin(page, env)
     // Registered AFTER the local mock API so this handler wins the precedence
     // contest (Playwright matches the most recently registered route first).
-    await page.route('**/api/v1/notifications/in-app*', (route) => {
+    // `in-app**` (not `in-app*`) so the POST .../in-app/<id>/dismiss this test
+    // exercises is intercepted too: a single `*` stops at `/`, so the dismiss
+    // request escaped the mock and hit the real backend (422 on the fixture's
+    // non-UUID id), leaving the card in place.
+    await page.route('**/api/v1/notifications/in-app**', (route) => {
       const url = new URL(route.request().url())
       if (url.pathname.endsWith('/dismiss')) {
         dismissed = true
