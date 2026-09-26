@@ -17,7 +17,7 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.api.routes.runs import _mask_output_value
+from modulo.api.routes.runs import _mask_output_value, _serialize_node_token_usage
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.run import get_run
 from modulo.db.crud.variant_group import (
@@ -125,6 +125,9 @@ class BatchRunCompare(BaseModel):
     eval_count: int = 0
     total_cost_usd: Any = None
     total_tokens: int | None = None
+    # Per-node token breakdown (feat-variants per-token comparison): the
+    # persisted enriched union, serialized through the RunResponse bounds.
+    node_token_usage: dict[str, Any] | None = None
     created_at: Any = None
     completed_at: Any = None
     override_diff: dict[str, Any] = Field(default_factory=dict)
@@ -882,5 +885,9 @@ async def batch_compare(
 
     for entry in entries:
         _mask_batch_compare_entry(entry)
+        # Per-node token breakdown (feat-variants): serialize the persisted
+        # enriched union through the RunResponse bounds so the compare surface
+        # never echoes a hostile raw cost and stays bounded for huge graphs.
+        entry["node_token_usage"] = _serialize_node_token_usage(entry.get("node_token_usage"))
 
     return {"batch_id": batch_id, "has_evals": has_evals, "runs": entries}

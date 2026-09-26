@@ -857,6 +857,7 @@ async def get_batch_compare(
                 "eval_count": total,
                 "total_cost_usd": run.total_cost_usd,
                 "total_tokens": run.total_tokens,
+                "node_token_usage": run.node_token_usage,
                 "created_at": run.created_at,
                 "completed_at": run.completed_at,
                 "override_diff": _override_diff(base_overrides, overrides),

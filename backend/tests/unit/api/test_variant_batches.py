@@ -48,6 +48,7 @@ def _make_run(
     variant_config_snapshot: dict[str, Any] | None = None,
     total_cost_usd: float | None = 0.01,
     total_tokens: int | None = 1000,
+    node_token_usage: dict[str, Any] | None = None,
     created_at: datetime | None = None,
     completed_at: datetime | None = None,
 ) -> MagicMock:
@@ -58,6 +59,7 @@ def _make_run(
     run.variant_config_snapshot = variant_config_snapshot or {}
     run.total_cost_usd = total_cost_usd
     run.total_tokens = total_tokens
+    run.node_token_usage = node_token_usage
     run.created_at = created_at or datetime.now(UTC)
     run.completed_at = completed_at
     return run
@@ -159,6 +161,26 @@ class TestRunToVariantRun:
         )
         result = _run_to_variant_run(run, eval_stats={}, eval_results=[], node_outputs=None)
         assert result["input_label"] is None
+
+    def test_maps_node_token_usage_breakdown(self) -> None:
+        run = _make_run(
+            status="complete",
+            node_token_usage={
+                "planner": {"input_tokens": 150, "output_tokens": 450, "total_tokens": 600, "cost_usd": 0.015},
+                "coder": {"input_tokens": 1200, "output_tokens": 3200, "total_tokens": 4400, "cost_usd": 0.108},
+            },
+        )
+        result = _run_to_variant_run(run, eval_stats={}, eval_results=[], node_outputs=None)
+        ntu = result["node_token_usage"]
+        assert isinstance(ntu, dict)
+        assert ntu["planner"]["input_tokens"] == 150
+        assert ntu["planner"]["total_tokens"] == 600
+        assert ntu["coder"]["total_tokens"] == 4400
+
+    def test_maps_node_token_usage_none_when_not_available(self) -> None:
+        run = _make_run(status="pending", node_token_usage=None)
+        result = _run_to_variant_run(run, eval_stats={}, eval_results=[], node_outputs=None)
+        assert result["node_token_usage"] is None
 
 
 @pytest.mark.asyncio

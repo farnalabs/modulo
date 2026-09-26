@@ -46,6 +46,17 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
 - [x] All mutations run under org RLS (`set_rls_org` / `set_rls_user_context`); the
       seed path requires `pipeline.create` + `agent.create` + `schema.create` permits
       (`test_onboarding.py`)
+- [x] Onboarding telemetry is wired into the wizard as a dedicated Telemetry
+      Opt-In step (FAR-1131, manifest `feat-onboarding`): reaching the step loads
+      `GET /api/v1/admin/telemetry` (a non-system-admin caller sees the softer
+      "admin-only" note instead of a raw 403) and the enable control records the
+      preference via `PUT /api/v1/admin/telemetry` (backed by
+      `core/runtime_config/telemetry_bridge.py`); Skip moves on without touching
+      the current preference. `OnboardingWizard.vue` step 6 +
+      `frontend/src/__tests__/OnboardingWizard.spec.ts` (load/save/forbidden,
+      error envelope + retry, skip). No separate telemetry surface is required on
+      the onboarding REST API — the opt-in preference is an instance-level
+      deployment toggle, distinct from the org-level product-analytics consent.
 
 ## Known Gaps
 
@@ -54,6 +65,12 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
 
 ## QA History
 
+- 2026-09-25: **Improve Architecture product-map walk** — closed the last
+  `feat-onboarding` partial: the "telemetry/opt-in preferences not wired into the
+  wizard" gap was stale. The wizard ships a Telemetry Opt-In step (step 6,
+  FAR-1131) driving `GET`/`PUT /api/v1/admin/telemetry` with load/save/forbidden,
+  error-envelope + retry, and skip coverage in `OnboardingWizard.spec.ts`. The
+  manifest `feat-onboarding` status is now `covered`.
 - 2026-09-25: **Improve Architecture product-map walk** — reconciled the
   manifest `feat-onboarding` registry entry with this tracker: the shipped skip/dismiss
   logic (`POST /actions/{id}/complete|skip`, `POST /dismiss`) is now ticked, leaving

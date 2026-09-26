@@ -700,8 +700,12 @@ def _serialize_node_token_usage(ntu: dict[str, Any] | None) -> dict[str, Any] | 
     more than ``_NODE_TOKEN_USAGE_MAX_NODES`` nodes are present, only the
     newest N (dict insertion order — the union appends as nodes complete) are
     emitted and a ``node_count`` aggregate records the full size.
+
+    Non-dict / falsy stored values (corrupt JSON, a legacy non-object column
+    value) degrade to ``None`` — the union is a display-only surface and must
+    never raise into the run/variant-compare response.
     """
-    if not ntu:
+    if not ntu or not isinstance(ntu, dict):
         return None
     clamped = _clamp_node_token_usage_union(ntu)
     total = len(clamped)

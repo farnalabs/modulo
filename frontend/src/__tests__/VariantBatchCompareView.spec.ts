@@ -228,6 +228,166 @@ describe('VariantBatchCompareView', () => {
     expect(wrapper.find('[data-testid="variant-batch-run-link-r1"]').exists()).toBe(true)
   })
 
+  it('renders the per-node token breakdown when a variant run has one', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            node_token_usage: {
+              planner: { input_tokens: 150, output_tokens: 450, total_tokens: 600, cost_usd: 0.015 },
+              coder: { input_tokens: 1200, output_tokens: 3200, total_tokens: 4400, cost_usd: 0.108 },
+            },
+          }),
+          run({ run_id: 'r2', variant_name: 'sonnet', node_token_usage: null }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    const text = breakdown.text()
+    expect(text).toContain('planner')
+    expect(text).toContain('coder')
+    expect(text).toContain('600')
+    expect(text).toContain('4400')
+  })
+
+  it('hides the token breakdown for runs without per-node usage', async () => {
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Default mock runs carry no node_token_usage.
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="variant-batch-token-breakdown"]').exists()).toBe(false)
+  })
+
+  it('shows the cost column from per-node cost when the run total cost is absent', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            total_cost_usd: null,
+            total_tokens: 660,
+            node_token_usage: {
+              planner: { input_tokens: 150, output_tokens: 450, total_tokens: 600, cost_usd: 0.015 },
+              coder: { total_tokens: 50 },
+              legacy: { cost_usd: 0.001 },
+              stray: null,
+              node_count: 4,
+            },
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    // The cost column appears even though the run total is null, because a node
+    // recorded a cost (showCostColumn(run)).
+    expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(true)
+    // Nodes missing individual figures render an em dash rather than crashing.
+    expect(breakdown.text()).toContain('—')
+    // The tfoot Total-row cost cell must render an em dash when the run total is
+    // unknown — never $0.000000, which would imply a real zero cost.
+    expect(breakdown.text()).not.toContain('0.000000')
+    // The node_count aggregate and the all-null usage entry are filtered out.
+    expect(breakdown.text()).not.toContain('node_count')
+    expect(breakdown.text()).not.toContain('stray')
+  })
+
+  it('hides the cost column when neither the run total nor any node records a cost', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            total_cost_usd: null,
+            total_tokens: 100,
+            node_token_usage: { planner: { total_tokens: 100 } },
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    expect(breakdown.text()).toContain('planner')
+    expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(false)
+  })
+
+  it('hides the cost column when the run total cost is omitted from the payload', async () => {
+    batchMocks.fetchVariantBatch.mockResolvedValue({
+      data: mockBatch({
+        runs: [
+          run({
+            run_id: 'r1',
+            variant_name: 'opus',
+            total_cost_usd: undefined,
+            total_tokens: 100,
+            node_token_usage: { planner: { total_tokens: 100 } },
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-expand-r1"]').trigger('click')
+    await nextTick()
+
+    const breakdown = wrapper.find('[data-testid="variant-batch-token-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+    // An omitted total_cost_usd (`undefined`) is false under the loose `!= null`
+    // guard, so the column stays hidden rather than rendering a spurious Cost header.
+    expect(breakdown.findAll('thead th').some(th => th.text() === 'Cost')).toBe(false)
+    expect(breakdown.text()).not.toContain('0.000000')
+  })
+
   it('re-fires the batch from the frozen batch', async () => {
     const wrapper = mount(VariantBatchCompareView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },

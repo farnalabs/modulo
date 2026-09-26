@@ -490,6 +490,7 @@ def batch_comparison_computed(ctx: dict[str, Any]) -> None:
             status=d["status"],
             total_cost_usd=d["total_cost_usd"],
             total_tokens=d["total_tokens"],
+            node_token_usage=None,
             variant_config_snapshot=d["variant_config_snapshot"],
             created_at=None,
             completed_at=None,

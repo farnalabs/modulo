@@ -14,6 +14,7 @@ from sqlalchemy import case, func, select
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.routes.runs import _serialize_node_token_usage
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
@@ -162,6 +163,12 @@ def _run_to_variant_run(
         "pass_rate": round(passed / total, 4) if total else None,
         "total_cost_usd": run.total_cost_usd,
         "total_tokens": run.total_tokens,
+        # Per-node token breakdown (feat-variants per-token comparison): the
+        # persisted enriched union, serialized through the RunResponse bounds
+        # (model_cost_raw_usd display clamp + newest-N node truncation) so the
+        # compare surface never echoes a hostile raw cost and stays bounded for
+        # huge graphs. Null when the run has no recorded per-node usage.
+        "node_token_usage": _serialize_node_token_usage(run.node_token_usage),
         "eval_results": eval_results,
         "node_outputs": node_outputs,
     }
