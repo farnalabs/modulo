@@ -16,6 +16,7 @@ from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.runner_capacity import (
     HOST_RESOURCE_PROVIDERS,
     MARKER_STATE_CLEARED_AT_HITL,
+    MARKER_STATE_DISPATCHING,
     MARKER_STATE_SCRIPT_EXECUTING,
     RUNNER_PROVIDER_DOCKER,
     RUNNER_PROVIDER_E2B,
@@ -207,6 +208,27 @@ def test_build_dispatch_marker_rejects_empty_provider() -> None:
         build_dispatch_marker("k", "   ")
     with pytest.raises(ValueError, match="provider must be a non-empty string"):
         build_dispatch_marker("k", "\t\n")
+
+
+def test_build_dispatch_marker_omits_via_provider_by_default() -> None:
+    """FAR-1050 R4 follow-up: the optional flag defaults to OMITTED, so every
+    pre-existing call site keeps its exact prior payload."""
+    parsed = json.loads(build_dispatch_marker("k", RUNNER_PROVIDER_E2B))
+    assert "via_provider" not in parsed
+    assert set(parsed) == {"state", "attempt_key", "provider", "written_at"}
+
+
+def test_build_dispatch_marker_carries_via_provider_when_supplied() -> None:
+    """The flag state rides the marker AT BUILD TIME and stays fence-neutral
+    and reader-tolerated (ADR 040 marker schema versioning)."""
+    for flag_on in (True, False):
+        marker = build_dispatch_marker("k", RUNNER_PROVIDER_E2B, via_provider=flag_on)
+        parsed = json.loads(marker)
+        assert parsed["via_provider"] is flag_on
+        assert parsed["state"] == MARKER_STATE_DISPATCHING
+        assert parsed["attempt_key"] == "k"
+        assert parse_marker_state(marker) == MARKER_STATE_DISPATCHING
+        assert marker_is_fence_component(marker) is False
 
 
 def test_tombstone_is_capacity_neutral_state() -> None:
@@ -653,11 +675,14 @@ async def test_gate_missing_claim_context_fails_open(monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 
 
-async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FAR-995: the marker written by acquire_runner_dispatch_slot carries the
-    explicit provider value passed by the caller."""
-    _patch_gate(monkeypatch, flag_on=True)
-    captured_markers: list[str] = []
+def _marker_capturing_factory(captured_markers: list[str]) -> Any:
+    """Session double whose fenced marker UPDATE records the marker it would write.
+
+    Statement routing mirrors the gate's own query shapes: the own-row
+    ``claim_count`` lock, the ``set_config`` / advisory-lock setup, the cap
+    read, the lock-free count, and the fenced ``UPDATE runs SET
+    sandbox_dispatch_state`` (the one that carries the marker).
+    """
 
     class _CapturingSession:
         def __init__(self) -> None:
@@ -691,7 +716,7 @@ async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyP
                 r.scalar_one.return_value = (4, True)
                 return r
             if "UPDATE runs SET sandbox_dispatch_state" in stmt_text:
-                captured_markers.append(params.get("marker", ""))
+                captured_markers.append((params or {}).get("marker", ""))
                 r = MagicMock()
                 r.fetchone.return_value = ("run-id",)
                 return r
@@ -699,6 +724,16 @@ async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyP
 
     def factory() -> _CapturingSession:
         return _CapturingSession()
+
+    return factory
+
+
+async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-995: the marker written by acquire_runner_dispatch_slot carries the
+    explicit provider value passed by the caller."""
+    _patch_gate(monkeypatch, flag_on=True)
+    captured_markers: list[str] = []
+    factory = _marker_capturing_factory(captured_markers)
 
     for provider_val in (RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_E2B, RUNNER_PROVIDER_LOCAL):
         slot = await acquire_runner_dispatch_slot(
@@ -711,6 +746,53 @@ async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyP
             f"marker provider mismatch: expected {provider_val}, got {parsed.get('provider')}"
         )
         assert "written_at" in parsed, f"written_at missing for provider={provider_val}"
+
+
+async def test_acquire_slot_marker_stamps_via_provider_at_build_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1050 R4 follow-up: the PRIMARY capacity-gate marker carries the
+    flag state built in — not only via the post-create rewrite — and stays
+    unstamped for a caller that supplies nothing."""
+    _patch_gate(monkeypatch, flag_on=True)
+    captured_markers: list[str] = []
+    factory = _marker_capturing_factory(captured_markers)
+
+    slot = await acquire_runner_dispatch_slot(
+        factory,
+        org_id=_ORG,
+        run_id=_RUN,
+        claim_token=_CLAIM,
+        node_id="n1",
+        provider=RUNNER_PROVIDER_E2B,
+        via_provider=True,
+    )
+    assert slot.status == "acquired"
+    assert captured_markers
+    stamped = json.loads(captured_markers[-1])
+    assert stamped["via_provider"] is True
+    assert stamped["provider"] == RUNNER_PROVIDER_E2B
+
+    slot = await acquire_runner_dispatch_slot(
+        factory,
+        org_id=_ORG,
+        run_id=_RUN,
+        claim_token=_CLAIM,
+        node_id="n1",
+        provider=RUNNER_PROVIDER_E2B,
+        via_provider=False,
+    )
+    assert slot.status == "acquired"
+    assert json.loads(captured_markers[-1])["via_provider"] is False
+
+    slot = await acquire_runner_dispatch_slot(
+        factory,
+        org_id=_ORG,
+        run_id=_RUN,
+        claim_token=_CLAIM,
+        node_id="n1",
+        provider=RUNNER_PROVIDER_E2B,
+    )
+    assert slot.status == "acquired"
+    assert "via_provider" not in json.loads(captured_markers[-1])
 
 
 # ---------------------------------------------------------------------------

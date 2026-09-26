@@ -29,6 +29,7 @@ E2B sandbox:
 
 import asyncio
 import json
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -1222,6 +1223,47 @@ def test_provider_mediated_handle_has_no_legacy_files_surface() -> None:
     handle = _ProviderMediatedHandle(MagicMock(), "sbx-handle")
     with pytest.raises(RuntimeError, match="no legacy files surface"):
         _ = handle.files
+
+
+def test_provider_mediated_handle_has_no_metrics_surface() -> None:
+    """R4 follow-up: the ABC models no metrics primitive, so the mediated
+    handle deliberately exposes no ``get_metrics`` — the watchdog detects
+    that (it does not attribute-error into the generic branch)."""
+    handle = _ProviderMediatedHandle(MagicMock(), "sbx-handle")
+    assert not callable(getattr(handle, "get_metrics", None))
+
+
+async def test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch(caplog: pytest.LogCaptureFixture) -> None:
+    """R4 follow-up (ADR 040 metrics gap): resource caps CANNOT be enforced on
+    the flag-ON path, and the fail-open is explicit + observable — one clear
+    warning naming the gap, NOT the generic transient 'metrics unavailable'
+    traceback — and it fires once per dispatch, not once per poll tick."""
+    handle = _ProviderMediatedHandle(MagicMock(), "sbx-gap")
+    watchdog = nr._SandboxWatchdog(
+        sandbox=handle,
+        stall=MagicMock(),
+        node_id="n-gap",
+        run_id="r-gap",
+        watch_log_path=None,
+        watch_globs=[],
+        resource_limits={"cpu_usage_pct": 50},
+        sandbox_mode="script",
+        stdout_percentage_delta=None,
+        stream_broker=None,
+        drained_chunks=[],
+        wall_clock=nr._WatchdogWallClock(None, 0.0),
+    )
+    logger = "modulo.core.pipeline_engine.node_runner"
+    with caplog.at_level(logging.WARNING, logger=logger):
+        assert await watchdog.enforce_resource_limits() is False
+        assert await watchdog.enforce_resource_limits() is False
+    gap_event = "sandbox_agent.resource_caps_not_enforced_via_provider"
+    gap_records = [r for r in caplog.records if r.getMessage() == gap_event]
+    assert len(gap_records) == 1
+    assert "NOT enforced" in gap_records[0].reason
+    assert "ADR 040" in gap_records[0].reason
+    assert not any("resource_metrics_unavailable" in r.getMessage() for r in caplog.records)
+    assert watchdog.budget_killed is False
 
 
 class _DoneEarlyChunks:
