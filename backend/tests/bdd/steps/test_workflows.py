@@ -863,10 +863,9 @@ def _analyse_valid_bundle(client, ctx: dict[str, Any]) -> None:
 def _connector_resolved_to_instance(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     connectors = data.get("resolved_connectors", [])
-    assert any(
-        c.get("instance_id") == str(FILESYSTEM_CONNECTOR_ID) and c.get("instance_name")
-        for c in connectors
-    ), f"Expected resolved filesystem instance, got {connectors}"
+    assert any(c.get("instance_id") == str(FILESYSTEM_CONNECTOR_ID) and c.get("instance_name") for c in connectors), (
+        f"Expected resolved filesystem instance, got {connectors}"
+    )
 
 
 @then('the schema reference is resolved to the local "PRD Input Schema" by abstract_name')
@@ -993,9 +992,7 @@ def _analyse_seam_mocks(*, existing_pipeline_names: set[str] | None = None) -> d
     to its deterministic result.
     """
     return {
-        "resolve_schema": AsyncMock(
-            return_value={"schema_id": str(SCHEMA_A_ID), "version": "1.0", "warning": None}
-        ),
+        "resolve_schema": AsyncMock(return_value={"schema_id": str(SCHEMA_A_ID), "version": "1.0", "warning": None}),
         "resolve_connector_type": AsyncMock(
             return_value={
                 "instance_id": str(FILESYSTEM_CONNECTOR_ID),
