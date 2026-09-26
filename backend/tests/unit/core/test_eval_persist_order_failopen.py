@@ -154,12 +154,16 @@ class TestRecordDecisionPersistFailureMetrics:
         )
 
     def test_no_counter_increment_when_unavailable(self) -> None:
+        ensure_metrics = MagicMock()
         with (
-            patch.object(eval_persist_order, "_ensure_metrics", MagicMock()),
+            patch.object(eval_persist_order, "_ensure_metrics", ensure_metrics),
             patch.object(eval_persist_order, "_decision_record_persist_failures_total", None),
         ):
             # Must be a no-op (and never raise) when metrics are unavailable.
-            _record_decision_persist_failure(resolved_action="continue", failure_class="transient")
+            result = _record_decision_persist_failure(resolved_action="continue", failure_class="transient")
+
+        assert result is None
+        ensure_metrics.assert_called_once()
 
     def test_metrics_error_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
