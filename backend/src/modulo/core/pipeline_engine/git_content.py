@@ -64,7 +64,13 @@ host): TTL :data:`CONTENT_CACHE_TTL_SECONDS`, entry cap
 :data:`CONTENT_CACHE_MAX_VALUE_BYTES` are never cached, writes are atomic
 (TempFile + ``os.replace``), the directory is ``chmod 0o700`` where supported,
 and every key-carrying file binds its own ``(repo_url, sha, path)`` so a
-traversal into the cache cannot serve a wrong key's content. The SSRF host
+traversal into the cache cannot serve a wrong key's content. Writes fail open
+(a read-only / full cache dir must not fail a fetch that otherwise succeeded)
+and orphaned temp files left by a crash between write and replace are swept
+once past the TTL. The key-binding check detects corruption or mislabelling,
+NOT deliberate poisoning by a same-host local writer who can write the cache
+directory (there is no HMAC); the ``0700`` mode and public-content-only scope
+bound that residual, alongside the DNS-TOCTOU window below. The SSRF host
 gate (below) runs BEFORE the cache is consulted — the boundary is
 unconditional.
 
@@ -609,17 +615,37 @@ def _cache_put(
     cache_dir: str | Path | None = None,
     max_entries: int = CONTENT_CACHE_MAX_ENTRIES,
 ) -> None:
-    """Persist the entry atomically; evict expired, then oldest-over-cap entries."""
-    directory = _cache_dir(cache_dir)
-    target = directory / f"{_cache_key(repo_url, sha, path)}.json"
-    tmp = directory / f".tmp-{uuid.uuid4().hex}"
-    tmp.write_text(
-        json.dumps(
-            {"repo_url": repo_url, "sha": sha.lower(), "path": path, "fetched_at": time.time(), "content": content}
-        ),
-        encoding="utf-8",
-    )
-    tmp.replace(target)
+    """Persist the entry atomically; evict expired, then oldest-over-cap entries.
+
+    Best-effort by design: the cache is an optimization, so any filesystem
+    error here (read-only directory, disk full, permission denied) is swallowed
+    rather than failing the content fetch that triggered the write. This is the
+    write-side counterpart of :func:`_cache_get`'s ``OSError`` handling.
+    """
+    try:
+        directory = _cache_dir(cache_dir)
+        target = directory / f"{_cache_key(repo_url, sha, path)}.json"
+        tmp = directory / f".tmp-{uuid.uuid4().hex}"
+        tmp.write_text(
+            json.dumps(
+                {"repo_url": repo_url, "sha": sha.lower(), "path": path, "fetched_at": time.time(), "content": content}
+            ),
+            encoding="utf-8",
+        )
+        tmp.replace(target)
+    except OSError:
+        _log.debug("git_content.cache_put_failed", exc_info=True)
+        return
+    _evict_cache(directory, max_entries)
+
+
+def _evict_cache(directory: Path, max_entries: int) -> None:
+    """Sweep a cache *directory*: TTL-expired entries, then oldest over *max_entries*.
+
+    Also removes orphaned ``.tmp-*`` files (a crash between ``write_text`` and
+    ``replace``) once they are past the TTL — they never match ``*.json`` so the
+    entry sweeps above would otherwise leave them to accumulate forever.
+    """
     now = time.time()
     # Drop TTL-expired entries first, then the oldest beyond the entry cap.
     for candidate in directory.glob("*.json"):
@@ -628,6 +654,13 @@ def _cache_put(
     entries = sorted(directory.glob("*.json"), key=_mtime_or_zero)
     for stale in entries[: max(0, len(entries) - max_entries)]:
         stale.unlink(missing_ok=True)
+    # Orphaned temp files from an interrupted ``replace`` are invisible to the
+    # ``*.json`` globs above; sweep the ones past the TTL so they cannot
+    # accumulate. A TTL (rather than every write) avoids racing a concurrent
+    # writer that is still filling its own ``.tmp-*`` file.
+    for orphan in directory.glob(".tmp-*"):
+        if now - _mtime_or_zero(orphan) > CONTENT_CACHE_TTL_SECONDS:
+            orphan.unlink(missing_ok=True)
 
 
 def _mtime_or_zero(entry: Path) -> float:
@@ -760,8 +793,8 @@ def validate_agent_git_content_values(
         and any(isinstance(item, str) and GIT_CONTENT_PREFIX in item for item in agent_commands)
     ):
         raise GitContentRefError(
-            "agent_commands contains a git content ref among several commands — git content "
-            "refs must be the whole field, not one command of several (use a single-item "
+            "agent_commands contains a git+ token among several commands — a git content "
+            "ref must be the whole field, not one command of several (use a single-item "
             "agent_commands list whose only entry is the ref, or inline the content)"
         )
 

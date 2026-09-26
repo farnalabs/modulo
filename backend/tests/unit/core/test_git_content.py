@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -307,6 +308,12 @@ def test_git_content_values_covers_three_fields() -> None:
     ]
 
 
+def test_git_content_values_skips_non_string_and_non_list_fields() -> None:
+    """A non-str scalar / non-list command field contributes no values."""
+    node = {"agent_prompt": 7, "script_command": None, "agent_commands": "not-a-list"}
+    assert git_content_values(node) == []
+
+
 def test_pin_node_fields_pins_movable_via_resolver() -> None:
     def _resolver(ref) -> str:
         assert ref.ref == "main"
@@ -562,6 +569,18 @@ async def test_git_spawn_carries_prompts_off_env(monkeypatch: pytest.MonkeyPatch
     assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
 
 
+def test_git_process_env_preserves_operator_ssh_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An operator-provided GIT_SSH_COMMAND is honoured, not overwritten.
+
+    ``BatchMode=yes`` is only the unset-case fallback; an explicitly configured
+    ssh command must survive so hosts needing their own transport options work.
+    """
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=no")
+    env = git_content._git_process_env()
+    assert env["GIT_SSH_COMMAND"] == "ssh -o StrictHostKeyChecking=no"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
 async def test_fetch_git_content_spawns_git_with_prompts_off_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -693,6 +712,38 @@ async def test_fetch_git_content_different_path_reclones(monkeypatch: pytest.Mon
     assert calls.count("fetch (shallow+blobless)") == 2
 
 
+async def test_fetch_git_content_use_cache_false_skips_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """``use_cache=False`` renders fresh content and writes nothing to the cache."""
+    _allow_all_hosts(monkeypatch)
+    calls: list[str] = []
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        calls.append(what)
+        return b"PROMPT FROM GIT" if what.startswith("show") else b""
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    out = await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path, use_cache=False)
+    assert out == "PROMPT FROM GIT"
+    assert calls.count("fetch (shallow+blobless)") == 1
+    assert await asyncio.to_thread(lambda: list(tmp_path.glob("*.json"))) == []
+
+
+async def test_fetch_git_content_does_not_cache_oversized_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Content above CONTENT_CACHE_MAX_VALUE_BYTES is returned but never cached."""
+    _allow_all_hosts(monkeypatch)
+    oversized = b"x" * (git_content.CONTENT_CACHE_MAX_VALUE_BYTES + 1)
+
+    async def _fake_git(args, *, cwd, timeout_seconds, what, repo_url):
+        return oversized if what.startswith("show") else b""
+
+    monkeypatch.setattr(git_content, "_git", _fake_git)
+    out = await fetch_git_content(_REPO, _SHA_A, "big.txt", cache_dir=tmp_path)
+    assert len(out) == git_content.CONTENT_CACHE_MAX_VALUE_BYTES + 1
+    assert await asyncio.to_thread(lambda: list(tmp_path.glob("*.json"))) == []
+
+
 async def test_fetch_git_content_oversized_clone_is_typed_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -730,15 +781,64 @@ def test_cache_get_misses_expired_entry(tmp_path: Path) -> None:
 
 
 def test_cache_put_evicts_beyond_entry_cap(tmp_path: Path) -> None:
+    # Eviction is by mtime, and rapid writes can land on the same filesystem
+    # timestamp tick (observed on CI-class storage); stamp each entry explicitly
+    # so the "oldest" set is deterministic on any filesystem. The entry cap
+    # itself is still what is under test.
+    base = time.time() - git_content.CONTENT_CACHE_TTL_SECONDS / 2
     for index in range(5):
-        git_content._cache_put(
-            f"https://github.com/ex/repo{index}.git", _SHA_A, "p.md", f"v{index}", cache_dir=tmp_path, max_entries=3
-        )
+        repo = f"https://github.com/ex/repo{index}.git"
+        git_content._cache_put(repo, _SHA_A, "p.md", f"v{index}", cache_dir=tmp_path, max_entries=3)
+        entry = tmp_path / f"{git_content._cache_key(repo, _SHA_A, 'p.md')}.json"
+        os.utime(entry, (base + index, base + index))
     files = list(tmp_path.glob("*.json"))
     assert len(files) == 3
     # The two oldest entries are evicted; traversal order does not matter.
     contents = {json.loads(p.read_text(encoding="utf-8"))["content"] for p in files}
     assert contents == {"v2", "v3", "v4"}
+
+
+def test_cache_put_evicts_ttl_expired_entries(tmp_path: Path) -> None:
+    git_content._cache_put(_REPO, _SHA_A, "old.md", "old", cache_dir=tmp_path)
+    old = tmp_path / f"{git_content._cache_key(_REPO, _SHA_A, 'old.md')}.json"
+    stale = time.time() - (git_content.CONTENT_CACHE_TTL_SECONDS + 60.0)
+    os.utime(old, (stale, stale))
+    git_content._cache_put(_REPO, _SHA_B, "new.md", "new", cache_dir=tmp_path)
+    assert not old.exists()
+    assert (tmp_path / f"{git_content._cache_key(_REPO, _SHA_B, 'new.md')}.json").exists()
+
+
+def test_cache_put_sweeps_stale_orphaned_temp_files(tmp_path: Path) -> None:
+    """A crash between ``write_text`` and ``replace`` leaves a ``.tmp-*`` file.
+
+    It never matches the ``*.json`` sweeps, so past the TTL it must be swept
+    explicitly; a fresh (possibly in-flight) temp file is left alone.
+    """
+    stale_orphan = tmp_path / ".tmp-deadbeef"
+    stale_orphan.write_text("partial", encoding="utf-8")
+    fresh_orphan = tmp_path / ".tmp-cafe"
+    fresh_orphan.write_text("in-flight", encoding="utf-8")
+    stale_stamp = time.time() - (git_content.CONTENT_CACHE_TTL_SECONDS + 60.0)
+    os.utime(stale_orphan, (stale_stamp, stale_stamp))
+    git_content._cache_put(_REPO, _SHA_A, "p.md", "content", cache_dir=tmp_path)
+    assert not stale_orphan.exists()
+    assert fresh_orphan.exists()
+
+
+def test_cache_put_fails_open_on_oserror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A cache write failure must never fail the fetch that triggered it."""
+
+    def _boom(_self: Path, *_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    git_content._cache_put(_REPO, _SHA_A, "p.md", "content", cache_dir=tmp_path)
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_mtime_or_zero_treats_stat_failure_as_zero(tmp_path: Path) -> None:
+    """A vanished/stat-failing entry sorts as oldest instead of raising."""
+    assert git_content._mtime_or_zero(tmp_path / "gone.json") == 0.0
 
 
 def test_cache_get_rejects_key_binding_mismatch(tmp_path: Path) -> None:
@@ -807,6 +907,18 @@ def test_git_repository_host_url_forms() -> None:
     assert git_content.git_repository_host_url("https://host.example:4443/a/b.git") == "https://host.example:4443"
     assert git_content.git_repository_host_url("ssh://git@host.example:2222/a/b.git") == "https://host.example:2222"
     assert git_content.git_repository_host_url("git@github.com:a/b.git") == "https://github.com"
+
+
+def test_git_repository_host_url_rejects_scp_without_host() -> None:
+    """A malformed SCP-style URL with an empty host is a typed refusal, not a bad probe URL."""
+    with pytest.raises(GitContentRefError, match="cannot extract the repository host"):
+        git_content.git_repository_host_url("git@:path")
+
+
+def test_git_repository_host_url_rejects_url_without_host() -> None:
+    """A URL with no netloc (e.g. ``ssh://``) cannot yield a host to gate on."""
+    with pytest.raises(GitContentRefError, match="cannot extract the repository host"):
+        git_content.git_repository_host_url("ssh://")
 
 
 async def test_require_public_git_host_refuses_loopback_literal() -> None:
