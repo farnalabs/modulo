@@ -15,6 +15,7 @@ from alembic.script import Script, ScriptDirectory
 from sqlalchemy import Connection, Engine, create_engine, event
 from sqlalchemy.pool import NullPool
 
+from modulo.db.migrations import _lock_state
 from modulo.db.models import Base
 
 _log = logging.getLogger(__name__)
@@ -58,18 +59,22 @@ _MIGRATION_LOCK_KEY = (72001, 1)
 _MIGRATION_LOCK_POLL_ATTEMPTS = 240
 _MIGRATION_LOCK_POLL_INTERVAL = 1.0
 
+
 # True while the app lifespan (main.py) already holds the migration lock on its
 # own connection. env.py must NOT re-acquire the same key on a different
 # session in that case — advisory locks are per-session, so a second session
 # would block on itself. Standalone `alembic upgrade heads` (entrypoint.sh)
 # never sets the flag and therefore always takes the lock.
-_lock_held_by_caller = False
-
-
+#
+# The flag lives in ``modulo.db.migrations._lock_state`` rather than as a module
+# global here: alembic executes env.py as a fresh ``env_py`` module (see
+# ``alembic.util.pyfiles.load_python_file``), so a global defined in this file
+# would be invisible to the copy ``command.upgrade`` runs and the caller-held
+# flag would never reach it — the app-lifespan migration run would deadlock on
+# the lock it already holds.
 def set_lock_held_by_caller(held: bool) -> None:
     """Set/clear whether the calling process already holds the migration lock."""
-    global _lock_held_by_caller
-    _lock_held_by_caller = held
+    _lock_state.set_held_by_caller(held)
 
 
 @contextmanager
@@ -82,7 +87,7 @@ def _migration_advisory_lock(engine: Engine, url: str) -> Iterator[None]:
     connection so it survives the migration transaction. Non-Postgres backends
     (SQLite/MariaDB — dev-only) have no advisory locks and are skipped.
     """
-    if not url.startswith("postgresql") or _lock_held_by_caller:
+    if not url.startswith("postgresql") or _lock_state.is_held_by_caller():
         yield
         return
 
