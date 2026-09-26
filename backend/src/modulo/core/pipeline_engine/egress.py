@@ -27,6 +27,51 @@ PROFILE_NETWORK_POLICIES: tuple[str, ...] = ("none", "outbound", "selected")
 NODE_EGRESS_POLICIES: tuple[str, ...] = ("default", "deny_all", "selected")
 """Valid values for the node-level ``egress_policy`` field."""
 
+WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY: str = "egress_allowlist"
+"""``WorkspaceSpec.workspace_metadata`` key carrying the selected-mode allowlist.
+
+JSON-encoded, matching the legacy E2B create path (``node_runner``) and the
+E2B provider's documented metadata carrier.  Every mapper that builds a
+``WorkspaceSpec`` from an :class:`EgressResolution` stamps under THIS key so
+the two paths cannot diverge.
+"""
+
+
+# --- WorkspaceSpec dialect mapping ----------------------------------------
+
+
+def spec_egress_for_canonical(policy: str | None) -> str:
+    """Map a canonical egress policy onto the ``WorkspaceSpec.egress_policy`` dialect.
+
+    Single owner of the canonical -> spec mapping (FAR-1050, ADR 040): every
+    call site that derives ``WorkspaceSpec.egress_policy`` from an
+    :class:`EgressResolution` MUST route through this helper so the profile
+    and bundled-runner mappers cannot drift apart.
+
+    Input vocabulary (:func:`resolve_egress` output): ``None`` (provider
+    default), ``"deny_all"``, ``"selected"``.
+
+    Output vocabulary — the ``WorkspaceSpec`` dialect consumed by the
+    providers (``DockerRuntimeProvider._resolve_network_mode`` keys on
+    ``"none"``; ``E2BRuntimeProvider._egress_allows_internet`` treats
+    ``"selected"`` / ``"none"`` as deny-internet):
+
+    - ``None``       -> ``"outbound"`` (unrestricted — the provider default)
+    - ``"deny_all"`` -> ``"none"`` (the spec dialect's deny value)
+    - ``"selected"`` -> ``"selected"`` (restrictive; the host:port allowlist
+      rides as workspace/sandbox metadata)
+    - anything else  -> ``"none"`` (fail CLOSED — an unknown policy must
+      never silently grant unrestricted egress)
+    """
+    if policy is None:
+        return "outbound"
+    value = policy.strip().lower()
+    if value == "deny_all":
+        return "none"
+    if value == "selected":
+        return "selected"
+    return "none"
+
 
 # --- Tier capability matrix (declare once) --------------------------------
 

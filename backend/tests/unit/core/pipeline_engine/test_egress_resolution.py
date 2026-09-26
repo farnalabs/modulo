@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 
 import modulo.core.pipeline_engine.egress as egress_mod
-from modulo.core.pipeline_engine.egress import EgressResolution, resolve_egress
+from modulo.core.pipeline_engine.egress import (
+    EgressResolution,
+    resolve_egress,
+    spec_egress_for_canonical,
+)
 from modulo.core.pipeline_engine.sandbox_mode import (
     SANDBOX_CAPABILITY_EGRESS,
     derive_sandbox_capabilities,
@@ -477,3 +481,33 @@ def test_egress_resolution_is_frozen() -> None:
     r = EgressResolution(policy=None, allowlist=None, refusal=None)
     with pytest.raises(AttributeError):
         r.policy = "deny_all"  # type: ignore[misc]
+
+
+# --- spec_egress_for_canonical: the single canonical -> WorkspaceSpec mapper
+
+
+@pytest.mark.parametrize(
+    ("canonical", "expected"),
+    [
+        pytest.param(None, "outbound", id="provider-default-allows"),
+        pytest.param("deny_all", "none", id="deny-all-denies"),
+        pytest.param("selected", "selected", id="selected-stays-selected"),
+        pytest.param("  SELECTED  ", "selected", id="case-and-whitespace-insensitive"),
+        pytest.param("bogus", "none", id="unknown-fails-closed"),
+        pytest.param("", "none", id="empty-fails-closed"),
+    ],
+)
+def test_spec_egress_for_canonical_is_lossless(canonical: str | None, expected: str) -> None:
+    """FAR-1050: the canonical -> WorkspaceSpec mapping must be lossless.
+
+    'selected' must never collapse into the permissive 'outbound'
+    (the ADR 040 fail-open defect class), and anything unrecognised must
+    fail CLOSED to the deny value.
+    """
+    assert spec_egress_for_canonical(canonical) == expected
+
+
+def test_spec_egress_for_canonical_selected_is_not_permissive() -> None:
+    """A restrictive canonical policy must never map to the permissive dialect value."""
+    assert spec_egress_for_canonical("selected") != "outbound"
+    assert spec_egress_for_canonical("deny_all") != "outbound"

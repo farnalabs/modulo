@@ -503,7 +503,11 @@ def _egress_tier_for_provider_type(provider_type: str) -> str | None:
 
 
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
-    from modulo.core.pipeline_engine.egress import resolve_egress
+    from modulo.core.pipeline_engine.egress import (
+        WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY,
+        resolve_egress,
+        spec_egress_for_canonical,
+    )
     from modulo.core.runtime_provider import WorkspaceSpec
 
     cfg = profile.config_json or {}
@@ -531,8 +535,19 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
             f"(provider_type={profile.provider_type!r}, tier={_tier!r}): "
             f"{_egress.refusal}"
         )
-    # Map canonical policy to WorkspaceSpec egress_policy vocabulary.
-    _spec_egress = "none" if _egress.policy == "deny_all" else "outbound"
+    # Map the canonical policy to the WorkspaceSpec egress vocabulary
+    # LOSSLESSLY (FAR-1050) — "selected" must stay "selected", never
+    # collapse into the permissive "outbound". The shared helper is the
+    # single owner of this mapping (both mappers route through it).
+    _spec_egress = spec_egress_for_canonical(_egress.policy)
+    # FAR-1050 R5 parity: carry the selected-mode allowlist in the same
+    # metadata key the legacy E2B create path stamping and the E2B provider
+    # read. Unreachable today (no profile-level allowlist field exists and
+    # the resolver refuses "selected" without one), but stamped so a future
+    # profile-level allowlist cannot silently behave as deny_all.
+    _workspace_metadata: dict[str, str] = {}
+    if _egress.policy == "selected" and _egress.allowlist:
+        _workspace_metadata[WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY] = json.dumps(_egress.allowlist)
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=profile.organisation_id,
@@ -544,6 +559,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         egress_policy=_spec_egress,
         persistence_policy=profile.persistence_policy,
         labels={"profile_name": profile.name},
+        workspace_metadata=_workspace_metadata,
     )
 
 
