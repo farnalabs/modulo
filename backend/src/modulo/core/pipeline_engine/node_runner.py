@@ -1493,8 +1493,9 @@ def _translate_provider_dispatch_error(exc: BaseException) -> BaseException:
 def _dispatch_marker_json(attempt_key: str, provider: str, *, via_provider: bool) -> str:
     """Dispatch/lease marker JSON carrying the tier AND the FAR-1050 flag state.
 
-    Builds on the canonical :func:`runner_capacity.build_dispatch_marker`
-    payload and adds ``via_provider`` so any run can be attributed to
+    The canonical :func:`runner_capacity.build_dispatch_marker` payload now
+    accepts the flag state directly (R4 follow-up), so this stays a thin
+    pass-through: ``via_provider`` is stamped so any run can be attributed to
     legacy-vs-provider execution from the marker alone (ADR 040 "Flag and
     revert observability"). Marker readers only ever read named keys
     (``state`` / ``attempt_key`` / ``provider``), so the extra field is
@@ -1502,9 +1503,7 @@ def _dispatch_marker_json(attempt_key: str, provider: str, *, via_provider: bool
     """
     from modulo.core.runner_capacity import build_dispatch_marker
 
-    payload = json.loads(build_dispatch_marker(attempt_key, provider))
-    payload["via_provider"] = bool(via_provider)
-    return json.dumps(payload)
+    return build_dispatch_marker(attempt_key, provider, via_provider=bool(via_provider))
 
 
 class _ProviderCommands:
@@ -1561,11 +1560,13 @@ class _ProviderMediatedHandle:
 
     Deliberately ABSENT: ``files`` (every file site is gated onto the ABC
     primitives by FAR-1050 R2b) and ``get_metrics`` (the ABC models no
-    metrics primitive — the resource-cap killer fails OPEN through its
-    existing "metrics unavailable" branch, exactly as it does when the SDK
-    reports no metrics). Touching ``files`` therefore means only one thing: a
-    flag read that flipped MID-dispatch, which must be loud, never a silent
-    legacy downgrade.
+    metrics primitive — the resource-cap killer detects the missing primitive
+    and fails OPEN through its EXPLICIT, once-per-dispatch
+    ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning, so an
+    operator can see the caps are not enforced on this path rather than
+    reading it as a transient metrics failure; ADR 040 metrics gap). Touching
+    ``files`` therefore means only one thing: a flag read that flipped
+    MID-dispatch, which must be loud, never a silent legacy downgrade.
     """
 
     def __init__(self, provider: "RuntimeProvider", provider_ref: str) -> None:
@@ -6392,10 +6393,13 @@ async def _sandbox_acquire_dispatch_marker(
 
     ``provider`` is REQUIRED (FAR-995) — every call site must pass its value
     explicitly so the type-checker enforces correct attribution.
-    ``via_provider`` (FAR-1050) is threaded to the node-runner-owned marker
-    writes below; the capacity gate's own marker is built inside
-    ``runner_capacity`` and is re-stamped with the flag by the post-create
-    ``_sandbox_store_dispatch_marker_sandbox`` rewrite.
+    ``via_provider`` (FAR-1050) is threaded to EVERY node-runner-owned marker
+    write — the primary capacity-gate acquire below (R4 follow-up: the gate
+    builds its own marker inside ``runner_capacity.build_dispatch_marker``,
+    which now accepts the flag state), the legacy best-effort fail-open write,
+    and the post-create ``_sandbox_store_dispatch_marker_sandbox`` rewrite —
+    so the flag state is on the marker from the first durable write onward,
+    not only after the create succeeds.
 
     Returns the attempt key on success, ``None`` when fenced (claim superseded
     or run not running — the caller MUST NOT create a sandbox). Raises
@@ -6430,6 +6434,7 @@ async def _sandbox_acquire_dispatch_marker(
             claim_token=claim_lease,
             node_id=node_id,
             provider=provider,
+            via_provider=via_provider,
         )
     except RunnerCapacityDeniedError as exc:
         raise SandboxCapacityExceededError(str(exc)) from exc
@@ -6869,6 +6874,10 @@ class _SandboxWatchdog:
         self._fs_min_stat_interval = 2.0
         self._budget_killed = False
         self._budget_check_ticks = 0
+        # FAR-1050 R4 follow-up: one-shot latch for the "caps not enforced"
+        # warning (ADR 040 metrics gap) — logged once per watchdog (i.e. once
+        # per node dispatch), not once per budget poll tick.
+        self._resource_gap_logged = False
         # FAR-296 Phase 4a: wall-clock spend budget. The watchdog's tick checks
         # the elapsed wall-clock against this budget and kills the sandbox when
         # exceeded (script mode only). ``start_time`` is the monotonic clock at
@@ -7199,15 +7208,47 @@ class _SandboxWatchdog:
         SDK exposes no observable metric for). Treating a core count
         as a percentage threshold would kill a 2-core self._sandbox at >2%
         CPU usage.
+
+        FAR-1050 R4 follow-up (ADR 040 metrics gap): on the flag-ON path
+        ``self._sandbox`` is the ABC-mediated ``_ProviderMediatedHandle``,
+        which exposes NO ``get_metrics`` — the frozen ``RuntimeProvider``
+        ABC models no metrics primitive, so there is nothing to poll. The
+        caps therefore CANNOT be enforced there. That fail-open is made
+        explicit and observable below: a distinct, one-per-dispatch warning
+        naming the gap, never a silent pass and never the generic
+        "metrics unavailable" traceback an operator would read as a
+        transient SDK hiccup.
         """
         if not self._resource_limits or self._sandbox_mode != "script" or self._sandbox is None:
+            return False
+        get_metrics = getattr(self._sandbox, "get_metrics", None)
+        if not callable(get_metrics):
+            # Explicit, observable fail-open for the missing ABC primitive —
+            # resource caps are NOT enforced on this path (ADR 040 metrics
+            # gap; the provider contract would need a new metrics primitive,
+            # which the contract freeze defers to an ADR amendment).
+            if not self._resource_gap_logged:
+                self._resource_gap_logged = True
+                _log.warning(
+                    "sandbox_agent.resource_caps_not_enforced_via_provider",
+                    extra={
+                        "node_id": self._node_id,
+                        "run_id": self._run_id,
+                        "reason": (
+                            "the ABC-mediated sandbox handle exposes no get_metrics primitive "
+                            "(the RuntimeProvider contract models none - ADR 040), so the "
+                            "configured resource_limits are NOT enforced while "
+                            "MODULO_E2B_VIA_PROVIDER is ON; fail open by design"
+                        ),
+                    },
+                )
             return False
         try:
             # get_metrics is a fresh coroutine per call, so wait_for is
             # safe to cancel; shield for consistency with the SDK-task
             # lesson (never cancel long-lived SDK internal tasks).
             metrics_raw = await asyncio.wait_for(
-                asyncio.shield(self._sandbox.get_metrics()),
+                asyncio.shield(get_metrics()),
                 timeout=_SANDBOX_METRICS_POLL_TIMEOUT,
             )
         except asyncio.CancelledError:

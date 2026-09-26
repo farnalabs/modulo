@@ -1730,6 +1730,47 @@ async def test_acquire_dispatch_marker_update_denied_returns_none():
     assert key is None
 
 
+async def test_acquire_dispatch_marker_threads_via_provider_into_the_gate(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1050 R4 follow-up: the PRIMARY acquire call passes the flag state
+    to ``acquire_runner_dispatch_slot``, so the capacity gate's own marker is
+    stamped at build time (previously only the post-create rewrite carried it).
+    """
+    import modulo.core.runner_capacity as rc
+
+    seen: dict[str, Any] = {}
+
+    async def _fake_acquire(_session_factory: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return rc.RunnerDispatchSlot("acquired", "run:x:node:n1:7", True)
+
+    monkeypatch.setattr(rc, "acquire_runner_dispatch_slot", _fake_acquire)
+
+    key_on = await nr._sandbox_acquire_dispatch_marker(
+        session_factory=lambda: _FakeSession(),
+        claim_lease="tok",
+        org_id=_ORG_ID,
+        run_id=_RUN_ID,
+        node_id="n1",
+        provider="e2b",
+        via_provider=True,
+    )
+    assert key_on == "run:x:node:n1:7"
+    assert seen["provider"] == "e2b"
+    assert seen["via_provider"] is True
+
+    key_off = await nr._sandbox_acquire_dispatch_marker(
+        session_factory=lambda: _FakeSession(),
+        claim_lease="tok",
+        org_id=_ORG_ID,
+        run_id=_RUN_ID,
+        node_id="n1",
+        provider="e2b",
+        via_provider=False,
+    )
+    assert key_off == "run:x:node:n1:7"
+    assert seen["via_provider"] is False
+
+
 async def test_store_dispatch_marker_sandbox_unparseable_org_noop():
     session = _FakeSession()
     await nr._sandbox_store_dispatch_marker_sandbox(
