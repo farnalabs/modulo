@@ -1,4 +1,5 @@
 import { getAutoLoginConfig } from '../../config/runtime'
+import { clearFlagCache } from '../../config/flagCache'
 
 const TOKEN_KEY = 'modulo_access_token'
 // FAR-1197: the refresh token is no longer persisted in localStorage. It rides
@@ -160,6 +161,13 @@ export function clearAccessToken(options?: { demoEnded?: boolean }): void {
   localStorage.removeItem(TOKEN_KEY)
   // Also wipe any legacy pre-FAR-1197 refresh token still lingering in storage.
   localStorage.removeItem(LEGACY_REFRESH_TOKEN_KEY)
+  // FAR-1237 review finding: the persisted flag map is per-session chrome, so
+  // it must not outlive the session. On a shared device the next user would
+  // otherwise first-paint the previous user's flag-resolved layout (and, if
+  // their own flags request failed, keep it indefinitely). Cleared here so
+  // BOTH explicit logout and involuntary clears (expiry, 401 recovery) scrub
+  // it — the single choke point every teardown path already funnels through.
+  clearFlagCache()
   setDemoSession(false)
   notifyListeners()
 }

@@ -7,7 +7,8 @@ unguarded since 0110. 0259 closes both gaps.
 
 Lenses:
 
-* **Chain** - 0259 chains onto 0258 and is the single linear head.
+* **Chain** - 0259 chains onto 0258; 0260_run_cancel_reason (FAR-1233) chains
+  onto 0259 and is the single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
   vocabulary and a TABLE-QUALIFIED ``conrelid`` gate; downgrade is the
@@ -66,9 +67,9 @@ def _executed() -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0259(self) -> None:
+    def test_single_head_is_0260(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_MIGRATION_REVISION], f"expected a single head, got {heads}"
+        assert heads == ["0260_run_cancel_reason"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0258(self) -> None:
         module = _load_migration()
