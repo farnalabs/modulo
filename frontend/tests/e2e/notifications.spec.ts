@@ -197,7 +197,16 @@ test.describe('Notifications', { tag: "@regression" }, () => {
     await loginAsAdmin(page, env)
     // Registered AFTER the local mock API so this handler wins the precedence
     // contest (Playwright matches the most recently registered route first).
-    await page.route('**/api/v1/notifications/in-app*', (route) => {
+    //
+    // The trailing glob must be `**`, not `*`: a single `*` matches any
+    // characters EXCEPT `/`, so `.../in-app*` matched the list GET
+    // (`.../in-app?page=1...`) but not the dismiss POST
+    // (`.../in-app/<id>/dismiss`). The POST then escaped the mock, hit the real
+    // target, and 422'd ("path.notification_id: Input should be a valid UUID")
+    // because the fixture id is not a UUID. The card consequently never
+    // dismissed on staging while the local mock quantified the request and hid
+    // the bug.
+    await page.route('**/api/v1/notifications/in-app**', (route) => {
       const url = new URL(route.request().url())
       if (url.pathname.endsWith('/dismiss')) {
         dismissed = true
