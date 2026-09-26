@@ -29,11 +29,14 @@ bdd:
   - backend/tests/bdd/features/library/contribute.feature
   - backend/tests/bdd/features/library/schemas.feature
   - backend/tests/bdd/features/composites/composite_library.feature
+  - backend/tests/bdd/features/workflows/import.feature
+  - backend/tests/bdd/features/workflows/export.feature
   - backend/tests/bdd/steps/test_library.py
   - backend/tests/bdd/steps/test_community_registry.py
   - backend/tests/bdd/steps/test_library_contributions.py
   - backend/tests/bdd/steps/test_schemas.py
   - backend/tests/bdd/steps/test_composites.py
+  - backend/tests/bdd/steps/test_workflows.py
 depends-on:
   - feat-pipelines
   - feat-schemas
@@ -92,14 +95,49 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       (`backend/tests/unit/api/test_library_collection.py`,
       `frontend/src/views/CollectionCreateView.vue`,
       `frontend/src/views/CollectionDetailView.vue`)
+- [x] Workflow export (`export.feature`) serialises a pipeline into a `.modulo.zip` /
+      signed YAML bundle with org-private fields stripped (owner_team_id, visibility,
+      credentials/ciphertexts, env secrets) and preserves the configuration surface
+      (`workflow_import_export.py`: `export_pipeline_bundle` / `export_pipeline_bundle_v2`)
+- [x] Workflow import (`import.feature`) is covered by executing BDD driving the real
+      two-phase REST surface — `POST /api/v1/libraries/import/analyse` resolves every
+      bundle reference (connector types to the org's local instances, schemas by
+      abstract_name, model backends by name) and detects pipeline-name conflicts with a
+      disambiguation suffix suggestion, then `POST /api/v1/libraries/import/confirm`
+      materialises the pipeline (200 `imported`); a tampered (non-JSON) bundle is
+      rejected 400 "Invalid bundle JSON" without creating entities. Only the DB
+      read/materialisation seams are patched (`test_workflows.py`)
 
 ## Known Gaps
 
 - **`community_registry.feature` is a separate surface from contribution** — contribution
   authoring and registry browsing are tracked under one feature here but cited separately.
+- **Workflow import verifies no Ed25519 signature** — `/api/v1/libraries/import/confirm`
+  accepts any structural `bundle_json`; bundle signatures are verified on the
+  community-registry install path, not the workflow-import path (the drafted
+  `import.feature` signature scenario was re-anchored to the shipped 400
+  "Invalid bundle JSON" tamper rejection instead).
+- **Schema-structure disambiguation is materialise-time only** — an imported schema
+  whose name collides with a different-structure local schema is saved with a
+  `(imported)` suffix by `materialize_import`'s `_reconcile_existing_schema`
+  (unit-covered), while the /import/analyse BDD surface locks abstract-name
+  matching only.
 
 ## QA History
 
+- 2026-09-26: **Improve Architecture product-map walk** — closed the
+  `workflows/import.feature` `@awaiting-implementation` gap: the five pinned
+  scenarios were rewritten to the real two-phase import contract and are now
+  executing BDD coverage driving `POST /api/v1/libraries/import/analyse` +
+  `POST /api/v1/libraries/import/confirm` with only the DB read/materialisation
+  seams patched (valid-bundle analysis + confirm, tampered-bundle 400 rejection
+  with no entities, connector disambiguation, schema abstract-name resolution,
+  duplicate pipeline-name suffix). The drafts that asserted a wire shape the
+  workflow-import path does not ship (an Ed25519 signature check on
+  `/import/confirm` — signatures are verified on the community-registry install
+  path — and a connector-instance selection list) were re-anchored to the
+  shipped contract instead. The five scenarios were removed from
+  `PINNED_AWAITING_IMPLEMENTATION`; `workflows/export.feature` is cited here too.
 - 2026-09-25: **Improve Architecture product-map walk** — reconciled the
   manifest `feat-library` registry entry with this tracker (both now
   `status: covered`): the FAR-760 collections authoring behaviour this entry ticks

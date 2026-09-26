@@ -100,15 +100,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Priya's HITL rejections grow the eval suite automatically",
         }
     ),
-    "tests/bdd/features/workflows/import.feature": frozenset(
-        {
-            "Import valid pipeline bundle",
-            "Import rejects tampered bundle with invalid Ed25519 signature",
-            "Import resolves connector type conflicts with disambiguation",
-            "Import resolves schema version conflicts with disambiguation suffix",
-            "Import handles duplicate pipeline names with suffix",
-        }
-    ),
     "tests/bdd/features/ui/eval_dashboard.feature": frozenset(
         {
             "Compare two runs side-by-side",

@@ -731,6 +731,24 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > now execute in CI; `_ORPHANED_BDD_FEATURES` stays empty. `library_browse`
 > remains the last pinned MCP legacy-`/mcp/tools/call` draft.
 
+> **Closed this walk (2026-09-26):** closed `feat-library`'s
+> `workflows/import.feature` `@awaiting-implementation` gap
+> (`library/library.md`). The five drafted scenarios previously targeted a wire
+> shape the workflow-import path does not ship (an Ed25519 signature check on
+> `/import/confirm` — signatures are verified on the community-registry install
+> path — and a connector-instance selection list) and were pinned since 2026-08;
+> they are rewritten to the real two-phase import contract and now drive the
+> REAL `POST /api/v1/libraries/import/analyse` + `/api/v1/libraries/import/confirm`
+> routes with only the DB read/materialisation seams patched
+> (`steps/test_workflows.py`): valid-bundle analysis (connector instance,
+> abstract-name schema and model-backend resolution) then confirm (200
+> `imported` with the bundle's pipeline name), a tampered non-JSON bundle 400
+> "Invalid bundle JSON" with `materialize_import` never awaited, connector-type
+> disambiguation, schema abstract-name matching, and duplicate pipeline-name
+> conflict detection with the real `suggest_import_name` producing
+> "PRD to Tickets (imported)". Removed the five scenarios from
+> `PINNED_AWAITING_IMPLEMENTATION`; `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

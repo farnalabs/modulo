@@ -4999,6 +4999,7 @@ features:
             - "[x] The library lists native and community primitives with search and type filtering"
             - "[x] Library items can be copied into the org with the CopyToAdaptWizard"
             - "[x] Library collections authoring and publishing ship behind the library_collection feature flag: a collection is created as a draft, its manifest pins are updated while draft, and it is published — invalid/duplicate pins, an empty manifest and more than MAX_COLLECTION_PINS are rejected 422, a duplicate slug is 409, and every collection endpoint 404s when the flag is off (docs/product-map/library/library.md, backend/tests/unit/api/test_library_collection.py)"
+            - "[x] Workflow bundle export writes a .modulo.zip / signed YAML bundle with org-private fields (owner_team_id, visibility, credentials/ciphertexts, env secrets) stripped, and workflow import runs a two-phase REST contract — /import/analyse resolves connector/schema(abstract_name)/model-backend references and detects pipeline-name conflicts with a disambiguation suffix, /import/confirm materialises the pipeline (200 imported); a tampered non-JSON bundle is rejected 400 without creating entities (backend/tests/bdd/features/workflows/import.feature, workflows/export.feature, steps/test_workflows.py)"
         deferrals:
             - "Collections authoring is gated behind the default-off library_collection feature flag per org (FAR-760); collection install/uninstall + community trust gates are tracked under feat-library-collections"
     feat-library-collections:
