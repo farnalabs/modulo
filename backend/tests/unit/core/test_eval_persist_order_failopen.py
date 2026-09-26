@@ -104,30 +104,46 @@ class TestFailOpenDoesNotPropagate:
     """Criterion 4: a persistence failure must not raise out of the wrapper."""
 
     @pytest.mark.asyncio
-    async def test_transient_failure_is_swallowed(self) -> None:
+    async def test_transient_failure_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
         session = _failing_savepoint_session(RuntimeError("connection refused"))
 
-        await _persist_decision_row(
-            _snapshot(),
-            _outcome(),
-            run_id,
-            session_factory=_session_factory(session),
-            org_id=org_id,
-        )
+        with caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER):
+            result = await _persist_decision_row(
+                _snapshot(),
+                _outcome(),
+                run_id,
+                session_factory=_session_factory(session),
+                org_id=org_id,
+            )
+
+        # The wrapper returned normally (no raise) and handled the failure by
+        # classifying it as transient and logging the structured event.
+        assert result is None
+        records = [r for r in caplog.records if r.message == "policy_gate_decision.persist_failed"]
+        assert len(records) == 1
+        assert records[0].failure_class == "transient"
 
     @pytest.mark.asyncio
-    async def test_fk_violation_is_swallowed(self) -> None:
+    async def test_fk_violation_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
         exc = IntegrityError("stmt", {}, Exception("fk violation"))
         exc.constraint_name = "fk_policy_gate_decisions_gate_org"
         session = _failing_savepoint_session(exc)
 
-        await _persist_decision_row(
-            _snapshot(),
-            _outcome("warn"),
-            run_id,
-            session_factory=_session_factory(session),
-            org_id=org_id,
-        )
+        with caplog.at_level(logging.ERROR, logger=_MODULE_LOGGER):
+            result = await _persist_decision_row(
+                _snapshot(),
+                _outcome("warn"),
+                run_id,
+                session_factory=_session_factory(session),
+                org_id=org_id,
+            )
+
+        # The wrapper returned normally (no raise) and handled the referential
+        # failure by logging the structured error event.
+        assert result is None
+        records = [r for r in caplog.records if r.message == "policy_gate_decision.persist_failed_referential"]
+        assert len(records) == 1
+        assert records[0].failure_class == "referential"
 
     @pytest.mark.asyncio
     async def test_session_factory_raising_is_swallowed(self) -> None:
