@@ -863,14 +863,21 @@ def _mask_graph_env_vars_for_hash(env_vars: dict[str, Any]) -> dict[str, Any]:
     An env key classified sensitive (``is_sensitive_env_key``) gets its whole
     value masked; remaining keys are value-compiled
     (:func:`mask_secret_values_in_text`) so an opaque token under a
-    non-sensitive key is masked too. Non-string values pass through.
+    non-sensitive key is masked too. Non-string values pass through. Like the
+    middleware's ``mask_sensitive_value``, a falsy (empty) value under a
+    sensitive key stays UNmasked — the server displays ``""``, not the
+    sentinel, and the hash view must match what the server displays.
     """
     from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, mask_secret_values_in_text
 
     masked: dict[str, Any] = {}
     for key, value in env_vars.items():
         if isinstance(value, str):
-            masked[key] = SENSITIVE_VALUE_MASK if is_sensitive_env_key(str(key)) else mask_secret_values_in_text(value)
+            if is_sensitive_env_key(str(key)):
+                # mask_sensitive_value: falsy values are left as-is.
+                masked[key] = SENSITIVE_VALUE_MASK if value else value
+            else:
+                masked[key] = mask_secret_values_in_text(value)
         else:
             masked[key] = value
     return masked
@@ -890,21 +897,28 @@ def _mask_graph_deep_config_for_hash(values: dict[str, Any], key: str | None = N
     """CLI-local mirror of the middleware's ``mask_config_json``.
 
     Recursing deep-dict masking identical to
-    ``api.middleware.sensitive_mask._mask_config_value`` (sensitive LEAF key ->
-    whole-value mask; otherwise pass through) so the drift hash compares the
-    desired view against the mask the server produces. Replicated locally so
-    the CLI never imports the FastAPI/DB-heavy middleware module (same
-    rationale as the ``_SENSITIVE_KEY_PATTERNS`` twin above); the pairing is
-    pinned by tests/unit/cli/test_apply_models.py.
+    ``api.middleware.sensitive_mask._mask_config_value`` — a string leaf whose
+    LEAF key is sensitive gets the whole-value mask (falsy values left
+    unmasked, mirroring ``mask_sensitive_value``), and every OTHER string leaf
+    is value-compiled with :func:`mask_secret_values_in_text`, so a
+    secret-shaped value under a NON-sensitive deep key (an embedded token in
+    ``base_url``, a ``headers.Authorization``) is redacted on the desired side
+    exactly as the server redacts it on read. Non-string leaves pass through.
+    Replicated locally so the CLI never imports the FastAPI/DB-heavy
+    middleware module (same rationale as the ``_SENSITIVE_KEY_PATTERNS`` twin
+    above); the pairing is pinned by tests/unit/cli/test_apply_models.py.
     """
-    from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, is_sensitive_key
+    from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, is_sensitive_key, mask_secret_values_in_text
 
     if isinstance(values, dict):
         return {k: _mask_graph_deep_config_for_hash(v, str(k)) for k, v in values.items()}
     if isinstance(values, list):
         return [_mask_graph_deep_config_for_hash(v, key) for v in values]
-    if isinstance(values, str) and key is not None and is_sensitive_key(key):
-        return SENSITIVE_VALUE_MASK
+    if isinstance(values, str):
+        if key is not None and is_sensitive_key(key):
+            # mask_sensitive_value: falsy values are left as-is.
+            return SENSITIVE_VALUE_MASK if values else values
+        return mask_secret_values_in_text(values)
     return values
 
 
