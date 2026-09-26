@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from modulo.cli.apply.models import strip_secret_shaped_graph
 from modulo.cli.apply.plan import (
     _CURRENT_VIEWS,
     KIND_BACKEND,
@@ -32,6 +33,13 @@ from modulo.cli.apply.plan import (
     KIND_TRIGGER,
     _trigger_current_view,
 )
+
+# Plan-only marker keys (FAR-1232 ``--refresh-secrets``) that participate in
+# the drift HASH — so the entity reports ``updated`` and the write path
+# re-sends it — but are NOT managed fields. They are stripped from the
+# managed-field breakdown so a refresh sweep never renders as
+# ``secrets_refresh: modified`` operator noise.
+_REFRESH_MARKER_KEYS: frozenset[str] = frozenset({"secrets_refresh"})
 
 
 def _diff_graph(
@@ -207,17 +215,20 @@ def build_drift_detail(
         if not view or "graph" not in view:
             continue
         current = (current_entities.get(KIND_PIPELINE) or {}).get(name) or {}
-        # Parity with the plan hash: the desired graph arrives already stripped
-        # (PipelineEntity.managed_view), so strip the current side too — else a
-        # server-masked credential would show up as a spurious 'modified' node.
-        from modulo.cli.apply.models import strip_secret_shaped_config
-
-        current_graph: dict[str, Any] = strip_secret_shaped_config(current.get("graph") or {"nodes": [], "edges": []})
+        raw_current_graph: dict[str, Any] = current.get("graph") or {"nodes": [], "edges": []}
+        # FAR-1232: the desired view arrives already redacted (managed_view),
+        # so the current side is redacted through the identical CLI mask —
+        # the node/modified breakdown then compares like-for-like (a masked
+        # secret shows as the sentinel on BOTH sides instead of a phantom
+        # "modified" entry that is pure masking).
+        current_graph = strip_secret_shaped_graph(raw_current_graph)
         breakdown = _diff_graph(view["graph"], current_graph)
         graph_changed = any(side for field in breakdown.values() for side in field.values())
         # FAR-220: name the git-sourced content fields that drifted (commit
-        # moves) alongside the generic node/edge breakdown.
-        git_content = _diff_git_content(view["graph"], current_graph)
+        # moves). Content-ref fields sit OUTSIDE the secret-bearing node
+        # fields, so the git comparison runs on the RAW current graph (with
+        # its refs intact) while the modified decision uses redacted views.
+        git_content = _diff_git_content(view["graph"], raw_current_graph)
         if git_content:
             breakdown["git_content"] = git_content
         if graph_changed or git_content:
@@ -233,7 +244,12 @@ def build_drift_detail(
             current_view = _managed_current_view(kind, name, view, current_entities)
             if current_view is None:
                 continue
-            fields = _diff_fields(view, current_view)
+            # Exclude plan-only refresh markers on both sides: the marker drives
+            # the hash decision (report says updated) but is not a managed field,
+            # so it must not surface in the field breakdown.
+            diffable_view = {key: value for key, value in view.items() if key not in _REFRESH_MARKER_KEYS}
+            diffable_current = {key: value for key, value in current_view.items() if key not in _REFRESH_MARKER_KEYS}
+            fields = _diff_fields(diffable_view, diffable_current)
             if any(fields.values()):
                 detail[f"{kind}:{name}"] = {"fields": fields}
     return detail

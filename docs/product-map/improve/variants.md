@@ -43,6 +43,17 @@ by the `variant_batch_compare` feature flag.
       missing, driving the real `get_coverage_gaps` seam (a variant claiming the
       eval is not flagged)
       (`tests/bdd/features/variants/variant_groups.feature`)
+- [x] Per-token breakdown comparison across variants ships: each variant's
+      per-node token usage (input/output/total tokens + cost) rides the
+      variant-batch detail surface (`_run_to_variant_run` in
+      `api/routes/variant_batches.py`) and the `get_batch_compare` surface
+      (`BatchRunCompare` / `batch_compare` in `api/routes/variants.py`) via the
+      persisted `node_token_usage` union, serialized through the RunResponse
+      bounds (`_serialize_node_token_usage` — `model_cost_raw_usd` display
+      clamp + newest-N node truncation), and the `/variants/compare/:batchId`
+      page renders a per-node token table per expanded variant run
+      (`VariantBatchCompareView.vue`, `VariantBatchCompareView.spec.ts`,
+      `test_variant_batches.py`, `test_variants.py`)
 - [x] The variant batch-compare UI is gated by the `variant_batch_compare` feature flag
       and hard-replaces the legacy AB-test view when enabled (frontend router guard)
 - [x] Variant groups are created and batch-fired from the inline builder on
@@ -52,19 +63,21 @@ by the `variant_batch_compare` feature flag.
 ## Known Gaps
 
 None acknowledged: the `@awaiting-implementation` draft scenarios in
-`variant_groups.feature` (tracked since the 2026-08-27 walk) are resolved. The
-sequential-order scenario now drives the real `run_variant_batch` seam (one run
-per variant, in insertion order, as the batch path ships); the eval-coverage
-scenario drives the real `get_coverage_gaps` seam (a variant missing a pipeline
-eval definition is reported as a gap). The two per-node eval-score / per-token
-breakdown comparison drafts described wire shapes the product does not ship —
-`get_batch_compare` returns a per-run `eval_pass_rate` / `eval_count` /
-`total_tokens` / `total_cost_usd` / frozen-snapshot override-diff contract that
-the batch-scope comparison scenarios already lock — so they were removed rather
-than left as false coverage promises.
+`variant_groups.feature` (tracked since the 2026-08-27 walk) are resolved, and
+the per-token breakdown comparison the manifest previously parked as the lone
+`feat-variants` partial is shipped (2026-09-25 Improve Architecture walk).
 
 ## QA History
 
+- 2026-09-25: **Improve Architecture product-map walk** — closed the last
+  `feat-variants` partial: per-token breakdown comparison now ships end to end.
+  `_run_to_variant_run` (`api/routes/variant_batches.py`) and `get_batch_compare`
+  / `batch_compare` (`api/routes/variants.py` + `db/crud/variant_group.py`) carry
+  each run's `node_token_usage` union through the RunResponse serialization
+  bounds (`_serialize_node_token_usage`), and `VariantBatchCompareView.vue`
+  renders a per-node input/output/total-token + cost table per expanded variant
+  run (`variant-batch-token-breakdown`, registered in the manifest elements
+  inventory). The manifest `feat-variants` status is now `covered`.
 - 2026-09-25: **Improve Architecture product-map walk** — reconciled the
   manifest `feat-variants` registry entry with this tracker: per-node eval-score
   comparison (the `[x]` "eval scores per node" behaviour above) is now ticked, and

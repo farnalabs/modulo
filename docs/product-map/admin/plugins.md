@@ -56,6 +56,14 @@ API surface ships and is gated by the `plugin_management` feature and the
 
 ## QA History
 
+- 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
+  `feat-plugins` registry entry: the unchecked "lifecycle management is partially
+  wired" gap now states exactly what remains — install / enable / disable / uninstall
+  are NOT exposed through the registry API; the registry is read-only
+  (importlib.metadata discovery at startup) and plugin installation/removal/upgrade
+  is deliberately left to pip. The `/admin/plugins` UI remains a private_preview
+  surface (FAR-544). Status stays `partial`.
+
 - 2026-09-18: **product-map review pass** — closed the four
   `plugin_registry.feature` scenarios that were pinned `@awaiting-implementation`:
   added the missing `GET /api/v1/plugins/{plugin_id}` detail endpoint, changed

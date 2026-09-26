@@ -4683,6 +4683,9 @@ elements:
       - testid: variant-batch-pass-rate
         type: element
         dynamic_testid: false
+      - testid: variant-batch-token-breakdown
+        type: element
+        dynamic_testid: false
       - testid: variant-batch-new-comparison
         type: element
         dynamic_testid: false
@@ -4925,13 +4928,13 @@ features:
             - "Cost-probe ledger self-healing (core/cost_controller/probe.py) tracks run-total vs breakdown consistency as an operational probe, not a surfaced admin report"
     feat-dashboard:
         description: Home dashboard, metrics overview, and saved views
-        status: partial
+        status: covered
         behaviours:
             - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
             - "[x] Dashboard metrics are scoped to the caller's organisation with per-team breakdown"
-            - "[ ] Saved Views (`/admin/views`, `GET/POST/PATCH/DELETE /api/v1/views` gated by `view_modes`) are configurable with custom filters and column layouts"
+            - "[x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders AdminViewsView.vue with create/edit/delete over GET/POST/PATCH/DELETE /api/v1/views (gated by the `view_modes` feature flag), covering custom filters (JSON), column layouts, view type, and sort configuration — locked by views.feature BDD + test_view_endpoint.py"
         deferrals:
-            - "Saved Views are deferred from the MVP nav — the `/admin/views` route and its `/api/v1/views` CRUD surface are hidden via `visibility: private_preview`; restore from git history when re-enabling (FAR-546)"
+            - "Saved Views are a private_preview surface (FAR-546): the /admin/views route is hidden from the sidebar nav and the `saved_views` plan toggle is default-off per org; the ViewToggle 'apply to list' frontend component ships but is not yet wired into the runs/pipelines list pages, so a saved view is created/edited from /admin/views rather than applied in-context"
     feat-environments:
         description: Environment profiles
         status: covered
@@ -4967,9 +4970,10 @@ features:
         behaviours:
             - "[x] Guardrail policies are configurable per organisation with pass/fail thresholds"
             - "[x] Guardrail enforcement is applied at pipeline runtime with typed violation responses"
-            - "[ ] Guardrail policy templates and cross-org inheritance are partially wired"
+            - "[x] Guardrail policy templates ship as versioned policy packs (FAR-216): the PolicyPack/PolicyControl framework with schema-valid mapping, fail-closed instantiation (instantiate_pack), a structured validation report, the CI gate (assert_pack_ci_ready) and warn-mode-first rollout (pack_rollout_config) live in core/guardrails/policy_pack.py with shipped SOC2 pack content in core/guardrails/packs/soc2.py (test_guardrail_policy_pack.py, test_guardrail_soc2_pack.py)"
+            - "[ ] Cross-org inheritance of guardrail policies (importing or sharing an org's guardrail configuration between organisations) is not shipped"
         deferrals:
-            - "Policy templates and cross-org inheritance are tracked under feat-guardrails"
+            - "Cross-org guardrail policy inheritance is tracked under feat-guardrails; policy templates/packs ship, cross-org sharing does not"
     feat-hitl:
         description: Human-in-the-loop approval gates and review
         status: covered
@@ -4989,13 +4993,11 @@ features:
             - "[x] HITL autonomy resolution clamps a context-setter's autonomy_recommendation to the pipeline's max_autonomy_level ceiling (pinned into the run snapshot as the reserved `_pipeline_max_autonomy` run_context key): a recommendation may lower autonomy freely, may raise only up to the ceiling — with no explicit ceiling the effective ceiling is the pipeline default, so a recommendation can only lower — and each clamp appends a run.autonomy_recommendation_clamped audit event (gate_id, requested, effective, ceiling); human_only gates still always fire"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
-        status: partial
+        status: covered
         behaviours:
             - "[x] Router nodes compile to ordered JMESPath rules with a default fallback edge"
             - "[x] The graph validator enforces router node topology constraints at save time"
-            - "[ ] Conditional routing with complex nested conditions is partially wired"
-        deferrals:
-            - "Complex nested conditional routing is tracked under feat-router"
+            - "[x] Conditional routing supports the full JMESPath expression language (nested filters/projections like items[?status=='open'], contains, multi-level access) because router guards, conditional edges, loop counters, HITL gate conditions and polling triggers all compile and evaluate through the single consolidated evaluator (compile_jmespath + evaluate_jmespath_condition in core/pipeline_engine/jmespath_eval.py); an invalid expression surfaces an actionable ValueError and a no-match run terminalizes router_no_match (pipeline_engine/jmespath_eval.py, router_nodes.feature)"
     feat-library:
         description: Reusable pipeline templates and the template library
         status: covered
@@ -5115,14 +5117,12 @@ features:
             - "[x] OTel *trace* span capture is BDD-exercised against the REAL LangGraphOtelBridge seams (otel_traces.feature, network-free and DB-free): chain spans stamp the set_run_context organisation_id / pipeline_id attributes per node execution, a tool callback becomes a child span under its parent node span (child parent.span_id == parent context.span_id), connector callbacks carry no credential fields in span attributes, and a telemetry-disabled provider (no span processor) exports no spans"
     feat-onboarding:
         description: First-run onboarding wizard for new users and organizations
-        status: partial
+        status: covered
         behaviours:
             - "[x] The onboarding wizard guides new users through connector setup and schema creation"
             - "[x] Onboarding creates initial pipeline templates and library items"
             - "[x] Skip logic ships: per-action complete/skip (POST /api/v1/onboarding/actions/{id}/complete|skip) and whole-wizard dismiss (POST /api/v1/onboarding/dismiss) persist and recompute progress (docs/product-map/auth/onboarding.md)"
-            - "[ ] Onboarding telemetry/opt-in preferences are not wired into the wizard"
-        deferrals:
-            - "Onboarding telemetry preferences are tracked under feat-onboarding / feat-product-analytics"
+            - "[x] Onboarding telemetry is wired into the wizard as a dedicated Telemetry Opt-In step (FAR-1131): the wizard loads GET /api/v1/admin/telemetry and records the preference via PUT /api/v1/admin/telemetry (backed by core/runtime_config/telemetry_bridge.py), a non-system-admin caller sees the softer admin-only note instead of a raw 403, and skip leaves the current preference untouched (OnboardingWizard.vue, OnboardingWizard.spec.ts)"
     feat-org:
         description: Organization settings and feature flags
         status: covered
@@ -5149,29 +5149,29 @@ features:
         behaviours:
             - "[x] The plugin registry lists installed plugins and their entry point groups"
             - "[x] Plugins support connector, model-backend, eval, and schema-type entry points"
-            - "[ ] Plugin lifecycle management (install, enable, disable, uninstall) is partially wired"
+            - "[ ] Plugin lifecycle management (install, enable, disable, uninstall) is not exposed through the registry API — the registry is read-only (importlib.metadata discovery at startup) and plugin installation/removal/upgrade is deliberately left to pip"
         deferrals:
-            - "Plugin lifecycle management is tracked under feat-plugins"
+            - "Plugin lifecycle management via the registry API is tracked under feat-plugins (install/enable/disable/uninstall stay pip-managed today); the /admin/plugins UI is a private_preview surface"
     feat-product-analytics:
         description: Product usage and adoption analytics for system administrators
         status: partial
         behaviours:
             - "[x] The product analytics page shows usage and adoption metrics for system administrators"
             - "[x] Consent and enforcement toggles are configurable per instance"
-            - "[ ] Product analytics export and scheduling is partially wired"
+            - "[x] Metrics scheduling ships: a jittered daily metrics-dump SAQ system cron (core/product_analytics/metrics_dump.py) gates the per-instance dump window on the stored jitter offset and intersects it with the consented validity window, then delivers the batch to the vendor ingest endpoint with a stable persisted watermark"
+            - "[ ] An in-product analytics export/administration surface (self-serve downloadable org metrics, configurable reporting schedule, or an in-app analytics warehouse) is not shipped — telemetry export is vendor-bound"
         deferrals:
-            - "Product analytics export and scheduling is tracked under feat-product-analytics"
+            - "In-product analytics export and scheduling administration is tracked under feat-product-analytics; a self-hosted analytics warehouse is feat-analytics scope"
     feat-assistant:
         description: Modulo assistant configuration and skills
-        status: partial
+        status: covered
         behaviours:
             - "[x] The assistant settings page configures providers, models, and system prompts"
             - "[x] Skills can be added, edited, and deleted with triggers and tool permissions"
             - "[x] Safety settings include rate limits, nogo patterns, and allowed selectors"
             - "[x] The /assistant page provides an AI assistant interface with analytics"
-            - "[ ] Assistant auto-execute thresholds and guidance tuning are partially wired"
-        deferrals:
-            - "Assistant auto-execute thresholds and guidance tuning are tracked under feat-assistant"
+            - "[x] Auto-execute thresholds ship end to end: the org assistant config carries auto_execute_threshold (default 0.8, AssistantConfig in core/assistant/config_service.py); in full_auto permission mode a proposed action whose reported confidence falls below the threshold is demoted to requires_approval (_default_tool_permission in api/routes/assistant.py); the /admin/assistant safety panel reads and writes the field and explains it via the auto-execute-threshold description (AdminAssistantView.vue, AdminAssistantView.spec.ts)"
+            - "[x] Guidance tuning ships end to end: additional_guidance is a first-class field on the admin assistant config (AssistantConfig in core/assistant/config_service.py, GET/PUT /api/v1/admin/assistant/config in api/routes/admin_assistant.py) edited through the Additional Guidance textarea in the admin settings view and asserted on the PUT body in AdminAssistantView.spec.ts"
     feat-runs:
         description: Run execution, history, detail, and output diffs
         status: covered
@@ -5384,15 +5384,13 @@ features:
             - Route-level webhook validation failures (HMAC/timestamp) roll back with the request and do not persist a TriggerEvent for those typed errors in that path (documented pre-existing limitation)
     feat-variants:
         description: Variant comparison and AB test models
-        status: partial
+        status: covered
         behaviours:
             - "[x] Variant comparison renders side-by-side run metrics and eval scores"
             - "[x] Batch runs create variants in insertion order under a batch_id"
             - "[x] Coverage gaps are reported via get_coverage_gaps"
             - "[x] Per-node eval score comparison is shipped: comparison surfaces include eval scores per node, prompt diffs and coverage gaps (variants/variant_groups.feature, docs/product-map/improve/variants.md)"
-            - "[ ] Per-token breakdown comparison across variants is not shipped (docs/product-map/improve/variants.md Known Gaps)"
-        deferrals:
-            - "Per-token breakdown comparison is tracked under feat-variants"
+            - "[x] Per-token breakdown comparison across variants is shipped: each variant's per-node token usage (input/output/total tokens + cost) rides the batch-compare and variant-batch compare surfaces via the persisted node_token_usage union, serialized through the RunResponse bounds (model_cost_raw_usd display clamp + newest-N node truncation), and the /variants/compare/:batchId page renders a per-node token table per expanded variant run (backend/src/modulo/api/routes/{variant_batches,variants}.py, VariantBatchCompareView.vue, test_variant_batches.py, test_variants.py, VariantBatchCompareView.spec.ts)"
 sidebar_groups:
     build:
         label: BUILD

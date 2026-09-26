@@ -52,6 +52,17 @@ an eligible tier.
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
 
 ## QA History
+- 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
+  `feat-product-analytics` registry entry: the vague "export and scheduling is
+  partially wired" gap is now split into what ships versus what is deferred.
+  Scheduling ships: the jittered daily metrics-dump SAQ system cron
+  (`core/product_analytics/metrics_dump.py`) gates each instance's dump window on a
+  stored jitter offset aligned to the cron grid, backfills from the consented
+  validity window up to the watermark, delivers to the vendor ingest endpoint, and
+  advances the watermark only on full success — ticked. An in-product analytics
+  export/administration surface (self-serve downloads, configurable schedule, or a
+  self-hosted warehouse) remains unshipped — tracked as the unchecked deferral
+  (warehouse scope sits under `feat-analytics`). Status stays `partial`.
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/product-analytics`

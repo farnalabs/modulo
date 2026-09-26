@@ -123,6 +123,16 @@ compensation, and single-node self-correction. Built on the eval engine
   external/unmediated runtimes.
 
 ## QA History
+- 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
+  `feat-guardrails` registry entry: the previously-vague "policy templates and
+  cross-org inheritance are partially wired" gap is now split into what actually
+  ships versus what is deferred. Policy templates ship as versioned policy packs
+  (FAR-216): the `PolicyPack` / `PolicyControl` framework with fail-closed
+  instantiation, the CI gate and warn-mode-first rollout (`core/guardrails/policy_pack.py`)
+  plus the shipped SOC2 pack content (`core/guardrails/packs/soc2.py`), tested by
+  `test_guardrail_policy_pack.py` / `test_guardrail_soc2_pack.py` — ticked. Cross-org
+  guardrail inheritance remains unshipped — tracked as the unchecked deferral.
+  Status stays `partial`.
 - 2026-09-12: **product-map review pass** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/guardrails`

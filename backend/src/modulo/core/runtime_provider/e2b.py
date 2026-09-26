@@ -52,6 +52,57 @@ _LOG_TAIL_RAW_FALLBACK = 4000
 # calls (SDK ``request_timeout`` + outer ``asyncio.wait_for``), mirroring
 # the house rule that every E2B SDK call sits under a wait_for.
 _FILE_IO_TIMEOUT = 30
+# FAR-1050 R5: egress vocabulary accepted on ``WorkspaceSpec.egress_policy``.
+# Two dialects feed this field (both reach the provider in production):
+#   - the CANONICAL dialect stamped by the flag-ON dispatch
+#     (``pipeline_engine.egress.resolve_egress`` output: ``None`` for the
+#     provider default, ``"deny_all"``, ``"selected"``), and
+#   - the WorkspaceSpec dialect stamped by the profile/bundled mappers
+#     (``environment_profiles._build_workspace_spec`` /
+#     ``runner_dispatch._workspace_spec_for_dispatch``): ``"none"`` for
+#     deny_all, ``"outbound"`` for unrestricted.
+# ``"default"`` is the node vocabulary's unrestricted value (resolve_egress
+# maps it to ``None`` upstream; carried raw by direct callers).
+_EGRESS_PERMISSIVE_POLICIES: frozenset[str] = frozenset({"", "default", "outbound"})
+_EGRESS_RESTRICTIVE_POLICIES: frozenset[str] = frozenset({"deny_all", "selected", "none"})
+
+
+def _egress_allows_internet(policy: str | None) -> bool:
+    """Map ``WorkspaceSpec.egress_policy`` onto the SDK's create boolean.
+
+    Reference semantics — the legacy create path in ``node_runner``:
+
+    .. code-block:: python
+
+        allow_internet_access=(_egress_resolved.policy is None)
+
+    i.e. a resolved restrictive policy denies internet, the provider default
+    allows it (the E2B default). This mapping reproduces that over the two
+    dialects the spec carries:
+
+    - ``None`` / ``""`` / ``"default"`` / ``"outbound"`` -> ``True``
+      (internet allowed — the E2B default, passed explicitly);
+    - ``"deny_all"`` / ``"selected"`` / ``"none"`` -> ``False``;
+    - anything unrecognised -> ``False`` (fail CLOSED: an unknown policy
+      must never silently grant unrestricted egress — ADR 040's recorded
+      defect class).
+
+    ``"selected"`` denies ALL egress at this boolean level exactly like the
+    legacy create (the host:port allowlist rides as sandbox metadata and is
+    enforced in-sandbox, not by the SDK).
+    """
+    if policy is None:
+        return True
+    value = policy.strip().lower()
+    if value in _EGRESS_PERMISSIVE_POLICIES:
+        return True
+    if value in _EGRESS_RESTRICTIVE_POLICIES:
+        return False
+    _log.warning(
+        "E2B create_workspace: unrecognised egress_policy %r — failing closed (allow_internet_access=False)",
+        policy,
+    )
+    return False
 
 
 @dataclass(frozen=True)
@@ -135,6 +186,15 @@ class E2BRuntimeProvider(RuntimeProvider):
 
         The spec's provider-neutral ``workspace_metadata`` maps to the E2B
         sandbox ``metadata`` (the SDK's tag-like carrier) when non-empty.
+        The selected-mode egress allowlist rides in that carrier under the
+        key the legacy create path uses (``egress_allowlist``, JSON-encoded)
+        — the SDK has no native allowlist control, so sandbox metadata is
+        the same tag the flag-OFF create stamps (FAR-1050 R5 parity).
+
+        ``spec.egress_policy`` maps onto the SDK's ``allow_internet_access``
+        boolean (FAR-1050 R5): a restrictive policy must never silently
+        grant unrestricted internet (ADR 040). See
+        :func:`_egress_allows_internet` for the exact mapping.
         """
         from e2b import AsyncSandbox
 
@@ -145,7 +205,13 @@ class E2BRuntimeProvider(RuntimeProvider):
         # only falls back to the E2B_API_KEY env var when api_key is falsy, and
         # ``__init__`` guarantees ``self._api_key`` is non-empty (fail-closed).
         create_kwargs: dict[str, Any] = {"template": template_id, "api_key": self._api_key}
+        # FAR-1050 R5: carry spec.egress_policy into the create call. The
+        # permissive side is passed explicitly too (never left to the SDK
+        # default) so the posture of every create is visible at the call site.
+        create_kwargs["allow_internet_access"] = _egress_allows_internet(spec.egress_policy)
         if spec.workspace_metadata:
+            # Legacy-key parity: ``egress_allowlist`` / ``resource_limits``
+            # are exactly the keys the flag-OFF create stamps as metadata.
             create_kwargs["metadata"] = dict(spec.workspace_metadata)
 
         try:

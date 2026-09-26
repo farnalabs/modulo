@@ -1,7 +1,7 @@
 """Unit tests for EvalEngine core logic.
 
 Tests per-type dispatch (regex, json_schema, custom_function, llm_judge),
-error handling, block/warn behaviour, and suite aggregation.
+error handling, and block/warn behaviour.
 """
 
 from uuid import uuid4
@@ -18,12 +18,8 @@ from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalDefinition,
     EvalEngine,
-    EvalResult,
-    EvalSuiteBlockedError,
     EvalType,
-    SuiteEvalResult,
     UnknownEvalTypeError,
-    evaluate_suite,
 )
 
 
@@ -60,18 +56,6 @@ def _make_capturing_callable(captured: list):
         return {"passed": True, "score": 0.95, "detail": "captured"}
 
     return fn
-
-
-def _make_result(passed: bool, detail: str = "") -> EvalResult:
-    return EvalResult(
-        id=uuid4(),
-        run_id=uuid4(),
-        node_id="n1",
-        eval_id=uuid4(),
-        passed=passed,
-        score=1.0 if passed else 0.0,
-        detail=detail,
-    )
 
 
 # =============================================================================
@@ -416,60 +400,6 @@ class TestEvalDispatch:
 
 
 # =============================================================================
-# Suite aggregation
-# =============================================================================
-
-
-class TestEvaluateSuite:
-    @pytest.mark.parametrize(
-        ("pass_count", "fail_count", "threshold", "expected_passed", "expected_score"),
-        [
-            (4, 0, 0.75, True, 1.0),
-            (1, 1, 0.75, False, 0.5),
-            (0, 0, 0.8, True, 0.0),
-            (0, 1, None, True, 0.0),
-            (0, 1, 0.0, True, 0.0),
-            (1, 1, 1.0, False, 0.5),
-        ],
-    )
-    def test_suite_threshold(
-        self,
-        pass_count: int,
-        fail_count: int,
-        threshold: float | None,
-        expected_passed: bool,
-        expected_score: float,
-    ) -> None:
-        results = [
-            EvalResult(
-                id=uuid4(),
-                run_id=uuid4(),
-                node_id="n1",
-                eval_id=uuid4(),
-                passed=i < pass_count,
-                score=1.0 if i < pass_count else 0.0,
-            )
-            for i in range(pass_count + fail_count)
-        ]
-        result = evaluate_suite(results, "suite-1", pass_threshold=threshold)
-        assert result.passed is expected_passed
-        assert result.aggregate_score == expected_score
-
-    def test_suite_eval_result_model_fields(self) -> None:
-        result = SuiteEvalResult(
-            suite_id="my-suite",
-            total_evals=10,
-            passed_evals=7,
-            aggregate_score=0.7,
-            passed=True,
-            blocking_failures=["e1: failed"],
-        )
-        assert result.suite_id == "my-suite"
-        assert result.total_evals == 10
-        assert result.passed_evals == 7
-
-
-# =============================================================================
 # Standalone evaluate
 # =============================================================================
 
@@ -592,31 +522,6 @@ class TestCustomFunctionErrorHandling:
         result = engine.evaluate({"text": "hello"}, eval_def)
         assert result.passed is False
         assert "not found" in result.detail
-
-
-class TestEvalSuiteBlockedError:
-    def test_constructor_sets_fields(self) -> None:
-        err = EvalSuiteBlockedError("suite-1", 0.3, 0.8)
-        assert err.suite_id == "suite-1"
-        assert err.score == pytest.approx(0.3)
-        assert err.threshold == pytest.approx(0.8)
-        assert "0.30" in str(err)
-        assert "0.80" in str(err)
-        assert "suite-1" in str(err)
-
-    def test_constructor_boundary_threshold_exact(self) -> None:
-        err = EvalSuiteBlockedError("suite-1", 0.8, 0.8)
-        assert err.score == err.threshold
-
-    def test_constructor_zero_score(self) -> None:
-        err = EvalSuiteBlockedError("suite-1", 0.0, 0.5)
-        assert err.score == 0.0
-        assert err.threshold == 0.5
-
-    def test_constructor_high_threshold(self) -> None:
-        err = EvalSuiteBlockedError("suite-1", 0.99, 1.0)
-        assert err.score == pytest.approx(0.99)
-        assert err.threshold == 1.0
 
 
 class TestContentWrapping:
@@ -817,59 +722,3 @@ class TestBuildSafeJudgeInput:
 
         assert "output" in original
         assert original["output"] == "original"
-
-
-class TestEvaluateSuiteEdgeCases:
-    def test_passing_suite_above_threshold(self) -> None:
-        results = [_make_result(passed=True) for _ in range(4)]
-        result = evaluate_suite(results, "test-suite", pass_threshold=0.75)
-        assert result.passed is True
-        assert result.aggregate_score == 1.0
-        assert result.total_evals == 4
-        assert result.passed_evals == 4
-        assert not result.blocking_failures
-
-    def test_passing_suite_at_threshold(self) -> None:
-        results = [_make_result(passed=True) for _ in range(3)] + [_make_result(passed=False)]
-        result = evaluate_suite(results, "test-suite", pass_threshold=0.75)
-        assert result.passed is True
-        assert result.aggregate_score == 0.75
-
-    def test_failing_suite_below_threshold(self) -> None:
-        results = [_make_result(passed=True) for _ in range(2)] + [_make_result(passed=False) for _ in range(2)]
-        result = evaluate_suite(results, "test-suite", pass_threshold=0.75)
-        assert result.passed is False
-        assert result.aggregate_score == 0.5
-        assert result.total_evals == 4
-        assert result.passed_evals == 2
-        assert len(result.blocking_failures) == 2
-
-    def test_suite_with_no_threshold_does_not_block(self) -> None:
-        results = [_make_result(passed=False) for _ in range(5)]
-        result = evaluate_suite(results, "test-suite", pass_threshold=None)
-        assert result.passed is True
-        assert result.aggregate_score == 0.0
-
-    def test_suite_with_mixed_pass_fail_results(self) -> None:
-        results = [
-            _make_result(passed=True, detail="ok"),
-            _make_result(passed=False, detail="wrong output"),
-            _make_result(passed=True, detail="ok"),
-            _make_result(passed=False, detail="missing field"),
-        ]
-        result = evaluate_suite(results, "test-suite", pass_threshold=0.6)
-        assert result.passed is False
-        assert result.aggregate_score == 0.5
-        assert result.passed_evals == 2
-        assert result.total_evals == 4
-        assert len(result.blocking_failures) == 2
-        assert any("wrong output" in f for f in result.blocking_failures)
-        assert any("missing field" in f for f in result.blocking_failures)
-
-    def test_empty_suite_always_passes(self) -> None:
-        result = evaluate_suite([], "test-suite", pass_threshold=0.8)
-        assert result.passed is True
-        assert result.aggregate_score == 0.0
-        assert result.total_evals == 0
-        assert result.passed_evals == 0
-        assert not result.blocking_failures

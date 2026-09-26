@@ -1128,8 +1128,8 @@ async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.Monkey
 
     With ``session_factory`` + ``org_id`` wired (as the executor does), the
     gate persists an ``EvalResultModel`` row per node-scoped eval definition
-    before raising the interrupt — so post-run suite-level threshold checks
-    (``_check_eval_suites``) can read committed results.
+    before raising the interrupt — so post-run eval checks
+    can read committed results.
     """
     import uuid as _uuid
 

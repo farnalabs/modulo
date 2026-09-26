@@ -56,10 +56,6 @@ from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
-    EvalSuiteBlockedError,
-    SuiteEvalResult,
-    SuiteOutcome,
-    evaluate_suite,
 )
 from modulo.core.eval_engine import (
     EvalResult as EngineEvalResult,
@@ -93,7 +89,6 @@ from modulo.core.pipeline_engine.error_codes import (
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.eval_persist_order import (
     EvalDefDTO,
-    _record_suite_incomplete,
     run_evals_persist_before_decide,
 )
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
@@ -143,7 +138,6 @@ from modulo.db.crud.run import (
 )
 from modulo.db.crud.run_node_outputs import read_run_blobs, read_run_markers
 from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -4127,10 +4121,10 @@ class PipelineExecutor:
                 limit=5000,
             )
 
-        # The post-stream tail (eval-suite checks, agent_signal firing, gated
-        # run_completed publish) owns its own try/except
+        # The post-stream tail (agent_signal firing, gated run_completed
+        # publish) owns its own try/except
         # (pipeline.post_stream_error); it can also mutate final_status /
-        # error_code / error_detail (EvalSuiteBlockedError), so its returned
+        # error_code / error_detail, so its returned
         # values are rebound here. The tail + the resource teardown
         # (contextvars, hubs, broker registry close) live in
         # ``_run_post_stream_and_teardown`` — the teardown runs in a finally so
@@ -5215,36 +5209,19 @@ class PipelineExecutor:
         broker: RunEventBroker,
         gate_suppressed: bool,
     ) -> tuple[str, str | None, str | None]:
-        """Post-stream tail: eval-suite checks, agent_signal firing, gated publish.
+        """Post-stream tail: agent_signal firing, gated publish.
 
         Preserves the outer try/except (``pipeline.post_stream_error``) that
         wrapped the original inline block. Returns the (possibly mutated)
-        ``(final_status, error_code, error_detail)`` — the eval-suite-blocked
-        branch terminal-fails the run, and that must reach ``_finalize_run_after_stream``.
+        ``(final_status, error_code, error_detail)``.
         The caller's ``finally`` owns the resource cleanup.
         """
         try:
-            # (The eval_blocked audit for this run is recorded in
-            # ``_finalize_run_after_stream`` — the shared finalization tail that
-            # both execute() and resume() use, so it fires exactly once.)
-            # If the run completed, check for eval suite thresholds. FAR-228: a
+            # If the run completed, fire agent_signal triggers. FAR-228: a
             # gated run (error_code harness.idempotency_gate) is excluded — the
-            # delivery was already made by a PRIOR attempt; running evals /
-            # firing agent_signal against the skip envelope would be wrong.
+            # delivery was already made by a PRIOR attempt; firing agent_signal
+            # against the skip envelope would be wrong.
             if final_status == "complete" and error_code != _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE:
-                async with self._session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await set_rls_execution_context(session)
-                    final_status, error_code, error_detail = await self._check_eval_suites_for_run(
-                        session=session,
-                        run_id=run_id,
-                        org_id=org_id,
-                        pipeline_id=pipeline_id,
-                        final_status=final_status,
-                        error_code=error_code,
-                        error_detail=error_detail,
-                        broker=broker,
-                    )
                 # Fire agent_signal triggers for each completed node.
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
@@ -5318,64 +5295,6 @@ class PipelineExecutor:
                 get_registry().close(run_id)
         return final_status, error_code, error_detail
 
-    async def _check_eval_suites_for_run(
-        self,
-        *,
-        session: AsyncSession,
-        run_id: uuid.UUID,
-        org_id: uuid.UUID,
-        pipeline_id: uuid.UUID,
-        final_status: str,
-        error_code: str | None,
-        error_detail: str | None,
-        broker: RunEventBroker,
-    ) -> tuple[str, str | None, str | None]:
-        """Check eval-suite thresholds for a completed run, terminal-failing when blocked.
-
-        Runs only for completed, non-gated runs (FAR-228: a gated run's
-        delivery was already made by a PRIOR attempt; running evals against the
-        skip envelope would be wrong). On ``EvalSuiteBlockedError`` the run is
-        terminal-failed as ``eval_suite_blocked`` with the audit event recorded
-        here. Returns the (possibly mutated) triplet.
-        """
-        if final_status != "complete" or error_code == _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE:
-            return final_status, error_code, error_detail
-        try:
-            await self._check_eval_suites(session, run_id, pipeline_id)
-        except EvalSuiteBlockedError as exc:
-            final_status = "failed"
-            error_code = "eval_suite_blocked"
-            error_detail = _sanitize_detail(exc, limit=None)
-            broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": error_detail})
-            _log.warning(
-                "eval.suite_blocked",
-                extra={
-                    "run_id": str(run_id),
-                    "suite_id": exc.suite_id,
-                    "score": exc.score,
-                },
-            )
-            try:
-                await append_audit_event(
-                    session,
-                    org_id=org_id,
-                    event_type="eval.suite_blocked",
-                    resource_type="run",
-                    resource_id=run_id,
-                    payload_json={
-                        "error_detail": _sanitize_detail(error_detail, limit=None),
-                        "suite_id": exc.suite_id,
-                        "score": exc.score,
-                        "actor": SYSTEM_ACTOR,
-                        "summary": f"Eval suite {short_id(exc.suite_id)} blocked the run (score {exc.score})",
-                    },
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
-        return final_status, error_code, error_detail
-
     async def _fire_agent_signals(
         self,
         *,
@@ -5441,127 +5360,6 @@ class PipelineExecutor:
                     "node_id": node_id,
                 },
             )
-
-    async def _check_eval_suites(
-        self,
-        session: AsyncSession,
-        run_id: uuid.UUID,
-        pipeline_id: uuid.UUID,
-    ) -> list[SuiteEvalResult]:
-        """Check all eval suites with pass_threshold for a completed run.
-
-        Queries Eval rows for the pipeline that belong to a suite
-        with a pass_threshold, aggregates their results, and returns
-        SuiteEvalResult for each suite.
-        """
-        stmt = select(Eval).where(
-            Eval.pipeline_id == pipeline_id,
-            Eval.suite_id.isnot(None),
-            Eval.pass_threshold.isnot(None),
-            Eval.eval_type != "guardrail",
-            Eval.deleted_at.is_(None),
-        )
-        result = await session.execute(stmt)
-        suite_defs = result.scalars().all()
-
-        if not suite_defs:
-            return []
-
-        suite_ids = list({d.suite_id for d in suite_defs if d.suite_id})
-        results: list[SuiteEvalResult] = []
-        for suite_id in suite_ids:
-            eval_stmt = select(Eval).where(
-                Eval.suite_id == suite_id,
-                Eval.pipeline_id == pipeline_id,
-                Eval.deleted_at.is_(None),
-            )
-            eval_result = await session.execute(eval_stmt)
-            defs_in_suite = eval_result.scalars().all()
-            if not defs_in_suite:
-                continue
-            eval_ids = [d.id for d in defs_in_suite]
-
-            result_stmt = select(EvalResult).where(
-                EvalResult.run_id == run_id,
-                EvalResult.eval_id.in_(eval_ids),
-            )
-            result_result = await session.execute(result_stmt)
-            eval_results = result_result.scalars().all()
-
-            # ------------------------------------------------------------------
-            # §4.7 completeness guard — set-coverage-based, not count-based.
-            # Every expected eval_id must appear at least once in the persisted
-            # set.  Duplicate rows (known accepted condition from overlapping
-            # post-node + HITL paths) do NOT false-fail.
-            # ------------------------------------------------------------------
-            expected_eval_ids: set[uuid.UUID] = {d.id for d in defs_in_suite}
-            persisted_eval_ids: set[uuid.UUID] = {r.eval_id for r in eval_results}
-            missing_eval_ids = expected_eval_ids - persisted_eval_ids
-
-            if missing_eval_ids:
-                missing_strs = [str(eid) for eid in sorted(missing_eval_ids, key=str)]
-                _log.warning(
-                    "eval_suites.incomplete",
-                    extra={
-                        "suite_id": suite_id,
-                        "expected_eval_ids": ",".join(str(eid) for eid in sorted(expected_eval_ids, key=str)),
-                        "persisted_eval_ids": ",".join(str(eid) for eid in sorted(persisted_eval_ids, key=str)),
-                        "missing_eval_ids": ",".join(missing_strs),
-                        "run_id": str(run_id),
-                    },
-                )
-                _record_suite_incomplete(reason="incomplete_suite_set")
-                results.append(
-                    SuiteEvalResult(
-                        suite_id=suite_id,
-                        total_evals=0,
-                        passed_evals=0,
-                        aggregate_score=0.0,
-                        passed=False,
-                        blocking_failures=[],
-                        outcome=SuiteOutcome.INDETERMINATE,
-                    )
-                )
-                continue
-
-            threshold_raw = next(
-                (d.pass_threshold for d in defs_in_suite if d.pass_threshold is not None),
-                None,
-            )
-            threshold = float(threshold_raw) if threshold_raw is not None else None
-
-            suite_result_raw = evaluate_suite(
-                eval_results=[
-                    EngineEvalResult(
-                        id=r.id,
-                        run_id=r.run_id,
-                        node_id=str(r.node_id) if r.node_id else "",
-                        eval_id=r.eval_id,
-                        passed=r.passed,
-                        score=r.score,
-                        detail=r.detail or "",
-                        evaluated_at=r.evaluated_at,
-                    )
-                    for r in eval_results
-                ],
-                suite_id=suite_id,
-                pass_threshold=threshold,
-            )
-
-            suite_result = SuiteEvalResult(
-                suite_id=suite_id,
-                total_evals=len(eval_results),
-                passed_evals=sum(1 for r in eval_results if r.passed),
-                aggregate_score=suite_result_raw.aggregate_score,
-                passed=suite_result_raw.passed,
-                blocking_failures=suite_result_raw.blocking_failures,
-                outcome=suite_result_raw.outcome,
-            )
-            if threshold is not None and not suite_result.passed:
-                raise EvalSuiteBlockedError(suite_id, suite_result.aggregate_score, threshold)
-            results.append(suite_result)
-
-        return results
 
     async def _create_interrupt_gate(
         self,

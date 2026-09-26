@@ -83,6 +83,28 @@ an echoed value is restored from storage, an echo with no stored counterpart
 is dropped (fail closed), and keys the caller removed stay removed. The same
 invariant holds on the MCP tool surface and on the composite-template editor /
 PATCH surfaces.
+**CLI hashing parity (FAR-1232).** The declarative `modulo apply` CLI compares
+its YAML declarations against the API's MASKED reads, so the CLI carries its own
+redaction (`strip_secret_shaped_graph` in `modulo/cli/apply/models.py`): pipeline
+graph node env vars, context files, composite parameter values and parameter
+overrides pass through the identical mask tiers (`is_sensitive_env_key` + the
+canonical `modulo.core.secret_patterns` value patterns + deep-dict masking).
+Because re-redacting already-redacted content is idempotent, the declared and the
+stored-masked sides hash equal whenever the declaration matches stored state (no
+phantom re-send per plan run). The same redaction runs on BOTH plan sides, so a
+graph drift breakdown compares like-for-like rather than showing mask-only
+"modified" entries. A rotated secret is invisible to that hash (both sides show
+the mask sentinel) — `--refresh-secrets` re-sends the declared graph (true values
+write through) for pipelines whose resolved graph declares secret-shaped
+entries, and triggers keep the existing config_json refresh behaviour.
+
+**Audited non-graph surfaces (FAR-1232).** No pipeline-graph serialisation was
+found on: the feedback, HITL, variant-group, and run daily-facts surfaces
+(structured records carry no graph payloads); the pipeline list / detail REST
+endpoints (node COUNT only, never node contents); the workflow engine internals
+and demo seed fixtures (server-internal, never client-facing). The sentinel-mask
+storage pattern means the org read never exposes a clear secret for these
+surfaces to leak.
 
 ### 2. Log redaction
 
@@ -160,6 +182,65 @@ If stripping itself fails, the whole credential-bearing field is dropped
 credential into an exported bundle.
 
 `?format=v2` (ADR 015) carries no graph-node payload, so it needs no stripping.
+
+### 7. Graph-storing entities × serialization paths (FAR-1232 matrix)
+
+Three entities store graph node payloads (credentials can live inside
+`env_vars`, `context_files`, `composite_parameter_values`, `parameter_overrides`):
+
+| Entity column | Model | Tested |
+|---|---|---|
+| `pipelines.graph_nodes_json` | `db/models/pipeline.py:86` | Y |
+| `pipeline_snapshots.graph_json` | `db/models/pipeline_snapshot.py:68` | Y |
+| `composite_templates.sub_pipeline_graph_json` | `db/models/composite_template.py:15` | Y |
+
+The snapshot's sibling columns (`connector_bindings_json`,
+`pipeline_snapshot.py:69`; `schema_pins_json`, `:70`; `composite_bindings_json`,
+`:73`) store **scalar metadata only** — ids, names, types — never node
+credential payloads (built by `_build_connector_bindings`,
+`db/crud/pipeline_snapshot.py:231`, and friends). They are out of masking scope.
+
+Every serialization path for the three graph entities, one cell per path:
+
+| Path | pipelines.graph_nodes_json | pipeline_snapshots.graph_json | composite_templates.sub_pipeline_graph_json |
+|---|---|---|---|
+| REST graph GET `GET /pipelines/{id}/graph` | **Masked** — `_graph_response` calls `mask_pipeline_graph_node` per node (`api/routes/pipelines.py:1790`); test `test_pipeline_graph_masking.py:283` | N/A (not this entity) | N/A |
+| REST graph PATCH (full replace) | **Write + echo-merge** — `merge_masked_graph_nodes` resolves masked echoes against storage before persisting (`pipelines.py` PATCH graph route); test `test_pipeline_graph_masking.py:300` | N/A | N/A |
+| REST pipeline list / detail / patch / archive / clone / folder-move | **Stripped** — `PipelineResponse` has no graph field; `node_count` only via `_pipeline_response` (`pipelines.py:2213-2228`); clone copies the column server-side (`db/crud/pipeline.py:1141`, in `_read_clone_source_snapshot` at `:1057`) | N/A (not on this entity) | N/A |
+| REST save-as-composite `POST /pipelines/{id}/save-as-composite` | **Masked before persist** — copied nodes pass `mask_pipeline_graph_node` before template storage (`pipelines.py:3277+`); test `routes/test_composite_authoring.py:468` | N/A | write side of the same flow |
+| REST snapshot list `GET /pipelines/{id}/snapshots` | N/A | **Stripped** — list response omits `graph_json` (`_snapshot_to_response`, `pipelines.py:3523`) | N/A |
+| REST snapshot detail + tag + rollback-recovered detail `GET/PATCH .../snapshots/{sid}` | N/A | **Masked** — `_snapshot_to_detail_response` uses `_masked_snapshot_graph` (`pipelines.py:3539`, used at `:3568`); test `test_pipeline_graph_masking.py:372` | N/A |
+| REST snapshot diff `POST .../snapshots/diff` | N/A | **Masked** — diffed graphs via `_masked_snapshot_graph` and added/removed nodes via `mask_pipeline_graph_node` (`pipelines.py:3820`, `:3825`) | N/A |
+| REST run fixture export `GET /runs/{run_id}/export-fixture` | N/A | **Masked** — `snapshot_graph_json = _masked_snapshot_graph(...)` (`runs.py:2106`, cited in the FAR-1181 comment at `:2101-2105`); test `test_pipeline_graph_masking.py:420` | N/A |
+| Composite template list / get / create-response / patch / restore / editor GET+PUT | N/A | N/A | **Masked + echo-merge** — `_mask_template_response` / `_mask_sub_pipeline_graph` (`api/routes/composite_templates.py:136`, `:41`); echo writes merge against storage (`merge_masked_graph_nodes`); tests `test_composite_templates_api.py` (`test_get_template_masks_secret_env_and_context_files`, `test_list_templates_masks_graph_nodes`, `test_patch_resolves_mask_echoes_before_storing_graph`, `test_editor_put_resolves_mask_echo_and_masks_response`) |
+| MCP `get_pipeline_graph` tool | **Masked** — `mask_pipeline_graph_node` per node (`api/mcp_server.py:2666`) | N/A | N/A |
+| MCP graph-update tool | **Write + echo-merge + masked response** — `merge_masked_graph_nodes` (`mcp_server.py:2836`), updated nodes masked (`:2884`) | N/A | N/A |
+| MCP standalone graph-update path | same as above (`mcp_server.py:2956-2969` internal list build before merge) | N/A | N/A |
+| MCP `modulo://pipelines/{id}` resource | **Stripped** — status/count only (`mcp_server.py:8987`, `:8992`) | N/A | N/A |
+| MCP `modulo://pipelines/{id}/snapshots/{sid}` resource | N/A | **Masked** — nodes masked at `mcp_server.py:9103` before rendering; test `test_pipeline_graph_masking.py:519`. `connector_bindings_json` rendered raw at `:9113` — safe: scalar ids/names only (see sibling-column note above) | N/A |
+| Library export v1 `POST /library/export/{pipeline_id}?format=v1` | **Stripped** — `strip_graph_node_credentials` (`core/workflow_import_export/__init__.py:553` into `:484`); removals recorded in `redacted_credentials` (`:572`); test `test_pipeline_graph_masking.py:629` | N/A | N/A |
+| Library export v2 `?format=v2` (ADR 015) | **Stripped (no node payload)** — `_build_v2_bundle` emits no `graph_nodes_json` (`core/workflow_import_export/__init__.py:795-817`, id collection at `:820-842`); test `test_pipeline_graph_masking.py:713` | N/A | N/A |
+| Library import analyse / upload-zip `POST /library/import/(analyse|upload-zip)` | **Write-side input echo, N/A** — the analyse response echoes `bundle_json` the CALLER just submitted (`library.py:1035`); no stored graph data is read | N/A | N/A |
+| Library import confirm `POST /library/import/confirm` | **Write (store)** — `materialize_import` persists `graph_nodes_json` (`core/workflow_import_export/__init__.py:1427-1449`); read paths mask afterwards. Starts stripped (v1 bundles carry no credentials) | N/A | N/A |
+| Library create-from-template `POST /library/{pid}/create-pipeline` | **Write (store)** — graph nodes copied from library primitive content into a fresh pipeline (`library.py:1767`); read paths mask afterwards | N/A | N/A |
+| Templates create-from-template `POST /templates/{id}/create-pipeline` | **Write (store)** — `pipeline.graph_nodes_json = resolved_nodes` (`api/routes/templates.py:270`); response carries ids/counts only (`:281`) | N/A | N/A |
+| CLI `modulo apply` plan / apply | **Hash-tier redaction + real write** — declarations hash through `strip_secret_shaped_graph`; writes carry the DECLARED values through `PATCH /pipelines` (the receiving API masks reads) (`cli/apply/pipeline_apply.py:255-256`, `:340-343`, `:367-368`); tests `test_apply_pipeline.py:426` (masked plan matches), `:897` (real write, `test_created_graph_secret_env_var_writes_declared_value`), `:484` (`--refresh-secrets`), `test_apply_models.py:782` (`strip_secret_shaped_graph`) | N/A | N/A |
+| Collections install / library service (internal writers) | **Write (store)** — `core/library_service/install.py:419`, `:448` assemble bundle graphs from library pins; `_seed_data.py` nodes are in-repo seed content (`:378` etc.) | N/A | N/A |
+| Run-time internals (entry-node checks, node labels, prompt-reveal agent lookup, rerun payload validation) | N/A | **Not applicable (internal reads, no serialization)** — `runs.py:1020` (`_find_entry_candidates`), `:1772` (`_build_node_labels` → label strings only), `:3105` (`_lookup_agent_for_node`), `:1306` (rerun validation); the prompt reveal response masks prompt TEXT separately (`_mask_message_list`, `runs.py:2944` def, `:3156` call) | **Not applicable** — composite expansion is server-internal (`core/composite_engine/expander.py`) |
+| Feedback / HITL / eval-coverage / admin coverage / analytics | N/A | **Not applicable (derived scalars only)** — feedback node-name map (`api/routes/feedback.py:378-388`, emits display names), HITL gate-label maps (`api/routes/hitl.py:1152-1159`, `:1562`), eval coverage node ids (`api/routes/evals.py:494`), admin coverage-gap ids (`api/routes/admin.py:2806`, `:2825`), analytics node-count/timeout facts (`core/analytics/__init__.py:285-354`) | N/A |
+| Housekeeping connectors-visited scan | N/A | **Not applicable (internal)** — `core/housekeeping.py:202-212` reads connector instance ids from `connector_bindings_json` | N/A |
+| Demo seed / graph validator / cost finalize / capability scope / guardrail compensation | **Write+internal** — `db/seed_demo.py`, `core/graph_validator/`, `core/cost_controller/finalize.py` (`derive_node_type_map`), `core/capability_scope.py`, `core/guardrails/compensation.py` produce or consume graphs server-side; snapshot-graph hash cleaned by migration 0147 tooling (`core/analytics/maintenance.py:268-297`) | same | same |
+
+**Uncovered surface flagged (follow-up recommended).**
+`backend/scripts/copy-run-as-fixture.py:83,92` writes the run's raw
+`input_payload`, `outputs_json` and the **raw** `snapshot.graph_json` into a
+fixture file — no `_mask_output_value` / `_masked_snapshot_graph` masking,
+unlike the API fixture-export route (`runs.py:2106-2129`, tested at
+`test_pipeline_graph_masking.py:420`). Dev-operations only (writes files under
+`tests/fixtures/runs/` by default), so the live product surfaces stay covered,
+but the script should reuse the shipped maskers before its next use. Fixing it
+needs more than a one-liner (mask three values + a falsifying test), so it is
+logged as a follow-up rather than patched here.
 
 ---
 

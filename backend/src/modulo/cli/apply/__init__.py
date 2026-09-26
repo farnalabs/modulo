@@ -142,10 +142,12 @@ def register_apply(group: click.Group) -> None:
         is_flag=True,
         default=False,
         help=(
-            "Always re-send config_json for triggers declaring secret-shaped entries. "
-            "The server masks stored secrets on read, so a rotated ${env:SECRET} value "
-            "is invisible to the drift hash (the plan reports 'unchanged' and no PUT "
-            "is sent) — this flag re-sends those configs every run."
+            "Always re-send secret-bearing declarations: config_json for "
+            "triggers and the resolved graph for pipelines declaring "
+            "secret-shaped entries (FAR-1232). The server masks stored "
+            "secrets on read, so a rotated ${env:SECRET} value is invisible "
+            "to the drift hash (the plan reports 'unchanged' and no write "
+            "is sent) — this flag re-sends those declarations every run."
         ),
     )
     @click.option(

@@ -1371,6 +1371,79 @@ class TestBatchCompare:
                 await batch_compare(uuid.uuid4(), mock_session, principal)
             assert exc.value.status_code == 404
 
+    async def test_surfaces_per_node_token_breakdown(self) -> None:
+        """The compare carries each variant's per-node token usage (feat-variants)."""
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        batch_id = uuid.uuid4()
+
+        entries = [
+            self._entry(
+                variant_name="control",
+                node_token_usage={
+                    "planner": {"input_tokens": 150, "output_tokens": 450, "total_tokens": 600, "cost_usd": 0.015},
+                    "coder": {"input_tokens": 1200, "output_tokens": 3200, "total_tokens": 4400, "cost_usd": 0.108},
+                },
+            )
+        ]
+        mock_run = MagicMock()
+        mock_run.pipeline_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_batch_compare",
+                new_callable=AsyncMock,
+                return_value=entries,
+            ),
+            patch(
+                "modulo.api.routes.variants.get_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await batch_compare(batch_id, mock_session, principal)
+
+        ntu = result["runs"][0]["node_token_usage"]
+        assert isinstance(ntu, dict)
+        assert ntu["planner"]["total_tokens"] == 600
+        assert ntu["coder"]["total_tokens"] == 4400
+
+    async def test_node_token_usage_none_when_no_breakdown(self) -> None:
+        """A run without a persisted union surfaces null, never an error."""
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        batch_id = uuid.uuid4()
+
+        entries = [self._entry(variant_name="control")]
+        mock_run = MagicMock()
+        mock_run.pipeline_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_batch_compare",
+                new_callable=AsyncMock,
+                return_value=entries,
+            ),
+            patch(
+                "modulo.api.routes.variants.get_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await batch_compare(batch_id, mock_session, principal)
+
+        assert result["runs"][0]["node_token_usage"] is None
+
 
 @pytest.mark.asyncio
 class TestRestoreGroup:

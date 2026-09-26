@@ -12,7 +12,6 @@ import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -25,7 +24,6 @@ from modulo.core.eval_engine import (
     EvalEngine,
     EvalResult,
     EvalType,
-    SuiteOutcome,
 )
 from modulo.core.pipeline_engine.eval_persist_order import (
     run_evals_persist_before_decide,
@@ -216,48 +214,6 @@ def _patch_rls(module: str = "modulo.core.pipeline_engine.eval_persist_order") -
     m1 = p1.start()
     m2 = p2.start()
     return m1, m2
-
-
-def _make_eval_result_row(
-    *,
-    eval_id: uuid.UUID,
-    run_id: uuid.UUID,
-    passed: bool,
-    node_id: uuid.UUID | None = None,
-    score: float | None = None,
-    detail: str = "",
-) -> MagicMock:
-    """Create a mock EvalResult ORM row for _check_eval_suites."""
-    row = MagicMock()
-    row.id = uuid4()
-    row.run_id = run_id
-    row.node_id = node_id or uuid4()
-    row.eval_id = eval_id
-    row.passed = passed
-    row.score = score if score is not None else (1.0 if passed else 0.0)
-    row.detail = detail
-    row.evaluated_at = datetime.now(UTC)
-    return row
-
-
-def _make_eval_def_row(
-    *,
-    eval_id: uuid.UUID | None = None,
-    name: str = "eval",
-    suite_id: str | None = None,
-    pass_threshold: float | None = None,
-    pipeline_id: uuid.UUID | None = None,
-) -> MagicMock:
-    """Create a mock EvalDefinition ORM row for _check_eval_suites."""
-    row = MagicMock()
-    row.id = eval_id or uuid4()
-    row.name = name
-    row.suite_id = suite_id
-    row.pass_threshold = pass_threshold
-    row.pipeline_id = pipeline_id or uuid4()
-    row.eval_type = "regex"
-    row.deleted_at = None
-    return row
 
 
 # ---------------------------------------------------------------------------
@@ -940,128 +896,6 @@ class TestC18PersistenceFailureHaltIdentity:
 
 
 # ---------------------------------------------------------------------------
-# C19 — Suite-completeness guard fails closed on missing eval id
-# ---------------------------------------------------------------------------
-
-
-class TestC19SuiteCompletenessGuard:
-    """C19: _check_eval_suites with missing eval_id → INDETERMINATE, no ratio."""
-
-    def _session_with_batches(self, batches: list[list[Any]]) -> AsyncMock:
-        """Session whose execute() returns one MagicMock result per batch."""
-        session = AsyncMock()
-        results = []
-        for batch in batches:
-            r = MagicMock()
-            r.scalars.return_value.all.return_value = batch
-            results.append(r)
-
-        async def _execute(stmt: Any) -> Any:
-            return results.pop(0)
-
-        session.execute = _execute
-        return session
-
-    async def test_missing_eval_id_indeterminate(self) -> None:
-        """Suite [A, B, C] but only [A, B] have rows → INDETERMINATE."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
-
-        pipeline_id = uuid4()
-        run_id = uuid4()
-        suite = "test-suite"
-        def_a = _make_eval_def_row(name="A", suite_id=suite, pass_threshold=0.8, pipeline_id=pipeline_id)
-        def_b = _make_eval_def_row(name="B", suite_id=suite, pass_threshold=0.8, pipeline_id=pipeline_id)
-        def_c = _make_eval_def_row(name="C", suite_id=suite, pass_threshold=0.8, pipeline_id=pipeline_id)
-
-        row_a = _make_eval_result_row(eval_id=def_a.id, run_id=run_id, passed=True)
-        row_b = _make_eval_result_row(eval_id=def_b.id, run_id=run_id, passed=True)
-
-        executor = PipelineExecutor(MagicMock())
-        session = self._session_with_batches(
-            [
-                [def_a, def_b, def_c],
-                [def_a, def_b, def_c],
-                [row_a, row_b],
-            ]
-        )
-
-        mock_incomplete = MagicMock()
-        with patch("modulo.core.pipeline_engine.executor._record_suite_incomplete", mock_incomplete):
-            results = await executor._check_eval_suites(session, run_id, pipeline_id)
-
-        assert len(results) == 1
-        assert results[0].outcome == SuiteOutcome.INDETERMINATE
-        assert results[0].passed is False
-        assert results[0].aggregate_score == 0.0
-        mock_incomplete.assert_called_once_with(reason="incomplete_suite_set")
-
-    async def test_duplicate_rows_do_not_false_fail(self) -> None:
-        """Duplicate EvalResult rows for the same eval_id must NOT false-fail the guard.
-
-        Suite [A, B] with pass_threshold=0.5. A has 2 rows (both pass), B has 1 row (pass).
-        Set-coverage: {A, B} ⊆ {A, B} → NOT indeterminate. Score = 3/3 = 1.0 >= 0.5 → PASSED.
-        The key assertion is NOT indeterminate (completeness guard passed despite duplicates).
-        """
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
-
-        pipeline_id = uuid4()
-        run_id = uuid4()
-        suite = "dup-suite"
-        def_a = _make_eval_def_row(name="A", suite_id=suite, pass_threshold=0.5, pipeline_id=pipeline_id)
-        def_b = _make_eval_def_row(name="B", suite_id=suite, pass_threshold=0.5, pipeline_id=pipeline_id)
-
-        row_a1 = _make_eval_result_row(eval_id=def_a.id, run_id=run_id, passed=True)
-        row_a2 = _make_eval_result_row(eval_id=def_a.id, run_id=run_id, passed=True)
-        row_b = _make_eval_result_row(eval_id=def_b.id, run_id=run_id, passed=True)
-
-        executor = PipelineExecutor(MagicMock())
-        session = self._session_with_batches(
-            [
-                [def_a, def_b],
-                [def_a, def_b],
-                [row_a1, row_a2, row_b],
-            ]
-        )
-
-        results = await executor._check_eval_suites(session, run_id, pipeline_id)
-
-        assert len(results) == 1
-        # Set-coverage: both eval_ids present → NOT indeterminate
-        assert results[0].outcome != SuiteOutcome.INDETERMINATE
-        # All 3 rows pass, score = 3/3 = 1.0 >= 0.5 → PASSED
-        assert results[0].outcome == SuiteOutcome.PASSED
-        assert results[0].aggregate_score == pytest.approx(1.0)
-
-    async def test_all_present_passes(self) -> None:
-        """Suite with all expected eval ids present → proceeds to ratio computation."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
-
-        pipeline_id = uuid4()
-        run_id = uuid4()
-        suite = "complete-suite"
-        def_a = _make_eval_def_row(name="A", suite_id=suite, pass_threshold=0.5, pipeline_id=pipeline_id)
-        def_b = _make_eval_def_row(name="B", suite_id=suite, pass_threshold=0.5, pipeline_id=pipeline_id)
-
-        row_a = _make_eval_result_row(eval_id=def_a.id, run_id=run_id, passed=True)
-        row_b = _make_eval_result_row(eval_id=def_b.id, run_id=run_id, passed=True)
-
-        executor = PipelineExecutor(MagicMock())
-        session = self._session_with_batches(
-            [
-                [def_a, def_b],
-                [def_a, def_b],
-                [row_a, row_b],
-            ]
-        )
-
-        results = await executor._check_eval_suites(session, run_id, pipeline_id)
-
-        assert len(results) == 1
-        assert results[0].outcome == SuiteOutcome.PASSED
-        assert results[0].aggregate_score == pytest.approx(1.0)
-
-
-# ---------------------------------------------------------------------------
 # Additional edge cases
 # ---------------------------------------------------------------------------
 
@@ -1203,51 +1037,34 @@ class TestOtelMetricsHelpers:
         with (
             patch.object(ep, "_get_otel_meter", return_value=None),
             patch.object(ep, "_eval_result_persist_failures_total", None),
-            patch.object(ep, "_eval_suite_incomplete_total", None),
         ):
             ep._ensure_metrics()
 
             assert ep._eval_result_persist_failures_total is None
-            assert ep._eval_suite_incomplete_total is None
 
-    def test_ensure_metrics_creates_both_counters_when_absent(self) -> None:
+    def test_ensure_metrics_creates_counter_when_absent(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
 
         meter = MagicMock()
         with (
             patch.object(ep, "_get_otel_meter", return_value=meter),
             patch.object(ep, "_eval_result_persist_failures_total", None),
-            patch.object(ep, "_eval_suite_incomplete_total", None),
         ):
             ep._ensure_metrics()
 
-        assert meter.create_counter.call_count == 2
+        meter.create_counter.assert_called_once()
 
-    def test_ensure_metrics_creates_only_missing_suite_counter(self) -> None:
+    def test_ensure_metrics_skips_when_already_initialised(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
 
         meter = MagicMock()
         with (
             patch.object(ep, "_get_otel_meter", return_value=meter),
             patch.object(ep, "_eval_result_persist_failures_total", MagicMock()),
-            patch.object(ep, "_eval_suite_incomplete_total", None),
         ):
             ep._ensure_metrics()
 
-        meter.create_counter.assert_called_once()
-
-    def test_ensure_metrics_creates_only_missing_failure_counter(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
-
-        meter = MagicMock()
-        with (
-            patch.object(ep, "_get_otel_meter", return_value=meter),
-            patch.object(ep, "_eval_result_persist_failures_total", None),
-            patch.object(ep, "_eval_suite_incomplete_total", MagicMock()),
-        ):
-            ep._ensure_metrics()
-
-        meter.create_counter.assert_called_once()
+        meter.create_counter.assert_not_called()
 
     def test_record_persist_failure_increments_counter(self) -> None:
         from modulo.core.pipeline_engine import eval_persist_order as ep
@@ -1283,43 +1100,6 @@ class TestOtelMetricsHelpers:
             patch.object(ep, "_log", logger),
         ):
             ep._record_persist_failure(failure_behaviour="block")
-
-        logger.warning.assert_called_once()
-
-    def test_record_suite_incomplete_increments_counter(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
-
-        counter = MagicMock()
-        with (
-            patch.object(ep, "_ensure_metrics"),
-            patch.object(ep, "_eval_suite_incomplete_total", counter),
-        ):
-            ep._record_suite_incomplete(reason="incomplete_suite_set")
-
-        counter.add.assert_called_once_with(1, {"reason": "incomplete_suite_set"})
-
-    def test_record_suite_incomplete_skips_when_counter_absent(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
-
-        logger = MagicMock()
-        with (
-            patch.object(ep, "_ensure_metrics"),
-            patch.object(ep, "_eval_suite_incomplete_total", None),
-            patch.object(ep, "_log", logger),
-        ):
-            ep._record_suite_incomplete(reason="incomplete_suite_set")
-
-        logger.warning.assert_not_called()
-
-    def test_record_suite_incomplete_swallows_metrics_error(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
-
-        logger = MagicMock()
-        with (
-            patch.object(ep, "_ensure_metrics", side_effect=RuntimeError("metrics down")),
-            patch.object(ep, "_log", logger),
-        ):
-            ep._record_suite_incomplete(reason="incomplete_suite_set")
 
         logger.warning.assert_called_once()
 

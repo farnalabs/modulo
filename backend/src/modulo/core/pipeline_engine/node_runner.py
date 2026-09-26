@@ -5141,8 +5141,7 @@ def make_hitl_gate_fn(
       used as before.
 
       If ``session_factory`` is provided, eval results are persisted to
-      the ``eval_results`` table so that post-run suite-level threshold
-      checks (``_check_eval_suites``) can read them.
+      the ``eval_results`` table.
 
     On resume (via ``aupdate_state`` + ``astream_events(None, config)``),
     the node is re-invoked with ``state["_hitl_decision"]`` populated.
@@ -8737,23 +8736,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # silent per-call downgrade back to the direct path (revert = flag
             # OFF, never a mid-dispatch fallback).
             _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider())
-            if _egress_resolved.policy is not None:
-                # ADR 040 records the egress defect class as "an operator could
-                # configure a restrictive policy and receive permissive egress,
-                # silently" and rules the refusal path part of the contract.
-                # ``E2BRuntimeProvider.create_workspace`` does not yet carry
-                # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
-                # (that carrier is outside this slice's footprint), so the
-                # flag-ON path CANNOT express deny_all/selected at provision
-                # time — refuse with the terminal named code rather than grant
-                # permissive egress. Follow-up: extend the E2B provider to
-                # honour ``spec.egress_policy``, then drop this refusal.
-                raise SandboxTierRefusedError(
-                    f"MODULO_E2B_VIA_PROVIDER is ON and node '{node_id}' resolves egress policy "
-                    f"{_egress_resolved.policy!r}, which the runtime-provider create path cannot yet "
-                    "enforce (E2B create_workspace does not carry spec.egress_policy). "
-                    "Set MODULO_E2B_VIA_PROVIDER=false (revert) until the provider honours the spec."
-                )
+            # FAR-1050 R5: ``E2BRuntimeProvider.create_workspace`` now carries
+            # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
+            # (deny_all/selected/none -> False; default/None -> True), and the
+            # selected-mode allowlist rides the spec's ``workspace_metadata``
+            # under the same key the legacy create stamps. A restrictive
+            # policy is therefore ENFORCED at provision time on this path, so
+            # the earlier "cannot express egress yet — refuse" stopgap is
+            # gone. ``_egress_resolved.refusal`` above still fires for a
+            # genuine tier refusal (e.g. an unrecognised policy).
             _dispatch_spec = WorkspaceSpec(
                 environment_profile_id=_runner_binding_env_profile_id() or uuid.UUID(int=0),
                 organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
