@@ -1508,11 +1508,6 @@ export default {
         "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
       },
       "pass_threshold": "Pass Threshold",
-      "failure_behaviour": "Failure Behaviour",
-      "warn": "Warn",
-      "block": "Block",
-      "warn_description": "Log a warning but allow the pipeline to continue.",
-      "block_description": "Fail the pipeline run immediately.",
       "new_eval": "New Eval",
       "edit_eval": "Edit Eval",
       "update": "Update",

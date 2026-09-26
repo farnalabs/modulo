@@ -38,7 +38,6 @@
                 <th class="px-4 py-3">{{ $t('views.SettingsGuardrailsView.detection_type') }}</th>
                 <th class="px-4 py-3">{{ $t('views.SettingsGuardrailsView.field') }}</th>
                 <th class="px-4 py-3">{{ $t('views.SettingsGuardrailsView.pipeline') }}</th>
-                <th class="px-4 py-3">{{ $t('views.SettingsGuardrailsView.status') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -61,7 +60,6 @@
                 </td>
                 <td class="px-4 py-3 font-mono text-xs">{{ fieldLabel(g) }}</td>
                 <td class="px-4 py-3">{{ pipelineName(g.pipeline_id) }}</td>
-                <td class="px-4 py-3 capitalize">{{ failureBehaviourLabel(g) }}</td>
               </tr>
             </tbody>
           </table>
@@ -239,7 +237,6 @@ interface GuardrailItem {
   name: string
   eval_type: string
   config_json: Record<string, unknown>
-  failure_behaviour?: string
 }
 
 const { error, data: guardrailsData, load: loadGuardrails, fetched: guardrailsLoaded } = useDataFetch(
@@ -344,10 +341,6 @@ function fieldLabel(g: GuardrailItem): string {
   return field || '\u2014'
 }
 
-function failureBehaviourLabel(g: GuardrailItem): string {
-  return g.failure_behaviour || 'warn'
-}
-
 function isObserveMode(g: GuardrailItem): boolean {
   if (killSwitchEnabled.value) return true
   return actionLabel(g) === 'observe'
@@ -414,7 +407,6 @@ async function saveGuardrail() {
         name: form.value.name,
         eval_type: 'guardrail',
         config_json: configJson,
-        failure_behaviour: 'warn',
       } as any,
     })
     if (err) {

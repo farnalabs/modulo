@@ -119,35 +119,6 @@
                 </div>
               </div>
 
-              <div>
-                <span class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.failure_behaviour') }}</span>
-                <div class="flex items-center gap-4">
-                  <label for="evaleditorview-field-2" class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input id="evaleditorview-field-2"
-                      v-model="form.failure_behaviour"
-                      type="radio"
-                      value="warn"
-                      data-testid="eval-editor-failure-warn"
-                      class="accent-primary"
-                    />
-                    {{ $t('views.EvalEditorView.warn') }}
-                  </label>
-                  <label for="evaleditorview-field-1" class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input id="evaleditorview-field-1"
-                      v-model="form.failure_behaviour"
-                      type="radio"
-                      value="block"
-                      data-testid="eval-editor-failure-block"
-                      class="accent-primary"
-                    />
-                    {{ $t('views.EvalEditorView.block') }}
-                  </label>
-                </div>
-                <p class="mt-1 text-xs text-muted-foreground">
-                  {{ form.failure_behaviour === 'warn' ? $t('views.EvalEditorView.warn_description') : $t('views.EvalEditorView.block_description') }}
-                </p>
-              </div>
-
               <div class="flex items-center gap-2 pt-2">
               <Button :disabled="!canSave || saving" data-testid="eval-editor-save" @click="saveEval">
                 {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
@@ -198,12 +169,6 @@
                   <p class="truncate font-medium">{{ ev.name }}</p>
                   <div class="mt-1 flex flex-wrap items-center gap-2">
                     <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{{ ev.eval_type }}</span>
-                    <span
-                      class="inline-block rounded px-2 py-0.5 text-xs font-medium"
-                      :class="ev.failure_behaviour === 'block' ? 'bg-destructive/10 text-destructive' : 'bg-pending/10 text-pending'"
-                    >
-                      {{ ev.failure_behaviour }}
-                    </span>
                     <span v-if="ev.pass_threshold != null" class="text-xs text-muted-foreground">
                       {{ $t('views.EvalEditorView.threshold', { value: ev.pass_threshold.toFixed(2) }) }}
                     </span>
@@ -306,7 +271,6 @@ interface EvalDefinition {
   name: string
   eval_type: string
   config_json: Record<string, unknown>
-  failure_behaviour: string
   pass_threshold: number | null
   suite_id: string | null
   created_by: string
@@ -325,7 +289,6 @@ const form = reactive({
   eval_type: 'llm_judge',
   config_json: '{}',
   pass_threshold: 0.8,
-  failure_behaviour: 'warn',
 })
 
 const saving = ref(false)
@@ -369,7 +332,6 @@ function resetForm() {
   form.eval_type = 'llm_judge'
   form.config_json = '{}'
   form.pass_threshold = 0.8
-  form.failure_behaviour = 'warn'
   editingEvalId.value = null
   formError.value = null
   formSuccess.value = null
@@ -456,7 +418,6 @@ async function saveEval() {
     name: form.name.trim(),
     eval_type: form.eval_type,
     config_json: configParsed,
-    failure_behaviour: form.failure_behaviour,
     pass_threshold: form.pass_threshold,
   }
   try {
@@ -491,7 +452,6 @@ function startEdit(ev: EvalDefinition) {
   form.eval_type = ev.eval_type
   form.config_json = JSON.stringify(ev.config_json, null, 2)
   form.pass_threshold = ev.pass_threshold ?? 0.8
-  form.failure_behaviour = ev.failure_behaviour
   formError.value = null
   formSuccess.value = null
 }

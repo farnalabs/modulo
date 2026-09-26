@@ -43,7 +43,6 @@ function evalItem(over: Record<string, unknown> = {}) {
     name: 'Existing Eval',
     eval_type: 'regex',
     config_json: { pattern: '.*' },
-    failure_behaviour: 'block',
     pass_threshold: 0.9,
     suite_id: null,
     created_by: 'user-1',
@@ -186,7 +185,6 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     expect(apiGET).toHaveBeenCalledWith('/api/v1/evals', { params: { query: { pipeline_id: 'p1' } } })
     expect(wrapper.text()).toContain('Existing Eval')
     expect(wrapper.text()).toContain('regex')
-    expect(wrapper.text()).toContain('block')
   })
 
   it('graph load failure shows the nodes error without crashing the page', async () => {
@@ -217,7 +215,7 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     expect(wrapper.text()).toContain('views.EvalEditorView.failed_to_load_evals')
   })
 
-  it('save (create): POST body carries the parsed config, threshold and failure behaviour; success message shown', async () => {
+  it('save (create): POST body carries the parsed config, threshold; success message shown', async () => {
     const wrapper = mountView()
     await flush()
 
@@ -227,7 +225,6 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     await wrapper.find('[data-testid="eval-editor-name"]').setValue('Fresh Eval')
     await wrapper.find('[data-testid="eval-editor-config"]').setValue('{"pattern":"abc"}')
     await wrapper.find('[data-testid="eval-editor-pass-threshold"]').setValue('0.55')
-    await wrapper.find('[data-testid="eval-editor-failure-block"]').setValue(true)
     await nextTick()
 
     const save = wrapper.find('[data-testid="eval-editor-save"]')
@@ -244,7 +241,6 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
       name: 'Fresh Eval',
       eval_type: 'llm_judge',
       config_json: { pattern: 'abc' },
-      failure_behaviour: 'block',
       pass_threshold: 0.55,
     })
     // FAR-631: the success flash now survives the form reset (reset runs
@@ -316,7 +312,6 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     const [url, options] = apiPUT.mock.calls[0]
     expect(url).toBe('/api/v1/evals/{eval_id}')
     expect(options.params.path.eval_id).toBe('eval-1')
-    expect(options.body.failure_behaviour).toBe('block')
     expect(options.body.pass_threshold).toBe(0.9)
     // FAR-631: the updated message now survives the reset and renders (see
     // the create-path note above).

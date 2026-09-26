@@ -70,7 +70,6 @@ def _make_eval_def(**overrides) -> MagicMock:
     m.name = overrides.get("name", "Test Eval")
     m.eval_type = overrides.get("eval_type", "regex")
     m.config_json = overrides.get("config_json", {"pattern": r"\d+"})
-    m.failure_behaviour = overrides.get("failure_behaviour", "warn")
     m.pass_threshold = overrides.get("pass_threshold")
     m.suite_id = overrides.get("suite_id")
     m.created_by = overrides.get("created_by", _USER_ID)
@@ -167,7 +166,6 @@ class TestCreateEvalDefinition:
                 "name": "Test Eval",
                 "eval_type": "regex",
                 "config_json": {"pattern": r"\d+"},
-                "failure_behaviour": "block",
                 "pass_threshold": 0.8,
                 "suite_id": "suite-1",
             },
@@ -176,7 +174,6 @@ class TestCreateEvalDefinition:
         data = resp.json()
         assert data["name"] == "Test Eval"
         assert data["eval_type"] == "regex"
-        assert data["failure_behaviour"] == "block"
         assert data["pass_threshold"] == pytest.approx(0.8)
         assert data["suite_id"] == "suite-1"
         assert data["config_json"] == {"pattern": r"\d+"}
@@ -290,7 +287,6 @@ class TestCreateEvalDefinition:
                 "name": "Envelope Eval",
                 "eval_type": "guardrail",
                 "config_json": {"detection": {"type": "llm_judge"}},
-                "failure_behaviour": "block",
             },
         )
         assert resp.status_code == 422
@@ -320,7 +316,6 @@ class TestCreateEvalDefinition:
                 "name": "Envelope Regex Eval",
                 "eval_type": "guardrail",
                 "config_json": {"detection": {"type": "regex", "field": "body", "pattern": r"SECRET_[A-Z0-9]{8}"}},
-                "failure_behaviour": "block",
             },
         )
         assert resp.status_code == 201

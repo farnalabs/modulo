@@ -9,10 +9,8 @@ Version stamping (FAR-382) lives inside the helper:
   - update (``existing_eval_id`` given) → bump ``version``, snapshot ``pre_version_raw``
 
 The guardrail config-vocabulary validator (:func:`validate_guardrail_request`)
-is consolidated here as the single shared validator.  The ad-hoc copy in
-``api/mcp_server.py`` (``_eval_def_guardrail_validation_error``) is deleted
-by the callers; MCP paths catch ``StarletteHTTPException`` and convert it
-to the MCP error-dict format.
+is consolidated here as the single shared validator.  The ``failure_behaviour``
+parameter was retired from the public surface in FAR-1103 chunk 5a.
 """
 
 from __future__ import annotations
@@ -41,43 +39,26 @@ _log = logging.getLogger(__name__)
 def validate_guardrail_request(
     *,
     eval_type: str,
-    failure_behaviour: str | None,
     config_json: dict[str, Any] | None,
 ) -> None:
     """Graph-save validation for guardrail definitions (FAR-208 item 5).
 
-    Five checks — not three.  An implementer consolidating from an incomplete
-    description would silently drop checks 4 and 5.
+    Three config-vocabulary checks.  The ``failure_behaviour`` parameter was
+    retired from the public surface in FAR-1103 chunk 5a.
 
-    1. ``failure_behaviour == "retry"`` → reject (guardrail blocks are terminal).
-    2. ``failure_behaviour`` not in ``(None, "warn", "block")`` → reject.
-    3. ``config_json.action`` not in ``("observe", "warn", "block", "redact")`` → reject.
-    4. Top-level ``config_json.type`` not in ``("regex", "json_schema")`` → reject.
-    5. Nested ``config_json.detection.type`` not in ``("regex", "json_schema")`` → reject.
+    1. ``config_json.action`` not in ``("observe", "warn", "block", "redact")`` → reject.
+    2. Top-level ``config_json.type`` not in ``("regex", "json_schema")`` → reject.
+    3. Nested ``config_json.detection.type`` not in ``("regex", "json_schema")`` → reject.
 
     Raises :class:`fastapi.HTTPException` (422) on violation.
     """
     if eval_type != "guardrail":
         return
 
-    # 1. Retry is forbidden for guardrails
-    if failure_behaviour == "retry":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A guardrail may never use failure_behaviour='retry' — guardrail blocks are terminal.",
-        )
-
-    # 2. Permitted failure_behaviour values for guardrails
-    if failure_behaviour not in (None, "warn", "block"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Guardrail failure_behaviour must be 'warn' or 'block'.",
-        )
-
     if config_json is None:
         return
 
-    # 3. Config-vocabulary check on the guardrail action
+    # 1. Config-vocabulary check on the guardrail action
     action = config_json.get("action")
     if action is not None and action not in ("observe", "warn", "block", "redact"):
         raise HTTPException(
@@ -85,7 +66,7 @@ def validate_guardrail_request(
             detail=f"Guardrail action must be one of observe|warn|block|redact (got {action!r}).",
         )
 
-    # 4. Top-level detection type check
+    # 2. Top-level detection type check
     detection_type = config_json.get("type")
     if detection_type is not None and detection_type not in ("regex", "json_schema"):
         raise HTTPException(
@@ -93,7 +74,7 @@ def validate_guardrail_request(
             detail=f"Guardrail detection must be regex|json_schema (got {detection_type!r}).",
         )
 
-    # 5. Nested detection-envelope type check (PRD §8.17)
+    # 3. Nested detection-envelope type check (PRD §8.17)
     envelope = config_json.get("detection")
     if isinstance(envelope, dict):
         env_type = envelope.get("type")
@@ -119,7 +100,7 @@ async def create_or_update_eval(
     name: str,
     eval_type: str,
     config_json: dict[str, Any],
-    failure_behaviour: str | None,
+    failure_behaviour: str,
     pass_threshold: float | None,
     suite_id: str | None,
     eval_suite_id: uuid.UUID | None = None,
@@ -137,6 +118,9 @@ async def create_or_update_eval(
     3. Else (suite-scoped non-guardrail) → persist ``Eval`` row only
        (no ``PolicyGate``).
 
+    ``failure_behaviour`` is internal — callers always pass ``"warn"``
+    since FAR-1103 chunk 5a retired the public surface.
+
     Version stamping lives inside the helper:
       - create → ``version=1``
       - update (``existing_eval_id`` given) → bump ``version``, snapshot ``pre_version_raw``.
@@ -152,7 +136,6 @@ async def create_or_update_eval(
         # Branch 1: guardrail — config-vocabulary validator only, no PolicyGate
         validate_guardrail_request(
             eval_type=eval_type,
-            failure_behaviour=failure_behaviour,
             config_json=config_json,
         )
         pg_action = None

@@ -3484,7 +3484,6 @@ async def list_eval_definitions(
 
         from modulo.db.crud.pagination import CursorPaginator
         from modulo.db.models.eval import Eval
-        from modulo.db.models.policy_gate import PolicyGate as PolicyGateModel
 
         async with _session(org_id) as s:
             q = select(Eval).where(
@@ -3505,25 +3504,6 @@ async def list_eval_definitions(
             )
             rows = page.items
 
-            # Batch-load PolicyGates for failure_behaviour mapping.
-            gate_map: dict[uuid.UUID, Any] = {}
-            if rows:
-                eval_ids = [r.id for r in rows]
-                gates = (
-                    (
-                        await s.execute(
-                            select(PolicyGateModel).where(
-                                PolicyGateModel.eval_id.in_(eval_ids),
-                                PolicyGateModel.organisation_id == org_id,
-                                PolicyGateModel.deleted_at.is_(None),
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                gate_map = {g.eval_id: g for g in gates}
-
         return {
             "data": [
                 {
@@ -3531,7 +3511,6 @@ async def list_eval_definitions(
                     "name": d.name,
                     "type": d.eval_type,
                     "pipeline_id": str(d.pipeline_id),
-                    "failure_behaviour": gate_map[d.id].action if d.id in gate_map else "warn",
                     "pass_threshold": float(d.pass_threshold) if d.pass_threshold is not None else None,
                     "suite_id": d.suite_id,
                 }
@@ -3551,8 +3530,6 @@ async def list_eval_definitions(
         return _tool_error("Failed to list eval definitions")
 
 
-_EVAL_FAILURE_BEHAVIOURS = ("warn", "block")
-
 # Mirrors the REST ``max_length=255`` on the eval-definition name field so an
 # oversized MCP-supplied name surfaces as ``invalid_name`` rather than a generic
 # constraint conflict.
@@ -3565,16 +3542,6 @@ def _assert_eval_type(eval_type: str) -> dict[str, Any] | None:
         return {
             "error": "invalid_eval_type",
             "detail": "eval_type must be one of: llm_judge|regex|json_schema|custom_function|guardrail|human_set",
-        }
-    return None
-
-
-def _assert_failure_behaviour(failure_behaviour: str) -> dict[str, Any] | None:
-    """Validate a failure_behaviour value, returning an error dict or None."""
-    if failure_behaviour not in _EVAL_FAILURE_BEHAVIOURS:
-        return {
-            "error": "invalid_failure_behaviour",
-            "detail": "failure_behaviour must be 'warn' or 'block'",
         }
     return None
 
@@ -3649,7 +3616,6 @@ async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> 
 def _assert_create_eval_definition_params(
     name: str,
     eval_type: str,
-    failure_behaviour: str,
     pass_threshold: float | None,
 ) -> dict[str, Any] | None:
     """Validate the scalar create-inputs of an eval definition; error dict or None."""
@@ -3662,8 +3628,6 @@ def _assert_create_eval_definition_params(
         }
     if (err := _assert_eval_type(eval_type)) is not None:
         return err
-    if (err := _assert_failure_behaviour(failure_behaviour)) is not None:
-        return err
     return _assert_pass_threshold(pass_threshold)
 
 
@@ -3673,7 +3637,6 @@ async def _create_eval_definition_impl(
     name: str,
     eval_type: str,
     config_json: dict[str, Any] | None,
-    failure_behaviour: str,
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
@@ -3688,7 +3651,7 @@ async def _create_eval_definition_impl(
     from modulo.api.constants import MSG_PIPELINE_NOT_FOUND
     from modulo.api.routes.evals import _eval_def_to_dict
 
-    if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
+    if (err := _assert_create_eval_definition_params(name, eval_type, pass_threshold)) is not None:
         return err
 
     _assert_admin_scope("create")
@@ -3712,7 +3675,6 @@ async def _create_eval_definition_impl(
     try:
         validate_guardrail_request(
             eval_type=eval_type,
-            failure_behaviour=failure_behaviour,
             config_json=cfg,
         )
     except StarletteHTTPException as exc:
@@ -3742,14 +3704,14 @@ async def _create_eval_definition_impl(
                 name=name,
                 eval_type=eval_type,
                 config_json=cfg,
-                failure_behaviour=failure_behaviour,
+                failure_behaviour="warn",
                 pass_threshold=pass_threshold,
                 suite_id=suite_id,
             )
         except PolicyGateBindingViolationError as exc:
             return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
 
-        return _eval_def_to_dict(eval_row, failure_behaviour_override=failure_behaviour)
+        return _eval_def_to_dict(eval_row)
 
 
 @mcp.tool(
@@ -3770,7 +3732,6 @@ async def create_eval_definition(
     name: str = "",
     eval_type: str = "",
     config_json: dict[str, Any] | None = None,
-    failure_behaviour: str = "warn",
     pass_threshold: float | None = None,
     suite_id: str | None = None,
 ) -> dict[str, Any]:
@@ -3780,7 +3741,6 @@ async def create_eval_definition(
         name,
         eval_type,
         config_json,
-        failure_behaviour,
         pass_threshold,
         suite_id,
     )
@@ -3788,14 +3748,11 @@ async def create_eval_definition(
 
 def _assert_update_eval_definition_params(
     eval_type: str | None,
-    failure_behaviour: str | None,
     pass_threshold: float | None,
     name: str | None,
 ) -> dict[str, Any] | None:
     """Validate the scalar update-inputs of an eval definition; error dict or None."""
     if eval_type is not None and (err := _assert_eval_type(eval_type)) is not None:
-        return err
-    if failure_behaviour is not None and (err := _assert_failure_behaviour(failure_behaviour)) is not None:
         return err
     if (err := _assert_pass_threshold(pass_threshold)) is not None:
         return err
@@ -3815,7 +3772,6 @@ def _collect_eval_definition_updates(
     name: str | None,
     eval_type: str | None,
     config_json: dict[str, Any] | None,
-    failure_behaviour: str | None,
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
@@ -3829,8 +3785,6 @@ def _collect_eval_definition_updates(
         updates["eval_type"] = eval_type
     if config_json is not None:
         updates["config_json"] = config_json
-    if failure_behaviour is not None:
-        updates["failure_behaviour"] = failure_behaviour
     if pass_threshold is not None:
         updates["pass_threshold"] = pass_threshold
     if suite_id is not None:
@@ -3844,7 +3798,6 @@ async def _update_eval_definition_impl(
     name: str | None,
     eval_type: str | None,
     config_json: dict[str, Any] | None,
-    failure_behaviour: str | None,
     pass_threshold: float | None,
     suite_id: str | None,
 ) -> dict[str, Any]:
@@ -3861,9 +3814,7 @@ async def _update_eval_definition_impl(
         _eval_def_to_dict,
     )
 
-    val_err: dict[str, Any] | None = _assert_update_eval_definition_params(
-        eval_type, failure_behaviour, pass_threshold, name
-    )
+    val_err: dict[str, Any] | None = _assert_update_eval_definition_params(eval_type, pass_threshold, name)
     if val_err is not None:
         return val_err
 
@@ -3882,7 +3833,6 @@ async def _update_eval_definition_impl(
         name=name,
         eval_type=eval_type,
         config_json=config_json,
-        failure_behaviour=failure_behaviour,
         pass_threshold=pass_threshold,
         suite_id=suite_id,
     )
@@ -3915,7 +3865,6 @@ async def _update_eval_definition_impl(
         try:
             validate_guardrail_request(
                 eval_type=updates.get("eval_type", eval_row.eval_type),
-                failure_behaviour=updates.get("failure_behaviour", current_failure_behaviour),
                 config_json=updates.get("config_json", eval_row.config_json),
             )
         except StarletteHTTPException as exc:
@@ -3933,7 +3882,7 @@ async def _update_eval_definition_impl(
                 name=updates.get("name") or eval_row.name or "",
                 eval_type=updates.get("eval_type", eval_row.eval_type),
                 config_json=updates.get("config_json", eval_row.config_json),
-                failure_behaviour=updates.get("failure_behaviour", current_failure_behaviour),
+                failure_behaviour=current_failure_behaviour,
                 pass_threshold=updates.get("pass_threshold", eval_row.pass_threshold),
                 suite_id=updates.get("suite_id", eval_row.suite_id),
                 eval_suite_id=updates.get("eval_suite_id", getattr(eval_row, "eval_suite_id", None)),
@@ -3976,7 +3925,6 @@ async def update_eval_definition(
     name: str | None = None,
     eval_type: str | None = None,
     config_json: dict[str, Any] | None = None,
-    failure_behaviour: str | None = None,
     pass_threshold: float | None = None,
     suite_id: str | None = None,
 ) -> dict[str, Any]:
@@ -3986,7 +3934,6 @@ async def update_eval_definition(
         name,
         eval_type,
         config_json,
-        failure_behaviour,
         pass_threshold,
         suite_id,
     )

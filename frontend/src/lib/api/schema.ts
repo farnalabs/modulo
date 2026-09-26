@@ -11521,11 +11521,6 @@ export interface components {
             config_json?: {
                 [key: string]: unknown;
             };
-            /**
-             * Failure Behaviour
-             * @default warn
-             */
-            failure_behaviour: string;
             /** Pass Threshold */
             pass_threshold?: number | null;
             /** Suite Id */
@@ -12356,8 +12351,6 @@ export interface components {
             config_json: {
                 [key: string]: unknown;
             };
-            /** Failure Behaviour */
-            failure_behaviour: string;
             /** Pass Threshold */
             pass_threshold?: number | null;
             /** Suite Id */
@@ -18529,8 +18522,6 @@ export interface components {
             config_json?: {
                 [key: string]: unknown;
             } | null;
-            /** Failure Behaviour */
-            failure_behaviour?: string | null;
             /** Pass Threshold */
             pass_threshold?: number | null;
             /** Suite Id */
