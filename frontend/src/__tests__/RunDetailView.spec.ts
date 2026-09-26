@@ -2819,6 +2819,12 @@ describe('RunDetailView cancellation reason (FAR-1233)', () => {
     wrapper.unmount()
   })
 
+  it('attributes a cancellation to a named actor by shortened id', async () => {
+    const wrapper = await mountCancelled(cancelledDetail('user_requested', 'user-abc-123-def'))
+    expect(wrapper.find('[data-testid="run-detail-cancelled-by"]').text()).toBe('Cancelled by #user-abc')
+    wrapper.unmount()
+  })
+
   it('hides the cancellation panel for a run that is not cancelled', async () => {
     const wrapper = await mountCancelled({ ...cancelledDetail('user_requested'), status: 'complete' })
     expect(wrapper.find('[data-testid="run-detail-cancel-reason"]').exists()).toBe(false)
