@@ -60,6 +60,10 @@ function makeNotification(id: string) {
     dismissible_at_scope: false,
     created_at: new Date().toISOString(),
     scope_label: 'Organization',
+    run_id: null,
+    run_status: null,
+    run_terminal: false,
+    run_cancel_reason: null,
   }
 }
 
