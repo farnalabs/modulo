@@ -183,7 +183,6 @@ async def test_mcp_soft_delete_stamps_real_rows(pg_env: McpEnv, mcp_on: SimpleNa
             name="pg-mortal",
             eval_type="guardrail",
             config_json={"action": "observe", "type": "regex"},
-            failure_behaviour="warn",
         )
         assert "error" not in created, created
         result = await delete_eval_definition(eval_id=created["id"], hard=False)
@@ -316,7 +315,6 @@ async def test_soft_deleted_eval_dropped_from_pipeline_loader(pg_env: McpEnv, mc
             name="pg-fleeting",
             eval_type="guardrail",
             config_json={"action": "observe", "type": "json_schema"},
-            failure_behaviour="warn",
         )
         eval_id = uuid.UUID(created["id"])
         assert "error" not in created, created

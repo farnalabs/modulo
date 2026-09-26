@@ -697,6 +697,18 @@ class TestAssertEvalType:
         assert err["error"] == "invalid_eval_type"
 
 
+class TestAssertFailureBehaviour:
+    """FAR-1103 chunk 5a retired ``_assert_failure_behaviour`` from the public
+    MCP surface.  These tests pin the retirement so the helper cannot silently
+    reappear without its validation being restored alongside it."""
+
+    def test_valid(self) -> None:
+        assert not hasattr(ms, "_assert_failure_behaviour")
+
+    def test_invalid(self) -> None:
+        assert "_assert_failure_behaviour" not in dir(ms)
+
+
 class TestAssertPassThreshold:
     def test_valid(self) -> None:
         assert _assert_pass_threshold(0.5) is None
@@ -1274,6 +1286,11 @@ class TestAssertCreateEvalDefinitionParams:
         assert err is not None
         assert err["error"] == "invalid_name"
 
+    def test_whitespace_name(self) -> None:
+        err = _assert_create_eval_definition_params("   ", "llm_judge", None)
+        assert err is not None
+        assert err["error"] == "invalid_name"
+
     def test_name_too_long(self) -> None:
         err = _assert_create_eval_definition_params("x" * 256, "llm_judge", None)
         assert err is not None
@@ -1283,6 +1300,12 @@ class TestAssertCreateEvalDefinitionParams:
         err = _assert_create_eval_definition_params("test", "bogus", None)
         assert err is not None
         assert err["error"] == "invalid_eval_type"
+
+    def test_bad_failure_behaviour(self) -> None:
+        # Retired from the public surface (FAR-1103 chunk 5a): the parameter is
+        # gone, so supplying it is a TypeError rather than an error dict.
+        with pytest.raises(TypeError):
+            _assert_create_eval_definition_params("test", "llm_judge", "crash", None)  # type: ignore[call-arg]
 
     def test_bad_pass_threshold(self) -> None:
         err = _assert_create_eval_definition_params("test", "llm_judge", 2.0)
@@ -1297,6 +1320,12 @@ class TestAssertUpdateEvalDefinitionParams:
     def test_bad_eval_type(self) -> None:
         err = _assert_update_eval_definition_params("bogus", None, None)
         assert err is not None
+
+    def test_bad_failure_behaviour(self) -> None:
+        # Retired from the public surface (FAR-1103 chunk 5a): the parameter is
+        # gone, so supplying it is a TypeError rather than an error dict.
+        with pytest.raises(TypeError):
+            _assert_update_eval_definition_params(None, "crash", None, None)  # type: ignore[call-arg]
 
     def test_bad_pass_threshold(self) -> None:
         err = _assert_update_eval_definition_params(None, -1.0, None)

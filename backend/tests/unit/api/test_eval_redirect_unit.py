@@ -149,6 +149,25 @@ class TestGuardrailBranchDispatch:
 class TestValidatorMatrix:
     """Criterion 8   the shared guardrail config-vocabulary validator (3 checks)."""
 
+    def test_retry_failure_behaviour_rejected(self) -> None:
+        # FAR-1103 chunk 5a retired ``failure_behaviour`` from the public write
+        # boundary: the shared validator no longer declares the parameter, so a
+        # caller cannot smuggle a guardrail-terminal "retry" through it at all.
+        with pytest.raises(TypeError):
+            validate_guardrail_request(
+                eval_type="guardrail",
+                failure_behaviour="retry",  # type: ignore[call-arg]
+                config_json=None,
+            )
+
+    def test_unknown_failure_behaviour_rejected(self) -> None:
+        with pytest.raises(TypeError):
+            validate_guardrail_request(
+                eval_type="guardrail",
+                failure_behaviour="purge",  # type: ignore[call-arg]
+                config_json=None,
+            )
+
     def test_invalid_action_rejected(self) -> None:
         with pytest.raises(HTTPException) as excinfo:
             validate_guardrail_request(
