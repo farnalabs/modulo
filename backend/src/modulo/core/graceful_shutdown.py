@@ -40,6 +40,7 @@ class ShutdownManager:
 
     @property
     def is_shutting_down(self) -> bool:
+        """Return True once ``shutdown()`` has started draining and closing resources."""
         return self._shutting_down
 
     def register(self, name: str, cleanup: Callable[[], Awaitable[None]]) -> None:
@@ -47,9 +48,11 @@ class ShutdownManager:
         self._resources.append((name, cleanup))
 
     def request_started(self) -> None:
+        """Record a newly started in-flight request so shutdown can drain it."""
         self._active_requests += 1
 
     def request_finished(self) -> None:
+        """Record a finished request and wake any waiter draining requests."""
         self._active_requests -= 1
         self._idle_event.set()
 
