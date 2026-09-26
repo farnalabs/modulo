@@ -64,23 +64,6 @@ class EvalType(StrEnum):
     HUMAN_SET = "human_set"
 
 
-class SuiteOutcome(StrEnum):
-    """Outcome of a suite-aggregate evaluation (FAR-971 §4.7).
-
-    * ``PASSED`` — all expected eval ids were persisted and the suite ratio
-      meets or exceeds the threshold (or no threshold was set).
-    * ``FAILED`` — all expected eval ids were persisted but the ratio is
-      below the threshold.
-    * ``INDETERMINATE`` — the suite's persisted eval id set does not cover
-      every expected eval id; the ratio is not computed and the suite
-      fails closed.
-    """
-
-    PASSED = "passed"
-    FAILED = "failed"
-    INDETERMINATE = "indeterminate"
-
-
 FailureBehaviour = Literal["warn", "block"]
 
 
@@ -694,6 +677,5 @@ __all__ = [
     "FailureBehaviour",
     "GuardrailMisroutedError",
     "LLMJudgeCallable",
-    "SuiteOutcome",
     "UnknownEvalTypeError",
 ]
