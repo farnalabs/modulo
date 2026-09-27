@@ -28,35 +28,6 @@ import {
 
 const isParked = (status: string) => status === 'awaiting_human' || status === 'hitl_parked'
 
-/**
- * Resolve a run id through the REAL API (never through the UI-triggered page
- * URL): list the pipeline's newest run (the endpoint orders by created_at
- * desc by default). This keeps the parked-state pin independent of the
- * editor's post-trigger client-side navigation timing. The editor now routes
- * to the run it created (PipelineEditorView reads `run_id`, fixed by #1013),
- * so the UI path works too; resolving out-of-band avoids racing the SPA route
- * change and lets the journey assert the parked state deterministically.
- */
-async function resolveLatestRunId(apiBase: string, token: string, pipelineId: string): Promise<string> {
-  const deadline = Date.now() + 30_000
-  let lastErr = 'no attempt completed'
-  while (Date.now() < deadline) {
-    const res = await apiFetch<{ items: Array<Record<string, unknown>> }>(
-      apiBase,
-      token,
-      'GET',
-      `/api/v1/runs?pipeline_id=${pipelineId}&page_size=1`,
-    )
-    const item = res.status === 200 ? res.body?.items?.[0] : undefined
-    if (item?.run_id) return String(item.run_id)
-    lastErr = `GET /api/v1/runs -> ${res.status}, items: ${res.body?.items?.length ?? 0}`
-    await new Promise((resolve) => setTimeout(resolve, 2_000))
-  }
-  throw new Error(
-    `[realstack] the editor-triggered run never appeared in GET /api/v1/runs within 30s (${lastErr})`,
-  )
-}
-
 test.describe('Real-stack journeys: run parks at HITL and completes on approval', { tag: '@regression' }, () => {
   test.beforeEach(async ({ page, env }) => {
     test.skip(env.name === 'local', 'Real-stack journey — run with E2E_TARGET=staging (no API mocks here)')
@@ -88,10 +59,12 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await page.getByTestId('pipeline-editor-run-prompt').fill('E2E journey run prompt')
       await page.getByTestId('pipeline-editor-run-submit').click()
 
-      // The run id comes from the REAL API (the newest run for the pipeline):
-      // resolving it out-of-band keeps the parked-state pin deterministic and
-      // independent of the editor's post-trigger client-side navigation.
-      const runId = await resolveLatestRunId(apiBase, token, created.pipeline.id)
+      // The editor routes to the run it created (PipelineEditorView reads
+      // `run_id` from POST /api/v1/runs, fixed by FAR-1246/#1013) — this
+      // waitForURL IS the end-to-end regression pin for that fix.
+      await page.waitForURL(/\/runs\/[0-9a-f-]{36}$/i, { timeout: 30_000 })
+      const runId = new URL(page.url()).pathname.split('/').pop() as string
+      expect(runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
 
       // Observable effect: the run parks and its detail page renders the open
       // gate — the review card exists only while a human decision is pending.
