@@ -2235,35 +2235,18 @@ async def test_watchdog_tick_enforces_resource_limits_every_n_ticks():
 # ---------------------------------------------------------------------------
 
 
-def test_format_sandbox_provider_error_appends_dict_response_body():
-    class _ProviderError(Exception):
-        pass
-
-    exc = _ProviderError("400: bad timeout")
-    exc.response = {"code": 400, "detail": "too long"}
-    msg = nr._format_sandbox_provider_error(exc, provider_exc_type=_ProviderError)
-    assert "400: bad timeout" in msg
-    assert '"code": 400' in msg
+def test_format_sandbox_provider_error_returns_message_text():
+    # FAR-1050 R6 dropped the SDK isinstance probe (the dispatch no longer
+    # holds an SDK exception), so the helper now returns the message verbatim.
+    exc = RuntimeError("400: bad timeout")
+    msg = nr._format_sandbox_provider_error(exc)
+    assert msg == "400: bad timeout"
 
 
-def test_format_sandbox_provider_error_unserializable_body_ignored():
-    class _ProviderError(Exception):
-        pass
-
-    exc = _ProviderError("400: bad")
-    exc.response = {1, 2}
-    msg = nr._format_sandbox_provider_error(exc, provider_exc_type=_ProviderError)
-    assert msg == "400: bad"
-
-
-def test_format_sandbox_provider_error_unserializable_dict_body_ignored():
-    class _ProviderError(Exception):
-        pass
-
-    exc = _ProviderError("400: bad")
-    exc.response = {"detail": {1, 2}}
-    msg = nr._format_sandbox_provider_error(exc, provider_exc_type=_ProviderError)
-    assert msg == "400: bad"
+def test_format_sandbox_provider_error_truncates_to_max_error_msg():
+    exc = RuntimeError("x" * (nr._MAX_ERROR_MSG + 500))
+    msg = nr._format_sandbox_provider_error(exc)
+    assert len(msg) == nr._MAX_ERROR_MSG
 
 
 def test_build_sandbox_node_envelope_includes_truthy_stall_reason():

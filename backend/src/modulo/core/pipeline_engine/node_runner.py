@@ -7365,29 +7365,18 @@ class _SandboxNodeOutput(NamedTuple):
     modulo_synthetic_failure: bool = False
 
 
-def _format_sandbox_provider_error(exc: Exception, provider_exc_type: type | None = None) -> str:
-    """Compose a run-output-safe error message, enriching provider exceptions.
+def _format_sandbox_provider_error(exc: Exception) -> str:
+    """Compose a run-output-safe error message from a provider exception.
 
     FAR-511: a bare ``str(exc)`` for an e2b ``SandboxException`` already carries
-    the HTTP status (e.g. ``400: Timeout cannot be greater than 1 hours``), but
-    the provider's response body may carry extra detail. When ``provider_exc_type``
-    (e.g. ``e2b.exceptions.SandboxException``) is supplied and matches, append the
-    response body so ``get_run_output`` reveals the full provisioning failure
-    rather than a masked "Sandbox agent execution failed".
+    the HTTP status (e.g. ``400: Timeout cannot be greater than 1 hours``). The
+    SDK isinstance probe that used to append the provider response body was
+    dropped in FAR-1050 R6 together with the direct path: the dispatch no
+    longer holds an SDK exception (provider failures arrive as typed
+    ``RuntimeProviderError`` members whose message already carries the detail),
+    so there is no SDK type to probe against.
     """
-    msg = str(exc)[:_MAX_ERROR_MSG]
-    if provider_exc_type is not None and isinstance(exc, provider_exc_type):
-        response = getattr(exc, "response", None)
-        if response is not None:
-            body = getattr(response, "text", None)
-            if not body and isinstance(response, (dict, list)):
-                try:
-                    body = json.dumps(response)
-                except (TypeError, ValueError):
-                    body = None
-            if body:
-                msg = f"{msg} — {body}"[:_MAX_ERROR_MSG]
-    return msg
+    return str(exc)[:_MAX_ERROR_MSG]
 
 
 def _build_sandbox_node_envelope(
@@ -10212,6 +10201,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         timeout=_OUTPUT_READ_TIMEOUT,
                     )
                 else:
+                    # FAR-1050 R6: the legacy direct-path kill is unreachable —
+                    # the dispatch always holds a ``_dispatch_provider`` (it is
+                    # the only path since R6) and ``_sandbox_id`` is always set
+                    # when ``sandbox`` is. Kept best-effort so a caller that
+                    # assigns ``sandbox`` without a provider still tears down.
                     # Shield the kill so a second CancelledError cannot abort the
                     # sandbox teardown (dist/runtime-core A3).
                     await asyncio.wait_for(
