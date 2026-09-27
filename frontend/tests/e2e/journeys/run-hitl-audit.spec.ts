@@ -1,7 +1,6 @@
 import { test, expect, loginAsAdmin } from '../setup/fixtures'
 import {
   apiBaseFor,
-  apiFetch,
   apiLogin,
   cleanupJourneyEntities,
   createManualNodePipeline,
