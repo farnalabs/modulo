@@ -3,9 +3,11 @@
 Drives the T7 call site inside ``_sandbox_agent_impl`` through the real
 dispatch (sandbox mock, no network) and proves:
 
-1. Flag OFF (default): the legacy engine-side ``apply_sandbox_policy``
-   runs and the isolation provider seam never does.
-2. Flag ON: the call routes through ``provider.apply_isolation`` with the
+1. Flag OFF (explicit revert, ``MODULO_E2B_VIA_PROVIDER=false``; ON has
+   been the default since R5): the legacy engine-side
+   ``apply_sandbox_policy`` runs and the isolation provider seam never does.
+2. Flag ON (the default since R5): the call routes through
+   ``provider.apply_isolation`` with the
    same resolved policy, and the legacy function is never invoked.
 3. Refusal maps to a TERMINAL named code: a provider's typed
    ``ProviderCapabilityUnsupportedError`` surfaces as
@@ -465,5 +467,17 @@ async def test_helper_builds_spec_and_policy_with_nil_fallbacks(monkeypatch: pyt
 
 
 # Flag settings sanity (mirrors R1's settings tests against this flag).
-def test_flag_defaults_off() -> None:
+def test_flag_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1050 R5: the dispatch flip - ON is the shipped default.
+
+    ``tests/conftest.py`` pins the suite baseline to the revert value, so
+    clear the override to read the PRODUCT default.
+    """
+    monkeypatch.delenv("MODULO_E2B_VIA_PROVIDER", raising=False)
+    assert Settings(_env_file=None).modulo_e2b_via_provider is True
+
+
+def test_flag_explicit_false_reverts_to_the_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R5 revert: ``MODULO_E2B_VIA_PROVIDER=false`` selects the legacy arm."""
+    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "false")
     assert Settings(_env_file=None).modulo_e2b_via_provider is False

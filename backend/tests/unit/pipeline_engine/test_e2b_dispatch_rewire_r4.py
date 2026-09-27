@@ -217,15 +217,35 @@ class _ScriptedStream:
 # ---------------------------------------------------------------------------
 
 
-def test_flag_defaults_off_and_reader_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert Settings(_env_file=None).modulo_e2b_via_provider is False
+def test_flag_defaults_on_and_reader_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R5 flip: ON is the shipped default (was False before the flip).
+    # ``tests/conftest.py`` pins the suite baseline to the revert value, so
+    # clear the override to read the PRODUCT default.
+    monkeypatch.delenv("MODULO_E2B_VIA_PROVIDER", raising=False)
+    assert Settings(_env_file=None).modulo_e2b_via_provider is True
     _disable_flag(monkeypatch)
     assert _dispatch_via_provider_enabled() is False
     _enable_flag(monkeypatch)
     assert _dispatch_via_provider_enabled() is True
-    # Fail-open: an unreadable settings store resolves to the flag's default
-    # (OFF = the legacy direct path), never to a crash.
+    # Fail-open: an unreadable settings store resolves to the flag's REVERT
+    # value (OFF = the legacy direct path), never to a crash - so a settings
+    # outage after the flip still lands on the safe legacy path.
     monkeypatch.setattr(nr, "get_settings", MagicMock(side_effect=RuntimeError("settings down")))
+    assert _dispatch_via_provider_enabled() is False
+
+
+def test_flag_explicit_false_reverts_dispatch_to_the_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R5 revert: ``MODULO_E2B_VIA_PROVIDER=false`` still selects the legacy path.
+
+    The env-derived settings resolve False; wired in place of the cached
+    instance, the R4 dispatch gate reads OFF and the whole create/stream/kill
+    sequence takes the legacy direct branch (the legacy code was NOT deleted
+    by the flip).
+    """
+    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "false")
+    settings = Settings(_env_file=None)
+    assert settings.modulo_e2b_via_provider is False
+    monkeypatch.setattr(nr, "get_settings", lambda *a, **k: settings)
     assert _dispatch_via_provider_enabled() is False
 
 
