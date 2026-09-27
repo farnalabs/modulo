@@ -55,7 +55,7 @@ def conditional_edge_has_default(default_target: str, ctx):
     ctx["default_target"] = default_target
 
 
-@given(parsers.parse('pipeline "{pipeline_name}" has a HITL gate at the edge from "{source}" to "{target}"'))
+@given(parsers.parse('pipeline "{pipeline_name}" has a HITL review at the edge from "{source}" to "{target}"'))
 def pipeline_has_hitl_review(pipeline_name: str, source: str, target: str, ctx):
     ctx["pipeline_name"] = pipeline_name
     ctx["hitl_source"] = source
@@ -220,7 +220,7 @@ def run_routes_back_to(target: str, ctx):
     assert ctx["routed_target"] == target, f"Expected kick-back route to {target!r}, got {ctx['routed_target']!r}"
 
 
-@then("the eval triggers the HITL gate")
+@then("the eval triggers the HITL review")
 def eval_triggers_hitl_review(ctx):
     assert ctx.get("eval_triggers_interrupt"), (
         f"Expected eval to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"
@@ -248,7 +248,7 @@ def run_completes_after_both_branches(ctx):
     )
 
 
-@then("the eval does not trigger the HITL gate")
+@then("the eval does not trigger the HITL review")
 def eval_does_not_trigger_hitl_review(ctx):
     assert not ctx.get("eval_triggers_interrupt"), (
         f"Expected eval NOT to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"

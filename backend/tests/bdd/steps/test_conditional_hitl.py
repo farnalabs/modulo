@@ -51,7 +51,7 @@ def node_has_llm_judge_eval(node_name: str, eval_name: str, ctx):
     }
 
 
-@given(parsers.parse('the edge after "{node_name}" has a HITL gate'))
+@given(parsers.parse('the edge after "{node_name}" has a HITL review'))
 def edge_has_hitl_review(node_name: str, ctx):
     ctx["gate_config"] = {
         "review_id": f"gate-{node_name}",

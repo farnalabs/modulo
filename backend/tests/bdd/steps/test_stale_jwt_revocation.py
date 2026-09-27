@@ -159,7 +159,7 @@ def documented_acceptable_gap() -> None:
     pass
 
 
-@then("the HITL gate enforcement uses a DB-live membership check")
+@then("the HITL review enforcement uses a DB-live membership check")
 def hitl_uses_db_live_check() -> None:
     pass
 

@@ -98,7 +98,7 @@ def run_awaiting_with_team_and_human_only(run_name: str, review_id: str, team_na
     ctx["mock_gate"] = mock_gate
 
 
-@when(parsers.parse('user "{username}" claims the HITL gate "{review_id}" on run "{run_name}"'))
+@when(parsers.parse('user "{username}" claims the HITL review "{review_id}" on run "{run_name}"'))
 def user_claims_gate(username: str, review_id: str, run_name: str, ctx, request):
     from modulo.core.hitl_manager import NotTeamMemberError
 

@@ -349,7 +349,7 @@ def _pipeline_named_exists(ctx: dict[str, Any], name: str) -> None:
     ctx["pipeline_name"] = name
 
 
-@given(parsers.parse('the pipeline has 2 agent nodes ("{a}", "{b}") and 1 HITL gate'))
+@given(parsers.parse('the pipeline has 2 agent nodes ("{a}", "{b}") and 1 HITL review'))
 def _pipeline_has_agent_nodes(ctx: dict[str, Any], a: str, b: str) -> None:
     ctx["pipeline_mock"].graph_nodes_json = [
         {"id": a, "role": "agent"},

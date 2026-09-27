@@ -135,7 +135,7 @@ def failed_run_with_manual_node(node: str, request):
     request.node._recover_node = node
 
 
-@given(parsers.parse('a failed run is parked at a HITL gate node "{node}"'))
+@given(parsers.parse('a failed run is parked at a HITL review node "{node}"'))
 def failed_run_parked_at_hitl_review(node: str, request):
     request.node._run_id = uuid.uuid4()
     request.node._recover_node = node

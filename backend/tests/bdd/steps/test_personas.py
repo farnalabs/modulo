@@ -215,7 +215,7 @@ def only_admins_view_edit_backend(ctx):
 # ===========================================================================
 
 
-@given(parsers.parse('pipeline "{name}" has HITL gate "{gate}"'))
+@given(parsers.parse('pipeline "{name}" has HITL review "{gate}"'))
 def pipeline_has_hitl_review(name, gate, ctx):
     ctx["pipeline_name"] = name
     ctx["gate_name"] = gate
@@ -1296,7 +1296,7 @@ def new_pipeline_same_topology(request):
 # ===========================================================================
 
 
-@given(parsers.parse('a run is waiting at HITL gate "{review_id}"'))
+@given(parsers.parse('a run is waiting at HITL review "{review_id}"'))
 def run_waiting_at_hitl_review(review_id: str, ctx):
     ctx["run_status"] = "awaiting_human"
     ctx["review_id"] = review_id
@@ -1352,7 +1352,7 @@ def audit_log_records_approval(ctx):
 # ===========================================================================
 
 
-@given(parsers.parse('pipeline "{name}" has a HITL gate at "{review_id}"'))
+@given(parsers.parse('pipeline "{name}" has a HITL review at "{review_id}"'))
 def alice_pipeline_has_hitl_review(name: str, review_id: str, ctx):
     ctx["pipeline_name"] = name
     ctx["pipeline_id"] = uuid.uuid4()
@@ -1380,7 +1380,7 @@ def run_pauses(ctx):
     assert ctx["run_status"] == "paused", f"Expected paused, got {ctx['run_status']}"
 
 
-@then(parsers.parse("the HITL gate has human_only {value}"))
+@then(parsers.parse("the HITL review has human_only {value}"))
 def hitl_review_human_only(value: str, ctx):
     expected = value.lower() == "true"
     assert ctx.get("human_only") == expected, f"Expected human_only={expected}"
@@ -1497,7 +1497,7 @@ def run_waiting_at_hitl_review_webhook(ctx):
     ctx["run_status"] = "awaiting_human"
 
 
-@when("the HITL gate triggers a notification")
+@when("the HITL review triggers a notification")
 def hitl_triggers_notification(ctx):
     ctx["notification_sent"] = True
 

@@ -508,7 +508,7 @@ def run_waiting_at_gate(gate: str, request):
     request.node._review_id = gate
 
 
-@when("the MCP client lists pending HITL gates")
+@when("the MCP client lists pending HITL reviews")
 def mcp_list_pending_hitl(request):
     # The pending gate's fire-time stamped config carries human_only=true, so
     # the REAL claim-stamped path of resolve_gate_human_only_map is exercised.

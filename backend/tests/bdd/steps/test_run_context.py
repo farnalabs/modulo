@@ -504,7 +504,7 @@ def pipeline_has_no_autonomy_defaults(pipeline_name: str, ctx: dict[str, Any]) -
     ctx["autonomy_default"] = None
 
 
-@when("a HITL gate checks the autonomy level")
+@when("a HITL review checks the autonomy level")
 def hitl_review_checks_autonomy(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import effective_autonomy_level
 
@@ -555,7 +555,7 @@ def gate_interrupts(ctx: dict[str, Any]) -> None:
     assert not should_skip_hitl_review(autonomy), f"Expected interrupt but gate was skipped (autonomy={autonomy.value})"
 
 
-@then(parsers.parse("the next HITL gate checks the new autonomy level"))
+@then(parsers.parse("the next HITL review checks the new autonomy level"))
 def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import effective_autonomy_level
 

@@ -1022,7 +1022,7 @@ def run_awaiting_human(request: pytest.FixtureRequest) -> None:
     request.node._mock_run = mock_run
 
 
-@when("a HITL gate raises NodeInterrupt")
+@when("a HITL review raises NodeInterrupt")
 def hitl_review_interrupts(request: pytest.FixtureRequest) -> None:
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None:
@@ -1118,7 +1118,7 @@ def run_waiting_at_manual(request: pytest.FixtureRequest) -> None:
     request.node._run_status = "awaiting_human"
 
 
-@given(parsers.parse('a pipeline with a HITL gate node "{review_id}"'))
+@given(parsers.parse('a pipeline with a HITL review node "{review_id}"'))
 def pipeline_with_hitl_review(review_id: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_run
 
@@ -1229,7 +1229,7 @@ def node_timeout_expires(request: pytest.FixtureRequest) -> None:
 # ---------------------------------------------------------------------------
 
 
-@given("a running pipeline with a conditional HITL gate")
+@given("a running pipeline with a conditional HITL review")
 def pipeline_with_conditional_hitl(request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_run
 

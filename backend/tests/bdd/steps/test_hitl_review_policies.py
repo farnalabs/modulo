@@ -56,7 +56,7 @@ def browser_reviewer_signed_in(ctx: dict[str, Any]) -> None:
     ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
 
 
-@given(parsers.parse('a HITL gate "{review_id}" is awaiting review'))
+@given(parsers.parse('a HITL review "{review_id}" is awaiting review'))
 def hitl_review_awaiting_review(ctx: dict[str, Any], review_id: str) -> None:
     ctx["run_id"] = uuid.uuid4()
     ctx["review_id"] = review_id
@@ -162,7 +162,7 @@ def _claim_mock(age_hours: int, review_id: str) -> MagicMock:
     return claim
 
 
-@given(parsers.parse("a claimed HITL gate has been held for {hours:d} hours"))
+@given(parsers.parse("a claimed HITL review has been held for {hours:d} hours"))
 def claimed_gate_held_for(ctx: dict[str, Any], hours: int) -> None:
     ctx["held_hours"] = hours
     ctx["overdue_review_id"] = "pre-deploy"
