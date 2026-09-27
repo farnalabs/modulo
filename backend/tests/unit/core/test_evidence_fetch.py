@@ -108,7 +108,7 @@ async def test_f1_order_by_is_the_snapshot_ladder() -> None:
         # Consecutive tokens occur in ascending text position: ladder order.
         cursor = position
     tail = order_segment.find("EVIDENCE.ID DESC") + len("EVIDENCE.ID DESC")
-    assert order_segment[tail:].strip() == ""
+    assert not order_segment[tail:].strip()
 
 
 # ---------------------------------------------------------------------------
