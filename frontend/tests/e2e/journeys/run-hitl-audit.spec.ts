@@ -4,10 +4,8 @@ import {
   apiFetch,
   apiLogin,
   cleanupJourneyEntities,
-  createPipeline,
-  createSchemaWithVersion,
+  createManualNodePipeline,
   pollRunStatus,
-  setPipelineGraph,
   triggerRun,
   uniqueName,
   type JourneyCleanup,
@@ -27,39 +25,6 @@ import {
  * Deepens sse-crossworker-notification.spec.ts's seam (run events) and covers
  * the run-detail/HITL surface that no other e2e spec exercises for real.
  */
-
-interface ManualNodePipeline {
-  pipeline: { id: string; name: string }
-  schemaId: string
-  nodeId: string
-}
-
-/**
- * Create a pipeline whose graph is a single manual-input node bound to a
- * fresh output schema (the backend requires manual nodes to declare an
- * output schema and a label). A manual node never calls an LLM: it interrupts
- * the run until a human supplies a decision.
- */
-async function createManualNodePipeline(
-  apiBase: string,
-  token: string,
-  pipelineName: string,
-  schemaName: string,
-): Promise<ManualNodePipeline> {
-  const schemaId = await createSchemaWithVersion(apiBase, token, schemaName)
-  const pipeline = await createPipeline(apiBase, token, pipelineName)
-  const nodeId = crypto.randomUUID()
-  await setPipelineGraph(apiBase, token, pipeline.id, [
-    {
-      id: nodeId,
-      node_type: 'manual',
-      label: 'E2E Human Input',
-      position: { x: 120, y: 120 },
-      output_schema_id: schemaId,
-    },
-  ])
-  return { pipeline, schemaId, nodeId }
-}
 
 const isParked = (status: string) => status === 'awaiting_human' || status === 'hitl_parked'
 

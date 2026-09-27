@@ -53,7 +53,7 @@ export async function apiLogin(env: TestEnv): Promise<string> {
 export async function apiFetch<T>(
   apiBase: string,
   token: string,
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
