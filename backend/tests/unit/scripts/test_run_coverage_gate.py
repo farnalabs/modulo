@@ -9,6 +9,7 @@ mocked so the tests are fast and offline.
 from __future__ import annotations
 
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -452,6 +453,163 @@ def test_unmeasured_file_lines_ignores_files_present_in_the_report():
     json_data = {"src_stats": {"src/present.py": {"covered_lines": [], "violation_lines": []}}}
 
     assert mod._unmeasured_file_lines(changed, json_data, {"src/only_template.py"}) == 30
+
+
+# ---------------------------------------------------------------------------
+# Windows path-case: diff-cover's JSON ``src_stats`` keys vs git's keys.
+#
+# diff-cover keys ``src_stats`` with ``diff_cover.util.to_unix_path`` —
+# ``posixpath.normpath(os.path.normcase(path).replace("\\", "/"))`` — and
+# ``os.path.normcase`` LOWER-CASES on Windows (identity on POSIX), while the
+# gate's own keys come from ``git diff --name-only`` and keep the repository
+# spelling.  Reproduced on Windows 2026-09-27 against real diff-cover 10.5.1
+# output: the JSON carried ``frontend/src/components/notificationcard.vue`` /
+# ``frontend/src/utils/runutils.ts`` / ``frontend/src/views/rundetailview.vue``
+# while the git side carried the PascalCase spellings, so every lookup missed,
+# the gate reported 1 changed line instead of 106, and a fully-covered diff
+# failed at 0.0%.  CI (Linux) is unaffected because ``normcase`` is a no-op
+# there — which is why these tests derive the JSON keys with diff-cover's own
+# platform-conditional algorithm rather than hard-coding either spelling.
+# ---------------------------------------------------------------------------
+def _diff_cover_src_stats_key(path: str) -> str:
+    r"""The key diff-cover 10.5.1 writes for *path* into ``src_stats``.
+
+    Reproduces ``diff_cover.util.to_unix_path``
+    (``posixpath.normpath(os.path.normcase(path).replace("\\", "/"))``)
+    independently of the helper under test, so the assertions pin the contract
+    to diff-cover's real behaviour.  On Windows this lower-cases; on POSIX it
+    is the identity — exactly what each platform's CI sees.
+    """
+    return posixpath.normpath(os.path.normcase(path).replace("\\", "/"))
+
+
+def test_path_key_is_idempotent_and_separator_insensitive():
+    """``_path_key`` must be a stable key space: separators collapse, the
+    function is idempotent, and on Windows (where diff-cover lower-cases) the
+    key is the lower-case spelling."""
+    key = mod._path_key("frontend/src/components/NotificationCard.vue")
+
+    assert mod._path_key(key) == key
+    assert mod._path_key(r"frontend\src\components\NotificationCard.vue") == key
+    if os.name == "nt":
+        assert key == "frontend/src/components/notificationcard.vue"
+
+
+def test_production_coverage_from_json_matches_diff_cover_key_case():
+    """A ``src_stats`` key spelled the way diff-cover spells it on THIS
+    platform must resolve the git-named changed file.
+
+    Before the fix, Windows lower-case keys missed the lookup entirely and
+    ``_production_coverage_from_json`` returned (0, 1) — the fully-covered
+    PascalCase component contributed nothing to the numerator or denominator.
+    """
+    changed = {
+        "frontend/src/components/NotificationCard.vue": 90,
+        "frontend/src/lib/api/notifications.ts": 4,
+    }
+    json_data = {
+        "src_stats": {
+            _diff_cover_src_stats_key("frontend/src/components/NotificationCard.vue"): {
+                "percent_covered": 100.0,
+                "covered_lines": list(range(1, 91)),
+                "violation_lines": [],
+            },
+            _diff_cover_src_stats_key("frontend/src/lib/api/notifications.ts"): {
+                "percent_covered": 0.0,
+                "covered_lines": [],
+                "violation_lines": [23],
+            },
+        }
+    }
+
+    # 90 covered (NotificationCard) + 1 measured-but-uncovered (notifications)
+    # -> (covered, measured) = (90, 91).
+    assert mod._production_coverage_from_json(changed, json_data) == (90, 91)
+
+
+def test_unmeasured_file_lines_normalises_diff_cover_key_case():
+    """A file measured under diff-cover's normalised key is NOT unmeasured.
+
+    Before the fix, Windows case differences pushed a measured file into the
+    unmeasured bucket and charged all 90 of its changed lines at 0%.
+    """
+    changed = {
+        "frontend/src/components/NotificationCard.vue": 90,
+        "frontend/src/lib/api/untested.ts": 30,
+    }
+    json_data = {
+        "src_stats": {
+            _diff_cover_src_stats_key("frontend/src/components/NotificationCard.vue"): {
+                "covered_lines": list(range(1, 91)),
+                "violation_lines": [],
+            }
+        }
+    }
+
+    # Only untested.ts (absent from the report) is unmeasured: 30 lines.
+    assert mod._unmeasured_file_lines(changed, json_data) == 30
+
+
+def test_match_report_key_uses_platform_case_semantics():
+    """Report-key matching follows the platform's case rules: Windows
+    tolerates a case-variant report path (diff-cover lower-cases and the
+    filesystem is case-insensitive); POSIX stays case-sensitive, where the
+    same variant genuinely names a different file."""
+    changed = {"frontend/src/views/RunDetailView.vue": 20}
+
+    target = mod._match_report_key_to_changed("src/views/RUNDETAILVIEW.VUE", changed, "JavaScript")
+
+    if os.name == "nt":
+        assert target == "frontend/src/views/RunDetailView.vue"
+    else:
+        assert target is None
+
+
+def test_evaluate_measures_case_normalised_src_stats(tmp_path):
+    """End-to-end: ``evaluate`` scores a changed file whose ``src_stats`` key
+    is diff-cover's normalised (lower-cased on Windows) spelling.
+
+    Before the fix this collapsed to a zero denominator and reported
+    ``diff-cover exited 0 but produced no parseable coverage result`` instead
+    of measuring the 90 covered changed lines.
+    """
+    fake_report = tmp_path / "lcov.info"
+    fake_report.write_text("SF:src/components/NotificationCard.vue\nDA:1,1\n")
+
+    json_data = {
+        "src_stats": {
+            _diff_cover_src_stats_key("frontend/src/components/NotificationCard.vue"): {
+                "percent_covered": 100.0,
+                "covered_lines": list(range(1, 91)),
+                "violation_lines": [],
+            }
+        },
+        "total_num_lines": 90,
+        "total_num_violations": 0,
+        "total_percent_covered": 100.0,
+        "num_changed_lines": 90,
+    }
+    with (
+        patch.object(
+            mod,
+            "_get_changed_production_files",
+            return_value={"frontend/src/components/NotificationCard.vue": 90},
+        ),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+        patch.object(mod, "_get_diff_cover_json", return_value=json_data),
+    ):
+        result = mod.evaluate(
+            language="JavaScript",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=98,
+        )
+
+    assert result.passed is True
+    assert result.actual_pct == 100.0
+    assert result.changed_lines == 90
+    assert result.measured_lines == 90
+    assert result.unmeasured_lines == 0
 
 
 def test_report_counts_files_maps_lcov_entries_to_changed_files(tmp_path):

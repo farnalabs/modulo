@@ -114,6 +114,7 @@ import ast
 import contextlib
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -268,6 +269,33 @@ def _is_excluded(path: str) -> bool:
     from fnmatch import fnmatch
 
     return any(fnmatch(path, pattern) for pattern in _EXCLUDE_PATTERNS)
+
+
+def _path_key(path: str) -> str:
+    """Normalise *path* into the key space diff-cover uses for its JSON report.
+
+    The gate's own keys come from ``git diff --name-only``, which keeps the
+    repository's spelling (``frontend/src/components/NotificationCard.vue``)
+    and always uses ``/``.  The keys diff-cover writes into the ``src_stats``
+    map of its ``--format json`` report are produced by
+    ``diff_cover.util.to_unix_path`` —
+    ``posixpath.normpath(os.path.normcase(path).replace("\\\\", "/"))`` — and
+    ``os.path.normcase`` **lower-cases on Windows** while being the identity
+    on POSIX.  On Windows, therefore, every changed path containing an
+    upper-case character (all PascalCase ``.vue``/``.ts`` components) missed
+    ``src_stats.get(path)``: the file's measured coverage silently dropped out
+    of both the numerator and the denominator, collapsing the gate to a bogus
+    tiny denominator (observed: 106 changed lines reported as 1, and a 0.0%
+    FAIL on a diff whose files were 100% covered).  CI/Linux is unaffected
+    because ``normcase`` is a no-op there.
+
+    Applying the same normalisation to BOTH sides makes the comparison case-
+    and separator-insensitive on Windows and leaves POSIX behaviour
+    byte-identical: ``os.path.normcase`` is the identity there, and both the
+    git keys and the diff-cover keys are already repo-relative POSIX paths,
+    which ``posixpath.normpath`` maps to themselves.
+    """
+    return posixpath.normpath(os.path.normcase(path).replace("\\", "/"))
 
 
 # ---------------------------------------------------------------------------
@@ -915,8 +943,18 @@ def _match_report_key_to_changed(
     branch failure regardless of real coverage.  Resolve *raw_key* into the
     changed-file namespace by exact match, then by a unique path-segment
     suffix match; return ``None`` when nothing matches.
+
+    Both sides are compared through :func:`_path_key` (case + separator
+    normalisation), so a report path that differs from the git spelling only
+    by Windows case — coverage.py writes the on-disk spelling, diff-cover
+    lower-cases, git keeps the index spelling — still resolves.  On POSIX the
+    normalisation is the identity, so the comparison there stays exact.  The
+    returned key is always the ORIGINAL changed-file spelling, because callers
+    re-key their data onto the git namespace.
     """
-    changed = {path.replace("\\", "/") for path in changed_files}
+    changed: dict[str, str] = {}
+    for path in changed_files:
+        changed.setdefault(_path_key(path), path)
     normalized = raw_key.replace("\\", "/")
     candidates: list[str] = []
     if Path(normalized).is_absolute():
@@ -928,16 +966,22 @@ def _match_report_key_to_changed(
         candidates.append(f"{prefix}/{normalized}")
 
     for candidate in candidates:
-        if candidate in changed:
-            return candidate
+        key = _path_key(candidate)
+        if key in changed:
+            return changed[key]
 
     # The report path may be relative to a deeper source root (coverage.py
     # relativises to ``src/modulo``), so ``core/foo.py`` names
     # ``backend/src/modulo/core/foo.py``.  Match on whole path segments and
     # require a unique hit so a shared basename can never cross-attribute.
     for candidate in sorted(candidates, key=len, reverse=True):
-        suffix = "/" + candidate.lstrip("/")
-        matches = [path for path in changed if path == candidate or path.endswith(suffix)]
+        key = _path_key(candidate)
+        suffix = "/" + key.lstrip("/")
+        matches = [
+            original
+            for normalized_key, original in changed.items()
+            if normalized_key == key or normalized_key.endswith(suffix)
+        ]
         if len(matches) == 1:
             return matches[0]
     return None
@@ -1298,15 +1342,21 @@ def _production_coverage_from_json(changed_files: dict[str, int], json_data: dic
     report contribute nothing here — ``evaluate`` counts every one of their
     changed lines as unmeasured so a brand-new untested file still fails.
 
+    ``src_stats`` keys are diff-cover's normalised spelling (lower-cased and
+    ``/``-separated on Windows — see :func:`_path_key`), while *changed_files*
+    keys are git's; both are reduced to the same key space before the lookup
+    so a PascalCase component file is never silently dropped from the
+    numerator and denominator on Windows.
+
     Returns ``None`` when *json_data* carries no ``src_stats`` mapping.
     """
     if not json_data or not isinstance(json_data.get("src_stats"), dict):
         return None
-    src_stats = json_data["src_stats"]
+    src_stats = {_path_key(key): stats for key, stats in json_data["src_stats"].items()}
     covered = 0
     measured = 0
     for path, changed in changed_files.items():
-        stats = src_stats.get(path)
+        stats = src_stats.get(_path_key(path))
         if not isinstance(stats, dict):
             continue
         file_covered = len(stats.get("covered_lines") or [])
@@ -1385,13 +1435,23 @@ def _unmeasured_file_lines(
     changed line.  When *present_files* is omitted the report-presence filter
     is skipped (used by direct unit tests).
 
+    Both membership tests run in the normalised key space
+    (:func:`_path_key`), so a file whose ``src_stats`` key differs from the git
+    spelling only by Windows case/separator is still recognised as measured
+    instead of being charged as unmeasured 0%.
+
     Returns the summed changed-line count of unmeasured files.
     """
     if not json_data or not isinstance(json_data.get("src_stats"), dict):
         return 0
-    src_stats = json_data["src_stats"]
-    present = present_files or set()
-    return sum(changed for path, changed in changed_files.items() if path not in src_stats and path not in present)
+    src_stats = {_path_key(key) for key in json_data["src_stats"]}
+    present = {_path_key(key) for key in (present_files or set())}
+    unmeasured = 0
+    for path, changed in changed_files.items():
+        key = _path_key(path)
+        if key not in src_stats and key not in present:
+            unmeasured += changed
+    return unmeasured
 
 
 def _production_coverage_from_text(output: str, changed_lines: int) -> tuple[float, int, int] | None:
