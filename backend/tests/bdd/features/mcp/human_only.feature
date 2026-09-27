@@ -29,7 +29,7 @@ Feature: MCP Human-Only Interaction
 
   Scenario: MCP can list but not act on human-only gates
     Given a run is waiting at human node "final-signoff"
-    When the MCP client lists pending HITL gates
+    When the MCP client lists pending HITL reviews
     Then the response contains the pending gate
     And the pending gate indicates "human_only" true
 

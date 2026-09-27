@@ -26,7 +26,7 @@ class DraftEdge:
     source: str
     target: str
     edge_type: str = "normal"
-    hitl_gate: bool = False
+    hitl_review: bool = False
 
 
 @dataclass
@@ -109,7 +109,7 @@ def _add_development_stage(
     )
     stage_node_ids.append("development")
     if has_planning:
-        edges.append(DraftEdge(source="planning", target="development", hitl_gate=True))
+        edges.append(DraftEdge(source="planning", target="development", hitl_review=True))
 
 
 def _add_review_stage(
@@ -137,7 +137,7 @@ def _add_review_stage(
     else:
         review_source = "start"
     stage_node_ids.append("review")
-    edges.append(DraftEdge(source=review_source, target="review", hitl_gate=True))
+    edges.append(DraftEdge(source=review_source, target="review", hitl_review=True))
     automation_suggestions.append(
         {
             "stage": "review",

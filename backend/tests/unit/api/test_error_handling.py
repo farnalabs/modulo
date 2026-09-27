@@ -243,7 +243,7 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
         f"/api/v1/runs/{_RUN_ID}/feedback",
         ProgrammingError,
         501,
-        {"gate_id": "gate-1", "rejection_reason": "Wrong output", "rejected_output": {}, "producing_node_id": "n"},
+        {"review_id": "gate-1", "rejection_reason": "Wrong output", "rejected_output": {}, "producing_node_id": "n"},
         "database",
     ),
     (
@@ -252,7 +252,7 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
         f"/api/v1/runs/{_RUN_ID}/feedback",
         SQLAlchemyError,
         503,
-        {"gate_id": "gate-1", "rejection_reason": "Wrong output", "rejected_output": {}, "producing_node_id": "n"},
+        {"review_id": "gate-1", "rejection_reason": "Wrong output", "rejected_output": {}, "producing_node_id": "n"},
         None,
     ),
     ("feedback_list_prog", "GET", "/api/v1/feedback", ProgrammingError, 501, None, "database"),

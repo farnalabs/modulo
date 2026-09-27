@@ -23,14 +23,14 @@ def _claim(
     *,
     claimed_at: datetime | None = None,
     run_id: uuid.UUID | None = None,
-    gate_id: str = "review-step",
+    review_id: str = "review-step",
     account_id: uuid.UUID | None = None,
     decision: str | None = None,
 ) -> MagicMock:
     g = MagicMock(spec=HitlClaim)
     g.id = uuid.uuid4()
     g.run_id = run_id or uuid.uuid4()
-    g.gate_id = gate_id
+    g.review_id = review_id
     g.organisation_id = _ORG
     g.claimed_at = claimed_at or (datetime.now(UTC) if account_id else None)
     g.pipeline_id = uuid.uuid4()
@@ -62,7 +62,7 @@ async def test_returns_claims_older_than_warning_threshold() -> None:
     assert len(result) == 1
     assert result[0]["id"] == str(mock_old.id)
     assert result[0]["pipeline_run_id"] == str(mock_old.run_id)
-    assert result[0]["node_id"] == mock_old.gate_id
+    assert result[0]["node_id"] == mock_old.review_id
     assert result[0]["age_hours"] >= 9.9
     assert result[0]["status"] == "warning"
 
@@ -168,7 +168,7 @@ def _overdue_row(
     *,
     claim_id: uuid.UUID | None = None,
     run_id: uuid.UUID | None = None,
-    gate_id: str = "review-step",
+    review_id: str = "review-step",
     claimed_at: datetime,
     pipeline_name: str = "My Pipeline",
 ) -> tuple[object, str]:
@@ -178,7 +178,7 @@ def _overdue_row(
         {
             "id": claim_id or uuid.uuid4(),
             "run_id": run_id or uuid.uuid4(),
-            "gate_id": gate_id,
+            "review_id": review_id,
             "claimed_at": claimed_at,
         },
     )()
@@ -281,15 +281,15 @@ async def test_dispatch_sends_hitl_overdue_events() -> None:
     run_1, run_2 = uuid.uuid4(), uuid.uuid4()
     claim_1 = uuid.uuid4()
     rows = [
-        _overdue_row(claim_id=claim_1, run_id=run_1, gate_id="gate-a", claimed_at=now - timedelta(hours=10)),
-        _overdue_row(run_id=run_2, gate_id="gate-b", claimed_at=now - timedelta(hours=48)),
+        _overdue_row(claim_id=claim_1, run_id=run_1, review_id="gate-a", claimed_at=now - timedelta(hours=10)),
+        _overdue_row(run_id=run_2, review_id="gate-b", claimed_at=now - timedelta(hours=48)),
     ]
     notifier = AsyncMock()
     dispatched, notifier = await _run_dispatch(rows=rows, notifier=notifier)
 
     assert len(dispatched) == 2
     assert dispatched[0]["run_id"] == run_1
-    assert dispatched[0]["gate_id"] == "gate-a"
+    assert dispatched[0]["review_id"] == "gate-a"
     assert dispatched[0]["pipeline_name"] == "My Pipeline"
     assert dispatched[0]["minutes_overdue"] == 600
     assert dispatched[1]["minutes_overdue"] == 2880
@@ -301,7 +301,7 @@ async def test_dispatch_sends_hitl_overdue_events() -> None:
     assert call_1.kwargs["run_id"] == str(run_1)
     assert call_1.kwargs["payload"] == {
         "run_id": str(run_1),
-        "gate_id": "gate-a",
+        "review_id": "gate-a",
         "pipeline_name": "My Pipeline",
         "minutes_overdue": 600,
     }

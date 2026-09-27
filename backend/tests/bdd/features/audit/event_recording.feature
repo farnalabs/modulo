@@ -27,7 +27,7 @@ Feature: Audit Event Recording
     And the event records the output hash
 
   Scenario: Claim expiry is audited
-    Given a HITL gate claim has expired
+    Given a HITL review claim has expired
     Then an audit event is created with type "hitl.claim_expired"
 
   Scenario: Org deletion request is audited

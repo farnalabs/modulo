@@ -37,7 +37,7 @@ def _gate(
     g = MagicMock(spec=HitlClaim)
     g.id = uuid.uuid4()
     g.run_id = _RUN
-    g.gate_id = _GATE
+    g.review_id = _GATE
     g.pipeline_id = _PIPELINE
     g.organisation_id = _ORG
     g.account_id = account_id
@@ -158,7 +158,7 @@ def _make_jwt_kwargs(**overrides: Any) -> dict[str, Any]:
         "subject": str(_USER),
         "secret_key": _KEY,
         "run_id": str(_RUN),
-        "gate_id": _GATE,
+        "review_id": _GATE,
         "client_id": str(_USER),
         **overrides,
     }
@@ -179,7 +179,7 @@ async def test_claim_succeeds_with_jwt_secret_key() -> None:
     )
     session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=claimed_gate)
     mgr = HITLManager(secret_key=_KEY)
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
 
 
@@ -211,7 +211,7 @@ async def test_claim_with_secret_key_writes_jwt_to_db() -> None:
 
     session.execute = _capture_execute
     mgr = HITLManager(secret_key=_KEY)
-    await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert len(captured) == 1
     # Second execute is the UPDATE … RETURNING — the token must be a JWT.
@@ -221,7 +221,7 @@ async def test_claim_with_secret_key_writes_jwt_to_db() -> None:
     payload = pyjwt.decode(stored, _KEY, algorithms=[_ALGORITHM])
     assert payload["purpose"] == "claim_token"
     assert payload["run_id"] == str(_RUN)
-    assert payload["gate_id"] == _GATE
+    assert payload["review_id"] == _GATE
     assert payload["client_id"] == str(_USER)
 
 
@@ -233,13 +233,13 @@ async def test_claim_with_secret_key_forwards_expiry_minutes() -> None:
     with patch("modulo.core.hitl_manager._create_claim_jwt") as mock_jwt:
         mock_jwt.return_value = "signed.jwt.token"
         mgr = HITLManager(secret_key=_KEY)
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=90)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=90)
 
     mock_jwt.assert_called_once_with(
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
         expiry_minutes=90,
     )
@@ -267,7 +267,7 @@ async def test_claim_without_secret_key_generates_opaque_token() -> None:
 
     with patch("modulo.core.hitl_manager.secrets.token_urlsafe", return_value="opaque-token-abc") as mock_tok:
         mgr = HITLManager()
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     mock_tok.assert_called_once_with(32)
     assert len(captured) == 1
@@ -295,7 +295,7 @@ def test_create_claim_token_roundtrip_unittest() -> None:
     payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     assert payload["purpose"] == "claim_token"
     assert payload["run_id"] == str(_RUN)
-    assert payload["gate_id"] == _GATE
+    assert payload["review_id"] == _GATE
     assert payload["client_id"] == str(_USER)
     assert payload["sub"] == str(_USER)
 
@@ -330,7 +330,7 @@ async def test_approve_validates_jwt_scope() -> None:
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
     )
     gate = _gate(account_id=_USER, claim_token=token, expires_at=future)
@@ -340,7 +340,7 @@ async def test_approve_validates_jwt_scope() -> None:
     result = await mgr.approve(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token=token,
     )
@@ -354,7 +354,7 @@ async def test_approve_rejects_expired_jwt() -> None:
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
         expiry_minutes=-1,
     )
@@ -364,7 +364,7 @@ async def test_approve_rejects_expired_jwt() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token=token,
         )
@@ -376,7 +376,7 @@ async def test_approve_rejects_client_id_mismatch() -> None:
         str(_USER),
         _KEY,
         run_id=str(uuid.uuid4()),  # wrong run_id
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
     )
     session = AsyncMock()
@@ -385,19 +385,19 @@ async def test_approve_rejects_client_id_mismatch() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token=token,
         )
 
 
-async def test_approve_rejects_wrong_gate_id() -> None:
-    """approve() rejects a JWT with non-matching gate_id."""
+async def test_approve_rejects_wrong_review_id() -> None:
+    """approve() rejects a JWT with non-matching review_id."""
     token = create_claim_token(
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id="wrong-gate",
+        review_id="wrong-gate",
         client_id=str(_USER),
     )
     session = AsyncMock()
@@ -406,7 +406,7 @@ async def test_approve_rejects_wrong_gate_id() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token=token,
         )
@@ -418,7 +418,7 @@ async def test_approve_rejects_tampered_token() -> None:
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
     )
     tampered = stored_token[:-5] + "XXXXX"
@@ -428,7 +428,7 @@ async def test_approve_rejects_tampered_token() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token=tampered,
         )
@@ -446,7 +446,7 @@ async def test_reject_validates_jwt() -> None:
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
     )
     gate = _gate(account_id=_USER, claim_token=token, expires_at=future)
@@ -456,7 +456,7 @@ async def test_reject_validates_jwt() -> None:
     result = await mgr.reject(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token=token,
     )
@@ -470,7 +470,7 @@ async def test_reject_rejects_expired_jwt() -> None:
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
         expiry_minutes=-1,
     )
@@ -480,7 +480,7 @@ async def test_reject_rejects_expired_jwt() -> None:
         await mgr.reject(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token=token,
         )
@@ -500,7 +500,7 @@ async def test_approve_opaque_token_backwards_compat() -> None:
     result = await mgr.approve(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="opaque-token-123",
     )
@@ -516,7 +516,7 @@ async def test_reject_opaque_token_backwards_compat() -> None:
     result = await mgr.reject(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="opaque-token-456",
     )
@@ -532,7 +532,7 @@ async def test_approve_no_secret_key_still_uses_opaque() -> None:
     result = await mgr.approve(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="plain-token",
     )
@@ -552,7 +552,7 @@ async def test_gate_not_found_with_jwt_manager() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="anything",
         )
@@ -568,7 +568,7 @@ async def test_already_decided_with_jwt_manager() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="opaque-already-decided",
         )
@@ -581,7 +581,7 @@ async def test_approve_rejects_jwt_with_wrong_key() -> None:
         str(_USER),
         different_key,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
     )
     session = AsyncMock()
@@ -590,7 +590,7 @@ async def test_approve_rejects_jwt_with_wrong_key() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token=token,
         )
@@ -603,7 +603,7 @@ async def test_bad_jwt_fails_fast_before_sql_update() -> None:
         str(_USER),
         _KEY,
         run_id=str(_RUN),
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_USER),
         expiry_minutes=-1,  # expired
     )
@@ -613,7 +613,7 @@ async def test_bad_jwt_fails_fast_before_sql_update() -> None:
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token=token,
         )

@@ -44,7 +44,7 @@ def _make_mock_record(**overrides: object) -> MagicMock:
     r.id = overrides.get("id", _RECORD_ID)
     r.organisation_id = _ORG_ID
     r.run_id = overrides.get("run_id", _RUN_ID)
-    r.gate_id = overrides.get("gate_id", "gate-1")
+    r.review_id = overrides.get("review_id", "gate-1")
     r.account_id = overrides.get("account_id", _USER_ID)
     r.rejection_reason = overrides.get("rejection_reason", "Wrong output")
     r.rejected_output = overrides.get("rejected_output", {"result": "bad"})
@@ -122,7 +122,7 @@ class TestCreateFeedback:
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/feedback",
                 json={
-                    "gate_id": "gate-1",
+                    "review_id": "gate-1",
                     "rejection_reason": "Wrong output",
                     "rejected_output": {"result": "bad"},
                     "producing_node_id": "node-b",
@@ -133,7 +133,7 @@ class TestCreateFeedback:
         assert resp.status_code == 201
         body = resp.json()
         assert body["feedback_status"] == "pending"
-        assert body["gate_id"] == "gate-1"
+        assert body["review_id"] == "gate-1"
 
     def test_creates_feedback_emits_feedback_created_audit(self, client: TestClient) -> None:
         mock_record = _make_mock_record()
@@ -149,7 +149,7 @@ class TestCreateFeedback:
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/feedback",
                 json={
-                    "gate_id": "gate-1",
+                    "review_id": "gate-1",
                     "rejection_reason": "Wrong output",
                     "rejected_output": {"result": "bad"},
                     "producing_node_id": "node-b",
@@ -167,7 +167,7 @@ class TestCreateFeedback:
         assert kwargs["resource_id"] == _RECORD_ID
         assert kwargs["payload_json"] == {
             "run_id": str(_RUN_ID),
-            "gate_id": "gate-1",
+            "review_id": "gate-1",
             "feedback_handler_type": "human",
         }
 
@@ -185,7 +185,7 @@ class TestCreateFeedback:
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/feedback",
                 json={
-                    "gate_id": "gate-1",
+                    "review_id": "gate-1",
                     "rejection_reason": "Wrong output",
                     "rejected_output": {"result": "bad"},
                     "producing_node_id": "node-b",
@@ -204,7 +204,7 @@ class TestCreateFeedback:
             resp = client.post(
                 f"/api/v1/runs/{uuid.uuid4()}/feedback",
                 json={
-                    "gate_id": "gate-1",
+                    "review_id": "gate-1",
                     "rejection_reason": "Wrong",
                     "rejected_output": {},
                     "producing_node_id": "node-b",
@@ -218,7 +218,7 @@ class TestCreateFeedback:
         resp = unauth_client.post(
             f"/api/v1/runs/{_RUN_ID}/feedback",
             json={
-                "gate_id": "gate-1",
+                "review_id": "gate-1",
                 "rejection_reason": "Wrong",
                 "rejected_output": {},
                 "producing_node_id": "node-b",
@@ -344,7 +344,7 @@ class TestUpdateStatus:
             "new_status": "resolved",
             "action": "update_status",
             "run_id": str(_RUN_ID),
-            "gate_id": "gate-1",
+            "review_id": "gate-1",
         }
 
     def test_status_audit_failure_does_not_block_update(self, client: TestClient) -> None:
@@ -648,7 +648,7 @@ class TestReviewFeedback:
         assert kwargs["payload_json"]["new_status"] == "resolved"
         assert kwargs["payload_json"]["action"] == "mark_reviewed"
         assert kwargs["payload_json"]["run_id"] == str(_RUN_ID)
-        assert kwargs["payload_json"]["gate_id"] == "gate-1"
+        assert kwargs["payload_json"]["review_id"] == "gate-1"
 
     def test_create_correction_run_emits_status_changed_audit(self, client: TestClient) -> None:
         audit = AsyncMock(return_value=MagicMock())
@@ -1150,7 +1150,7 @@ class TestCreateFeedbackDBErrors:
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/feedback",
-                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+                json={"review_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
             )
         assert resp.status_code == 409
 
@@ -1164,7 +1164,7 @@ class TestCreateFeedbackDBErrors:
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/feedback",
-                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+                json={"review_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
             )
         assert resp.status_code == 501
 
@@ -1178,7 +1178,7 @@ class TestCreateFeedbackDBErrors:
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/feedback",
-                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+                json={"review_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
             )
         assert resp.status_code == 503
 
@@ -1192,7 +1192,7 @@ class TestCreateFeedbackDBErrors:
         ):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/feedback",
-                json={"gate_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
+                json={"review_id": "g", "rejection_reason": "r", "rejected_output": {}, "producing_node_id": "n"},
             )
         assert resp.status_code == 500
 

@@ -161,7 +161,7 @@ from modulo.core.trigger_streak import (
 )
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.account import AccountNotFoundError
-from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
+from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied, HitlReviewWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import CircuitBreakerThresholdChangeDenied, get_pipeline
 from modulo.db.crud.run import WorkItemRefsRequiredError, get_run
@@ -2684,9 +2684,9 @@ async def get_pipeline_graph_tool(
 
 
 async def _append_mcp_hitl_denial_audit(
-    org_id: uuid.UUID, pipeline_id: uuid.UUID, exc: HitlGateWeakeningDenied
+    org_id: uuid.UUID, pipeline_id: uuid.UUID, exc: HitlReviewWeakeningDenied
 ) -> None:
-    """Append the hitl_gate_removal_denied audit event for an MCP denial.
+    """Append the hitl_review_removal_denied audit event for an MCP denial.
 
     Runs in a fresh ``_session`` after the guarded write's transaction rolled
     back, so the denial is never lost (hitl-gate-removal-guard-plan.md v19 §5).
@@ -2712,7 +2712,7 @@ async def _append_mcp_hitl_denial_audit(
             await append_audit_event(
                 s,
                 org_id=org_id,
-                event_type="hitl_gate_removal_denied",
+                event_type="hitl_review_removal_denied",
                 actor_user_id=actor_user_id,
                 resource_type="pipeline",
                 resource_id=pipeline_id,
@@ -2786,7 +2786,7 @@ async def _update_pipeline_graph_impl(
 
     # FAR-613: the MCP path never runs the full graph validator, and a node's
     # ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
-    # edge-level ``HitlGateConfig`` Pydantic contract entirely — so the HITL
+    # edge-level ``HitlReviewConfig`` Pydantic contract entirely — so the HITL
     # gate-description requirement is enforced HERE explicitly. An
     # agent-authored gate is exactly where an unexplained gate most needs its
     # decision briefing: a node-level or edge-level gate without a
@@ -2809,10 +2809,10 @@ async def _update_pipeline_graph_impl(
     # enforcement for REST writes stays the forcing function, and the
     # editor surfaces legacy violations to the user (PipelineEditorView
     # banner, FAR-688) instead of blocking the read.
-    from modulo.core.graph_validator import check_hitl_gate_descriptions as _check_hitl_descriptions
+    from modulo.core.graph_validator import check_hitl_review_descriptions as _check_hitl_descriptions
 
     hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
-    hitl_description_errors = [i.message for i in hitl_issues if i.code == "HITL_GATE_DESCRIPTION_REQUIRED"]
+    hitl_description_errors = [i.message for i in hitl_issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
     if hitl_description_errors:
         return {
             "error": "validation_failed",
@@ -2861,10 +2861,10 @@ async def _update_pipeline_graph_impl(
             if result is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
             updated_nodes, updated_edges = result
-    except HitlGateWeakeningDenied as exc:
+    except HitlReviewWeakeningDenied as exc:
         await _append_mcp_hitl_denial_audit(org_id, pid, exc)
         return {
-            "error": "hitl_gate_removal_denied",
+            "error": "hitl_review_removal_denied",
             "detail": str(exc),
             "reason_code": exc.reason_code,
             "affected_edges": [
@@ -2892,7 +2892,7 @@ async def _update_pipeline_graph_impl(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
     "and edges as a list of dicts with id, source_node_id, target_node_id, edge_type. "
-    "HITL gates (node hitl_config or edge hitl_gate_config) must carry a human-provided "
+    "HITL gates (node hitl_config or edge hitl_review_config) must carry a human-provided "
     "description (min 20 chars) explaining why the gate exists; a graph write whose "
     "gates lack one is rejected with validation_failed (FAR-613: the MCP path enforces "
     "the HITL description rule specifically). Returns the updated graph."
@@ -4121,7 +4121,7 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
     return {"run_id": run_id, "cancellation_requested": True}
 
 
-@mcp.tool(description="List all pending (undecided) HITL gates across all runs.")
+@mcp.tool(description="List all pending (undecided) HITL reviews across all runs.")
 @_RETRY_DB
 async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
@@ -4166,35 +4166,35 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
 
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
-        gates, total = await _load_pending_hitl_gates(s, base_where, page, page_size)
+        gates, total = await _load_pending_hitl_reviews(s, base_where, page, page_size)
         # FAR-613: resolve each gate's description via the shared batched
         # resolver (same normalisation + the FAR-688 unified context-first
         # precedence the REST pending endpoints use) while the session is
         # open. Context comes from the claim row itself.
-        from modulo.db.crud.hitl_gate_config import (
-            resolve_gate_descriptions,
-            resolve_gate_human_only_map,
+        from modulo.db.crud.hitl_review_config import (
+            resolve_review_descriptions,
+            resolve_review_human_only_map,
         )
 
-        description_by_gate = await resolve_gate_descriptions(s, gates=gates, org_id=org_id)
-        # FAR-609/610: tell the agent client which pending gates REQUIRE a
-        # browser human — human_only gates cannot be claimed or decided through
+        description_by_review = await resolve_review_descriptions(s, gates=gates, org_id=org_id)
+        # FAR-609/610: tell the agent client which pending reviews REQUIRE a
+        # browser human — human_only reviews cannot be claimed or decided through
         # MCP. Resolved via the shared batched flag map (claim-stamped config
         # preferred; snapshot config fallback; fail-safe True default) so an
         # agent can see before it attempts an action.
-        human_only_by_gate = await resolve_gate_human_only_map(s, gates=gates, org_id=org_id)
+        human_only_by_review = await resolve_review_human_only_map(s, gates=gates, org_id=org_id)
     return {
-        "gates": [
+        "reviews": [
             {
                 "run_id": str(g.run_id),
-                "gate_id": g.gate_id,
+                "review_id": g.review_id,
                 "pipeline_id": str(g.pipeline_id),
                 "claimed_by": str(g.account_id) if g.account_id else None,
                 "expires_at": _iso_or_none(g.expires_at),
                 "required_team_id": str(g.required_team_id) if g.required_team_id else None,
-                "description": description_by_gate.get((g.run_id, g.gate_id)),
+                "description": description_by_review.get((g.run_id, g.review_id)),
                 "context": g.context_json if isinstance(g.context_json, dict) else None,
-                "human_only": human_only_by_gate.get((g.run_id, g.gate_id)),
+                "human_only": human_only_by_review.get((g.run_id, g.review_id)),
             }
             for g in gates
         ],
@@ -4205,10 +4205,10 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
     }
 
 
-async def _load_pending_hitl_gates(
+async def _load_pending_hitl_reviews(
     s: AsyncSession, base_where: list[Any], page: int, page_size: int
 ) -> tuple[list[HitlClaim], int]:
-    """Load a page of pending HITL gates plus the total count (one transaction)."""
+    """Load a page of pending HITL reviews plus the total count (one transaction)."""
     from sqlalchemy import func, select
 
     from modulo.db.models.pipeline import Pipeline
@@ -4244,29 +4244,29 @@ async def _load_pending_hitl_gates(
 
 @mcp.tool(
     description=(
-        "List the unclaimed, undecided HITL gates for the organisation "
+        "List the unclaimed, undecided HITL reviews for the organisation "
         "(their runs are in awaiting_human). Read-only inspection: claim or "
         "decide via review_hitl."
     ),
 )
 @_RETRY_DB
-async def list_hitl_gates(limit: int = 20) -> dict[str, Any]:
+async def list_hitl_reviews(limit: int = 20) -> dict[str, Any]:
     try:
-        return await _list_hitl_gates_impl(limit)
+        return await _list_hitl_reviews_impl(limit)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("list_hitl_gates failed")
+        _log.exception("list_hitl_reviews failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
-        _log.exception("list_hitl_gates failed")
-        return _tool_error("Failed to list HITL gates")
+        _log.exception("list_hitl_reviews failed")
+        return _tool_error("Failed to list HITL reviews")
 
 
-async def _list_hitl_gates_impl(limit: int) -> dict[str, Any]:
+async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    _check_agent_tool_scope("list_hitl_gates")
+    _check_agent_tool_scope("list_hitl_reviews")
     from sqlalchemy import func, select
 
     from modulo.db.crud.team_scope import team_scope_clause
@@ -4284,7 +4284,7 @@ async def _list_hitl_gates_impl(limit: int) -> dict[str, Any]:
         key_team_id = _ctx_team_id_val()
         if key_team_id is not None:
             # Same team boundary as list_pending_hitl: a team-scoped key only
-            # sees gates for runs owned by its own team (or org-level runs).
+            # sees reviews for runs owned by its own team (or org-level runs).
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
         result = await s.execute(
@@ -4297,10 +4297,10 @@ async def _list_hitl_gates_impl(limit: int) -> dict[str, Any]:
         )
         rows = result.all()
     return {
-        "gates": [
+        "reviews": [
             {
                 "run_id": str(gate.run_id),
-                "gate_id": gate.gate_id,
+                "review_id": gate.review_id,
                 "pipeline_id": str(gate.pipeline_id),
                 "pipeline_name": pipeline_name,
                 "run_number": run_number,
@@ -4317,31 +4317,31 @@ async def _list_hitl_gates_impl(limit: int) -> dict[str, Any]:
 
 @mcp.tool(
     description=(
-        "Get read-only detail for one HITL gate: run status, the gate config AS "
+        "Get read-only detail for one HITL review: run status, the review config AS "
         "CAPTURED IN THAT RUN'S SNAPSHOT (label, condition, human_only, "
-        "claim_expiry_minutes, reject_target, required_team_id), and the gate's "
+        "claim_expiry_minutes, reject_target, required_team_id), and the review's "
         "claim/decision state. Decide via review_hitl or the browser UI."
     ),
 )
 @_RETRY_DB
-async def get_hitl_gate(run_id: str, gate_id: str) -> dict[str, Any]:
+async def get_hitl_review(run_id: str, review_id: str) -> dict[str, Any]:
     try:
-        return await _get_hitl_gate_impl(run_id, gate_id)
+        return await _get_hitl_review_impl(run_id, review_id)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("get_hitl_gate failed")
+        _log.exception("get_hitl_review failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
-        _log.exception("get_hitl_gate failed")
-        return _tool_error("Failed to get HITL gate")
+        _log.exception("get_hitl_review failed")
+        return _tool_error("Failed to get HITL review")
 
 
-async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
+async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    _check_agent_tool_scope("get_hitl_gate")
-    from modulo.db.crud.hitl_gate_config import human_only_effective, resolve_hitl_gate_config
+    _check_agent_tool_scope("get_hitl_review")
+    from modulo.db.crud.hitl_review_config import human_only_effective, resolve_hitl_review_config
 
     org_id = _ctx_org_id_val()
     rid, rid_err = _parse_uuid_param(run_id, "run_id")
@@ -4354,17 +4354,17 @@ async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
             return _team_scope_error("run", run_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
-        gate = await HITLManager().get_gate(s, run_id=rid, gate_id=gate_id, org_id=org_id)
+        gate = await HITLManager().get_gate(s, run_id=rid, review_id=review_id, org_id=org_id)
         if gate is None:
-            return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+            return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
         # FAR-610 resolution order: the run's snapshot graph is authoritative
-        # for the gate that fired; the live edges/nodes are the fallbacks.
-        config = await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id, run=run)
+        # for the review that fired; the live edges/nodes are the fallbacks.
+        config = await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id, run=run)
     result = {
         "run_id": run_id,
-        "gate_id": gate_id,
+        "review_id": review_id,
         "run_status": run.status,
-        "gate_fired": True,
+        "review_fired": True,
         "claimed_by": str(gate.account_id) if gate.account_id else None,
         "claimed_at": _iso_or_none(gate.claimed_at),
         "expires_at": _iso_or_none(gate.expires_at),
@@ -4372,10 +4372,10 @@ async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
         "decision_at": _iso_or_none(gate.decision_at),
     }
     if config is None:
-        result["gate_config"] = None
+        result["review_config"] = None
     else:
         required_team = config.get("required_team_id")
-        result["gate_config"] = {
+        result["review_config"] = {
             "label": config.get("label"),
             "condition": config.get("condition"),
             "human_only": human_only_effective(config),
@@ -4388,29 +4388,29 @@ async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
 
 @mcp.tool(
     description=(
-        "List the hitl_gate_config blocks on a pipeline's committed graph edges "
+        "List the hitl_review_config blocks on a pipeline's committed graph edges "
         "(source/target node ids + full config). Read-only: the graph is "
         "modified via update_pipeline_graph, never by this tool."
     ),
 )
 @_RETRY_DB
-async def get_pipeline_gates(pipeline_id: str) -> dict[str, Any]:
+async def get_pipeline_reviews(pipeline_id: str) -> dict[str, Any]:
     try:
-        return await _get_pipeline_gates_impl(pipeline_id)
+        return await _get_pipeline_reviews_impl(pipeline_id)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("get_pipeline_gates failed")
+        _log.exception("get_pipeline_reviews failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
-        _log.exception("get_pipeline_gates failed")
-        return _tool_error("Failed to get pipeline gates")
+        _log.exception("get_pipeline_reviews failed")
+        return _tool_error("Failed to get pipeline reviews")
 
 
-async def _get_pipeline_gates_impl(pipeline_id: str) -> dict[str, Any]:
+async def _get_pipeline_reviews_impl(pipeline_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-    _check_agent_tool_scope("get_pipeline_gates")
+    _check_agent_tool_scope("get_pipeline_reviews")
     from modulo.db.crud.pipeline import get_pipeline_graph
 
     org_id = _ctx_org_id_val()
@@ -4431,12 +4431,12 @@ async def _get_pipeline_gates_impl(pipeline_id: str) -> dict[str, Any]:
             "source_node_id": str(e.source_node_id),
             "target_node_id": str(e.target_node_id),
             "edge_type": e.edge_type,
-            "hitl_gate_config": dict(e.hitl_gate_config),
+            "hitl_review_config": dict(e.hitl_review_config),
         }
         for e in edges
-        if isinstance(e.hitl_gate_config, dict)
+        if isinstance(e.hitl_review_config, dict)
     ]
-    return {"pipeline_id": pipeline_id, "gates": gates, "gate_count": len(gates)}
+    return {"pipeline_id": pipeline_id, "reviews": gates, "review_count": len(gates)}
 
 
 _TEAM_SCOPE_ERROR = object()
@@ -4494,14 +4494,14 @@ async def _load_hitl_run(
 def _hitl_human_only_denial_payload(
     *,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     action: str,
     verdict: str,
 ) -> dict[str, Any]:
     """The shared ``hitl.human_only_denied`` audit payload for MCP denials (FAR-634)."""
     return {
         "run_id": str(run_id),
-        "gate_id": gate_id,
+        "review_id": review_id,
         "action": action,
         "surface": "mcp",
         "principal_kind": _ctx_auth_type.get(None) or "api_key",
@@ -4515,7 +4515,7 @@ async def _append_hitl_human_only_denied_audit(
     org_id: uuid.UUID,
     *,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     action: str,
     verdict: str,
 ) -> None:
@@ -4530,7 +4530,7 @@ async def _append_hitl_human_only_denied_audit(
     """
     try:
         from modulo.core.audit_logger import append_audit_event
-        from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED
+        from modulo.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED
 
         try:
             actor_user_id = _ctx_user_id_val()
@@ -4545,7 +4545,7 @@ async def _append_hitl_human_only_denied_audit(
             resource_id=run_id,
             payload_json=_hitl_human_only_denial_payload(
                 run_id=run_id,
-                gate_id=gate_id,
+                review_id=review_id,
                 action=action,
                 verdict=verdict,
             ),
@@ -4555,7 +4555,7 @@ async def _append_hitl_human_only_denied_audit(
     except Exception:
         _log.warning(
             "mcp.hitl_human_only_denial_audit_failed",
-            extra={"run_id": str(run_id), "gate_id": gate_id, "action": action},
+            extra={"run_id": str(run_id), "review_id": review_id, "action": action},
             exc_info=True,
         )
 
@@ -4564,7 +4564,7 @@ async def _check_human_only_gate(
     s: AsyncSession,
     org_id: uuid.UUID,
     run: Any,
-    gate_id: str,
+    review_id: str,
     action: str,
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
@@ -4583,20 +4583,20 @@ async def _check_human_only_gate(
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
-    via the shared resolver (``db.crud.hitl_gate_config``). The previous
+    via the shared resolver (``db.crud.hitl_review_config``). The previous
     implementation selected the pipeline's edges with NO source/target filter
     and read ``.scalars().first()`` — the first edge in arbitrary order — and
     checked THAT edge's config, so on the PR Reviewer pipeline (first edge
-    carried no ``hitl_gate_config``) MCP approvals were ALLOWED on a
+    carried no ``hitl_review_config``) MCP approvals were ALLOWED on a
     ``human_only`` gate elsewhere in the graph.
 
     Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
     gate actually fired (a claim row exists —
-    ``hitl_gate_exists_but_unresolved``), the human_only policy cannot be
+    ``hitl_review_exists_but_unresolved``), the human_only policy cannot be
     verified, so the decision is denied rather than silently allowed. The
     error reuses the ``human_only_gate`` code (clients already handle it)
     with a detail naming the actual reason. The verdict itself lives in the
-    shared pure function ``hitl_gate_config.human_only_denial`` so REST and
+    shared pure function ``hitl_review_config.human_only_denial`` so REST and
     MCP enforce one policy with one wording (FAR-610 review); the claim
     lookup runs only when the config is unresolvable.
 
@@ -4609,17 +4609,17 @@ async def _check_human_only_gate(
     ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
     returned.
     """
-    from modulo.db.crud.hitl_gate_config import (
+    from modulo.db.crud.hitl_review_config import (
         EVENT_HUMAN_ONLY_DENIED,
-        hitl_gate_exists_but_unresolved,
+        hitl_review_exists_but_unresolved,
         human_only_denial,
-        resolve_hitl_gate_config,
+        resolve_hitl_review_config,
     )
 
-    config = await resolve_hitl_gate_config(s, run_id=run.id, gate_id=gate_id, org_id=org_id, run=run)
+    config = await resolve_hitl_review_config(s, run_id=run.id, review_id=review_id, org_id=org_id, run=run)
     gate_fired = False
     if config is None:
-        gate_fired = await hitl_gate_exists_but_unresolved(s, run_id=run.id, gate_id=gate_id, org_id=org_id)
+        gate_fired = await hitl_review_exists_but_unresolved(s, run_id=run.id, review_id=review_id, org_id=org_id)
     # MCP callers authenticate with API keys — always a non-browser credential.
     verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
     if verdict is not None:
@@ -4627,7 +4627,7 @@ async def _check_human_only_gate(
             EVENT_HUMAN_ONLY_DENIED,
             extra={
                 "run_id": str(run.id),
-                "gate_id": gate_id,
+                "review_id": review_id,
                 "action": action,
                 "surface": "mcp",
                 "principal_kind": _ctx_auth_type.get(None) or "api_key",
@@ -4637,7 +4637,7 @@ async def _check_human_only_gate(
             s,
             org_id,
             run_id=run.id,
-            gate_id=gate_id,
+            review_id=review_id,
             action=action,
             verdict=verdict,
         )
@@ -4648,7 +4648,7 @@ async def _check_human_only_gate(
 async def _validate_mcp_choice_answer(
     s: AsyncSession,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     org_id: uuid.UUID,
     answer: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -4669,7 +4669,7 @@ async def _validate_mcp_choice_answer(
         validated = await validate_hitl_answer(
             s,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             answer=answer,
         )
@@ -4683,7 +4683,7 @@ async def _dispatch_hitl_action(
     s: AsyncSession,
     action: str,
     rid: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     org_id: uuid.UUID,
     actor_account_id: uuid.UUID | None,
     claim_token: str | None,
@@ -4696,7 +4696,7 @@ async def _dispatch_hitl_action(
     Raises the domain exceptions (GateNotFoundError, NotTeamMemberError, etc.)
     which the caller maps to error responses.
 
-    FAR-541: every decision payload is STAMPED with the ``gate_id`` it resolves.
+    FAR-541: every decision payload is STAMPED with the ``review_id`` it resolves.
     The decision commits on the gate's claim row (created by the executor when
     the gate fired); the MCP flow never dispatches a resume itself — the
     dispatcher reconcile is the resume path, and it scopes its reconstruction
@@ -4728,7 +4728,7 @@ async def _dispatch_hitl_action(
             extra={
                 "org_id": str(org_id),
                 "action": action,
-                "gate_id": gate_id,
+                "review_id": review_id,
             },
         )
         return _hitl_decision_rate_limited_response()
@@ -4739,7 +4739,7 @@ async def _dispatch_hitl_action(
                 "detail": "A gate claim requires an authenticated user context; this MCP session has none",
             }
         gate = await mgr.claim(
-            s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
+            s, run_id=rid, review_id=review_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
         )
         return {
             "status": "claimed",
@@ -4750,17 +4750,17 @@ async def _dispatch_hitl_action(
         # FAR-860: validate choice answer before the manager call. The error is
         # returned out-of-band so a legit answer carrying an "error" key is
         # never misread as an MCP error dict.
-        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, gate_id, org_id, answer)
+        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
         if answer_error is not None:
             return answer_error
         # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-        approve_payload: dict[str, Any] = {"action": "approved", "gate_id": gate_id}
+        approve_payload: dict[str, Any] = {"action": "approved", "review_id": review_id}
         if validated_answer is not None:
             approve_payload["answer"] = validated_answer
         await mgr.approve(
             s,
             run_id=rid,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             claim_token=claim_token or "",
             actor_id=actor_account_id,
@@ -4768,22 +4768,22 @@ async def _dispatch_hitl_action(
             client_type=client_type,
             answer=validated_answer,
         )
-        return {"status": "approved", "gate_id": gate_id}
+        return {"status": "approved", "review_id": review_id}
     if action == "deliver_manual":
         # FAR-860: validate choice answer before the manager call. The error is
         # returned out-of-band so a legit answer carrying an "error" key is
         # never misread as an MCP error dict.
-        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, gate_id, org_id, answer)
+        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
         if answer_error is not None:
             return answer_error
         # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-        manual_payload: dict[str, Any] = {"action": "deliver_manual", "gate_id": gate_id, "output": output or {}}
+        manual_payload: dict[str, Any] = {"action": "deliver_manual", "review_id": review_id, "output": output or {}}
         if validated_answer is not None:
             manual_payload["answer"] = validated_answer
         await mgr.deliver_manual(
             s,
             run_id=rid,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             claim_token=claim_token or "",
             output=output or {},
@@ -4792,15 +4792,15 @@ async def _dispatch_hitl_action(
             client_type=client_type,
             answer=validated_answer,
         )
-        return {"status": "delivered_manual", "gate_id": gate_id}
+        return {"status": "delivered_manual", "review_id": review_id}
     # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-    reject_payload: dict[str, Any] = {"action": "rejected", "gate_id": gate_id}
+    reject_payload: dict[str, Any] = {"action": "rejected", "review_id": review_id}
     if reason is not None:
         reject_payload["reason"] = reason
     await mgr.reject(
         s,
         run_id=rid,
-        gate_id=gate_id,
+        review_id=review_id,
         org_id=org_id,
         claim_token=claim_token or "",
         actor_id=actor_account_id,
@@ -4808,14 +4808,14 @@ async def _dispatch_hitl_action(
         decision_payload=reject_payload,
         client_type=client_type,
     )
-    return {"status": "rejected", "gate_id": gate_id}
+    return {"status": "rejected", "review_id": review_id}
 
 
-def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[str, Any]:
+def _hitl_error_response(exc: BaseException, run_id: str, review_id: str) -> dict[str, Any]:
     if isinstance(exc, GateNotFoundError):
-        return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+        return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
     if isinstance(exc, NotTeamMemberError):
-        return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
+        return {"error": "not_team_member", "detail": "You are not a member of the team required by this review"}
     if isinstance(exc, AlreadyClaimedError):
         return {"error": "already_claimed", "detail": "Gate is already held by another client"}
     if isinstance(exc, ClaimTokenInvalidError):
@@ -4840,7 +4840,7 @@ def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[
 
 async def _review_hitl_impl(
     run_id: str,
-    gate_id: str,
+    review_id: str,
     action: str,
     claim_token: str | None,
     reason: str | None,
@@ -4881,7 +4881,7 @@ async def _review_hitl_impl(
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
-            return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+            return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
 
         if action in ("claim", "approve", "deliver_manual"):
             # FAR-610: deliver_manual is a decision exactly like approve — a
@@ -4893,13 +4893,13 @@ async def _review_hitl_impl(
             # principals on default-human_only gates, so only a principal
             # already holding a claim can reject; agent-only runs on default
             # gates require browser-human intervention (intended policy).
-            human_only_err = await _check_human_only_gate(s, org_id, run, gate_id, action)
+            human_only_err = await _check_human_only_gate(s, org_id, run, review_id, action)
             if human_only_err:
                 return human_only_err
 
         try:
             return await _dispatch_hitl_action(
-                mgr, s, action, rid, gate_id, org_id, actor_account_id, claim_token, output, reason, answer
+                mgr, s, action, rid, review_id, org_id, actor_account_id, claim_token, output, reason, answer
             )
         except (
             GateNotFoundError,
@@ -4912,9 +4912,9 @@ async def _review_hitl_impl(
             RunNotAwaitingError,
             ProgrammingError,
         ) as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
+            return _hitl_error_response(exc, run_id, review_id)
         except Exception as exc:
-            return _hitl_error_response(exc, run_id, gate_id)
+            return _hitl_error_response(exc, run_id, review_id)
 
 
 @mcp.tool(
@@ -4935,7 +4935,7 @@ async def _review_hitl_impl(
 @_RETRY_DB
 async def review_hitl(
     run_id: str,
-    gate_id: str,
+    review_id: str,
     action: str,
     claim_token: str | None = None,
     reason: str | None = None,
@@ -4943,7 +4943,7 @@ async def review_hitl(
     answer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        return await _review_hitl_impl(run_id, gate_id, action, claim_token, reason, output, answer)
+        return await _review_hitl_impl(run_id, review_id, action, claim_token, reason, output, answer)
     except OperationalError:
         raise
     except Exception:
@@ -9133,21 +9133,21 @@ async def resource_run(run_id: str) -> str:
     return "\n".join(parts)
 
 
-async def _get_hitl_gate(s: AsyncSession, rid: uuid.UUID, gate_id: str, org_id: uuid.UUID) -> HitlClaim | None:
-    """Fetch the HITL gate claim for *gate_id* on *rid*, org-scoped."""
+async def _get_hitl_review(s: AsyncSession, rid: uuid.UUID, review_id: str, org_id: uuid.UUID) -> HitlClaim | None:
+    """Fetch the HITL gate claim for *review_id* on *rid*, org-scoped."""
     from sqlalchemy import select
 
     result = await s.execute(
         select(HitlClaim).where(
             HitlClaim.run_id == rid,
-            HitlClaim.gate_id == gate_id,
+            HitlClaim.review_id == review_id,
             HitlClaim.organisation_id == org_id,
         )
     )
     return result.scalar_one_or_none()
 
 
-async def _hitl_gate_scope_error(s: AsyncSession, rid: uuid.UUID, gate: HitlClaim) -> str | None:
+async def _hitl_review_scope_error(s: AsyncSession, rid: uuid.UUID, gate: HitlClaim) -> str | None:
     """Return a team-scope error string when the caller's key cannot read this gate."""
     run = await get_run(s, rid)
     owner_team_id = (
@@ -9171,15 +9171,15 @@ async def _hitl_required_team_name(s: AsyncSession, gate: HitlClaim) -> str | No
     return team.name if team else None
 
 
-#: FAR-688: the fire-context dump on the ``modulo://runs/{run_id}/hitl/{gate_id}``
+#: FAR-688: the fire-context dump on the ``modulo://runs/{run_id}/hitl/{review_id}``
 #: resource is sliced to this many characters (with the shared truncation
 #: marker appended when sliced) so one briefing can never dominate the
 #: resource payload.
 _FIRE_CONTEXT_MAX_CHARS = 2048
 
 
-@mcp.resource("modulo://runs/{run_id}/hitl/{gate_id}")
-async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
+@mcp.resource("modulo://runs/{run_id}/hitl/{review_id}")
+async def resource_hitl_review(run_id: str, review_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
@@ -9189,37 +9189,37 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     except ValueError:
         return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
-        gate = await _get_hitl_gate(s, rid, gate_id, org_id)
+        gate = await _get_hitl_review(s, rid, review_id, org_id)
         required_team_name = None
         description: str | None = None
         context: dict[str, Any] | None = None
         if gate is not None:
             # A team-scoped key must not read another team's gate even when
             # the gate itself is org-level (required_team_id IS NULL).
-            scope_error = await _hitl_gate_scope_error(s, rid, gate)
+            scope_error = await _hitl_review_scope_error(s, rid, gate)
             if scope_error is not None:
                 return scope_error
             required_team_name = await _hitl_required_team_name(s, gate)
             # FAR-613: the fire-time briefing. FAR-688 unified precedence
             # (context-first, snapshot fallback — the context IS the fire-time
-            # truth): the shared helper in ``hitl_gate_config`` is the SAME
+            # truth): the shared helper in ``hitl_review_config`` is the SAME
             # rule the REST pending endpoints apply via
-            # ``resolve_gate_descriptions``, so every surface renders one
+            # ``resolve_review_descriptions``, so every surface renders one
             # description for the same gate. The snapshot-config fallback
             # read runs only when the capture carries no usable description
             # (gates that fired before capture existed).
             context = gate.context_json if isinstance(gate.context_json, dict) else None
-            from modulo.db.crud.hitl_gate_config import resolve_gate_description, resolve_hitl_gate_config
+            from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_description
 
-            description = resolve_gate_description(context, None)
+            description = resolve_review_description(context, None)
             if description is None:
-                description = resolve_gate_description(
-                    None, await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id)
+                description = resolve_review_description(
+                    None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id)
                 )
     if gate is None:
-        return f"HITL gate '{gate_id}' not found on run {run_id}."
+        return f"HITL gate '{review_id}' not found on run {run_id}."
     parts = [
-        f"Gate: {gate_id}",
+        f"Gate: {review_id}",
         f"Run: {run_id}",
         f"Pipeline: {gate.pipeline_id}",
         f"Decision: {gate.decision or 'pending'}",

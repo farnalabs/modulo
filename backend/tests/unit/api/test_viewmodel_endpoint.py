@@ -194,7 +194,7 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
     assert body["user"]["username"] == "testuser"
     assert body["pipelines_total"] == 1
     assert body["runs_total"] == 1
-    assert not body["pending_hitl_gates"]
+    assert not body["pending_hitl_reviews"]
     assert len(body["pipelines"]) == 1
     assert len(body["recent_runs"]) == 1
     assert body["org"]["org_name"] == "Test Org"
@@ -236,7 +236,7 @@ def test_viewmodel_current_includes_pending_hitl(client: TestClient) -> None:
     hitl.id = uuid.uuid4()
     hitl.run_id = uuid.uuid4()
     hitl.pipeline_id = uuid.uuid4()
-    hitl.gate_id = "approval_gate"
+    hitl.review_id = "approval_gate"
     hitl.claimed_by = None
     hitl.expires_at = None
 

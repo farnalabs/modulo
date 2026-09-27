@@ -61,8 +61,8 @@ from modulo.core.trigger_streak import (
 from modulo.db.models.run import (
     ACTIVE_RUN_STATUSES,
     AWAITING_HUMAN_STATUS,
-    CANCEL_REASON_HITL_GATE_EXPIRED,
-    CANCEL_REASON_HITL_GATE_MISSING,
+    CANCEL_REASON_HITL_REVIEW_EXPIRED,
+    CANCEL_REASON_HITL_REVIEW_MISSING,
     CANCELLED_BY_SYSTEM,
     ONGOING_ACTIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -284,15 +284,15 @@ _EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
 # ---------------------------------------------------------------------------
 # FAR-648 HITL-gate-expiry terminalizer. An ``awaiting_human`` run whose open
 # gate expired UNCLAIMED and UNDECIDED past the configurable grace (settings
-# ``hitl_gate_cancel_grace_seconds``, default 60 min) is a zombie: nobody ever
+# ``hitl_review_cancel_grace_seconds``, default 60 min) is a zombie: nobody ever
 # claimed the gate, so a decision will never arrive, yet the run keeps holding
 # an org-level concurrency slot (the org gate counts human-waiting runs,
 # FAR-604 D1). It is terminalized ``cancelled`` — NOT ``failed``: the human
 # simply never answered, and classify.py buckets ``cancelled`` as
 # ``operator_or_hitl_cancelled`` (excluded from delivery streaks).
 # ---------------------------------------------------------------------------
-_HITL_GATE_EXPIRED_ERROR_CODE = "hitl_gate_expired"
-_HITL_GATE_EXPIRED_ERROR_DETAIL = "HITL gate expired unanswered; run cancelled to release its concurrency slot."
+_HITL_REVIEW_EXPIRED_ERROR_CODE = "hitl_review_expired"
+_HITL_REVIEW_EXPIRED_ERROR_DETAIL = "HITL review expired unanswered; run cancelled to release its concurrency slot."
 
 # ---------------------------------------------------------------------------
 # FAR-721 complement to the FAR-648 terminalizer above (zombie ``awaiting_human``
@@ -309,8 +309,8 @@ _HITL_GATE_EXPIRED_ERROR_DETAIL = "HITL gate expired unanswered; run cancelled t
 # analytics buckets the class as operator_or_hitl_cancelled — the same
 # convention the FAR-648 terminalizer uses.
 # ---------------------------------------------------------------------------
-_HITL_GATE_MISSING_ERROR_CODE = "hitl_gate_missing"
-_HITL_GATE_MISSING_ERROR_DETAIL = (
+_HITL_REVIEW_MISSING_ERROR_CODE = "hitl_review_missing"
+_HITL_REVIEW_MISSING_ERROR_DETAIL = (
     "Run orphaned awaiting_human with no HITL gate/claim row; cancelled to release its concurrency slot."
 )
 
@@ -334,7 +334,7 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # They are listed here only for readability of the blob's full key set:
     # claimed_but_never_dispatched, claim_cap_terminalized,
     # mid_graph_wedge_terminalized, age_terminalized,
-    # hitl_gate_expired_terminalized, hitl_gate_missing_terminalized,
+    # hitl_review_expired_terminalized, hitl_review_missing_terminalized,
     # dispatch_failed_terminalized, enqueue_failed_ttl_terminalized.
     "enqueue_failed_redispatched": 0,
     "enqueue_failed_capped": 0,
@@ -4559,7 +4559,7 @@ async def _latest_committed_decision_row(
     org_id: uuid.UUID,
     run_id: uuid.UUID,
 ) -> Any:
-    """``(decision, decision_payload, gate_id)`` of the run's latest committed
+    """``(decision, decision_payload, review_id)`` of the run's latest committed
     HITL decision row, or ``None``. Shared selection for the F6a guard and the
     resume-data reconstruction so both always agree on WHICH decision is
     resumed. The ORDER BY is fully deterministic (FAR-541 iteration 3): the
@@ -4569,7 +4569,7 @@ async def _latest_committed_decision_row(
     """
     result = await session.execute(
         text(
-            "SELECT decision, decision_payload, gate_id FROM hitl_claims "
+            "SELECT decision, decision_payload, review_id FROM hitl_claims "
             "WHERE organisation_id=:oid AND run_id=:rid AND decision IS NOT NULL "
             "ORDER BY decision_at DESC NULLS LAST, claimed_at DESC NULLS LAST, id DESC LIMIT 1"
         ),
@@ -4578,7 +4578,7 @@ async def _latest_committed_decision_row(
     return result.first()
 
 
-async def _pending_claimed_gate_id(
+async def _pending_claimed_review_id(
     session: AsyncSession,
     org_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -4597,7 +4597,7 @@ async def _pending_claimed_gate_id(
     """
     result = await session.execute(
         text(
-            "SELECT gate_id FROM hitl_claims "
+            "SELECT review_id FROM hitl_claims "
             "WHERE organisation_id=:oid AND run_id=:rid AND decision IS NULL "
             "AND account_id IS NOT NULL "
             "ORDER BY claimed_at DESC NULLS LAST, id DESC LIMIT 1"
@@ -4621,25 +4621,25 @@ async def _has_any_undecided_claim_row(
     return result.first() is not None
 
 
-def _decision_gate_identity(latest: Any) -> str | None:
+def _decision_review_identity(latest: Any) -> str | None:
     """The gate a committed decision row resolves.
 
-    FAR-541 stamps every decision payload with its ``gate_id``; a stamped
+    FAR-541 stamps every decision payload with its ``review_id``; a stamped
     payload carries the identity. A legacy/payload-less row (or a pre-stamping
     payload) predates stamping — the identity then comes from the decision
-    ROW's own ``gate_id`` (``hitl_claims.gate_id``), which is authoritative
+    ROW's own ``review_id`` (``hitl_claims.review_id``), which is authoritative
     because the decision was committed on that row's gate.
     """
-    payload, row_gate_id = latest[1], latest[2]
+    payload, row_review_id = latest[1], latest[2]
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
         except (ValueError, TypeError):
             payload = None
-    stamped = payload.get("gate_id") if isinstance(payload, dict) else None
+    stamped = payload.get("review_id") if isinstance(payload, dict) else None
     if stamped is not None:
         return str(stamped)
-    return str(row_gate_id) if row_gate_id else None
+    return str(row_review_id) if row_review_id else None
 
 
 async def _awaiting_human_has_committed_decision(
@@ -4667,8 +4667,8 @@ async def _awaiting_human_has_committed_decision(
     run is currently waiting at:
 
     * A CLAIMED-but-undecided claim row: SKIP unconditionally (FAR-541
-      iteration 4, FIX C). Under ``uq_hitl_claims_run_gate``
-      (``UNIQUE (run_id, gate_id)``) a claimed-UNDECIDED row and a DECIDED
+      iteration 4, FIX C). Under ``uq_hitl_claims_run_review``
+      (``UNIQUE (run_id, review_id)``) a claimed-UNDECIDED row and a DECIDED
       row for the same gate cannot coexist, so the former "claimed +
       same-gate committed decision" identity match was structurally dead —
       it could never be True. A claimed run therefore always skips; its
@@ -4683,7 +4683,7 @@ async def _awaiting_human_has_committed_decision(
       and the MCP flow's resume path (``review_hitl`` never dispatches a
       resume itself). The resume is accepted only when the decision's
       identity routes it to a consumer that will actually accept it:
-      ``hitl_gate_*`` / guardrail identities accept only verdict actions
+      ``hitl_review_*`` / guardrail identities accept only verdict actions
       (a ``manual_output`` at either would bounce the run straight back to
       awaiting_human and re-dispatch-loop — FAR-541 iteration 3), while a
       MANUAL-NODE park (identity = the node id) also accepts a committed
@@ -4704,7 +4704,7 @@ async def _awaiting_human_has_committed_decision(
       reconstruction always agree (FAR-541 iteration 3);
     * in the no-undecided-rows crash-recovery branch the payload must be
       stamped AND carry an action the identity's consumer accepts:
-      ``approved``/``rejected``/``deliver_manual`` for a ``hitl_gate_*`` or
+      ``approved``/``rejected``/``deliver_manual`` for a ``hitl_review_*`` or
       guardrail identity (their consumers reject anything else and would
       bounce the run straight back to awaiting_human and re-dispatch-loop,
       FAR-541 iteration 3), or ``manual_output`` (with its ``output``) for a
@@ -4742,10 +4742,10 @@ async def _awaiting_human_has_committed_decision(
             return False
     # Gate scoping (FAR-541): the decision must resolve the gate the run is
     # waiting at. See the docstring for the state matrix.
-    if await _pending_claimed_gate_id(session, org_id, run_id) is not None:
+    if await _pending_claimed_review_id(session, org_id, run_id) is not None:
         # FAR-541 iteration 4 (FIX C): a claimed-UNDECIDED row SKIPs
         # unconditionally. Under uq_hitl_claims_run_gate
-        # (UNIQUE (run_id, gate_id)) a claimed-undecided row and a DECIDED row
+        # (UNIQUE (run_id, review_id)) a claimed-undecided row and a DECIDED row
         # for the same gate cannot coexist, so the former identity match
         # ("claimed + same-gate committed decision -> resume") was structurally
         # dead. Mid-resume crash recovery for claimed runs routes through the
@@ -4772,19 +4772,19 @@ async def _awaiting_human_has_committed_decision(
     # (HITL gates first fired that day), so NO backfill migration is shipped.
     # Ops remedy: stamp the row's ``decision_payload`` manually in the DB (or
     # raise a ticket for the run's owner) to unblock it.
-    if not isinstance(payload, dict) or not payload.get("gate_id"):
+    if not isinstance(payload, dict) or not payload.get("review_id"):
         # Unstamped / legacy ""-stamped (falsy) — cannot be verified -> SKIP.
         return False
-    identity = _decision_gate_identity(latest)
+    identity = _decision_review_identity(latest)
     action = payload.get("action")
-    if identity is not None and identity.startswith(("hitl_gate_", "guardrail_conformance")):
+    if identity is not None and identity.startswith(("hitl_review_", "guardrail_conformance")):
         # GATE / guardrail park: the gate consumer accepts only verdict
         # actions and the conformance consumer only recognized override
         # actions — a ``manual_output`` committed at either is not a verdict
         # that consumer accepts, so resuming it would bounce the run back to
         # awaiting_human and re-dispatch-loop (FAR-541 iteration 3).
         return action in ("approved", "rejected", "deliver_manual")
-    # MANUAL-NODE park (the interrupt stamps ``gate_id: node_id``): the manual
+    # MANUAL-NODE park (the interrupt stamps ``review_id: node_id``): the manual
     # consumer completes the node on any payload stamped with its node id, so
     # a committed ``manual_output`` (its ``output`` presence was checked
     # above) is a legitimately concluded decision whose resume job was lost —
@@ -4810,7 +4810,7 @@ async def _committed_decision_resume_data(
     modification.
 
     FAR-541: the reconstructed payload ALWAYS carries the decision row's own
-    ``gate_id`` (added when the payload does not already carry the stamp) so
+    ``review_id`` (added when the payload does not already carry the stamp) so
     the consumer's gate-identity check passes for legacy rows reconstructed
     for the gate they were committed on.
     """
@@ -4829,8 +4829,8 @@ async def _committed_decision_resume_data(
         reconstructed = {"action": decision}
     else:
         return None
-    if reconstructed.get("gate_id") is None and latest[2]:
-        reconstructed["gate_id"] = str(latest[2])
+    if reconstructed.get("review_id") is None and latest[2]:
+        reconstructed["review_id"] = str(latest[2])
     return reconstructed
 
 
@@ -4890,7 +4890,7 @@ class ReconcileTuning:
     claim_cap: int
     stale_window: int
     capacity_redispatch_seconds: int
-    hitl_gate_cancel_grace_seconds: int
+    hitl_review_cancel_grace_seconds: int
 
 
 def _int_setting(value: Any, default: int) -> int:
@@ -5017,14 +5017,14 @@ async def _terminalize_claim_cap_exhausted(
     return [run_id for (run_id,) in rows]
 
 
-async def _terminalize_expired_hitl_gates(
+async def _terminalize_expired_hitl_reviews(
     session: AsyncSession,
     org_id: uuid.UUID,
     *,
     grace_seconds: int,
     max_rows: int | None = None,
 ) -> list[uuid.UUID]:
-    """Terminalize ``awaiting_human`` runs whose HITL gate expired unanswered (FAR-648).
+    """Terminalize ``awaiting_human`` runs whose HITL review expired unanswered (FAR-648).
 
     DB-only, org-scoped. A run parked at ``awaiting_human`` whose open gate is
     UNCLAIMED (``hitl_claims.account_id IS NULL`` — the same predicate the
@@ -5033,7 +5033,7 @@ async def _terminalize_expired_hitl_gates(
     it (no committed decision — FAR-541 auto-approve guard) and nobody who
     never claimed the gate will decide it, yet the run keeps holding an
     org-level concurrency slot. Terminalizing ``cancelled`` with
-    ``hitl_gate_expired`` releases the slot (the terminalizer writes raw
+    ``hitl_review_expired`` releases the slot (the terminalizer writes raw
     UPDATEs and never runs ``finalize_cost``, so the caller records the
     compensating daily fact — P6', FAR-162).
 
@@ -5084,10 +5084,10 @@ async def _terminalize_expired_hitl_gates(
         ),
         {
             "oid": str(org_id),
-            "code": _HITL_GATE_EXPIRED_ERROR_CODE,
-            "detail": _HITL_GATE_EXPIRED_ERROR_DETAIL,
+            "code": _HITL_REVIEW_EXPIRED_ERROR_CODE,
+            "detail": _HITL_REVIEW_EXPIRED_ERROR_DETAIL,
             # FAR-1233: the WHY/WHO ride the same UPDATE as the status flip.
-            "reason": CANCEL_REASON_HITL_GATE_EXPIRED,
+            "reason": CANCEL_REASON_HITL_REVIEW_EXPIRED,
             "actor": CANCELLED_BY_SYSTEM,
             "grace_seconds": grace_seconds,
             "awaiting_status": AWAITING_HUMAN_STATUS,
@@ -5105,7 +5105,7 @@ async def _terminalize_expired_hitl_gates(
     return [run_id for (run_id,) in rows]
 
 
-async def _terminalize_hitl_gate_missing(
+async def _terminalize_hitl_review_missing(
     session: AsyncSession,
     org_id: uuid.UUID,
     *,
@@ -5114,14 +5114,14 @@ async def _terminalize_hitl_gate_missing(
 ) -> list[uuid.UUID]:
     """Terminalize ``awaiting_human`` runs with ZERO ``hitl_claims`` rows (FAR-721).
 
-    Complement to :func:`_terminalize_expired_hitl_gates` (FAR-648). Both that
+    Complement to :func:`_terminalize_expired_hitl_reviews` (FAR-648). Both that
     sweep and the FAR-604 park sweep (``run_admission._PARK_RUNS_SQL``) gate on
     an ``EXISTS`` of a matching gate/claim row, so an ``awaiting_human`` run
     whose gate was never written is a zombie NEITHER sweep collects, while it
     keeps holding an org-level concurrency slot. This sweep terminalizes only
     that class: ``awaiting_human`` + ``cancellation_requested = false`` + ZERO
     claim rows + ``created_at`` older than the grace window, as ``cancelled``
-    with the distinct ``hitl_gate_missing`` error code.
+    with the distinct ``hitl_review_missing`` error code.
 
     NOT over-collected: the executor's interrupt handler durably commits the
     gate (``HITLManager.create_gate``) in a dedicated session BEFORE the
@@ -5161,10 +5161,10 @@ async def _terminalize_hitl_gate_missing(
         ),
         {
             "oid": str(org_id),
-            "code": _HITL_GATE_MISSING_ERROR_CODE,
-            "detail": _HITL_GATE_MISSING_ERROR_DETAIL,
+            "code": _HITL_REVIEW_MISSING_ERROR_CODE,
+            "detail": _HITL_REVIEW_MISSING_ERROR_DETAIL,
             # FAR-1233: the WHY/WHO ride the same UPDATE as the status flip.
-            "reason": CANCEL_REASON_HITL_GATE_MISSING,
+            "reason": CANCEL_REASON_HITL_REVIEW_MISSING,
             "actor": CANCELLED_BY_SYSTEM,
             "grace_seconds": grace_seconds,
             "awaiting_status": AWAITING_HUMAN_STATUS,
@@ -5283,25 +5283,25 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         stall_reason="dispatch_failed",
     ),
     ReconcileTerminalizer(
-        key="hitl_gate",
-        stats_key="hitl_gate_expired_terminalized",
-        blob_keys=("hitl_gate_expired_terminalized",),
-        stall_reason="hitl_gate_expired",
-        coroutine_name="_terminalize_expired_hitl_gates",
-        tuning_kwargs={"grace_seconds": "hitl_gate_cancel_grace_seconds"},
+        key="hitl_review",
+        stats_key="hitl_review_expired_terminalized",
+        blob_keys=("hitl_review_expired_terminalized",),
+        stall_reason="hitl_review_expired",
+        coroutine_name="_terminalize_expired_hitl_reviews",
+        tuning_kwargs={"grace_seconds": "hitl_review_cancel_grace_seconds"},
     ),
     # FAR-721: the zero-claim complement to the FAR-648 sweep above — an
     # ``awaiting_human`` run whose gate/claim row was never written is
     # collected by neither the EXISTS-gated FAR-648 sweep nor the FAR-604 park
     # sweep, so it holds an org slot forever.  Same grace knob, distinct
-    # telemetry counter (``hitl_gate_missing_terminalized``) and stall reason.
+    # telemetry counter (``hitl_review_missing_terminalized``) and stall reason.
     ReconcileTerminalizer(
-        key="hitl_gate_missing",
-        stats_key="hitl_gate_missing_terminalized",
-        blob_keys=("hitl_gate_missing_terminalized",),
-        stall_reason="hitl_gate_missing",
-        coroutine_name="_terminalize_hitl_gate_missing",
-        tuning_kwargs={"grace_seconds": "hitl_gate_cancel_grace_seconds"},
+        key="hitl_review_missing",
+        stats_key="hitl_review_missing_terminalized",
+        blob_keys=("hitl_review_missing_terminalized",),
+        stall_reason="hitl_review_missing",
+        coroutine_name="_terminalize_hitl_review_missing",
+        tuning_kwargs={"grace_seconds": "hitl_review_cancel_grace_seconds"},
     ),
 )
 
@@ -5314,8 +5314,8 @@ _TERMINALIZERS_BY_KEY: dict[str, ReconcileTerminalizer] = {spec.key: spec for sp
 _BATCH_TERMINALIZER_SPECS: tuple[ReconcileTerminalizer, ...] = (
     _TERMINALIZERS_BY_KEY["mid_graph"],
     _TERMINALIZERS_BY_KEY["claim_cap"],
-    _TERMINALIZERS_BY_KEY["hitl_gate"],
-    _TERMINALIZERS_BY_KEY["hitl_gate_missing"],
+    _TERMINALIZERS_BY_KEY["hitl_review"],
+    _TERMINALIZERS_BY_KEY["hitl_review_missing"],
 )
 
 
@@ -5493,8 +5493,8 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         goes stale, while a LIVE run on its final claim is never killed.
       * FAR-648 gate-expiry: any ``awaiting_human`` row whose every undecided
         gate is UNCLAIMED and past ``expires_at`` +
-        ``hitl_gate_cancel_grace_seconds`` (default 60m) is terminalized
-        ``cancelled`` (``hitl_gate_expired``) — a zombie holding an org-level
+        ``hitl_review_cancel_grace_seconds`` (default 60m) is terminalized
+        ``cancelled`` (``hitl_review_expired``) — a zombie holding an org-level
         concurrency slot that no human will ever release.
 
     On match: verify the Redis read, RE-CHECK ``q.job()`` AFTER the decision
@@ -5510,7 +5510,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     are re-dispatched only when their pipeline has free capacity.
 
     Every run terminalised this tick (``executor_superseded`` /
-    ``claim_cap_exhausted`` / ``dispatch_failed`` / ``hitl_gate_expired``) gets
+    ``claim_cap_exhausted`` / ``dispatch_failed`` / ``hitl_review_expired``) gets
     a compensating ``run_daily_facts`` row (FAR-162, P6') written after the
     per-org transactions commit — the terminalizers never run
     ``finalize_cost``, so without this the terminalised runs would be
@@ -5554,7 +5554,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
-    hitl_gate_cancel_grace = int(settings.hitl_gate_cancel_grace_seconds)
+    hitl_review_cancel_grace = int(settings.hitl_review_cancel_grace_seconds)
     # FAR-720: the tick's tuning knobs travel as one frozen unit.
     tuning = ReconcileTuning(
         nodeless_window=nodeless_window,
@@ -5562,7 +5562,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         claim_cap=claim_cap,
         stale_window=stale_window,
         capacity_redispatch_seconds=capacity_redispatch_seconds,
-        hitl_gate_cancel_grace_seconds=hitl_gate_cancel_grace,
+        hitl_review_cancel_grace_seconds=hitl_review_cancel_grace,
     )
     budget_seconds = _int_setting(
         getattr(settings, "dispatcher_reconcile_budget_seconds", None), _RECONCILE_BUDGET_DEFAULT_SECONDS
@@ -5743,7 +5743,7 @@ async def _dispatcher_reconcile_body(
         rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
-    # hitl_gate_expired): the terminalizers write raw UPDATEs and never
+    # hitl_review_expired): the terminalizers write raw UPDATEs and never
     # run finalize_cost, so without this the terminalised runs would be
     # invisible to the analytics failure/stall dimensions. All per-org
     # terminalizer transactions have committed by now; each facts write
@@ -5794,7 +5794,7 @@ def _dispatcher_summary() -> dict[str, Any]:
         # The FAR-720 registry supplies the terminalizer counters
         # (claimed_but_never_dispatched, claim_cap_terminalized,
         # mid_graph_wedge_terminalized, age_terminalized,
-        # hitl_gate_expired_terminalized, hitl_gate_missing_terminalized)
+        # hitl_review_expired_terminalized, hitl_review_missing_terminalized)
         # via summary.update(_terminalizer_stats_defaults()) below.
         "runner_markers_scanned": 0,
         "runner_markers_cleared": 0,
@@ -6208,7 +6208,7 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
         # pre-refactor behaviour when a caller passes a summary lacking a
         # counter: the missing key raises KeyError and aborts the block,
         # swallowed exactly as before.  The FAR-721 zero-claim sweep is a
-        # registry entry (stall_reason="hitl_gate_missing") so it emits here
+        # registry entry (stall_reason="hitl_review_missing") so it emits here
         # with no edit to this block.
         for spec in _TERMINALIZERS:
             if summary[spec.stats_key]:

@@ -204,7 +204,7 @@ async def _create_feedback_record(
         )
         await conn.execute(
             text(
-                "INSERT INTO feedback_records (id, organisation_id, run_id, gate_id, account_id, "
+                "INSERT INTO feedback_records (id, organisation_id, run_id, review_id, account_id, "
                 "rejection_reason, rejected_output, producing_node_id, feedback_status, "
                 "feedback_handler_type) "
                 "VALUES (:id, :oid, :rid, 'gate-1', :aid, 'secret detected', (:out)::json, "

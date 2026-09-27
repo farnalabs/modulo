@@ -201,18 +201,18 @@ def step_mint_legacy(name: str, role: str, request) -> None:
     state["token"] = str(pyjwt.encode(claims, state["secret"], algorithm="HS256"))
 
 
-@when(parsers.parse('a claim token is minted for user "{name}" for run "{run_id}" and gate "{gate_id}"'))
-def step_mint_claim(name: str, run_id: str, gate_id: str, request) -> None:
+@when(parsers.parse('a claim token is minted for user "{name}" for run "{run_id}" and gate "{review_id}"'))
+def step_mint_claim(name: str, run_id: str, review_id: str, request) -> None:
     state = _state(request)
     state["token"] = jwt_mod.create_claim_token(
         name,
         state["secret"],
         run_id=run_id,
-        gate_id=gate_id,
+        review_id=review_id,
         client_id=state["account"],
     )
     state["claim_run"] = run_id
-    state["claim_gate"] = gate_id
+    state["claim_gate"] = review_id
 
 
 # -- When: decoding / rotating --------------------------------------------------
@@ -265,12 +265,12 @@ def step_rotate_token(request) -> None:
     _capture(request, lambda: jwt_mod.refresh_access_token(state["token"], state["secret"]))
 
 
-@when(parsers.parse('I decode the claim token against run "{run_id}" and gate "{gate_id}"'))
-def step_decode_claim(run_id: str, gate_id: str, request) -> None:
+@when(parsers.parse('I decode the claim token against run "{run_id}" and gate "{review_id}"'))
+def step_decode_claim(run_id: str, review_id: str, request) -> None:
     state = _state(request)
     _capture(
         request,
-        lambda: jwt_mod.decode_claim_token(state["token"], state["secret"], run_id=run_id, gate_id=gate_id),
+        lambda: jwt_mod.decode_claim_token(state["token"], state["secret"], run_id=run_id, review_id=review_id),
     )
     if state["jwt_error"] is None and isinstance(state["decoded"], dict):
         state["claim_payload"] = state["decoded"]
@@ -344,20 +344,20 @@ def step_claim_accepted(request) -> None:
     assert state["claim_payload"] is not None, "no claim payload was decoded"
 
 
-@then(parsers.parse('the claim token carries run "{run_id}" and gate "{gate_id}"'))
-def step_claim_carries(run_id: str, gate_id: str, request) -> None:
+@then(parsers.parse('the claim token carries run "{run_id}" and gate "{review_id}"'))
+def step_claim_carries(run_id: str, review_id: str, request) -> None:
     payload = _state(request)["claim_payload"]
     assert payload is not None, "no claim payload was decoded"
     assert payload.get("run_id") == run_id, f"expected run {run_id!r}, got {payload.get('run_id')!r}"
-    assert payload.get("gate_id") == gate_id, f"expected gate {gate_id!r}, got {payload.get('gate_id')!r}"
+    assert payload.get("review_id") == review_id, f"expected gate {review_id!r}, got {payload.get('review_id')!r}"
     assert payload.get("purpose") == "claim_token"
 
 
-@then(parsers.parse('decoding the claim token against the wrong gate "{gate_id}" is rejected'))
-def step_claim_wrong_gate(gate_id: str, request) -> None:
+@then(parsers.parse('decoding the claim token against the wrong gate "{review_id}" is rejected'))
+def step_claim_wrong_gate(review_id: str, request) -> None:
     state = _state(request)
     try:
-        jwt_mod.decode_claim_token(state["token"], state["secret"], run_id=state["claim_run"], gate_id=gate_id)
+        jwt_mod.decode_claim_token(state["token"], state["secret"], run_id=state["claim_run"], review_id=review_id)
     except JWTError:
         return
     raise AssertionError("expected a gate-id mismatch to be rejected but the claim token decoded")

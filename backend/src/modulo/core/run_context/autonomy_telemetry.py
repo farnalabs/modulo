@@ -39,7 +39,7 @@ Data model
       "payload_json": {
         "actor": "system",
         "summary": "<human-readable one-line description>",
-        "gate_id": "<gate_id>",
+        "review_id": "<review_id>",
         "autonomy_level": "manual_approval | notify_on_complete | fully_autonomous",
         "gate_outcome": "skipped | auto_approved | fired",
         "pipeline_id": "<pipeline_id>" | null,
@@ -145,7 +145,7 @@ async def emit_autonomy_telemetry(
     *,
     org_id: uuid.UUID | None,
     run_id: uuid.UUID | str | None,
-    gate_id: str,
+    review_id: str,
     autonomy_level: str,
     gate_outcome: str,
     pipeline_id: uuid.UUID | str | None = None,
@@ -162,7 +162,7 @@ async def emit_autonomy_telemetry(
     org_id:
         Organisation the run belongs to. Required for the audit chain; when
         ``None`` the call is skipped.
-    run_id, gate_id, autonomy_level, gate_outcome:
+    run_id, review_id, autonomy_level, gate_outcome:
         The evidence-record fields described in the module docstring.
     pipeline_id:
         Optional pipeline id, carried in the payload for joins.
@@ -185,9 +185,9 @@ async def emit_autonomy_telemetry(
             "actor": SYSTEM_ACTOR,
             "summary": (
                 f'Autonomy level "{autonomy_level}" applied to run '
-                f"{short_id(run_id) or 'unknown'} (gate {gate_id}, {gate_outcome})"
+                f"{short_id(run_id) or 'unknown'} (gate {review_id}, {gate_outcome})"
             ),
-            "gate_id": gate_id,
+            "review_id": review_id,
             "autonomy_level": autonomy_level,
             "gate_outcome": gate_outcome,
             "pipeline_id": str(pipeline_id) if pipeline_id else None,
@@ -212,7 +212,7 @@ async def emit_autonomy_clamp_telemetry(
     *,
     org_id: uuid.UUID | None,
     run_id: uuid.UUID | str | None,
-    gate_id: str,
+    review_id: str,
     requested: str | None,
     effective: str,
     ceiling: str,
@@ -235,7 +235,7 @@ async def emit_autonomy_clamp_telemetry(
         a no-op.
     org_id:
         Organisation the run belongs to; ``None`` skips the write.
-    run_id, gate_id:
+    run_id, review_id:
         The run and gate the clamp occurred on.
     requested:
         The autonomy level the recommendation asked for.
@@ -260,9 +260,9 @@ async def emit_autonomy_clamp_telemetry(
             "summary": (
                 f'Autonomy recommendation "{requested}" clamped to "{effective}" '
                 f'(ceiling "{ceiling}") on run {short_id(run_id) or "unknown"} '
-                f"(gate {gate_id})"
+                f"(gate {review_id})"
             ),
-            "gate_id": gate_id,
+            "review_id": review_id,
             "requested": requested,
             "effective": effective,
             "ceiling": ceiling,

@@ -77,32 +77,32 @@ Feature: Run Context — Seeding, Write Guard, and Audit
   Scenario: Autonomy recommendation cannot escalate above the default ceiling
     Given pipeline "deploy-service" has autonomy default "manual_approval"
     And run_context contains "autonomy_recommendation" = "fully_autonomous"
-    When a HITL gate checks the autonomy level
+    When a HITL review checks the autonomy level
     Then the gate uses "manual_approval"
     And the gate interrupts for human review
 
   Scenario: Invalid autonomy recommendation falls back to pipeline default
     Given pipeline "deploy-service" has autonomy default "fully_autonomous"
     And run_context contains "autonomy_recommendation" = "bogus_value"
-    When a HITL gate checks the autonomy level
+    When a HITL review checks the autonomy level
     Then the gate uses the pipeline default "fully_autonomous"
 
   Scenario: No autonomy configured falls back to manual_approval
     Given pipeline "deploy-service" has no autonomy defaults
-    When a HITL gate checks the autonomy level
+    When a HITL review checks the autonomy level
     Then the gate interrupts for human review
 
   Scenario: Autonomy recommendation may lower the level
     Given pipeline "deploy-service" has autonomy default "fully_autonomous"
     When a context-setter node changes autonomy_recommendation to "manual_approval"
-    Then the next HITL gate checks the new autonomy level
+    Then the next HITL review checks the new autonomy level
     And the gate uses "manual_approval"
 
   Scenario: Ceiling permits raising autonomy up to max_autonomy_level
     Given pipeline "deploy-service" has autonomy default "manual_approval"
     And pipeline "deploy-service" has autonomy ceiling "fully_autonomous"
     And run_context contains "autonomy_recommendation" = "notify_on_complete"
-    When a HITL gate checks the autonomy level
+    When a HITL review checks the autonomy level
     Then the gate uses "notify_on_complete"
 
   Scenario: Context-setter writes empty dict — no-op

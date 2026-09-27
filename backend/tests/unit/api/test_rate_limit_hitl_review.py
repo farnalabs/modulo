@@ -1,19 +1,19 @@
 """Unit tests for HITL review endpoint rate limiting.
 
 PRD §7.18 specifies 20/min for HITL review endpoints. They live under
-/api/v1/runs/{run_id}/hitl/{gate_id}/{action} where the run/gate ids are
+/api/v1/runs/{run_id}/hitl/{review_id}/{action} where the run/gate ids are
 variable, so they are matched by a dedicated HITL rule (`HITL_RULE`: 20/min)
 instead of the more generous /api/v1/runs rule (60/min) that prefix-matches
 the path. Since FAR-611 the bucket key normalizes the WHOLE variable tail —
 run id, gate id (which is an arbitrary node id like
-``hitl_gate_<source>_<target>``, NOT a UUID), and the trailing action — so the
+``hitl_review_<source>_<target>``, NOT a UUID), and the trailing action — so the
 20/min budget is aggregate per identity across runs, gates, and actions. The
 pre-FAR-611 normalizer only stripped hex-UUID gate segments, which let the
 2026-09-05 bulk-approve sweep (22 gates / ~34 req/min) spread its requests
 across per-gate buckets and never exceed 20/min on any single one.
 
 FAR-611 review fix: the approve-capable manual-output submit route
-(POST /api/v1/runs/{run_id}/manual/{gate_id}/submit) has no /hitl/ segment in
+(POST /api/v1/runs/{run_id}/manual/{review_id}/submit) has no /hitl/ segment in
 its path, so it used to ride the 60/min runs rule; it now shares the SAME
 aggregate bucket as the /hitl/ review actions.
 """
@@ -37,11 +37,11 @@ HITL_ENDPOINTS = [
     "/api/v1/runs/run-123/manual/gate-abc/submit",
 ]
 
-# A realistic (non-hex) HITL gate id — gate ids are "hitl_gate_<source>_<target>"
+# A realistic (non-hex) HITL gate id — gate ids are "hitl_review_<source>_<target>"
 # node ids, never UUIDs. This is the exact shape that defeated the pre-FAR-611
 # normalizer.
 _SWEEP_RUN_ID = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
-_SWEEP_GATE = "hitl_gate_fetch-pr-title_verify-branch"
+_SWEEP_GATE = "hitl_review_fetch-pr-title_verify-branch"
 
 
 def _make_settings() -> Settings:
@@ -136,14 +136,14 @@ class TestHitlReviewRateLimit:
         assert resp.status_code == status.HTTP_200_OK
         mock_registry.check.assert_awaited_once()
         key = mock_registry.check.await_args[0][0]
-        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<gate_id>"
+        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<review_id>"
 
     def test_hitl_key_normalizes_variable_uuid_segments(self) -> None:
         """Variable run/gate UUIDs must be normalised to fixed placeholders so
         per-segment bucket rotation never happens (FAR-1304, FAR-611)."""
         run_id = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
-        gate_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
-        endpoint = f"/api/v1/runs/{run_id}/hitl/{gate_id}/claim"
+        review_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
+        endpoint = f"/api/v1/runs/{run_id}/hitl/{review_id}/claim"
         app = FastAPI()
         app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
         mock_registry = MagicMock(spec=RateLimiterRegistry)
@@ -159,10 +159,10 @@ class TestHitlReviewRateLimit:
 
         assert resp.status_code == status.HTTP_200_OK
         key = mock_registry.check.await_args[0][0]
-        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<gate_id>"
+        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<review_id>"
 
-    def test_hitl_key_normalizes_non_uuid_gate_ids(self) -> None:
-        """REAL gate ids are node ids like ``hitl_gate_<source>_<target>`` —
+    def test_hitl_key_normalizes_non_uuid_review_ids(self) -> None:
+        """REAL gate ids are node ids like ``hitl_review_<source>_<target>`` —
         the pre-FAR-611 normalizer only stripped hex-UUID gate segments, so
         these paths kept the raw gate id in the key and every gate got its
         own 20/min bucket. This is the regression test for the 2026-09-05
@@ -183,14 +183,14 @@ class TestHitlReviewRateLimit:
 
         assert resp.status_code == status.HTTP_200_OK
         key = mock_registry.check.await_args[0][0]
-        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<gate_id>"
+        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<review_id>"
         assert _SWEEP_GATE not in key
 
     def test_hitl_key_does_not_leak_raw_uuids(self) -> None:
         """Raw run/gate UUIDs must never surface in a rate-limit bucket key."""
         run_id = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
-        gate_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
-        endpoint = f"/api/v1/runs/{run_id}/hitl/{gate_id}/claim"
+        review_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
+        endpoint = f"/api/v1/runs/{run_id}/hitl/{review_id}/claim"
         app = FastAPI()
         app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
         mock_registry = MagicMock(spec=RateLimiterRegistry)
@@ -207,7 +207,7 @@ class TestHitlReviewRateLimit:
         assert resp.status_code == status.HTTP_200_OK
         key = mock_registry.check.await_args[0][0]
         assert run_id not in key
-        assert gate_id not in key
+        assert review_id not in key
 
     @pytest.mark.parametrize("endpoint", HITL_ENDPOINTS)
     def test_hitl_check_uses_20_per_min_budget(self, endpoint: str) -> None:
@@ -229,7 +229,7 @@ class TestHitlReviewRateLimit:
         app = FastAPI()
         app.add_api_route(
             "/api/v1/runs/run-123/hitl/gate-abc/pending",
-            lambda: {"gates": []},
+            lambda: {"reviews": []},
             methods=["GET"],
             include_in_schema=False,
         )
@@ -336,10 +336,10 @@ class _FakeRedis:
         return _FakePipeline(self._store)
 
 
-def _make_sweep_app(gate_ids: list[str], actions: tuple[str, ...], registry: RateLimiterRegistry) -> FastAPI:
+def _make_sweep_app(review_ids: list[str], actions: tuple[str, ...], registry: RateLimiterRegistry) -> FastAPI:
     """App exposing claim/approve routes for every gate under a fixed UUID run."""
     app = FastAPI()
-    for gate in gate_ids:
+    for gate in review_ids:
         for action in actions:
             app.add_api_route(
                 f"/api/v1/runs/{_SWEEP_RUN_ID}/hitl/{gate}/{action}",
@@ -363,7 +363,7 @@ class TestAggregateSweepThrottle:
 
         The pre-FAR-611 limiter gave every gate its own bucket (one request
         each) so this exact pattern sailed through unthrottled."""
-        gates = [f"hitl_gate_node-{i}_review" for i in range(25)]
+        gates = [f"hitl_review_node-{i}_review" for i in range(25)]
         registry = RateLimiterRegistry(redis_client=_FakeRedis())
         client = TestClient(_make_sweep_app(gates, ("claim",), registry))
 
@@ -375,7 +375,7 @@ class TestAggregateSweepThrottle:
 
     def test_mixed_claim_and_approve_share_the_budget(self) -> None:
         """A claim+approve sweep across one gate set trips at 21 total actions."""
-        gates = [f"hitl_gate_node-{i}_verify" for i in range(15)]
+        gates = [f"hitl_review_node-{i}_verify" for i in range(15)]
         registry = RateLimiterRegistry(redis_client=_FakeRedis())
         client = TestClient(_make_sweep_app(gates, ("claim", "approve"), registry))
 
@@ -389,11 +389,11 @@ class TestAggregateSweepThrottle:
         assert statuses[20] == status.HTTP_429_TOO_MANY_REQUESTS
 
 
-def _make_mixed_surface_app(gate_ids: list[str], registry: RateLimiterRegistry) -> FastAPI:
+def _make_mixed_surface_app(review_ids: list[str], registry: RateLimiterRegistry) -> FastAPI:
     """App exposing BOTH budgeted HITL surfaces for every gate: the /hitl/
     approve route and the /manual/{gate}/submit route (no /hitl/ segment)."""
     app = FastAPI()
-    for gate in gate_ids:
+    for gate in review_ids:
         app.add_api_route(
             f"/api/v1/runs/{_SWEEP_RUN_ID}/hitl/{gate}/approve",
             lambda: {"status": "ok"},
@@ -438,13 +438,13 @@ class TestManualSubmitSharesHitlBudget:
 
         assert resp.status_code == status.HTTP_200_OK
         key = mock_registry.check.await_args[0][0]
-        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<gate_id>"
+        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<review_id>"
 
     def test_20_mixed_surface_requests_trip_the_21st(self) -> None:
         """20 mixed /hitl/approve + /manual/submit requests across distinct
         gates fill one bucket; the 21st (either surface) 429s. Pre-fix, the
         manual submits rode the 60/min runs rule and the mix sailed through."""
-        gates = [f"hitl_gate_node-{i}_manual" for i in range(25)]
+        gates = [f"hitl_review_node-{i}_manual" for i in range(25)]
         registry = RateLimiterRegistry(redis_client=_FakeRedis())
         client = TestClient(_make_mixed_surface_app(gates, registry))
 

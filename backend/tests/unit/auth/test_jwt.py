@@ -574,14 +574,14 @@ def test_create_claim_token_roundtrip() -> None:
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
     )
-    payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
+    payload = decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE)
     assert payload["sub"] == _ACCOUNT
     assert payload["purpose"] == "claim_token"
     assert payload["run_id"] == _RUN
-    assert payload["gate_id"] == _GATE
+    assert payload["review_id"] == _GATE
     assert payload["client_id"] == _ACCOUNT
 
 
@@ -590,10 +590,10 @@ def test_create_claim_token_default_15_min_expiry() -> None:
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
     )
-    payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
+    payload = decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE)
     exp_ts: float = payload["exp"]  # type: ignore[assignment]
     iat_ts: float = payload["iat"]  # type: ignore[assignment]
     exp = datetime.fromtimestamp(exp_ts, tz=UTC)
@@ -606,11 +606,11 @@ def test_create_claim_token_custom_expiry() -> None:
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
         expiry_minutes=60,
     )
-    payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
+    payload = decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE)
     exp_ts: float = payload["exp"]  # type: ignore[assignment]
     iat_ts: float = payload["iat"]  # type: ignore[assignment]
     exp = datetime.fromtimestamp(exp_ts, tz=UTC)
@@ -623,11 +623,11 @@ def test_decode_claim_token_wrong_key_raises() -> None:
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
     )
     with pytest.raises(JWTError):
-        decode_claim_token(token, "wrong_key_32_bytes_minimum_______", run_id=_RUN, gate_id=_GATE)
+        decode_claim_token(token, "wrong_key_32_bytes_minimum_______", run_id=_RUN, review_id=_GATE)
 
 
 def test_decode_claim_token_wrong_run_id_raises() -> None:
@@ -635,23 +635,23 @@ def test_decode_claim_token_wrong_run_id_raises() -> None:
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
     )
     with pytest.raises(JWTError, match="run_id"):
-        decode_claim_token(token, _KEY, run_id=_RUN + "x", gate_id=_GATE)
+        decode_claim_token(token, _KEY, run_id=_RUN + "x", review_id=_GATE)
 
 
-def test_decode_claim_token_wrong_gate_id_raises() -> None:
+def test_decode_claim_token_wrong_review_id_raises() -> None:
     token = create_claim_token(
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
     )
-    with pytest.raises(JWTError, match="gate_id"):
-        decode_claim_token(token, _KEY, run_id=_RUN, gate_id="wrong-step")
+    with pytest.raises(JWTError, match="review_id"):
+        decode_claim_token(token, _KEY, run_id=_RUN, review_id="wrong-step")
 
 
 def test_decode_claim_token_client_id_mismatch_raises() -> None:
@@ -659,12 +659,12 @@ def test_decode_claim_token_client_id_mismatch_raises() -> None:
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
     )
     other = "99999999-9999-9999-9999-999999999999"
     with pytest.raises(JWTError, match="client_id"):
-        decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE, expected_client_id=other)
+        decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE, expected_client_id=other)
 
 
 def test_decode_claim_token_accepts_matching_client_id() -> None:
@@ -672,10 +672,10 @@ def test_decode_claim_token_accepts_matching_client_id() -> None:
         str(_ACCOUNT),
         _KEY,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         client_id=str(_ACCOUNT),
     )
-    payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE, expected_client_id=str(_ACCOUNT))
+    payload = decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE, expected_client_id=str(_ACCOUNT))
     assert payload["client_id"] == _ACCOUNT
 
 
@@ -685,14 +685,14 @@ def test_decode_claim_token_expired_raises() -> None:
         "sub": str(_ACCOUNT),
         "purpose": "claim_token",
         "run_id": _RUN,
-        "gate_id": _GATE,
+        "review_id": _GATE,
         "client_id": str(_ACCOUNT),
         "iat": past - 900,
         "exp": past,
     }
     token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError):
-        decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
+        decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE)
 
 
 def test_decode_claim_token_missing_purpose_raises() -> None:
@@ -700,14 +700,14 @@ def test_decode_claim_token_missing_purpose_raises() -> None:
     claims = {
         "sub": str(_ACCOUNT),
         "run_id": _RUN,
-        "gate_id": _GATE,
+        "review_id": _GATE,
         "client_id": str(_ACCOUNT),
         "iat": future - 3600,
         "exp": future,
     }
     token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="purpose"):
-        decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
+        decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE)
 
 
 def test_decode_claim_token_wrong_purpose_raises() -> None:
@@ -716,11 +716,11 @@ def test_decode_claim_token_wrong_purpose_raises() -> None:
         "sub": str(_ACCOUNT),
         "purpose": "access",
         "run_id": _RUN,
-        "gate_id": _GATE,
+        "review_id": _GATE,
         "client_id": str(_ACCOUNT),
         "iat": future - 3600,
         "exp": future,
     }
     token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError, match="purpose"):
-        decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE)
+        decode_claim_token(token, _KEY, run_id=_RUN, review_id=_GATE)

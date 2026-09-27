@@ -4,7 +4,7 @@ Complements ``test_pipelines_endpoint.py`` (CRUD + graph happy paths),
 ``test_pipeline_copy_errors.py`` (clone failures), ``test_pipeline_team_visibility.py``
 (team gates) and the per-feature pipeline test modules by covering:
 
-* the graph-write denial translation (``_deny_hitl_gate`` /
+* the graph-write denial translation (``_deny_hitl_review`` /
   ``_handle_graph_write_denials`` — 403/503 mapping + audited denial),
 * the ``update_pipeline`` surfaces (team-transition re-validation, autonomy
   audit, graph-in-PATCH path, active-runs 409, 404s, denial mapping),
@@ -39,9 +39,9 @@ from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.routes.pipelines import _finalize_locked_graph_save
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.hitl_gate_guard import (
+from modulo.db.crud.hitl_review_guard import (
     GuardrailBindingStripDenied,
-    HitlGateWeakeningDenied,
+    HitlReviewWeakeningDenied,
     denial_http_status,
 )
 from modulo.settings import Settings, get_settings
@@ -279,11 +279,11 @@ def _edge_dict() -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def test_deny_hitl_gate_audits_and_raises_403() -> None:
-    from modulo.api.routes.pipelines import _deny_hitl_gate
+async def test_deny_hitl_review_audits_and_raises_403() -> None:
+    from modulo.api.routes.pipelines import _deny_hitl_review
 
     session = _make_session()
-    exc = HitlGateWeakeningDenied(
+    exc = HitlReviewWeakeningDenied(
         reason_code="gate-removal",
         correlation_keys=[("a", "b", "default")],
         weakening_types=["removed"],
@@ -294,7 +294,7 @@ async def test_deny_hitl_gate_audits_and_raises_403() -> None:
         patch(f"{_PREFIX}append_audit_event", new_callable=AsyncMock) as audit,
         pytest.raises(HTTPException) as excinfo,
     ):
-        await _deny_hitl_gate(
+        await _deny_hitl_review(
             session,
             org_id=_ORG_ID,
             account_id=_USER_ID,
@@ -307,17 +307,17 @@ async def test_deny_hitl_gate_audits_and_raises_403() -> None:
     audit.assert_awaited_once()
 
 
-async def test_deny_hitl_gate_audit_failure_still_raises() -> None:
-    from modulo.api.routes.pipelines import _deny_hitl_gate
+async def test_deny_hitl_review_audit_failure_still_raises() -> None:
+    from modulo.api.routes.pipelines import _deny_hitl_review
 
     session = _make_session()
-    exc = HitlGateWeakeningDenied(reason_code="gate-removal")
+    exc = HitlReviewWeakeningDenied(reason_code="gate-removal")
     with (
         patch(f"{_PREFIX}set_rls_org", new_callable=AsyncMock),
         patch(f"{_PREFIX}append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit down"))),
         pytest.raises(HTTPException) as excinfo,
     ):
-        await _deny_hitl_gate(
+        await _deny_hitl_review(
             session,
             org_id=_ORG_ID,
             account_id=_USER_ID,
@@ -337,7 +337,7 @@ async def test_handle_graph_write_denials_maps_both_types() -> None:
     principal.account_id = _USER_ID
     principal.request_id = None
 
-    hitl_exc = HitlGateWeakeningDenied(reason_code="gate-removal")
+    hitl_exc = HitlReviewWeakeningDenied(reason_code="gate-removal")
     with (
         patch(f"{_PREFIX}set_rls_org", new_callable=AsyncMock),
         patch(f"{_PREFIX}append_audit_event", new_callable=AsyncMock),
@@ -626,13 +626,13 @@ def test_find_node_and_edge_helpers() -> None:
     edge.target_node_id = uuid.uuid4()
     edge.edge_type = "default"
     edge.condition_expression = None
-    edge.hitl_gate_config = {"label": "gate"}
+    edge.hitl_review_config = {"label": "gate"}
     edge.source_port = "out"
     edge.target_port = "in"
     d = _edge_to_dict(edge)
     assert d["source_node_id"] == str(edge.source_node_id)
     assert d["source_port"] == "out"
-    assert d["hitl_gate_config"] == {"label": "gate"}
+    assert d["hitl_review_config"] == {"label": "gate"}
 
 
 def test_extract_agent_command_sync_updates_rejects_bad_shapes() -> None:
@@ -1102,7 +1102,7 @@ def test_save_as_composite_happy_path_detects_parameter_ports(client: tuple[Test
     edge_row.target_node_id = uuid.UUID(node_b["id"])
     edge_row.edge_type = "default"
     edge_row.condition_expression = None
-    edge_row.hitl_gate_config = None
+    edge_row.hitl_review_config = None
     edges_result.scalars.return_value.all = MagicMock(return_value=[edge_row])
 
     def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
@@ -1932,6 +1932,25 @@ async def test_finalize_locked_graph_save_reraises_unrecognised_error() -> None:
     except RuntimeError as caught:
         with pytest.raises(RuntimeError, match="kaboom"):
             await _finalize_locked_graph_save(caught, AsyncMock(), principal=principal, pipeline_id=_PIPELINE_ID)
+
+
+async def test_finalize_locked_graph_save_denies_weakening() -> None:
+    """The shared mapping routes a HITL-review-weakening denial to the audit +
+    HTTP translation helper (``_deny_hitl_review``) rather than raising raw.
+
+    ``_deny_hitl_review`` is patched here so the helper's own translation
+    (tested separately) does not mask this branch; the assertion pins that the
+    denial path is taken and the helper returns to its caller.
+    """
+    principal = MagicMock()
+    principal.organisation_id = _ORG_ID
+    principal.account_id = _USER_ID
+    exc = HitlReviewWeakeningDenied(reason_code="gate-removal")
+    with patch(f"{_PREFIX}_deny_hitl_review", new_callable=AsyncMock) as deny:
+        await _finalize_locked_graph_save(exc, AsyncMock(), principal=principal, pipeline_id=_PIPELINE_ID)
+
+    deny.assert_awaited_once()
+    assert deny.await_args.kwargs["exc"] is exc
 
 
 # ---------------------------------------------------------------------------

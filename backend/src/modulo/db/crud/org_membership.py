@@ -113,7 +113,7 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     account resolves to None, and every existing caller's None-check denies.
     INNER-JOIN semantics: a membership whose account row is missing resolves
     to None. Lives in the db layer (pure ORM query) so the service-layer
-    backstop (db.crud.hitl_gate_guard) can reuse it without importing
+    backstop (db.crud.hitl_review_guard) can reuse it without importing
     ``auth.dependencies`` (which would transitively reach the api layer,
     violating the import-linter contracts).
     """

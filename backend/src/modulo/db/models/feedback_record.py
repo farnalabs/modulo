@@ -26,7 +26,7 @@ class FeedbackRecord(OrgScoped):
         nullable=False,
         index=True,
     )
-    gate_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    review_id: Mapped[str] = mapped_column(String(255), nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )

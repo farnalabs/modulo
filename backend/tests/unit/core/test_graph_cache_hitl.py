@@ -1,6 +1,6 @@
 """Unit tests for the HITL gate reject→correction dispatch seam (FAR-210 follow-up).
 
-The ``_hitl_gate`` node builder (``node_runner.make_hitl_gate_fn``) is where a
+The ``_hitl_review`` node builder (``node_runner.make_hitl_review_fn``) is where a
 HITL reject decision lands during a graph resume. When the gate config declares
 a ``correction_target`` and the human REJECTED the gate, the node dispatches the
 single-node correction for the blocked node via
@@ -14,12 +14,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
 
 def _gate_fn(correction_target: str | None = None, *, org_id: uuid.UUID | None = None):
     config: dict = {
-        "gate_id": "hitl_gate_a_b",
+        "review_id": "hitl_review_a_b",
         "label": "review",
         "description": "",
         "human_only": True,
@@ -28,12 +28,12 @@ def _gate_fn(correction_target: str | None = None, *, org_id: uuid.UUID | None =
     }
     if correction_target is not None:
         config["correction_target"] = correction_target
-    return make_hitl_gate_fn(config, session_factory=AsyncMock(), org_id=org_id or uuid.uuid4())
+    return make_hitl_review_fn(config, session_factory=AsyncMock(), org_id=org_id or uuid.uuid4())
 
 
 def _state(**overrides: dict) -> dict:
     state: dict = {
-        "_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_a_b", "reason": "secret detected"},
+        "_hitl_decision": {"action": "rejected", "review_id": "hitl_review_a_b", "reason": "secret detected"},
         "_run_id": uuid.uuid4(),
         "output": {"body": "secret: hunter2"},
     }
@@ -83,7 +83,7 @@ async def test_approve_with_correction_target_does_not_dispatch():
         "modulo.core.feedback_manager.dispatch_reject_correction",
         new=AsyncMock(return_value=None),
     ) as dispatch:
-        result = await gate(_state(_hitl_decision={"action": "approved", "gate_id": "hitl_gate_a_b"}))
+        result = await gate(_state(_hitl_decision={"action": "approved", "review_id": "hitl_review_a_b"}))
 
     dispatch.assert_not_awaited()
     assert result["artifacts"][0]["result"] == "approved"

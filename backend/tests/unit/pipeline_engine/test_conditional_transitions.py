@@ -20,7 +20,7 @@ from modulo.core.pipeline_engine.graph_cache import (
 from modulo.core.pipeline_engine.node_runner import (
     _evaluate_eval_condition,
     _is_truthy,
-    make_hitl_gate_fn,
+    make_hitl_review_fn,
 )
 
 # ---------------------------------------------------------------------------
@@ -194,33 +194,33 @@ def test_conditional_router_jmespath_nested():
 
 def test_gate_kickback_router_empty_hitl_decision():
     """Empty _hitl_decision dict routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
+    router = _make_gate_kickback_router("normal", "reject", review_id="hitl_review_a_b")
     assert router({"_hitl_decision": {}}) == "normal"
 
 
 def test_gate_kickback_router_non_dict_hitl_decision():
     """Non-dict _hitl_decision value routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
+    router = _make_gate_kickback_router("normal", "reject", review_id="hitl_review_a_b")
     assert router({"_hitl_decision": "garbage"}) == "normal"
 
 
 def test_gate_kickback_router_no_action_key():
     """_hitl_decision without 'action' key routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
+    router = _make_gate_kickback_router("normal", "reject", review_id="hitl_review_a_b")
     assert router({"_hitl_decision": {"status": "pending"}}) == "normal"
 
 
 def test_gate_kickback_router_non_rejected_action():
     """_hitl_decision with non-'rejected' action routes to normal_target."""
-    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
-    assert router({"_hitl_decision": {"action": "approved", "gate_id": "hitl_gate_a_b"}}) == "normal"
-    assert router({"_hitl_decision": {"action": "escalated", "gate_id": "hitl_gate_a_b"}}) == "normal"
+    router = _make_gate_kickback_router("normal", "reject", review_id="hitl_review_a_b")
+    assert router({"_hitl_decision": {"action": "approved", "review_id": "hitl_review_a_b"}}) == "normal"
+    assert router({"_hitl_decision": {"action": "escalated", "review_id": "hitl_review_a_b"}}) == "normal"
 
 
 def test_gate_kickback_router_rejected_action():
     """_hitl_decision with 'rejected' action routes to reject_target."""
-    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
-    assert router({"_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_a_b"}}) == "reject"
+    router = _make_gate_kickback_router("normal", "reject", review_id="hitl_review_a_b")
+    assert router({"_hitl_decision": {"action": "rejected", "review_id": "hitl_review_a_b"}}) == "reject"
 
 
 def test_gate_kickback_router_foreign_rejection_routes_normal():
@@ -228,8 +228,8 @@ def test_gate_kickback_router_foreign_rejection_routes_normal():
     THIS edge to the reject target — the router is reachable without the gate
     consuming a decision (condition/autonomy skip) and ``_hitl_decision`` is
     never cleared from state."""
-    router = _make_gate_kickback_router("normal", "reject", gate_id="hitl_gate_a_b")
-    assert router({"_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_c_d"}}) == "normal"
+    router = _make_gate_kickback_router("normal", "reject", review_id="hitl_review_a_b")
+    assert router({"_hitl_decision": {"action": "rejected", "review_id": "hitl_review_c_d"}}) == "normal"
     assert router({"_hitl_decision": {"action": "rejected"}}) == "normal"
 
 
@@ -333,7 +333,7 @@ async def test_gate_with_reject_edge_routes_on_rejection():
                 "source": "source",
                 "target": "target",
                 "type": "normal",
-                "hitl_gate_config": {
+                "hitl_review_config": {
                     "label": "Review",
                     "description": "Gate",
                     "claim_expiry_minutes": 60,
@@ -352,8 +352,8 @@ async def test_gate_with_reject_edge_routes_on_rejection():
         "run_context": {"cancelled": False, "input": {}},
         "artifacts": [],
         # FAR-541: the resume decision is stamped with the gate it resolves
-        # (gate id = hitl_gate_<source>_<target>).
-        "_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_source_target"},
+        # (gate id = hitl_review_<source>_<target>).
+        "_hitl_decision": {"action": "rejected", "review_id": "hitl_review_source_target"},
     }
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     result = await compiled.ainvoke(initial_state, config)
@@ -376,7 +376,7 @@ async def test_gate_with_reject_target_routes_on_rejection():
                 "source": "source",
                 "target": "target",
                 "type": "normal",
-                "hitl_gate_config": {
+                "hitl_review_config": {
                     "label": "Review",
                     "description": "Gate",
                     "claim_expiry_minutes": 60,
@@ -391,8 +391,8 @@ async def test_gate_with_reject_target_routes_on_rejection():
         "run_context": {"cancelled": False, "input": {}},
         "artifacts": [],
         # FAR-541: the resume decision is stamped with the gate it resolves
-        # (gate id = hitl_gate_<source>_<target>).
-        "_hitl_decision": {"action": "rejected", "gate_id": "hitl_gate_source_target"},
+        # (gate id = hitl_review_<source>_<target>).
+        "_hitl_decision": {"action": "rejected", "review_id": "hitl_review_source_target"},
     }
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     result = await compiled.ainvoke(initial_state, config)
@@ -451,18 +451,18 @@ async def test_conditional_graph_accepts_mixed_naming():
 async def test_condition_syntax_error_fails_closed():
     """An invalid JMESPath gate condition fails CLOSED — ValueError, run fails.
 
-    ``make_hitl_gate_fn`` compiles the JMESPath expression up front; a syntax
+    ``make_hitl_review_fn`` compiles the JMESPath expression up front; a syntax
     error raises ``ValueError`` (wrapping the JMESPathError) instead of
     silently skipping the gate (fail-open).
     """
-    gate_config = {"gate_id": "bad-cond", "condition": "score >>"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "bad-cond", "condition": "score >>"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(ValueError, match="Invalid HITL gate condition expression"):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "score": 0.8,
             }
         )
@@ -478,7 +478,7 @@ async def test_eval_condition_nonexistent_eval_name_is_graceful():
     mis-evaluation of the condition.
     """
     gate_config = {
-        "gate_id": "eval-cond-missing",
+        "review_id": "eval-cond-missing",
         "eval_condition": {"eval_name": "not-defined", "threshold": 0.8, "operator": "lt"},
     }
     eval_def = EvalDefinition(
@@ -489,16 +489,16 @@ async def test_eval_condition_nonexistent_eval_name_is_graceful():
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "pass",
             }
         )
 
     interrupt_list = exc_info.value.args[0]
-    assert interrupt_list[0].value["gate_id"] == "eval-cond-missing"
+    assert interrupt_list[0].value["review_id"] == "eval-cond-missing"

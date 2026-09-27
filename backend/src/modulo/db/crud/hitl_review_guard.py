@@ -22,7 +22,7 @@ Design notes (plan §1, §3):
   node-level ``human_only`` relaxations and hitl-node removal when the caller
   passes ``old_nodes``/``new_nodes``.
 - **Presence signal**: a new edge whose topology key matches a pre-existing row
-  preserves the stored value when ``hitl_gate_config_present`` is False;
+  preserves the stored value when ``hitl_review_config_present`` is False;
   ``True`` means use the provided value verbatim, including explicit ``null``
   as genuine removal.
 - **Deep-copy invariant**: ``old_edges`` are deep-copied on entry so a later
@@ -46,7 +46,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.team_rbac import org_role_level
-from modulo.db.crud.hitl_gate_config import human_only_effective
+from modulo.db.crud.hitl_review_config import human_only_effective
 from modulo.db.models.pipeline_edge import PipelineEdge
 
 _log = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ class DiffResult:
     weakened_nodes: list[EdgeWeakening] = dataclasses_field(default_factory=list)
 
 
-class HitlGateWeakeningDenied(Exception):  # noqa: N818 — matched by callers
+class HitlReviewWeakeningDenied(Exception):  # noqa: N818 — matched by callers
     """Raised by guarded write paths when a gate-weakening is denied.
 
     ``reason_code`` is one of the plan §5 codes. ``correlation_keys`` names
@@ -172,7 +172,7 @@ def _normalize_edge(edge: PipelineEdge | dict[str, Any]) -> dict[str, Any]:
     Accepts ``PipelineEdge`` ORM rows or plain dicts (REST edge_data / snapshot
     edge dicts). The presence signal for ORM rows is derived from the column
     value (a row that has no gate is not subject to weakening detection);
-    for dicts it honours an explicit ``hitl_gate_config_present`` flag and
+    for dicts it honours an explicit ``hitl_review_config_present`` flag and
     otherwise falls back to "the key is present in the dict".
     """
     if isinstance(edge, dict):
@@ -180,20 +180,20 @@ def _normalize_edge(edge: PipelineEdge | dict[str, Any]) -> dict[str, Any]:
         source = d.get("source_node_id") or d.get("source")
         target = d.get("target_node_id") or d.get("target")
         edge_type = d.get("edge_type") or d.get("type") or "normal"
-        present = d.get("hitl_gate_config_present", "hitl_gate_config" in d)
+        present = d.get("hitl_review_config_present", "hitl_review_config" in d)
         return {
             "source_node_id": str(source) if source is not None else "",
             "target_node_id": str(target) if target is not None else "",
             "edge_type": str(edge_type),
-            "hitl_gate_config": d.get("hitl_gate_config"),
-            "hitl_gate_config_present": bool(present),
+            "hitl_review_config": d.get("hitl_review_config"),
+            "hitl_review_config_present": bool(present),
         }
     return {
         "source_node_id": str(edge.source_node_id),
         "target_node_id": str(edge.target_node_id),
         "edge_type": edge.edge_type,
-        "hitl_gate_config": edge.hitl_gate_config,
-        "hitl_gate_config_present": edge.hitl_gate_config is not None,
+        "hitl_review_config": edge.hitl_review_config,
+        "hitl_review_config_present": edge.hitl_review_config is not None,
     }
 
 
@@ -246,7 +246,7 @@ def _normalize_hitl_node(node: dict[str, Any]) -> dict[str, Any] | None:
     (``graph_cache`` compile step) and IGNORES ``hitl_config`` on every other
     node type, so honouring ``hitl_config`` on non-hitl nodes would over-block
     saves of unrelated nodes (same rule as
-    ``hitl_gate_config.config_from_hitl_nodes``). Returns None for every
+    ``hitl_review_config.config_from_hitl_nodes``). Returns None for every
     non-participating node; the returned dict is read-only data (never
     mutated by the caller) so no deep-copy is required.
     """
@@ -288,7 +288,7 @@ def _hitl_node_weakenings(
       or flipped off ``node_type == "hitl"``) is a structural weakening
       (``structural:hitl_node_removed``) — deletion is the one way a
       node-level gate vanishes entirely, and the edge diff cannot see it
-      (node-level gates have no edge-level ``hitl_gate_config`` in the
+      (node-level gates have no edge-level ``hitl_review_config`` in the
       persisted definition);
     - a new node whose ``hitl_config`` is absent/None is NEVER flagged: at
       compile time an absent config still compiles to an injected gate
@@ -375,7 +375,7 @@ async def apply_gated_edge_diff(
     old_by_key = {
         _topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e
         for e in old_norm
-        if e["hitl_gate_config"] is not None
+        if e["hitl_review_config"] is not None
     }
     new_by_key = {_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e for e in new_norm}
 
@@ -393,13 +393,13 @@ async def apply_gated_edge_diff(
                 )
             )
             continue
-        if not new_edge["hitl_gate_config_present"]:
+        if not new_edge["hitl_review_config_present"]:
             # Key omitted by the client -> preserve the existing stored value.
             # The delete+reinsert write paths MUST mirror this contract and
             # merge the stored value back (see pipeline._preserve_omitted_gate_config).
             # An omitted key is never a gate removal.
             continue
-        new_cfg = new_edge["hitl_gate_config"]
+        new_cfg = new_edge["hitl_review_config"]
         if new_cfg is None:
             weakened.append(
                 EdgeWeakening(
@@ -411,7 +411,7 @@ async def apply_gated_edge_diff(
                 )
             )
             continue
-        field_types = _weakening_types(old_edge["hitl_gate_config"], new_cfg)
+        field_types = _weakening_types(old_edge["hitl_review_config"], new_cfg)
         if field_types:
             weakened.append(
                 EdgeWeakening(
@@ -478,15 +478,15 @@ async def resolve_effective_privilege(
         live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
     except SQLAlchemyError:
         _log.exception(
-            "hitl_gate_guard.role_check_db_error",
+            "hitl_review_guard.role_check_db_error",
             extra={"org_id": str(org_id), "account_id": str(account_id)},
         )
-        raise HitlGateWeakeningDenied(
+        raise HitlReviewWeakeningDenied(
             reason_code=REASON_ROLE_CHECK_DB_ERROR,
             detail="Failed to re-read the caller's org role under the row lock.",
         ) from None
     if live_role is None:
-        raise HitlGateWeakeningDenied(
+        raise HitlReviewWeakeningDenied(
             reason_code=REASON_ROLE_CHANGED,
             detail="No active org membership for the caller.",
         )
@@ -640,7 +640,7 @@ async def _resolve_effective_guardrail_admin(
         live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
     except SQLAlchemyError:
         _log.exception(
-            "hitl_gate_guard.guardrail_admin_role_check_db_error",
+            "hitl_review_guard.guardrail_admin_role_check_db_error",
             extra={"org_id": str(org_id), "account_id": str(account_id)},
         )
         raise GuardrailBindingStripDenied(

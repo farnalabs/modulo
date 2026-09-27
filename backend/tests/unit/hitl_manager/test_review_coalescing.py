@@ -36,7 +36,7 @@ OTHER_ORG_ID = uuid.UUID("2b6d9f0a-1c3e-4d5b-8a7f-9e0d1c2b3a4c")
 PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000006666")
 RUN_ID = uuid.UUID("fb4b1368-68ca-4125-8091-ca8d7c25839e")
 OLD_RUN_ID = uuid.UUID("0b0e2f60-1f47-4bda-9aeb-6f6fdd807d3c")
-GATE = "hitl_gate_review_publish"
+GATE = "hitl_review_review_publish"
 KEY = "github:farnalabs/modulo:pr:42"
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -54,7 +54,7 @@ def _open_claim() -> MagicMock:
     claim = MagicMock(spec=HitlClaim)
     claim.id = uuid.uuid4()
     claim.run_id = OLD_RUN_ID
-    claim.gate_id = GATE
+    claim.review_id = GATE
     claim.pipeline_id = PIPELINE_ID
     claim.organisation_id = ORG_ID
     claim.decision = None
@@ -125,7 +125,7 @@ class TestEvaluateGateCoalescing:
     async def test_missing_run_row_raises(self) -> None:
         session = _CoalesceSession(run_row=None, candidates=[])
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "raise"
         assert len(session.statements) == 1
@@ -133,7 +133,7 @@ class TestEvaluateGateCoalescing:
     async def test_no_coalesce_key_always_raises(self) -> None:
         session = _CoalesceSession(run_row=_run_row(_payload(key=None), HASH_A), candidates=[])
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "raise"
         # No candidate scan at all — non-webhook runs are never coalesced.
@@ -142,7 +142,7 @@ class TestEvaluateGateCoalescing:
     async def test_no_open_gate_raises(self) -> None:
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "raise"
         assert len(session.statements) == 2
@@ -154,7 +154,7 @@ class TestEvaluateGateCoalescing:
             candidates=[(_open_claim(), HASH_A, _payload(key=other_key))],
         )
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "raise"
         assert len(session.statements) == 2
@@ -168,7 +168,7 @@ class TestEvaluateGateCoalescing:
             candidates=[(_open_claim(), HASH_A, _payload())],
         )
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "reuse"
         # Pure decision + audit — no gate-closing / un-park writes issued.
@@ -192,7 +192,7 @@ class TestEvaluateGateCoalescing:
             candidates=[(_open_claim(), HASH_A, _payload())],
         )
         outcome_reuse = await evaluate_gate_coalescing(
-            session_reuse, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session_reuse, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome_reuse == "reuse"
         # Pure decision — no supersede writes issued either way.
@@ -203,7 +203,7 @@ class TestEvaluateGateCoalescing:
             candidates=[(_open_claim(), HASH_A, _payload())],
         )
         outcome_supersede = await evaluate_gate_coalescing(
-            session_supersede, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session_supersede, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome_supersede == "raise"
         # The old gate was superseded (close-out + un-park) exactly as with a
@@ -221,7 +221,7 @@ class TestEvaluateGateCoalescing:
             candidates=[(_open_claim(), HASH_A, _payload())],
         )
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "raise"
         assert len(session.statements) == 4
@@ -248,7 +248,7 @@ class TestEvaluateGateCoalescing:
             supersede_rowcount=0,
         )
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "raise"
         # Only the guarded close-out attempt ran; the un-park never fired.
@@ -259,7 +259,7 @@ class TestEvaluateGateCoalescing:
     async def test_candidate_scan_is_open_gate_scoped(self, audit: AsyncMock) -> None:
         """The candidate query filters on pipeline + gate id + open state."""
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
-        await evaluate_gate_coalescing(session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
         sql = str(session.statements[1])
         assert "hitl_claims" in sql
         assert "runs" in sql
@@ -275,7 +275,7 @@ class TestCandidateScanIsolation:
         """qa F3: the scan's WHERE carries the live-status filter — a
         terminal run's orphaned open gate is never a reuse candidate."""
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
-        await evaluate_gate_coalescing(session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
         sql = str(session.statements[1])
         assert "status IN" in sql
         # The status literals ride as a bound (POSTCOMPILE) list — assert on
@@ -295,7 +295,7 @@ class TestCandidateScanIsolation:
         org + pipeline — the scan can never widen past them (RLS is defence
         in depth, not the only guard)."""
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
-        await evaluate_gate_coalescing(session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
         params = session.statements[1].compile().params
         param_values = {str(v) for v in params.values()}
         assert str(ORG_ID) in param_values
@@ -312,13 +312,13 @@ class TestCandidateScanIsolation:
             candidates=[(_open_claim(), HASH_A, _payload())],
         )
         outcome_a = await evaluate_gate_coalescing(
-            session_a, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session_a, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome_a == "reuse"
 
         session_b = _CoalesceSession(run_row=_run_row(_payload(), HASH_B), candidates=[])
         outcome_b = await evaluate_gate_coalescing(
-            session_b, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=OTHER_ORG_ID
+            session_b, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=OTHER_ORG_ID
         )
         assert outcome_b == "raise"
         params_b = session_b.statements[1].compile().params
@@ -337,7 +337,7 @@ class TestAdvisoryLockSerialisation:
             candidates=[],
             dialect="postgresql",
         )
-        await evaluate_gate_coalescing(session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
         lock_stmt = str(session.statements[1])
         assert "pg_advisory_xact_lock" in lock_stmt
         assert "hashtext" in lock_stmt
@@ -350,7 +350,7 @@ class TestAdvisoryLockSerialisation:
         """Advisory locks are a Postgres feature — other backends skip the
         lock statement entirely (SQLite is single-writer anyway)."""
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
-        await evaluate_gate_coalescing(session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
         assert all("pg_advisory_xact_lock" not in str(s) for s in session.statements)
 
     async def test_no_coalesce_key_never_takes_the_lock(self) -> None:
@@ -358,7 +358,7 @@ class TestAdvisoryLockSerialisation:
         before any locking statement is issued."""
         session = _CoalesceSession(run_row=_run_row(_payload(key=None), HASH_A), candidates=[], dialect="postgresql")
         outcome = await evaluate_gate_coalescing(
-            session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+            session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
         )
         assert outcome == "raise"
         assert all("pg_advisory_xact_lock" not in str(s) for s in session.statements)
@@ -371,7 +371,7 @@ class TestServerSideKeyFilter:
 
     async def test_postgres_filters_key_server_side_and_skips_payload_haul(self) -> None:
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[], dialect="postgresql")
-        await evaluate_gate_coalescing(session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
         sql = str(session.statements[2])
         assert "jsonb_extract_path_text" in sql
         # input_payload appears ONLY in the server-side filter — the SELECT
@@ -382,7 +382,7 @@ class TestServerSideKeyFilter:
         """Non-Postgres backends have no JSON path filter: payloads stay in
         the SELECT and the key match happens client-side."""
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
-        await evaluate_gate_coalescing(session, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
         sql = str(session.statements[1])
         assert "jsonb_extract_path_text" not in sql
         assert "input_payload" in sql

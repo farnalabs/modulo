@@ -166,7 +166,7 @@ class TestHumanOnlyGateBypass:
 
             src = uuid.uuid4()
             tgt = uuid.uuid4()
-            gate_id = f"hitl_gate_{src}_{tgt}"
+            review_id = f"hitl_review_{src}_{tgt}"
             run = MagicMock()
             run.id = uuid.uuid4()
             run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
@@ -175,7 +175,7 @@ class TestHumanOnlyGateBypass:
             snapshot.graph_json = {
                 "nodes": [],
                 "edges": [
-                    {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                    {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
                 ],
             }
 
@@ -199,7 +199,7 @@ class TestHumanOnlyGateBypass:
             ):
                 result = await _rh(
                     run_id=_FAKE_ID,
-                    gate_id=gate_id,
+                    review_id=review_id,
                     action="approve",
                     claim_token="test-token",
                 )
@@ -218,7 +218,7 @@ class TestHumanOnlyGateBypass:
 
             src = uuid.uuid4()
             tgt = uuid.uuid4()
-            gate_id = f"hitl_gate_{src}_{tgt}"
+            review_id = f"hitl_review_{src}_{tgt}"
             run = MagicMock()
             run.id = uuid.uuid4()
             run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
@@ -227,7 +227,7 @@ class TestHumanOnlyGateBypass:
             snapshot.graph_json = {
                 "nodes": [],
                 "edges": [
-                    {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": False}},
+                    {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": False}},
                 ],
             }
 
@@ -245,7 +245,7 @@ class TestHumanOnlyGateBypass:
 
                 result = await _rh(
                     run_id=_FAKE_ID,
-                    gate_id=gate_id,
+                    review_id=review_id,
                     action="approve",
                     claim_token="test-token",
                 )
@@ -265,7 +265,7 @@ class TestHumanOnlyGateBypass:
 
             result = await _rh(
                 run_id=_FAKE_ID,
-                gate_id="gate-human-only",
+                review_id="gate-human-only",
                 action="approve",
                 claim_token="test-token",
             )

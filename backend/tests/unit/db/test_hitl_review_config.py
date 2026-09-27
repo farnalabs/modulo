@@ -1,10 +1,10 @@
 """Unit tests: shared HITL gate-config resolver (FAR-610).
 
-The resolver must map a gate id (``hitl_gate_<source>_<target>``) to the
+The resolver must map a gate id (``hitl_review_<source>_<target>``) to the
 config of the edge with THAT topology — from the run's snapshot graph first,
 falling back to the live pipeline edges — never to an arbitrary edge by
 position (the FAR-610 MCP bug approved human_only gates because the FIRST
-edge of the pipeline carried no ``hitl_gate_config``).
+edge of the pipeline carried no ``hitl_review_config``).
 """
 
 import uuid
@@ -12,21 +12,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.exc import MultipleResultsFound
 
-from modulo.db.crud.hitl_gate_config import (
+from modulo.db.crud.hitl_review_config import (
     MSG_HUMAN_ONLY_DENY,
     MSG_HUMAN_ONLY_UNRESOLVED,
     edge_source_or_target,
-    hitl_gate_exists_but_unresolved,
+    hitl_review_exists_but_unresolved,
     human_only_denial,
     human_only_effective,
-    make_gate_id,
+    make_review_id,
     normalize_gate_description,
-    parse_hitl_gate_id,
-    resolve_gate_description,
-    resolve_gate_descriptions,
-    resolve_gate_human_only_map,
-    resolve_hitl_gate_config,
-    snapshot_gate_config_map,
+    parse_hitl_review_id,
+    resolve_hitl_review_config,
+    resolve_review_description,
+    resolve_review_descriptions,
+    resolve_review_human_only_map,
+    snapshot_review_config_map,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -37,18 +37,18 @@ _SOURCE_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TARGET_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 
 
-def _gate_id() -> str:
-    return make_gate_id(str(_SOURCE_ID), str(_TARGET_ID))
+def _review_id() -> str:
+    return make_review_id(str(_SOURCE_ID), str(_TARGET_ID))
 
 
 class TestMakeGateId:
     def test_matches_executor_format(self) -> None:
-        # Byte-identical mirror of graph_cache._make_gate_id.
-        assert make_gate_id("a", "b") == f"hitl_gate_{'a'}_{'b'}"
+        # Byte-identical mirror of graph_cache._make_review_id.
+        assert make_review_id("a", "b") == f"hitl_review_{'a'}_{'b'}"
 
     def test_round_trips_with_parse(self) -> None:
         source, target = str(_SOURCE_ID), str(_TARGET_ID)
-        assert parse_hitl_gate_id(make_gate_id(source, target)) == (source, target)
+        assert parse_hitl_review_id(make_review_id(source, target)) == (source, target)
 
 
 def _make_session(
@@ -95,22 +95,22 @@ def _snapshot(*, edges: list) -> MagicMock:
     return snapshot
 
 
-class TestParseHitlGateId:
+class TestParseHitlReviewId:
     def test_parses_uuid_topology(self) -> None:
-        assert parse_hitl_gate_id(_gate_id()) == (str(_SOURCE_ID), str(_TARGET_ID))
+        assert parse_hitl_review_id(_review_id()) == (str(_SOURCE_ID), str(_TARGET_ID))
 
     def test_parses_short_node_names(self) -> None:
-        assert parse_hitl_gate_id("hitl_gate_planner_deploy") == ("planner", "deploy")
+        assert parse_hitl_review_id("hitl_review_planner_deploy") == ("planner", "deploy")
 
-    def test_rejects_non_gate_id(self) -> None:
-        assert parse_hitl_gate_id("gate-1") is None
+    def test_rejects_non_review_id(self) -> None:
+        assert parse_hitl_review_id("gate-1") is None
 
     def test_rejects_single_segment(self) -> None:
-        assert parse_hitl_gate_id("hitl_gate_onlyone") is None
+        assert parse_hitl_review_id("hitl_review_onlyone") is None
 
     def test_rejects_three_segments(self) -> None:
         # Node ids are UUIDs (no underscores); three segments is ambiguous.
-        assert parse_hitl_gate_id("hitl_gate_a_b_c") is None
+        assert parse_hitl_review_id("hitl_review_a_b_c") is None
 
 
 class TestEdgeSourceOrTarget:
@@ -133,13 +133,13 @@ class TestResolveFromSnapshot:
         config = {"human_only": True, "label": "Sign-off"}
         snapshot = _snapshot(
             edges=[
-                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": config},
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": config},
             ]
         )
         session = _make_session(snapshot=snapshot)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result == config
@@ -152,13 +152,13 @@ class TestResolveFromSnapshot:
         config = {"human_only": False}
         snapshot = _snapshot(
             edges=[
-                {"source_node_id": str(_SOURCE_ID), "target_node_id": str(_TARGET_ID), "hitl_gate_config": config},
+                {"source_node_id": str(_SOURCE_ID), "target_node_id": str(_TARGET_ID), "hitl_review_config": config},
             ]
         )
         session = _make_session(snapshot=snapshot)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result == config
@@ -171,8 +171,8 @@ class TestResolveFromSnapshot:
         )
         session = _make_session(snapshot=snapshot, edge=None)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result is None
@@ -182,15 +182,15 @@ class TestResolveFromSnapshot:
         snapshot = _snapshot(
             edges=[
                 {"source": str(_SOURCE_ID), "target": str(_TARGET_ID)},
-                {"source": "unrelated-1", "target": "unrelated-2", "hitl_gate_config": {"human_only": True}},
+                {"source": "unrelated-1", "target": "unrelated-2", "hitl_review_config": {"human_only": True}},
             ]
         )
         live_edge = MagicMock()
-        live_edge.hitl_gate_config = {"human_only": True}
+        live_edge.hitl_review_config = {"human_only": True}
         session = _make_session(snapshot=snapshot, edge=live_edge)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result == {"human_only": True}
@@ -199,11 +199,11 @@ class TestResolveFromSnapshot:
 class TestResolveFallbacks:
     async def test_falls_back_to_live_edges_without_snapshot(self) -> None:
         live_edge = MagicMock()
-        live_edge.hitl_gate_config = {"human_only": True}
+        live_edge.hitl_review_config = {"human_only": True}
         session = _make_session(snapshot=None, edge=live_edge)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
         assert result == {"human_only": True}
@@ -214,11 +214,11 @@ class TestResolveFallbacks:
     async def test_live_edge_query_filters_by_topology(self) -> None:
         """The fallback queries source AND target, not the pipeline's first edge."""
         live_edge = MagicMock()
-        live_edge.hitl_gate_config = {"human_only": False}
+        live_edge.hitl_review_config = {"human_only": False}
         session = _make_session(snapshot=None, edge=live_edge)
 
-        await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
         stmt = session.execute.await_args.args[0]
@@ -238,7 +238,7 @@ class TestResolveFallbacks:
         resolve the normal edge's config instead of raising
         MultipleResultsFound on the two-row match."""
         normal_edge = MagicMock()
-        normal_edge.hitl_gate_config = {"human_only": True}
+        normal_edge.hitl_review_config = {"human_only": True}
         session = AsyncMock()
 
         async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
@@ -265,8 +265,8 @@ class TestResolveFallbacks:
 
         session.execute = AsyncMock(side_effect=_execute)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
         assert result == {"human_only": True}
@@ -277,15 +277,15 @@ class TestResolveFallbacks:
         result.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=result)
 
-        resolved = await resolve_hitl_gate_config(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID)
+        resolved = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID)
 
         assert resolved is None
 
-    async def test_returns_none_for_non_gate_id(self) -> None:
+    async def test_returns_none_for_non_review_id(self) -> None:
         session = _make_session(snapshot=None, edge=None)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
         assert result is None
@@ -305,8 +305,8 @@ class TestResolveStampedConfigFirst:
         stamped_config = {"human_only": True, "label": "Sign-off"}
         session = _make_session(claim_row=stamped_config)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result == stamped_config
@@ -320,8 +320,8 @@ class TestResolveStampedConfigFirst:
         stamped_config = {"human_only": True}
         session = _make_session(claim_row=stamped_config)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         result["human_only"] = False
@@ -331,17 +331,19 @@ class TestResolveStampedConfigFirst:
         """Legacy row (fired before the stamp column existed): NULL config —
         the snapshot walk resolves as before."""
         config = {"human_only": True}
-        snapshot = _snapshot(edges=[{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": config}])
+        snapshot = _snapshot(
+            edges=[{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": config}]
+        )
         session = _make_session(snapshot=snapshot, claim_row=None)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result == config
         assert session.execute.await_count == 2
 
-    async def test_non_gate_id_skips_the_claim_stamp_lookup(self) -> None:
+    async def test_non_review_id_skips_the_claim_stamp_lookup(self) -> None:
         """Manual-node ids never have a claim row — the stamp lookup is
         skipped entirely (submit-manual decisions pay zero extra queries)."""
         session = _make_session(snapshot=None, edge=None, claim_row=MagicMock())
@@ -358,8 +360,8 @@ class TestResolveStampedConfigFirst:
 
         session.execute = AsyncMock(side_effect=_execute)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
         assert result is None
@@ -368,12 +370,14 @@ class TestResolveStampedConfigFirst:
         """Defence in depth: the stamp lookup filters run + gate + org."""
         session = _make_session(claim_row=None)
 
-        await resolve_hitl_gate_config(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run())
+        await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
+        )
 
         stmt = session.execute.await_args_list[0].args[0]
         bind_values = [str(value) for value in stmt.compile().params.values()]
         assert str(_RUN_ID) in bind_values
-        assert _gate_id() in bind_values
+        assert _review_id() in bind_values
         assert str(_ORG_ID) in bind_values
 
 
@@ -399,14 +403,14 @@ class TestResolveFromHitlNodes:
     """FAR-402 HITL nodes carry ``hitl_config`` on the NODE; the compiler
     injects it onto outgoing edges at build time, so the persisted definition
     (snapshot graph_json and live pipeline rows alike) has NO edge-level
-    ``hitl_gate_config`` for node-level gates. Without the node walk these
+    ``hitl_review_config`` for node-level gates. Without the node walk these
     gates resolve None and human_only enforcement fails open."""
 
     async def test_resolves_node_config_from_snapshot(self) -> None:
         session = _make_session(snapshot=_hitl_node_snapshot())
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result == {"human_only": True, "label": "Sign-off"}
@@ -419,8 +423,8 @@ class TestResolveFromHitlNodes:
         honouring it here would over-block, so it must not resolve."""
         session = _make_session(snapshot=_hitl_node_snapshot(node_type="agent"), edge=None)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result is None
@@ -430,8 +434,8 @@ class TestResolveFromHitlNodes:
         other_source = uuid.UUID("00000000-0000-0000-0000-00000000000c")
         session = _make_session(snapshot=_hitl_node_snapshot(source_id=other_source), edge=None)
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
         )
 
         assert result is None
@@ -447,8 +451,8 @@ class TestResolveFromHitlNodes:
             ],
         )
 
-        result = await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        result = await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
         assert result == {"human_only": True}
@@ -459,8 +463,8 @@ class TestResolveFromHitlNodes:
     async def test_live_node_lookup_filters_by_pipeline_and_org(self) -> None:
         session = _make_session(snapshot=None, edge=None, pipeline_nodes=None)
 
-        await resolve_hitl_gate_config(
-            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        await resolve_hitl_review_config(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
         stmt = session.execute.await_args_list[2].args[0]
@@ -469,30 +473,34 @@ class TestResolveFromHitlNodes:
         assert str(_ORG_ID) in bind_values
 
 
-class TestHitlGateExistsButUnresolved:
+class TestHitlReviewExistsButUnresolved:
     """Fail-closed signal: True only when a fired gate (claim row) has an
     unresolvable config. Non-gate ids (manual-node ids) short-circuit."""
 
     async def test_true_when_claim_row_exists(self) -> None:
         session = _make_session(claim_row=MagicMock())
 
-        result = await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID)
+        result = await hitl_review_exists_but_unresolved(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID
+        )
 
         assert result is True
 
     async def test_false_when_no_claim_row(self) -> None:
         session = _make_session(claim_row=None)
 
-        result = await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID)
+        result = await hitl_review_exists_but_unresolved(
+            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID
+        )
 
         assert result is False
 
-    async def test_non_gate_id_short_circuits_without_query(self) -> None:
+    async def test_non_review_id_short_circuits_without_query(self) -> None:
         """Manual-node ids can never have a claim row — no query at all, so the
         fail-closed check cannot over-block manual output delivery."""
         session = _make_session(claim_row=MagicMock())
 
-        result = await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id="node-1", org_id=_ORG_ID)
+        result = await hitl_review_exists_but_unresolved(session, run_id=_RUN_ID, review_id="node-1", org_id=_ORG_ID)
 
         assert result is False
         assert session.execute.await_count == 0
@@ -500,12 +508,12 @@ class TestHitlGateExistsButUnresolved:
     async def test_claim_query_filters_run_gate_and_org(self) -> None:
         session = _make_session(claim_row=None)
 
-        await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID)
+        await hitl_review_exists_but_unresolved(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID)
 
         stmt = session.execute.await_args.args[0]
         bind_values = [str(value) for value in stmt.compile().params.values()]
         assert str(_RUN_ID) in bind_values
-        assert _gate_id() in bind_values
+        assert _review_id() in bind_values
         assert str(_ORG_ID) in bind_values
 
 
@@ -572,9 +580,9 @@ class TestSnapshotGateConfigMap:
         config = {"label": "Sign-off", "description": "Human approves the release."}
         graph = {
             "nodes": [],
-            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": config}],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": config}],
         }
-        assert snapshot_gate_config_map(graph) == {_gate_id(): config}
+        assert snapshot_review_config_map(graph) == {_review_id(): config}
 
     def test_covers_node_gate_shape_over_outgoing_edges(self) -> None:
         config = {"description": "Human confirms the resolution."}
@@ -582,23 +590,23 @@ class TestSnapshotGateConfigMap:
             "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": config}],
             "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID)}],
         }
-        assert snapshot_gate_config_map(graph) == {_gate_id(): config}
+        assert snapshot_review_config_map(graph) == {_review_id(): config}
 
     def test_node_gate_does_not_shadow_a_matching_edge_gate(self) -> None:
         edge_config = {"description": "Edge-level description wins."}
         node_config = {"description": "Node-level description."}
         graph = {
             "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": node_config}],
-            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": edge_config}],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": edge_config}],
         }
-        assert snapshot_gate_config_map(graph) == {_gate_id(): edge_config}
+        assert snapshot_review_config_map(graph) == {_review_id(): edge_config}
 
     def test_inert_hitl_config_on_non_hitl_node_ignored(self) -> None:
         graph = {
             "nodes": [{"id": str(_SOURCE_ID), "node_type": "agent", "hitl_config": {"description": "inert"}}],
             "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID)}],
         }
-        assert not snapshot_gate_config_map(graph)
+        assert not snapshot_review_config_map(graph)
 
 
 class TestNormalizeGateDescription:
@@ -621,21 +629,21 @@ class TestResolveGateDescriptionPrecedence:
     def test_captured_context_description_wins(self) -> None:
         context = {"description": "Fire-time captured briefing."}
         config = {"description": "Snapshot config description."}
-        assert resolve_gate_description(context, config) == "Fire-time captured briefing."
+        assert resolve_review_description(context, config) == "Fire-time captured briefing."
 
     def test_snapshot_config_is_the_fallback(self) -> None:
         config = {"description": "Snapshot config description."}
-        assert resolve_gate_description(None, config) == "Snapshot config description."
-        assert resolve_gate_description({}, config) == "Snapshot config description."
-        assert resolve_gate_description({"description": "   "}, config) == "Snapshot config description."
+        assert resolve_review_description(None, config) == "Snapshot config description."
+        assert resolve_review_description({}, config) == "Snapshot config description."
+        assert resolve_review_description({"description": "   "}, config) == "Snapshot config description."
 
     def test_unusable_on_both_surfaces_maps_none(self) -> None:
-        assert resolve_gate_description(None, None) is None
-        assert resolve_gate_description(None, {"label": "no description"}) is None
-        assert resolve_gate_description({"condition": "x"}, None) is None
+        assert resolve_review_description(None, None) is None
+        assert resolve_review_description(None, {"label": "no description"}) is None
+        assert resolve_review_description({"condition": "x"}, None) is None
 
     def test_context_description_is_normalised(self) -> None:
-        assert resolve_gate_description({"description": "  padded.  "}, None) == "padded."
+        assert resolve_review_description({"description": "  padded.  "}, None) == "padded."
 
 
 class TestResolveGateDescriptions:
@@ -660,40 +668,40 @@ class TestResolveGateDescriptions:
         session.execute = AsyncMock(side_effect=_execute)
         return session
 
-    def _gate(self, run_id: uuid.UUID, gate_id: str, context_json: object | None = None) -> MagicMock:
+    def _gate(self, run_id: uuid.UUID, review_id: str, context_json: object | None = None) -> MagicMock:
         gate = MagicMock()
         gate.run_id = run_id
-        gate.gate_id = gate_id
+        gate.review_id = review_id
         if context_json is not None:
             gate.context_json = context_json
         return gate
 
     async def test_resolves_description_via_batched_queries(self) -> None:
-        edge_gate_id = _gate_id()
+        edge_review_id = _review_id()
         graph = {
             "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": {"description": "Node gate why."}}],
             "edges": [
                 {
                     "source": str(_SOURCE_ID),
                     "target": str(_TARGET_ID),
-                    "hitl_gate_config": {"description": "Edge gate why."},
+                    "hitl_review_config": {"description": "Edge gate why."},
                 }
             ],
         }
-        gate = self._gate(_RUN_ID, edge_gate_id)
+        gate = self._gate(_RUN_ID, edge_review_id)
         session = self._make_batched_session(
             run_rows=[(_RUN_ID, _SNAPSHOT_ID)],
             snapshot_rows=[(_SNAPSHOT_ID, graph)],
         )
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, edge_gate_id): "Edge gate why."}
+        assert result == {(_RUN_ID, edge_review_id): "Edge gate why."}
 
     async def test_captured_context_description_wins_over_snapshot(self) -> None:
         gate = self._gate(
             _RUN_ID,
-            _gate_id(),
+            _review_id(),
             context_json={"description": "Captured at fire time."},
         )
         graph = {
@@ -702,15 +710,15 @@ class TestResolveGateDescriptions:
                 {
                     "source": str(_SOURCE_ID),
                     "target": str(_TARGET_ID),
-                    "hitl_gate_config": {"description": "Edited after the gate fired."},
+                    "hitl_review_config": {"description": "Edited after the gate fired."},
                 }
             ],
         }
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): "Captured at fire time."}
+        assert result == {(_RUN_ID, gate.review_id): "Captured at fire time."}
 
     async def test_config_map_memoised_per_snapshot_within_one_call(self) -> None:
         """Two pending gates sharing one run/snapshot re-use ONE config-map
@@ -721,52 +729,54 @@ class TestResolveGateDescriptions:
                 {
                     "source": str(_SOURCE_ID),
                     "target": str(_TARGET_ID),
-                    "hitl_gate_config": {"description": "Shared snapshot briefing."},
+                    "hitl_review_config": {"description": "Shared snapshot briefing."},
                 }
             ],
         }
-        gate_a = self._gate(_RUN_ID, _gate_id())
-        gate_b = self._gate(_RUN_ID, _gate_id())
+        gate_a = self._gate(_RUN_ID, _review_id())
+        gate_b = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
         import unittest.mock
 
         with unittest.mock.patch(
-            "modulo.db.crud.hitl_gate_config.snapshot_gate_config_map",
-            side_effect=snapshot_gate_config_map,
+            "modulo.db.crud.hitl_review_config.snapshot_review_config_map",
+            side_effect=snapshot_review_config_map,
         ) as map_mock:
-            result = await resolve_gate_descriptions(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
+            result = await resolve_review_descriptions(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
 
         assert map_mock.call_count == 1
         assert result == {
-            (_RUN_ID, gate_a.gate_id): "Shared snapshot briefing.",
-            (_RUN_ID, gate_b.gate_id): "Shared snapshot briefing.",
+            (_RUN_ID, gate_a.review_id): "Shared snapshot briefing.",
+            (_RUN_ID, gate_b.review_id): "Shared snapshot briefing.",
         }
 
     async def test_missing_snapshot_maps_none(self) -> None:
-        gate = self._gate(_RUN_ID, _gate_id())
+        gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, None)], snapshot_rows=[])
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): None}
+        assert result == {(_RUN_ID, gate.review_id): None}
 
     async def test_gate_without_usable_description_maps_none(self) -> None:
-        gate = self._gate(_RUN_ID, _gate_id())
+        gate = self._gate(_RUN_ID, _review_id())
         graph = {
             "nodes": [],
-            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": {"label": "no desc"}}],
+            "edges": [
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": {"label": "no desc"}}
+            ],
         }
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): None}
+        assert result == {(_RUN_ID, gate.review_id): None}
 
     async def test_empty_gates_short_circuits_without_queries(self) -> None:
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_descriptions(session, gates=[], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[], org_id=_ORG_ID)
 
         assert result == {}
         assert session.execute.await_count == 0
@@ -794,29 +804,29 @@ class TestResolveGateHumanOnlyMap:
         session.execute = AsyncMock(side_effect=_execute)
         return session
 
-    def _gate(self, run_id: uuid.UUID, gate_id: str, *, stamped: object = None) -> MagicMock:
+    def _gate(self, run_id: uuid.UUID, review_id: str, *, stamped: object = None) -> MagicMock:
         gate = MagicMock()
         gate.run_id = run_id
-        gate.gate_id = gate_id
+        gate.review_id = review_id
         gate.gate_config_json = stamped
         return gate
 
     async def test_stamped_config_short_circuits_without_queries(self) -> None:
-        gate = self._gate(_RUN_ID, _gate_id(), stamped={"human_only": True})
+        gate = self._gate(_RUN_ID, _review_id(), stamped={"human_only": True})
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): True}
+        assert result == {(_RUN_ID, gate.review_id): True}
         assert session.execute.await_count == 0
 
     async def test_stamped_config_explicit_false_opts_out(self) -> None:
-        gate = self._gate(_RUN_ID, _gate_id(), stamped={"human_only": False})
+        gate = self._gate(_RUN_ID, _review_id(), stamped={"human_only": False})
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): False}
+        assert result == {(_RUN_ID, gate.review_id): False}
 
     async def test_unstamped_falls_back_to_snapshot_config(self) -> None:
         graph = {
@@ -825,30 +835,30 @@ class TestResolveGateHumanOnlyMap:
                 {
                     "source": str(_SOURCE_ID),
                     "target": str(_TARGET_ID),
-                    "hitl_gate_config": {"human_only": False},
+                    "hitl_review_config": {"human_only": False},
                 }
             ],
         }
-        gate = self._gate(_RUN_ID, _gate_id())
+        gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): False}
+        assert result == {(_RUN_ID, gate.review_id): False}
 
     async def test_snapshot_config_without_key_fails_safe_true(self) -> None:
         graph = {
             "nodes": [],
             "edges": [
-                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": {"label": "Sign-off"}},
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": {"label": "Sign-off"}},
             ],
         }
-        gate = self._gate(_RUN_ID, _gate_id())
+        gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): True}
+        assert result == {(_RUN_ID, gate.review_id): True}
 
     async def test_config_map_memoised_per_snapshot_within_one_call(self) -> None:
         """Two pending gates sharing one run/snapshot re-use ONE config-map
@@ -856,44 +866,44 @@ class TestResolveGateHumanOnlyMap:
         graph = {
             "nodes": [],
             "edges": [
-                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": {"human_only": True}},
+                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": {"human_only": True}},
             ],
         }
-        gate_a = self._gate(_RUN_ID, _gate_id())
-        gate_b = self._gate(_RUN_ID, _gate_id())
+        gate_a = self._gate(_RUN_ID, _review_id())
+        gate_b = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
         import unittest.mock
 
         with unittest.mock.patch(
-            "modulo.db.crud.hitl_gate_config.snapshot_gate_config_map",
-            side_effect=snapshot_gate_config_map,
+            "modulo.db.crud.hitl_review_config.snapshot_review_config_map",
+            side_effect=snapshot_review_config_map,
         ) as map_mock:
-            result = await resolve_gate_human_only_map(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
+            result = await resolve_review_human_only_map(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
 
         assert map_mock.call_count == 1
-        assert result == {(_RUN_ID, gate_a.gate_id): True, (_RUN_ID, gate_b.gate_id): True}
+        assert result == {(_RUN_ID, gate_a.review_id): True, (_RUN_ID, gate_b.review_id): True}
 
     async def test_missing_snapshot_row_fails_safe_true(self) -> None:
-        gate = self._gate(_RUN_ID, _gate_id())
+        gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): True}
+        assert result == {(_RUN_ID, gate.review_id): True}
 
     async def test_unresolvable_run_fails_safe_true(self) -> None:
-        gate = self._gate(_RUN_ID, _gate_id())
+        gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, None)], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
-        assert result == {(_RUN_ID, gate.gate_id): True}
+        assert result == {(_RUN_ID, gate.review_id): True}
 
     async def test_empty_gates_short_circuits_without_queries(self) -> None:
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[], org_id=_ORG_ID)
 
         assert result == {}
         assert session.execute.await_count == 0

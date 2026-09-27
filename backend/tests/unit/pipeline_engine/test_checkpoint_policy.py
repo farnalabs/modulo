@@ -34,8 +34,8 @@ def test_graph_is_interactive_batch_pipeline_is_false():
     assert _graph_is_interactive(graph) is False
 
 
-def test_graph_is_interactive_hitl_gate_edge_is_true():
-    """An edge carrying ``hitl_gate_config`` must be checkpointed."""
+def test_graph_is_interactive_hitl_review_edge_is_true():
+    """An edge carrying ``hitl_review_config`` must be checkpointed."""
     graph: dict[str, Any] = {
         "nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],
         "edges": [
@@ -43,7 +43,7 @@ def test_graph_is_interactive_hitl_gate_edge_is_true():
                 "source": "a",
                 "target": "b",
                 "type": "normal",
-                "hitl_gate_config": {"human_only": True},
+                "hitl_review_config": {"human_only": True},
             }
         ],
     }

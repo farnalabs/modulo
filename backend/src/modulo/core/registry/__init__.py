@@ -404,9 +404,9 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                     {
                         "source": "test-runner",
                         "target": "pr-creator",
-                        "hitl_gate_config": {
+                        "hitl_review_config": {
                             "human_only": True,
-                            "gate_id": "review_before_pr",
+                            "review_id": "review_before_pr",
                             "overdue_threshold_minutes": 60,
                             # FAR-613: gates must explain why a human decides.
                             "description": "Review the generated changes and test results before a PR is created.",

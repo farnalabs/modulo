@@ -1022,8 +1022,8 @@ def run_awaiting_human(request: pytest.FixtureRequest) -> None:
     request.node._mock_run = mock_run
 
 
-@when("a HITL gate raises NodeInterrupt")
-def hitl_gate_interrupts(request: pytest.FixtureRequest) -> None:
+@when("a HITL review raises NodeInterrupt")
+def hitl_review_interrupts(request: pytest.FixtureRequest) -> None:
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None:
         mock_run.status = "awaiting_human"
@@ -1118,24 +1118,24 @@ def run_waiting_at_manual(request: pytest.FixtureRequest) -> None:
     request.node._run_status = "awaiting_human"
 
 
-@given(parsers.parse('a pipeline with a HITL gate node "{gate_id}"'))
-def pipeline_with_hitl_gate(gate_id: str, request: pytest.FixtureRequest) -> None:
+@given(parsers.parse('a pipeline with a HITL review node "{review_id}"'))
+def pipeline_with_hitl_review(review_id: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_run
 
     mock_pipeline = make_mock_pipeline(name="hitl-gate-pipeline")
     request.node._mock_pipeline = mock_pipeline
     mock_run = make_mock_run(status="pending", pipeline_id=mock_pipeline.id)
     request.node._mock_run = mock_run
-    request.node._gate_id = gate_id
+    request.node._review_id = review_id
 
 
-@when(parsers.parse('the run reaches the "{gate_id}" gate'))
-def run_reaches_gate(gate_id: str, request: pytest.FixtureRequest) -> None:
+@when(parsers.parse('the run reaches the "{review_id}" gate'))
+def run_reaches_gate(review_id: str, request: pytest.FixtureRequest) -> None:
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None:
         mock_run.status = "waiting_for_approval"
     request.node._run_status = "waiting_for_approval"
-    request.node._current_node = gate_id
+    request.node._current_node = review_id
 
 
 @when(parsers.parse('the run reaches node "{node_id}"'))
@@ -1229,7 +1229,7 @@ def node_timeout_expires(request: pytest.FixtureRequest) -> None:
 # ---------------------------------------------------------------------------
 
 
-@given("a running pipeline with a conditional HITL gate")
+@given("a running pipeline with a conditional HITL review")
 def pipeline_with_conditional_hitl(request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_run
 
@@ -1827,11 +1827,11 @@ def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, reques
     if getattr(request.node, "_rollback_denied", False):
         # hitl-gate-removal-guard-plan.md v19: a gate-weakening rollback by a
         # non-privileged caller is denied at the service layer.
-        from modulo.db.crud.hitl_gate_guard import REASON_INSUFFICIENT_ROLE, HitlGateWeakeningDenied
+        from modulo.db.crud.hitl_review_guard import REASON_INSUFFICIENT_ROLE, HitlReviewWeakeningDenied
 
         p = patch(
             "modulo.api.routes.pipelines.rollback_to_snapshot",
-            side_effect=HitlGateWeakeningDenied(
+            side_effect=HitlReviewWeakeningDenied(
                 reason_code=REASON_INSUFFICIENT_ROLE,
                 correlation_keys=[("a", "b", "normal")],
                 weakening_types=["human_only"],
@@ -1846,8 +1846,8 @@ def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, reques
     _store_response(request, resp)
 
 
-@given("the rollback would weaken a HITL gate for a non-privileged caller")
-def rollback_would_weaken_hitl_gate(request: pytest.FixtureRequest) -> None:
+@given("the rollback would weaken a HITL review for a non-privileged caller")
+def rollback_would_weaken_hitl_review(request: pytest.FixtureRequest) -> None:
     request.node._rollback_denied = True
 
 

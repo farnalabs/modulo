@@ -22,7 +22,7 @@ from modulo.api.mcp_server import (
     list_pending_hitl,
     list_pipelines_tool,
     resource_connectors,
-    resource_hitl_gate,
+    resource_hitl_review,
     resource_model_backends,
     resource_pipeline_detail,
     resource_pipelines,
@@ -276,7 +276,7 @@ class TestHandlerPerEventAuth:
     async def test_review_hitl_returns_auth_error(self, mock_validate_auth: AsyncMock) -> None:
         result = await review_hitl(
             run_id=str(uuid.uuid4()),
-            gate_id="gate1",
+            review_id="gate1",
             action="claim",
         )
         assert result["error"] == "auth_expired"
@@ -417,12 +417,12 @@ class TestHandlerPerEventAuth:
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     @patch("modulo.api.mcp_server._session")
-    async def test_resource_hitl_gate_returns_auth_error(
+    async def test_resource_hitl_review_returns_auth_error(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        result = await resource_hitl_gate(run_id=str(uuid.uuid4()), gate_id="gate1")
+        result = await resource_hitl_review(run_id=str(uuid.uuid4()), review_id="gate1")
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
 

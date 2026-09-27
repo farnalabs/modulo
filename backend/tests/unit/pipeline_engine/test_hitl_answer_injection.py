@@ -1,61 +1,73 @@
 """Unit tests for FAR-860 answer injection and context capture.
 
 Covers ``_inject_answer_state`` (state key injection) and the
-``response_contract`` capture in ``HitlGateContext``.
+``response_contract`` capture in ``HitlReviewContext``.
 """
 
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from modulo.core.pipeline_engine import node_runner
 from modulo.core.pipeline_engine.hitl_context import (
-    build_hitl_gate_context,
+    build_hitl_review_context,
 )
 from modulo.core.pipeline_engine.node_runner import (
-    HITL_ANSWER_STATE_KEY_PREFIX,
+    HITL_REVIEW_ANSWER_STATE_KEY_PREFIX,
     _inject_answer_state,
 )
 
 _UUID_SRC = "550e8400-e29b-41d4-a716-446655440000"
 _UUID_TGT = "660e8400-e29b-41d4-a716-446655440001"
-_GATE_ID = f"hitl_gate_{_UUID_SRC}_{_UUID_TGT}"
+_REVIEW_ID = f"hitl_review_{_UUID_SRC}_{_UUID_TGT}"
 _ORG_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 
 
 class TestInjectAnswerState:
     def test_injects_choice_answer(self):
-        decision = {"action": "approved", "gate_id": _GATE_ID, "answer": {"kind": "choice", "option_id": "yes"}}
+        decision = {"action": "approved", "review_id": _REVIEW_ID, "answer": {"kind": "choice", "option_id": "yes"}}
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
-        key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
+        key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert gate_result[key] == "yes"
 
+    def test_transition_shim_skips_duplicate_write_when_prefixes_coincide(self, monkeypatch):
+        """FAR-1104 transition shim: the legacy key is written only when it
+        differs from the current key. When the two prefixes coincide (a future
+        rename reusing the old spelling) the guard must skip the duplicate
+        write rather than overwrite the same key twice."""
+        monkeypatch.setattr(node_runner, "HITL_REVIEW_ANSWER_STATE_KEY_PREFIX", "hitl_answer_")
+        decision = {"action": "approved", "review_id": _REVIEW_ID, "answer": {"kind": "choice", "option_id": "yes"}}
+        gate_result: dict[str, Any] = {}
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
+        assert gate_result == {f"hitl_answer_{_REVIEW_ID}": "yes"}
+
     def test_no_answer_no_injection(self):
-        decision = {"action": "approved", "gate_id": _GATE_ID}
+        decision = {"action": "approved", "review_id": _REVIEW_ID}
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
-        key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
+        key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert key not in gate_result
 
     def test_non_dict_decision_no_injection(self):
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, "not_a_dict", gate_result)
-        key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        _inject_answer_state(_REVIEW_ID, "not_a_dict", gate_result)
+        key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert key not in gate_result
 
     def test_empty_option_id_no_injection(self):
-        decision = {"action": "approved", "gate_id": _GATE_ID, "answer": {"kind": "choice", "option_id": ""}}
+        decision = {"action": "approved", "review_id": _REVIEW_ID, "answer": {"kind": "choice", "option_id": ""}}
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
-        key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
+        key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert key not in gate_result
 
     def test_approval_answer_no_injection(self):
-        decision = {"action": "approved", "gate_id": _GATE_ID, "answer": {"kind": "approval"}}
+        decision = {"action": "approved", "review_id": _REVIEW_ID, "answer": {"kind": "approval"}}
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
-        key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
+        key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert key not in gate_result
 
 
@@ -79,7 +91,7 @@ def _edge_graph_with_rc(rc: dict[str, Any] | None = None) -> dict[str, Any]:
         config["response_contract"] = rc
     return {
         "nodes": [{"id": _UUID_SRC, "label": "Comment Generator"}, {"id": _UUID_TGT}],
-        "edges": [{"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config}],
+        "edges": [{"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config}],
     }
 
 
@@ -91,17 +103,17 @@ async def _build(graph_json: dict[str, Any]) -> dict[str, Any] | None:
         new_callable=AsyncMock,
         return_value=_run_mock(snapshot_id),
     ):
-        return await build_hitl_gate_context(
+        return await build_hitl_review_context(
             session,
             run_id=_RUN_ID,
-            gate_id=_GATE_ID,
+            review_id=_REVIEW_ID,
             org_id=_ORG_ID,
             pipeline_name="Test Pipeline",
             completed_node_outputs=None,
         )
 
 
-class TestHitlGateContextResponseContract:
+class TestHitlReviewContextResponseContract:
     async def test_response_contract_captured(self):
         rc = {
             "kind": "choice",

@@ -603,17 +603,19 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     ),
     # --- hitl codes --------------------------------------------------------
     # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes
-    # the raw ``hitl_gate_expired`` code — registered here (and aliased in
+    # the raw ``hitl_review_expired`` code — registered here (and aliased in
     # LEGACY_ALIASES) so it never resolves through the ``harness.unknown``
     # fallback and analytics buckets it as its own cancel class rather than
     # "Unknown error". Terminal like the sibling terminalizer codes
     # (``run.superseded``): the gate expired unanswered, never retried, and
     # routine hygiene — no alert.
-    "hitl.gate_expired": ErrorCodeSpec(
+    "hitl.review_expired": ErrorCodeSpec(
         error_class="hitl",
         retryable=False,
         alert_severity=None,
-        guidance="HITL gate expired unclaimed; run terminalized by dispatcher_reconcile to free its concurrency slot.",
+        guidance=(
+            "HITL review expired unclaimed; run terminalized by dispatcher_reconcile to free its concurrency slot."
+        ),
     ),
     # --- eval codes ------------------------------------------------------
     _CODE_EVAL_BLOCKED: ErrorCodeSpec(
@@ -763,7 +765,7 @@ LEGACY_ALIASES: dict[str, str] = {
     # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes
     # the raw code — canonicalized to the ``hitl.gate_expired`` registry entry
     # beside its sibling terminalizer aliases above (never ``harness.unknown``).
-    "hitl_gate_expired": "hitl.gate_expired",
+    "hitl_review_expired": "hitl.review_expired",
     "pipeline_capacity": "capacity.pipeline",
     "org_capacity_limited": _CODE_CAPACITY_ORG,
     "capacity_timeout": "capacity.timeout",

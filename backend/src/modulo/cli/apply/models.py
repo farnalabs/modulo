@@ -348,7 +348,7 @@ class ApplyGraphEdge(BaseModel):
     source_node_id: uuid.UUID
     target_node_id: uuid.UUID
     edge_type: str = Field(pattern=r"^(normal|reject|conditional|loop)$")
-    hitl_gate_config: dict[str, Any] | None = None
+    hitl_review_config: dict[str, Any] | None = None
     condition_expression: str | None = Field(default=None, max_length=500)
     source_port: str = "out"
     target_port: str = "in"

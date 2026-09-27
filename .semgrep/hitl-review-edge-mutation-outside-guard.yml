@@ -17,7 +17,7 @@ rules:
       exclude:
         - "**/backend/src/modulo/db/crud/pipeline.py"
         - "**/backend/src/modulo/db/crud/pipeline_snapshot_versioning.py"
-        - "**/backend/src/modulo/db/crud/hitl_gate_guard.py"
+        - "**/backend/src/modulo/db/crud/hitl_review_guard.py"
         - "**/backend/src/modulo/core/workflow_import_export/**"
         - "**/backend/src/modulo/api/routes/templates.py"
         - "**/backend/src/modulo/api/routes/library.py"

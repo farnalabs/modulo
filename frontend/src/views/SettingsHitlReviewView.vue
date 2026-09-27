@@ -227,13 +227,13 @@
         <div class="min-w-0 flex-1">{{ $t('views.SettingsHitlReviewView.assignee_label') }}</div>
         <span class="w-40 flex-shrink-0 text-right">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
       </div>
-      <!-- FAR-858: visually-hidden h2 so the h3 gate labels in HitlGateCard
+      <!-- FAR-858: visually-hidden h2 so the h3 gate labels in HitlReviewCard
            don't skip a heading level (page h1 → h2 → h3). -->
       <h2 class="sr-only">{{ $t('views.SettingsHitlReviewView.title') }}</h2>
       <div class="space-y-2">
       <div
         v-for="gate in filteredGates"
-        :key="gate.gate_id + gate.run_id"
+        :key="gate.review_id + gate.run_id"
         class="rounded-lg border bg-card shadow-sm"
       >
         <button
@@ -247,7 +247,7 @@
             <input
               type="checkbox"
               :checked="isSelected(gate)"
-              :aria-label="$t('views.SettingsHitlReviewView.bulk_select_gate', { id: shortId(gate.gate_id) })"
+              :aria-label="$t('views.SettingsHitlReviewView.bulk_select_gate', { id: shortId(gate.review_id) })"
               data-testid="hitl-review-row-checkbox"
               class="h-4 w-4 rounded border-input accent-primary"
               @click.stop
@@ -275,7 +275,7 @@
           </div>
           <div class="min-w-0 flex-[2]">
             <p class="truncate text-sm font-medium text-foreground" data-testid="hitl-review-node-name">
-              {{ gate.label || shortId(gate.gate_id) }}
+              {{ gate.label || shortId(gate.review_id) }}
             </p>
             <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 truncate text-xs text-muted-foreground" data-testid="hitl-review-snippet">
               {{ gateDescriptionSnippet(gate) }}
@@ -297,7 +297,7 @@
                approve/reject immediately after claiming; the row badge
                converges on the next auto-refresh. @decided is safe: the row
                leaves the list, so there is no in-card state to lose. -->
-          <HitlGateCard
+          <HitlReviewCard
             :gate="gate"
             show-run-link
             @claimed="clearClaimFailureBanner"
@@ -308,7 +308,7 @@
       </div>
       </div>
       </div>
-      <!-- FAR-692: server-side pagination over /hitl/gates. Only rendered when
+      <!-- FAR-692: server-side pagination over /hitl/reviews. Only rendered when
            there is more than one page; the page indicator uses role="status" so
            a page change is announced. No shared pagination component exists in
            components/shared/, so this minimal inline pager is view-local. -->
@@ -359,9 +359,9 @@ import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
-import HitlGateCard from '../components/hitl/HitlGateCard.vue'
+import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
 import { usePlanStore } from '../stores/planStore'
-import { useHitlGateState } from '../composables/useHitlGateState'
+import { useHitlReviewState } from '../composables/useHitlReviewState'
 import { formatApiError } from '../lib/api/formatError'
 import { claimFailureMessage } from '../lib/hitlClaimFailure'
 import { formatDateShortWithTime } from '../lib/formatDate'
@@ -373,11 +373,11 @@ const { t } = useI18n()
 
 interface GateItem {
   run_id: string
-  gate_id: string
+  review_id: string
   pipeline_id: string
   /** FAR-727: server-resolved pipeline name (null when the pipeline row is gone). */
   pipeline_name?: string | null
-  /** FAR-727: server-resolved human label from the snapshot's hitl_gate_config. */
+  /** FAR-727: server-resolved human label from the snapshot's hitl_review_config. */
   label?: string | null
   claimed_by: string | null
   /** FAR-691: claimant's human-readable display name (server-resolved). */
@@ -401,7 +401,7 @@ interface PipelineItem {
   name: string
 }
 
-// FAR-692: the review page lists gates in EVERY state via GET /api/v1/hitl/gates
+// FAR-692: the review page lists gates in EVERY state via GET /api/v1/hitl/reviews
 // (server-side status filter + pagination). The FilterBar's empty selection maps
 // to the server's `undecided` default, preserving today's queue view.
 type ServerGateStatus = 'undecided' | 'pending' | 'claimed' | 'approved' | 'rejected' | 'all'
@@ -414,7 +414,7 @@ function serverStatusFor(filter: string): ServerGateStatus {
 }
 
 // FAR-692: server-side pagination state. totalGates is stamped from each
-// /hitl/gates response; the pager renders only when it exceeds PAGE_SIZE.
+// /hitl/reviews response; the pager renders only when it exceeds PAGE_SIZE.
 // NB: every ref the fetch closure reads (statusFilter/page/totalGates) must be
 // declared BEFORE useDataFetch — vue-query invokes the fetcher during setup.
 const page = ref(1)
@@ -431,7 +431,7 @@ const { loading, error, data: gates, fetched, load: loadGates } = useDataFetch<G
   async () => {
     // Reads the CURRENT status/page refs on every load: filter and page
     // changes re-invoke loadGates(), so each fetch reflects the latest state.
-    const res = await api.GET('/api/v1/hitl/gates', {
+    const res = await api.GET('/api/v1/hitl/reviews', {
       params: { query: { status: serverStatusFor(statusFilter.value), page: page.value, page_size: PAGE_SIZE } },
     })
     // FAR-768 regression: a missing envelope is a FAILURE, not an empty queue.
@@ -506,7 +506,7 @@ let refreshInFlight = false
 let disposed = false
 
 function expandKey(gate: GateItem): string {
-  return `${gate.run_id}:${gate.gate_id}`
+  return `${gate.run_id}:${gate.review_id}`
 }
 
 function gateStatus(gate: GateItem): string {
@@ -578,7 +578,7 @@ function matchesSearch(gate: GateItem): boolean {
   if (!searchQuery.value) return true
   const q = searchQuery.value.toLowerCase()
   const pName = pipelineDisplayName(gate).toLowerCase()
-  return pName.includes(q) || gate.gate_id.toLowerCase().includes(q)
+  return pName.includes(q) || gate.review_id.toLowerCase().includes(q)
 }
 
 function matchesDate(gate: GateItem): boolean {
@@ -598,14 +598,14 @@ function matchesDate(gate: GateItem): boolean {
 
 const filteredGates = computed(() => {
   // Status is filtered SERVER-side now (FAR-692): the statusFilter param selects
-  // the gate subset on /hitl/gates. Search/pipeline/date remain client-side
+  // the gate subset on /hitl/reviews. Search/pipeline/date remain client-side
   // over the loaded page (documented limitation: search matches within the
   // current page only).
   return gates.value.filter(gate =>
     matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
 })
 
-// FAR-686: claim/decide logic lives inside HitlGateCard (shared with
+// FAR-686: claim/decide logic lives inside HitlReviewCard (shared with
 // RunDetailView). The view only hoists the card's feedback: failures persist
 // in the view-level banner (FAR-612), successes clear it and refresh the list.
 // FAR-645 (rebased onto FAR-686): the claim-conflict discrimination by the
@@ -654,7 +654,7 @@ interface BulkOutcome {
 const bulkOutcomes = ref<BulkOutcome[] | null>(null)
 
 function gateKey(gate: GateItem): string {
-  return `${gate.run_id}:${gate.gate_id}`
+  return `${gate.run_id}:${gate.review_id}`
 }
 
 const allSelected = computed(() => {
@@ -735,8 +735,8 @@ async function bulkClaim() {
     }
 
     try {
-      const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/claim', {
-        params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{review_id}/claim', {
+        params: { path: { run_id: gate.run_id, review_id: gate.review_id } },
         body: { expiry_minutes: 15 },
       })
       if (err) {
@@ -744,8 +744,8 @@ async function bulkClaim() {
         anyFailed = true
       } else if (data) {
         const d = data as { claim_token: string; expires_at: string }
-        const gateState = useHitlGateState(gate.run_id, gate.gate_id)
-        gateState.setClaimToken(d.claim_token)
+        const reviewState = useHitlReviewState(gate.run_id, gate.review_id)
+        reviewState.setClaimToken(d.claim_token)
         outcomes.push({ key, status: 'succeeded' })
       }
     } catch (e: unknown) {
@@ -789,8 +789,8 @@ async function confirmBulkReject() {
 
   for (const gate of selected) {
     const key = gateKey(gate)
-    const gateState = useHitlGateState(gate.run_id, gate.gate_id)
-    const token = gateState.claimToken.value
+    const reviewState = useHitlReviewState(gate.run_id, gate.review_id)
+    const token = reviewState.claimToken.value
 
     if (gate.decision === 'approved' || gate.decision === 'rejected') {
       outcomes.push({ key, status: 'skipped-already-decided' })
@@ -813,15 +813,15 @@ async function confirmBulkReject() {
     }
 
     try {
-      const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
-        params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{review_id}/reject', {
+        params: { path: { run_id: gate.run_id, review_id: gate.review_id } },
         body: { claim_token: token, reason },
       })
       if (err) {
         outcomes.push({ key, status: 'failed', error: `${t('hitl.gate.reject_failed')} ${formatApiError(err)}` })
         anyFailed = true
       } else {
-        gateState.clear()
+        reviewState.clear()
         outcomes.push({ key, status: 'succeeded' })
       }
     } catch (e: unknown) {

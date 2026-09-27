@@ -23,22 +23,22 @@ from modulo.api.hitl_answer_validation import (
 
 _RUN_ID = uuid.uuid4()
 _ORG_ID = uuid.uuid4()
-_GATE_ID = "hitl_gate_src_tgt"
+_REVIEW_ID = "hitl_review_src_tgt"
 _SESSION = AsyncMock()
 
 
 async def _validate(
     answer: dict[str, Any] | None, config: dict[str, Any] | None, *, require_answer: bool = False
 ) -> dict[str, Any] | None:
-    """Run ``validate_hitl_answer`` with ``resolve_hitl_gate_config`` stubbed."""
+    """Run ``validate_hitl_answer`` with ``resolve_hitl_review_config`` stubbed."""
     with patch(
-        "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+        "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
         new=AsyncMock(return_value=config),
     ):
         return await validate_hitl_answer(
             _SESSION,
             run_id=_RUN_ID,
-            gate_id=_GATE_ID,
+            review_id=_REVIEW_ID,
             org_id=_ORG_ID,
             answer=answer,
             require_answer=require_answer,
@@ -136,10 +136,10 @@ async def test_mcp_adapter_keeps_answer_with_error_key_as_answer():
     answer = {"kind": "choice", "option_id": "yes", "error": "a legitimate answer field"}
     config = {"response_contract": {"kind": "choice", "options": [{"id": "yes", "label": "Yes"}]}}
     with patch(
-        "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+        "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
         new=AsyncMock(return_value=config),
     ):
-        error, validated = await _validate_mcp_choice_answer(AsyncMock(), _RUN_ID, _GATE_ID, _ORG_ID, answer)
+        error, validated = await _validate_mcp_choice_answer(AsyncMock(), _RUN_ID, _REVIEW_ID, _ORG_ID, answer)
     assert error is None
     assert validated == answer
 
@@ -149,11 +149,11 @@ async def test_mcp_adapter_returns_error_tuple_on_invalid_answer():
 
     config = {"response_contract": {"kind": "choice", "options": [{"id": "yes", "label": "Yes"}]}}
     with patch(
-        "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+        "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
         new=AsyncMock(return_value=config),
     ):
         error, validated = await _validate_mcp_choice_answer(
-            AsyncMock(), _RUN_ID, _GATE_ID, _ORG_ID, {"kind": "choice", "option_id": "maybe"}
+            AsyncMock(), _RUN_ID, _REVIEW_ID, _ORG_ID, {"kind": "choice", "option_id": "maybe"}
         )
     assert error is not None
     assert error["error"] == "invalid_answer"

@@ -69,7 +69,7 @@ def main():
 
     # Show summary of all pending gates
     for g in gates:
-        print(f"  - Gate {g['gate_id']} | Run {g['run_id']} | Node: {g.get('node_id', 'N/A')}")
+        print(f"  - Gate {g['review_id']} | Run {g['run_id']} | Node: {g.get('node_id', 'N/A')}")
         print(f"    Created: {g.get('created_at', 'N/A')}")
         claimed_by = g.get("claimed_by")
         print(f"    Claimed: {claimed_by or 'No (available)'}")
@@ -82,13 +82,13 @@ def main():
 
     gate = available[0]
     run_id = gate["run_id"]
-    gate_id = gate["gate_id"]
-    print(f"\nUsing gate {gate_id} on run {run_id}")
+    review_id = gate["review_id"]
+    print(f"\nUsing gate {review_id} on run {run_id}")
 
     # Step 3: Claim the gate
-    print(f"\nClaiming gate {gate_id} ...")
+    print(f"\nClaiming gate {review_id} ...")
     resp = client.post(
-        f"/api/v1/runs/{run_id}/hitl/{gate_id}/claim",
+        f"/api/v1/runs/{run_id}/hitl/{review_id}/claim",
         json={"expiry_minutes": 10},
         headers=headers,
     )
@@ -108,9 +108,9 @@ def main():
     choice = input("Approve or reject? (a/r) [a]: ").strip().lower() or "a"
 
     if choice == "a":
-        print(f"\nApproving gate {gate_id} ...")
+        print(f"\nApproving gate {review_id} ...")
         resp = client.post(
-            f"/api/v1/runs/{run_id}/hitl/{gate_id}/approve",
+            f"/api/v1/runs/{run_id}/hitl/{review_id}/approve",
             json={"claim_token": claim_token, "notes": "Looks good, proceed."},
             headers=headers,
         )
@@ -118,9 +118,9 @@ def main():
             bail(f"approve failed: {resp.status_code} {resp.text}")
         print(f"  Approved! Status: {resp.json()['status']}")
     else:
-        print(f"\nRejecting gate {gate_id} ...")
+        print(f"\nRejecting gate {review_id} ...")
         resp = client.post(
-            f"/api/v1/runs/{run_id}/hitl/{gate_id}/reject",
+            f"/api/v1/runs/{run_id}/hitl/{review_id}/reject",
             json={"claim_token": claim_token, "reason": "Needs revision before proceeding."},
             headers=headers,
         )

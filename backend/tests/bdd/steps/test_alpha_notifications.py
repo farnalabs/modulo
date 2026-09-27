@@ -42,7 +42,7 @@ def webhook_sent(url: str, request):
     pass
 
 
-@then("the webhook body contains the run_id and gate_id")
+@then("the webhook body contains the run_id and review_id")
 def webhook_body_contains_ids(request):
     pass
 

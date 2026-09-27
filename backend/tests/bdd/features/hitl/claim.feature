@@ -1,6 +1,6 @@
 Feature: HITL Claim
   As an approver
-  I want to claim a HITL gate so that others know I am reviewing it
+  I want to claim a HITL review so that others know I am reviewing it
   So that multiple people do not approve/reject the same gate
 
   Background:

@@ -2,7 +2,7 @@ export default {
   "hitl": {
     "gate": {
       "gate_label": "Gate:",
-      "copy_gate_id": "Copy gate ID",
+      "copy_review_id": "Copy gate ID",
       "run_label": "View run:",
       "run_id": "Run ID",
       "pipeline_label": "Pipeline",
@@ -1185,7 +1185,7 @@ export default {
       "max_iterations_placeholder": "0 = unlimited (RunawayGuard applies)",
       "max_iterations_hint": "Maximum number of times this loop can repeat before exiting. 0 means no limit.",
       "routing_label_placeholder": "e.g. retry, escalate, complete",
-      "hitl_gate": "HITL Gate",
+      "hitl_review": "HITL Gate",
       "hitl_label_placeholder": "e.g. Review before deploy",
       "hitl_description_placeholder": "Describe what the reviewer should check",
       "hitl_description_hint": "Required (min 20 chars). This is the reviewer's briefing — explain why a human must decide here.",
@@ -1561,7 +1561,7 @@ export default {
       "share_summary": "Share Summary",
       "copy_node_trace_id": "Copy node trace ID",
       "copy_node_span_id": "Copy node span ID",
-      "copy_gate_id": "Copy gate ID",
+      "copy_review_id": "Copy gate ID",
       "copy_node_id": "Copy node ID",
       "view_trace": "View trace",
       "execution_trace": "Execution Trace",
@@ -1647,7 +1647,7 @@ export default {
       "last_heartbeat": "Last heartbeat",
       "cost_so_far": "Cost so far",
       "tokens": "tokens",
-      "hitl_gate": "HITL Gate",
+      "hitl_review": "HITL Gate",
       "queued_waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
       "queued_starting_soon": "Queued — starting soon",
       "work_items": "Work items",
@@ -4171,8 +4171,8 @@ export default {
   "cancelReasons": {
     "user_requested": "An operator cancelled it on request.",
     "agent_requested": "An agent cancelled it through the API.",
-    "hitl_gate_expired": "It was cancelled automatically: the human review gate expired without a decision.",
-    "hitl_gate_missing": "It was cancelled automatically: the human review gate was never created.",
+    "hitl_review_expired": "It was cancelled automatically: the human review gate expired without a decision.",
+    "hitl_review_missing": "It was cancelled automatically: the human review gate was never created.",
     "unknown": "Reason not recorded."
   },
   "connectors": {

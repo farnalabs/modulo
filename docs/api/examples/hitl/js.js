@@ -62,7 +62,7 @@ async function main() {
 
   for (const g of pending.gates) {
     const claimed = g.claimed_by || "available";
-    console.log(`  Gate ${g.gate_id} | Run ${g.run_id} | Claimed: ${claimed}`);
+    console.log(`  Gate ${g.review_id} | Run ${g.run_id} | Claimed: ${claimed}`);
   }
 
   // Step 2: Pick first unclaimed gate
@@ -73,12 +73,12 @@ async function main() {
   }
 
   const gate = available[0];
-  const { run_id, gate_id } = gate;
-  console.log(`\nUsing gate ${gate_id} on run ${run_id}`);
+  const { run_id, review_id } = gate;
+  console.log(`\nUsing gate ${review_id} on run ${run_id}`);
 
   // Step 3: Claim the gate
-  console.log(`\nClaiming gate ${gate_id} ...`);
-  const claim = await api(`/api/v1/runs/${run_id}/hitl/${gate_id}/claim`, {
+  console.log(`\nClaiming gate ${review_id} ...`);
+  const claim = await api(`/api/v1/runs/${run_id}/hitl/${review_id}/claim`, {
     method: "POST",
     headers: h,
     body: JSON.stringify({ expiry_minutes: 10 }),
@@ -86,8 +86,8 @@ async function main() {
   console.log(`  Claimed! Token: ${logSafe(claim.claim_token.slice(0, 20))}...`);
 
   // Step 4: Approve the gate
-  console.log(`\nApproving gate ${gate_id} ...`);
-  const approve = await api(`/api/v1/runs/${run_id}/hitl/${gate_id}/approve`, {
+  console.log(`\nApproving gate ${review_id} ...`);
+  const approve = await api(`/api/v1/runs/${run_id}/hitl/${review_id}/approve`, {
     method: "POST",
     headers: h,
     body: JSON.stringify({

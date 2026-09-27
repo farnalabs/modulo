@@ -23,7 +23,7 @@ Membership representations (inspected for this ticket):
   team_memberships ...)`` clause in ``api.team_scope``).
 
 Raises ``fastapi.HTTPException(422)`` directly — the same service-layer
-pattern ``db.crud.hitl_gate_guard`` uses for structured authz denials, so
+pattern ``db.crud.hitl_review_guard`` uses for structured authz denials, so
 ``handle_db_errors``' HTTPException passthrough returns the specific detail
 without a 500.
 """

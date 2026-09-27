@@ -14,7 +14,7 @@ re-parented onto ``0179_drop_workspace_leases`` to keep the chain linear (the
 standard collision renumber flow).
 
 FAR-604 D2 (HITL capacity design) introduces the park-on-expiry sweep: a run
-whose HITL gate expired unanswered past the grace window (settings
+whose HITL review expired unanswered past the grace window (settings
 ``HITL_PARK_GRACE_SECONDS``, default 24h) is transitioned out of
 ``awaiting_human`` into the dedicated non-terminal ``hitl_parked`` status so it
 stops occupying review state while the gate stays OPEN AND CLAIMABLE.

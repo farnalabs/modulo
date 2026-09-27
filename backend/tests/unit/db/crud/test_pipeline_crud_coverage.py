@@ -288,7 +288,7 @@ class TestEdgeToPlainDict:
         edge.edge_type = "normal"
         edge.source_port = "out"
         edge.target_port = "in"
-        edge.hitl_gate_config = {"some": "config"}
+        edge.hitl_review_config = {"some": "config"}
         edge.condition_expression = "x > 0"
         d = _edge_to_plain_dict(edge)
         assert d["source_node_id"] == edge.source_node_id
@@ -296,14 +296,14 @@ class TestEdgeToPlainDict:
         assert d["edge_type"] == "normal"
         assert d["source_port"] == "out"
         assert d["target_port"] == "in"
-        assert d["hitl_gate_config"] == {"some": "config"}
+        assert d["hitl_review_config"] == {"some": "config"}
         assert d["condition_expression"] == "x > 0"
 
     def test_defaults_ports_when_none(self) -> None:
         edge = MagicMock()
         edge.source_port = None
         edge.target_port = None
-        edge.hitl_gate_config = None
+        edge.hitl_review_config = None
         d = _edge_to_plain_dict(edge)
         assert d["source_port"] == "out"
         assert d["target_port"] == "in"
@@ -357,7 +357,7 @@ class TestSnapshotToDict:
 
 class TestPreserveOmittedGateConfig:
     def test_present_returns_config_value(self) -> None:
-        edge = {"hitl_gate_config": {"gated": True}}
+        edge = {"hitl_review_config": {"gated": True}}
         result = _preserve_omitted_gate_config(edge, {})
         assert result == {"gated": True}
 
@@ -374,7 +374,7 @@ class TestPreserveOmittedGateConfig:
 
     def test_explicit_false_returns_none(self) -> None:
         edge = {
-            "hitl_gate_config_present": False,
+            "hitl_review_config_present": False,
             "source_node_id": "a",
             "target_node_id": "b",
             "edge_type": "normal",

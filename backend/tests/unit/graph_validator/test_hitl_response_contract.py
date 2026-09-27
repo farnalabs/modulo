@@ -2,7 +2,7 @@
 
 Covers ``_check_hitl_response_contract`` (response_contract validation) via
 the save-time entry point ``validate_definition``. Both gate shapes are
-exercised: EDGE-level ``hitl_gate_config`` and node-level ``hitl_config``.
+exercised: EDGE-level ``hitl_review_config`` and node-level ``hitl_config``.
 """
 
 from typing import Any
@@ -33,7 +33,7 @@ def _gated_edge_graph(rc: dict[str, Any] | None = None) -> dict[str, Any]:
         config["response_contract"] = rc
     return {
         "nodes": [{"id": _UUID_A}, {"id": _UUID_B}],
-        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal", "hitl_gate_config": config}],
+        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal", "hitl_review_config": config}],
     }
 
 

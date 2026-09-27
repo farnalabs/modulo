@@ -8,7 +8,7 @@ Two nullable columns recording WHY and WHO cancelled a run:
 
 * ``cancel_reason`` — one of the closed vocabulary in
   ``modulo.db.models.run.CANCEL_REASON_VALUES`` (``user_requested``,
-  ``agent_requested``, ``hitl_gate_expired``, ``hitl_gate_missing``), guarded
+  ``agent_requested``, ``hitl_review_expired``, ``hitl_review_missing``), guarded
   by the ``ck_runs_cancel_reason`` CHECK. NULL means "reason not recorded":
   every run cancelled BEFORE this migration keeps NULL by design and the run
   detail page renders a neutral fallback (no backfill — a guessed reason would
@@ -43,7 +43,7 @@ _ADD_CHECK_NOT_VALID = (
     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_cancel_reason') "
     "THEN ALTER TABLE public.runs ADD CONSTRAINT ck_runs_cancel_reason CHECK ("
     "cancel_reason IS NULL OR "
-    "cancel_reason IN ('user_requested', 'agent_requested', 'hitl_gate_expired', 'hitl_gate_missing')"
+    "cancel_reason IN ('user_requested', 'agent_requested', 'hitl_review_expired', 'hitl_review_missing')"
     ") NOT VALID; END IF; END $$;"
 )
 _VALIDATE_CHECK = (

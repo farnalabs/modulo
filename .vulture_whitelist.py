@@ -420,8 +420,8 @@ __all__ = [
     #     string-keyed lookup, so it reports them as unused.
     "_terminalize_mid_graph_wedges",
     "_terminalize_claim_cap_exhausted",
-    "_terminalize_expired_hitl_gates",
-    "_terminalize_hitl_gate_missing",
+    "_terminalize_expired_hitl_reviews",
+    "_terminalize_hitl_review_missing",
     # FAR-720 declarative registry dataclasses: referenced only in type
     # annotations (``tuple[ReconcileTerminalizer, ...]``, ``tuning:
     # ReconcileTuning``), which vulture does not credit as uses.

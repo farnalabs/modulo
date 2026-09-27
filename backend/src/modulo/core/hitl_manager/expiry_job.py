@@ -89,7 +89,7 @@ async def expire_stale_claims(
                 select(
                     HitlClaim.id,
                     HitlClaim.run_id,
-                    HitlClaim.gate_id,
+                    HitlClaim.review_id,
                     HitlClaim.account_id,
                 ).where(
                     HitlClaim.organisation_id == org_id,
@@ -108,7 +108,7 @@ async def expire_stale_claims(
                 {
                     "claim_id": r.id,
                     "run_id": r.run_id,
-                    "gate_id": r.gate_id,
+                    "review_id": r.review_id,
                     "claimed_by": r.account_id,
                     "organisation_id": org_id,
                 }
@@ -156,10 +156,10 @@ async def expire_stale_claims(
                                 "summary": (
                                     f"HITL claim {short_id(entry['claim_id']) or 'unknown'} expired "
                                     f"(run {short_id(entry['run_id']) or 'unknown'}, "
-                                    f"gate {entry['gate_id']})"
+                                    f"gate {entry['review_id']})"
                                 ),
                                 "pipeline_run_id": str(entry["run_id"]),
-                                "node_id": entry["gate_id"],
+                                "node_id": entry["review_id"],
                                 "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
                             },
                         )
@@ -178,7 +178,7 @@ async def expire_stale_claims(
                         event_type="claim_expired",
                         payload={
                             "run_id": str(entry["run_id"]),
-                            "gate_id": entry["gate_id"],
+                            "review_id": entry["review_id"],
                             "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
                         },
                         run_id=str(entry["run_id"]),
@@ -188,7 +188,7 @@ async def expire_stale_claims(
                 except Exception:
                     _log.exception(
                         "hitl.expiry_job.notification_failed",
-                        extra={"gate_id": entry["gate_id"], "run_id": str(entry["run_id"])},
+                        extra={"review_id": entry["review_id"], "run_id": str(entry["run_id"])},
                     )
 
     return all_expired

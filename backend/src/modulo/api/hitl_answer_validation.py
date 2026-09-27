@@ -28,7 +28,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
+from modulo.db.crud.hitl_review_config import resolve_hitl_review_config
 
 
 class AnswerValidationError(ValueError):
@@ -39,7 +39,7 @@ async def validate_hitl_answer(
     session: AsyncSession,
     *,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     org_id: uuid.UUID,
     answer: dict[str, Any] | None,
     require_answer: bool = False,
@@ -56,10 +56,10 @@ async def validate_hitl_answer(
     """
     if answer is None:
         if require_answer:
-            config = await resolve_hitl_gate_config(
+            config = await resolve_hitl_review_config(
                 session,
                 run_id=run_id,
-                gate_id=gate_id,
+                review_id=review_id,
                 org_id=org_id,
             )
             rc = config.get("response_contract") if isinstance(config, dict) else None
@@ -71,10 +71,10 @@ async def validate_hitl_answer(
     if not isinstance(kind, str) or not kind:
         raise AnswerValidationError("answer must have a non-empty 'kind' string")
 
-    config = await resolve_hitl_gate_config(
+    config = await resolve_hitl_review_config(
         session,
         run_id=run_id,
-        gate_id=gate_id,
+        review_id=review_id,
         org_id=org_id,
     )
 

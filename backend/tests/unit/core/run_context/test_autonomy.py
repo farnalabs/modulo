@@ -15,7 +15,7 @@ from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
     resolve_autonomy,
     should_notify_on_complete,
-    should_skip_hitl_gate,
+    should_skip_hitl_review,
     validate_autonomy_ceiling,
 )
 
@@ -249,7 +249,7 @@ class TestEffectiveAutonomyLevel:
         assert "not a dict" in caplog.records[0].message
 
 
-class TestShouldSkipHitlGate:
+class TestShouldSkipHitlReview:
     @pytest.mark.parametrize(
         ("level", "expected"),
         [
@@ -258,8 +258,8 @@ class TestShouldSkipHitlGate:
             (AutonomyLevel.NOTIFY_ON_COMPLETE, False),
         ],
     )
-    def test_skip_hitl_gate(self, level: AutonomyLevel, expected: bool) -> None:
-        assert should_skip_hitl_gate(level) is expected
+    def test_skip_hitl_review(self, level: AutonomyLevel, expected: bool) -> None:
+        assert should_skip_hitl_review(level) is expected
 
 
 class TestShouldNotifyOnComplete:

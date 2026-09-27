@@ -85,14 +85,14 @@ ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 CANCEL_REASON_USER_REQUESTED: Final[str] = "user_requested"
 CANCEL_REASON_AGENT_REQUESTED: Final[str] = "agent_requested"
-CANCEL_REASON_HITL_GATE_EXPIRED: Final[str] = "hitl_gate_expired"
-CANCEL_REASON_HITL_GATE_MISSING: Final[str] = "hitl_gate_missing"
+CANCEL_REASON_HITL_REVIEW_EXPIRED: Final[str] = "hitl_review_expired"
+CANCEL_REASON_HITL_REVIEW_MISSING: Final[str] = "hitl_review_missing"
 CANCEL_REASON_VALUES: frozenset[str] = frozenset(
     {
         CANCEL_REASON_USER_REQUESTED,
         CANCEL_REASON_AGENT_REQUESTED,
-        CANCEL_REASON_HITL_GATE_EXPIRED,
-        CANCEL_REASON_HITL_GATE_MISSING,
+        CANCEL_REASON_HITL_REVIEW_EXPIRED,
+        CANCEL_REASON_HITL_REVIEW_MISSING,
     }
 )
 

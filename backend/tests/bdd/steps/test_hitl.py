@@ -42,13 +42,13 @@ def pipeline_has_approval_gate(pipeline_name: str, node_id: str, ctx):
     ctx["pipeline_name"] = pipeline_name
     ctx["pipeline_id"] = uuid.uuid4()
     ctx["gate_node_id"] = node_id
-    ctx["gate_id"] = node_id
+    ctx["review_id"] = node_id
     ctx["run_id"] = uuid.uuid4()
 
     # Mock the HITL manager gate creation
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = ctx["gate_id"]
+    mock_gate.review_id = ctx["review_id"]
     mock_gate.pipeline_id = ctx["pipeline_id"]
     mock_gate.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     mock_gate.claimed_by = None
@@ -92,10 +92,10 @@ def approver_notified_websocket(ctx):
 # ============================================================================
 
 
-@given(parsers.parse('a run is waiting at gate "{gate_id}"'))
-def run_waiting_at_gate(gate_id: str, ctx):
+@given(parsers.parse('a run is waiting at gate "{review_id}"'))
+def run_waiting_at_gate(review_id: str, ctx):
     ctx["run_status"] = "awaiting_human"
-    ctx["gate_id"] = gate_id
+    ctx["review_id"] = review_id
     ctx["run_id"] = uuid.uuid4()
 
     # Create a claim token so the approve action can succeed
@@ -104,7 +104,7 @@ def run_waiting_at_gate(gate_id: str, ctx):
 
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = gate_id
+    mock_gate.review_id = review_id
     mock_gate.pipeline_id = uuid.uuid4()
     mock_gate.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     mock_gate.claimed_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -242,10 +242,10 @@ def run_status_rejected(ctx):
 # ============================================================================
 
 
-@given(parsers.parse('a run is waiting at gate "{gate_id}" with timeout {timeout:d}s'))
-def run_waiting_at_gate_with_timeout(gate_id: str, timeout: int, ctx):
+@given(parsers.parse('a run is waiting at gate "{review_id}" with timeout {timeout:d}s'))
+def run_waiting_at_gate_with_timeout(review_id: str, timeout: int, ctx):
     ctx["run_status"] = "awaiting_human"
-    ctx["gate_id"] = gate_id
+    ctx["review_id"] = review_id
     ctx["run_id"] = uuid.uuid4()
     ctx["gate_timeout_seconds"] = timeout
 
@@ -253,7 +253,7 @@ def run_waiting_at_gate_with_timeout(gate_id: str, timeout: int, ctx):
     expired_time = datetime.now(UTC) - timedelta(seconds=1)
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = gate_id
+    mock_gate.review_id = review_id
     mock_gate.pipeline_id = uuid.uuid4()
     mock_gate.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     mock_gate.claimed_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -266,7 +266,7 @@ def run_waiting_at_gate_with_timeout(gate_id: str, timeout: int, ctx):
 
     # Mock HITL manager with expire_stale to simulate timeout
     mock_mgr = MagicMock()
-    mock_mgr.expire_stale = AsyncMock(return_value=[{"run_id": ctx["run_id"], "gate_id": gate_id}])
+    mock_mgr.expire_stale = AsyncMock(return_value=[{"run_id": ctx["run_id"], "review_id": review_id}])
     mock_mgr.get_gate = AsyncMock(return_value=mock_gate)
     ctx["_mock_hitl_mgr"] = mock_mgr
 
@@ -274,7 +274,9 @@ def run_waiting_at_gate_with_timeout(gate_id: str, timeout: int, ctx):
 @when("1 second passes without approval")
 def one_second_passes(ctx):
     """Simulate the expiry check — not a real sleep, just a mock invocation."""
-    ctx["expired_gates"] = [{"run_id": ctx.get("run_id", uuid.uuid4()), "gate_id": ctx.get("gate_id", "pre-deploy")}]
+    ctx["expired_gates"] = [
+        {"run_id": ctx.get("run_id", uuid.uuid4()), "review_id": ctx.get("review_id", "pre-deploy")}
+    ]
     ctx["run_status"] = "timed_out"
 
 
@@ -330,7 +332,7 @@ def feedback_record_exists(ctx):
     ctx["feedback_record"] = {
         "id": str(uuid.uuid4()),
         "run_id": str(ctx.get("run_id", uuid.uuid4())),
-        "gate_id": ctx.get("gate_id", "review-output"),
+        "review_id": ctx.get("review_id", "review-output"),
         "rejected_by": str(ctx.get("user_id", uuid.uuid4())),
         "rejection_reason": "Output lacks required citations",
         "feedback_status": "pending",
@@ -365,7 +367,7 @@ def post_feedback(request, reason: str, client, ctx):
     mock_record = MagicMock()
     mock_record.id = uuid.uuid4()
     mock_record.run_id = ctx.get("run_id", uuid.uuid4())
-    mock_record.gate_id = ctx.get("gate_id", "review-output")
+    mock_record.review_id = ctx.get("review_id", "review-output")
     mock_record.rejected_by = ctx.get("user_id", uuid.uuid4())
     mock_record.rejection_reason = reason
     mock_record.feedback_status = "pending"
@@ -384,7 +386,7 @@ def post_feedback(request, reason: str, client, ctx):
         resp = client.post(
             f"/api/v1/runs/{mock_record.run_id}/feedback",
             json={
-                "gate_id": mock_record.gate_id,
+                "review_id": mock_record.review_id,
                 "rejection_reason": reason,
                 "rejected_output": {},
                 "producing_node_id": "node-a",
@@ -407,7 +409,7 @@ def get_feedback_list(client, request):
     mock_item = MagicMock()
     mock_item.id = uuid.uuid4()
     mock_item.run_id = uuid.uuid4()
-    mock_item.gate_id = "review-output"
+    mock_item.review_id = "review-output"
     mock_item.rejected_by = uuid.uuid4()
     mock_item.rejection_reason = "test"
     mock_item.feedback_status = "pending"
@@ -536,24 +538,24 @@ def feedback_status_correcting(request):
 # ============================================================================
 
 
-@given(parsers.parse('I have claimed gate "{gate_id}"'))
-def i_have_claimed_gate(gate_id: str, ctx):
+@given(parsers.parse('I have claimed gate "{review_id}"'))
+def i_have_claimed_gate(review_id: str, ctx):
     """Track that the user has claimed this gate."""
     ctx["gate_claimed"] = True
     if "claim_token" not in ctx:
         ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
 
 
-@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and manual output"))
-def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
+@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with claim_token and manual output"))
+def post_deliver_manual_success(request, run_id, review_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
-    _ = run_id, gate_id  # parsed from step — use ctx for actual values
+    _ = run_id, review_id  # parsed from step — use ctx for actual values
     mock_gate = MagicMock()
     mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
-    mock_gate.gate_id = ctx.get("gate_id", "pre-deploy")
+    mock_gate.review_id = ctx.get("review_id", "pre-deploy")
     mock_gate.decision = "deliver_manual"
     mock_gate.claim_token = None
     mock_gate.claimed_by = None
@@ -570,7 +572,7 @@ def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
         mock_exec_cls.return_value.resume = AsyncMock()
 
         resp = client.post(
-            f"/api/v1/runs/{mock_gate.run_id}/hitl/{mock_gate.gate_id}/deliver-manual",
+            f"/api/v1/runs/{mock_gate.run_id}/hitl/{mock_gate.review_id}/deliver-manual",
             json={
                 "claim_token": ctx.get("claim_token", "valid_token"),
                 "output": {"status": "approved", "notes": "Manual review passed"},
@@ -581,13 +583,13 @@ def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
     ctx["run_status"] = "running"
 
 
-@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with no claim_token and manual output"))
-def post_deliver_manual_no_token(request, run_id, gate_id, ctx, client):
+@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with no claim_token and manual output"))
+def post_deliver_manual_no_token(request, run_id, review_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
-    _ = run_id, gate_id
+    _ = run_id, review_id
     mock_mgr = MagicMock()
     mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token is invalid"))
 
@@ -603,14 +605,16 @@ def post_deliver_manual_no_token(request, run_id, gate_id, ctx, client):
 
 
 @when(
-    parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with expired claim_token and manual output")
+    parsers.parse(
+        "I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with expired claim_token and manual output"
+    )
 )
-def post_deliver_manual_expired(request, run_id, gate_id, ctx, client):
+def post_deliver_manual_expired(request, run_id, review_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
-    _ = run_id, gate_id
+    _ = run_id, review_id
     mock_mgr = MagicMock()
     mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token has expired"))
 
@@ -625,13 +629,13 @@ def post_deliver_manual_expired(request, run_id, gate_id, ctx, client):
         request.node._resp_status = 410
 
 
-@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{gate_id}/deliver-manual with claim_token and empty output"))
-def post_deliver_manual_empty(request, run_id, gate_id, ctx, client):
+@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with claim_token and empty output"))
+def post_deliver_manual_empty(request, run_id, review_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
-    _ = run_id, gate_id
+    _ = run_id, review_id
     mock_gate = MagicMock()
     mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
 
@@ -688,7 +692,7 @@ def manual_input_node_exists(ctx):
     ctx["node_id"] = "review-data"
     ctx["run_id"] = uuid.uuid4()
     ctx["run_status"] = "awaiting_human"
-    ctx["gate_id"] = "manual_review-data"
+    ctx["review_id"] = "manual_review-data"
 
 
 @when("the run reaches the manual node")
@@ -706,7 +710,7 @@ def run_pauses_for_manual_data(ctx):
 def run_waiting_at_manual_node(node_id: str, ctx):
     ctx["run_status"] = "awaiting_human"
     ctx["node_id"] = node_id
-    ctx["gate_id"] = f"manual_{node_id}"
+    ctx["review_id"] = f"manual_{node_id}"
     ctx["run_id"] = uuid.uuid4()
     ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
 
@@ -752,7 +756,7 @@ def submit_manual_output(request, ctx, client):
 
     mock_gate = MagicMock()
     mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
-    mock_gate.gate_id = ctx.get("gate_id", "manual_review-data")
+    mock_gate.review_id = ctx.get("review_id", "manual_review-data")
 
     with patch(
         "modulo.api.routes.hitl.HITLManager",
@@ -762,7 +766,7 @@ def submit_manual_output(request, ctx, client):
         mock_mgr.approve = AsyncMock(return_value=mock_gate)
 
         resp = client.post(
-            f"/api/v1/runs/{mock_gate.run_id}/manual/{mock_gate.gate_id}/submit",
+            f"/api/v1/runs/{mock_gate.run_id}/manual/{mock_gate.review_id}/submit",
             json={"claim_token": "token", "output": {"approval": True}},
         )
     request.node._resp = resp
@@ -798,15 +802,15 @@ def bdd_approver_in_org(org: str, ctx) -> None:
     ctx["user_id"] = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-@given(parsers.parse('another user has claimed gate "{gate_id}" with claim_token "{token}"'))
-def another_user_claimed_gate_with_token(gate_id: str, token: str, ctx) -> None:
+@given(parsers.parse('another user has claimed gate "{review_id}" with claim_token "{token}"'))
+def another_user_claimed_gate_with_token(review_id: str, token: str, ctx) -> None:
     """A gate already claimed by a different reviewer."""
     ctx["gate_claimed_by_other"] = True
     ctx["claim_token"] = token
 
 
-@given(parsers.parse('another user has claimed gate "{gate_id}"'))
-def another_user_claimed_gate(gate_id: str, ctx) -> None:
+@given(parsers.parse('another user has claimed gate "{review_id}"'))
+def another_user_claimed_gate(review_id: str, ctx) -> None:
     """A gate already claimed by a different reviewer (default token)."""
     ctx["gate_claimed_by_other"] = True
     ctx["claim_token"] = "other_user_token"
@@ -828,7 +832,7 @@ def post_claim(request, run_id: str, ctx, client):
         claim_patch = patch(
             "modulo.api.routes.hitl.HITLManager.claim",
             new_callable=AsyncMock,
-            side_effect=AlreadyClaimedError(ctx["run_id"], ctx["gate_id"]),
+            side_effect=AlreadyClaimedError(ctx["run_id"], ctx["review_id"]),
         )
     else:
         claim_patch = patch(
@@ -838,7 +842,7 @@ def post_claim(request, run_id: str, ctx, client):
         )
     with claim_patch:
         resp = client.post(
-            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/claim",
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/claim",
             json={"expiry_minutes": 15},
         )
     request.node._resp = resp
@@ -863,14 +867,14 @@ def response_contains_claim_token(request):
     assert "claim_token" in body, f"Expected a claim_token in the response, got {body}"
 
 
-@then(parsers.parse('I am the claimant of gate "{gate_id}"'))
-def i_am_the_claimant(gate_id: str, request, ctx):
+@then(parsers.parse('I am the claimant of gate "{review_id}"'))
+def i_am_the_claimant(review_id: str, request, ctx):
     assert ctx.get("user_role") == "approver", "User is not an approver"
     resp = getattr(request.node, "_resp", None)
     assert resp is not None, "No claim response was captured"
     assert resp.status_code == 200, "Claim did not succeed"
     body = resp.json()
-    assert body.get("gate_id") == gate_id, f"Expected claim on gate {gate_id!r}, got {body}"
+    assert body.get("review_id") == review_id, f"Expected claim on gate {review_id!r}, got {body}"
     assert body.get("claim_token"), f"Expected a claim_token in the response, got {body}"
 
 
@@ -928,7 +932,7 @@ def post_approve_with_claim_token(request, run_id: str, decision: str, ctx, clie
     ):
         mock_exec_cls.return_value.resume = AsyncMock()
         resp = client.post(
-            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve",
             json={"claim_token": ctx["claim_token"], "notes": None},
         )
     request.node._resp = resp
@@ -944,7 +948,7 @@ def post_approve_without_claim_token(request, run_id: str, decision: str, ctx, c
     _ = run_id
     ctx["decision"] = decision
     resp = client.post(
-        f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+        f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve",
         json={"notes": None},
     )
     request.node._resp = resp
@@ -964,7 +968,7 @@ def post_approve_with_expired_token(request, run_id: str, decision: str, ctx, cl
         side_effect=ClaimTokenExpiredError(),
     ):
         resp = client.post(
-            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve",
             json={"claim_token": "expired_token", "notes": None},
         )
     request.node._resp = resp
@@ -984,7 +988,7 @@ def post_approve_with_specific_token(request, run_id: str, token: str, decision:
         side_effect=ClaimTokenInvalidError(),
     ):
         resp = client.post(
-            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve",
             json={"claim_token": token, "notes": None},
         )
     request.node._resp = resp

@@ -6,7 +6,7 @@ Feature: Export workflow as YAML bundle
 
   Background:
     Given a pipeline named "PRD to Tickets" exists
-    And the pipeline has 2 agent nodes ("prd-reader", "ticket-writer") and 1 HITL gate
+    And the pipeline has 2 agent nodes ("prd-reader", "ticket-writer") and 1 HITL review
     And each agent references an abstract schema and a connector type
     And the pipeline has a model_backend_id and encrypted credentials
 
@@ -34,7 +34,7 @@ Feature: Export workflow as YAML bundle
     When the exported YAML is inspected
     Then the agents section contains prompt_template for each agent
     And the agents section contains input_schema and output_schema as abstract names
-    And the edges section contains source, target, edge_type and hitl_gate_config
+    And the edges section contains source, target, edge_type and hitl_review_config
     And the requires section lists connector_types and abstract_schemas
 
   Scenario: Export fails for non-existent pipeline

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { h, nextTick } from 'vue'
 
 const useApiFns = vi.hoisted(() => ({
   get: vi.fn(),
@@ -342,7 +342,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     // jmespath condition
     vm.populateEdgeForm({
       edge_type: 'loop', max_iterations: 5, routing_label: '',
-      hitl_gate_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.', claim_expiry_minutes: 30, human_only: false, condition: 'status == "ok"' },
+      hitl_review_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.', claim_expiry_minutes: 30, human_only: false, condition: 'status == "ok"' },
     })
     expect(vm.edgeForm.hitl_enabled).toBe(true)
     expect(vm.edgeForm.condition_type).toBe('jmespath')
@@ -354,7 +354,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     // eval condition
     vm.populateEdgeForm({
       edge_type: 'llm', routing_label: 'go',
-      hitl_gate_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.', claim_expiry_minutes: 15, eval_condition: { eval_name: 'quality', threshold: 0.9, operator: 'gte' } },
+      hitl_review_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.', claim_expiry_minutes: 15, eval_condition: { eval_name: 'quality', threshold: 0.9, operator: 'gte' } },
     })
     expect(vm.edgeForm.condition_type).toBe('eval')
     expect(vm.edgeForm.eval_name).toBe('quality')
@@ -367,14 +367,14 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     // none condition (no condition or eval_condition in the config)
     vm.populateEdgeForm({
       edge_type: 'reject',
-      hitl_gate_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
+      hitl_review_config: { label: 'Gate', description: 'Approve the deploy only after a human reviews the plan.' },
     })
     expect(vm.edgeForm.condition_type).toBe('none')
     expect(vm.edgeForm.condition).toBe('')
     expect(vm.edgeForm.eval_name).toBe('')
     expect(vm.edgeForm.edge_type).toBe('reject')
 
-    // no hitl_gate_config (gate-less edge)
+    // no hitl_review_config (gate-less edge)
     vm.populateEdgeForm({ edge_type: 'loop', max_iterations: 3, routing_label: 'retry' })
     expect(vm.edgeForm.hitl_enabled).toBe(false)
     expect(vm.edgeForm.edge_type).toBe('loop')
@@ -384,8 +384,8 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     wrapper.unmount()
   })
 
-  // -- buildHitlGateConfig: all condition branches --
-  it('buildHitlGateConfig returns null when HITL is disabled', async () => {
+  // -- buildHitlReviewConfig: all condition branches --
+  it('buildHitlReviewConfig returns null when HITL is disabled', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
@@ -393,7 +393,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     const vm = wrapper.vm as any
 
     vm.edgeForm.hitl_enabled = false
-    expect(vm.buildHitlGateConfig()).toBeNull()
+    expect(vm.buildHitlReviewConfig()).toBeNull()
 
     // jmespath condition
     vm.edgeForm.hitl_enabled = true
@@ -403,8 +403,8 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     vm.edgeForm.description = 'A gate description for testing'
     vm.edgeForm.claim_expiry_minutes = 15
     vm.edgeForm.human_only = true
-    vm.selectedEdgeData = { hitl_gate_config: { reject_target: 'node-x', required_team_id: 'team-1' } }
-    const config = vm.buildHitlGateConfig()
+    vm.selectedEdgeData = { hitl_review_config: { reject_target: 'node-x', required_team_id: 'team-1' } }
+    const config = vm.buildHitlReviewConfig()
     expect(config.condition).toBe('status == "ok"')
     expect(config.eval_condition).toBeUndefined()
     expect(config.reject_target).toBe('node-x')
@@ -416,13 +416,13 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     vm.edgeForm.eval_threshold = 0.9
     vm.edgeForm.eval_operator = 'gte'
     vm.edgeForm.condition = ''
-    const evalConfig = vm.buildHitlGateConfig()
+    const evalConfig = vm.buildHitlReviewConfig()
     expect(evalConfig.eval_condition).toEqual({ eval_name: 'quality', threshold: 0.9, operator: 'gte' })
     expect(evalConfig.condition).toBeUndefined()
 
     // none condition
     vm.edgeForm.condition_type = 'none'
-    const noneConfig = vm.buildHitlGateConfig()
+    const noneConfig = vm.buildHitlReviewConfig()
     expect(noneConfig.condition).toBeUndefined()
     expect(noneConfig.eval_condition).toBeUndefined()
 
@@ -438,8 +438,8 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     const vm = wrapper.vm as any
     vm.rawNodes = [{ id: 'n1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } }]
     vm.rawEdges = [
-      { id: 'e1', source_node_id: 'n1', target_node_id: 'n1', edge_type: 'loop', max_iterations: 3, condition_expression: 'x > 1', hitl_gate_config: null, source_port: 'out', target_port: 'in' },
-      { id: 'e2', source_node_id: 'n1', target_node_id: 'n1', edge_type: 'llm', routing_label: 'retry', condition_expression: null, hitl_gate_config: null },
+      { id: 'e1', source_node_id: 'n1', target_node_id: 'n1', edge_type: 'loop', max_iterations: 3, condition_expression: 'x > 1', hitl_review_config: null, source_port: 'out', target_port: 'in' },
+      { id: 'e2', source_node_id: 'n1', target_node_id: 'n1', edge_type: 'llm', routing_label: 'retry', condition_expression: null, hitl_review_config: null },
     ]
 
     await vm.saveGraph()
@@ -1693,11 +1693,11 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     await flushPromises()
     const vm = wrapper.vm as any
     vm.rawEdges = [
-      { id: 'edge-1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_gate_config: null, condition_expression: null },
+      { id: 'edge-1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_review_config: null, condition_expression: null },
     ]
     vm.flowEdges = [{
       id: 'edge-1', source: 'n1', target: 'n2',
-      data: { hitl_gate_config: null, edge_type: 'normal' },
+      data: { hitl_review_config: null, edge_type: 'normal' },
     }]
     vm.onEdgeClick({ edge: { id: 'edge-1' } })
     await nextTick()
@@ -1718,11 +1718,11 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     const vm = wrapper.vm as any
     vm.rawEdges = [{
       id: 'edge-1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal',
-      hitl_gate_config: { label: 'Gate', description: 'short' }, condition_expression: null,
+      hitl_review_config: { label: 'Gate', description: 'short' }, condition_expression: null,
     }]
     vm.flowEdges = [{
       id: 'edge-1', source: 'n1', target: 'n2',
-      data: { hitl_gate_config: { label: 'Gate' }, edge_type: 'normal' },
+      data: { hitl_review_config: { label: 'Gate' }, edge_type: 'normal' },
     }]
     vm.onEdgeClick({ edge: { id: 'edge-1' } })
     await nextTick()
@@ -1732,6 +1732,85 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     await flushPromises()
     expect(vm.edgeSaveError).toBeTruthy()
     expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('renders the edge-default slot with and without a HITL gate config', async () => {
+    // The default mount stub renders only the unnamed slot, so the edge
+    // template (and its v-if on edgeProps.data.hitl_review_config) never ran.
+    // Invoke the scoped slot twice — once with a gate config, once without —
+    // to exercise both arms of the badge conditional.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['edge-default']
+              return h('div', [
+                slot?.({ data: { hitl_review_config: { label: 'Gate' }, edge_type: 'normal' } }),
+                slot?.({ data: { hitl_review_config: null, edge_type: 'normal' } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Exactly one edge rendered the gate badge (the config-bearing one).
+    expect(wrapper.text().match(/HITL/g)?.length ?? 0).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('saveEdgeConfig preserves hitl_review_config on non-selected edges', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    vm.rawEdges = [
+      { id: 'edge-1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_review_config: null, condition_expression: null },
+      { id: 'edge-2', source_node_id: 'n2', target_node_id: 'n3', edge_type: 'normal', hitl_review_config: { label: 'Gate', description: 'A long enough description here' }, condition_expression: null },
+      { id: 'edge-3', source_node_id: 'n3', target_node_id: 'n4', edge_type: 'normal', hitl_review_config: null, condition_expression: null },
+    ]
+    vm.selectedEdgeData = vm.rawEdges[0]
+    vm.edgeForm.edge_type = 'normal'
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+
+    await vm.saveEdgeConfig()
+    await flushPromises()
+
+    // The map ran over the two non-selected edges: one with a gate config
+    // (truthy arm) and one without (|| null arm).
+    expect(vm.savingEdge).toBe(false)
+    const patched = vi.mocked(api.PATCH).mock.calls.at(-1)?.[1] as { body?: { edges?: unknown[] } } | undefined
+    expect(patched?.body?.edges?.length).toBe(3)
     wrapper.unmount()
   })
 })

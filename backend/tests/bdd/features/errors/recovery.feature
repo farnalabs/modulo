@@ -26,9 +26,9 @@ Feature: Run Recovery from a Failed State
     Then the recovery request returns status 200
     And the recovery response action is "skip"
 
-  Scenario: Recovery refuses HITL gate nodes
-    Given a failed run is parked at a HITL gate node "hitl_gate_approval"
-    When I replay node "hitl_gate_approval" with input_data {"approve": true}
+  Scenario: Recovery refuses HITL review nodes
+    Given a failed run is parked at a HITL review node "hitl_review_approval"
+    When I replay node "hitl_review_approval" with input_data {"approve": true}
     Then the recovery request returns status 422
     And the recovery failure mentions "HITL"
 

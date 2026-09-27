@@ -504,8 +504,8 @@ def pipeline_has_no_autonomy_defaults(pipeline_name: str, ctx: dict[str, Any]) -
     ctx["autonomy_default"] = None
 
 
-@when("a HITL gate checks the autonomy level")
-def hitl_gate_checks_autonomy(ctx: dict[str, Any]) -> None:
+@when("a HITL review checks the autonomy level")
+def hitl_review_checks_autonomy(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import effective_autonomy_level
 
     _pin_pipeline_ceiling(ctx)
@@ -522,12 +522,12 @@ def context_setter_changes_autonomy(new_level: str, ctx: dict[str, Any]) -> None
 @then("the gate is skipped")
 def gate_is_skipped(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import (
-        should_skip_hitl_gate,
+        should_skip_hitl_review,
     )
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
-    assert should_skip_hitl_gate(autonomy), f"Expected gate to be skipped but autonomy={autonomy.value}"
+    assert should_skip_hitl_review(autonomy), f"Expected gate to be skipped but autonomy={autonomy.value}"
 
 
 @then("no human interrupt is raised")
@@ -547,15 +547,15 @@ def gate_uses_pipeline_default(level: str, ctx: dict[str, Any]) -> None:
 @then("the gate interrupts for human review")
 def gate_interrupts(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import (
-        should_skip_hitl_gate,
+        should_skip_hitl_review,
     )
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
-    assert not should_skip_hitl_gate(autonomy), f"Expected interrupt but gate was skipped (autonomy={autonomy.value})"
+    assert not should_skip_hitl_review(autonomy), f"Expected interrupt but gate was skipped (autonomy={autonomy.value})"
 
 
-@then(parsers.parse("the next HITL gate checks the new autonomy level"))
+@then(parsers.parse("the next HITL review checks the new autonomy level"))
 def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
     from modulo.core.run_context.autonomy import effective_autonomy_level
 

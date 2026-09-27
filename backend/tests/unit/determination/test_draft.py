@@ -35,7 +35,7 @@ def test_repos_create_start_end_nodes() -> None:
     assert draft.edges == [DraftEdge(source="development", target="end")]
 
 
-def test_planning_and_development_creates_hitl_gate() -> None:
+def test_planning_and_development_creates_hitl_review() -> None:
     samples = [
         make_sample(
             "issues",
@@ -46,7 +46,7 @@ def test_planning_and_development_creates_hitl_gate() -> None:
     ]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
-    edge = next((e for e in draft.edges if e.hitl_gate), None)
+    edge = next((e for e in draft.edges if e.hitl_review), None)
     assert edge is not None
     assert edge.source == "planning"
     assert edge.target == "development"
@@ -109,7 +109,7 @@ def test_review_only_draft_connects_from_start() -> None:
     edge = next((e for e in draft.edges if e.target == "review"), None)
     assert edge is not None
     assert edge.source == "start"
-    assert edge.hitl_gate is True
+    assert edge.hitl_review is True
     # Review must not be wired to itself when no prior stage exists
     assert not any(e.source == "review" and e.target == "review" for e in draft.edges)
 
@@ -124,7 +124,7 @@ def test_ci_cd_node_connected_after_development() -> None:
     edge = next((e for e in draft.edges if e.target == "ci_cd"), None)
     assert edge is not None
     assert edge.source == "development"
-    assert edge.hitl_gate is False
+    assert edge.hitl_review is False
 
 
 def test_development_node_has_required_capabilities() -> None:
@@ -200,7 +200,7 @@ def test_planning_to_ci_without_development() -> None:
     edge = next((e for e in draft.edges if e.target == "ci_cd"), None)
     assert edge is not None
     assert edge.source == "planning"
-    assert edge.hitl_gate is False
+    assert edge.hitl_review is False
 
 
 def test_review_sourced_from_planning_when_no_development() -> None:
@@ -221,5 +221,5 @@ def test_review_sourced_from_planning_when_no_development() -> None:
     edge = next((e for e in draft.edges if e.target == "review"), None)
     assert edge is not None
     assert edge.source == "planning"
-    assert edge.hitl_gate is True
+    assert edge.hitl_review is True
     assert not any(e.source == "review" and e.target == "review" for e in draft.edges)

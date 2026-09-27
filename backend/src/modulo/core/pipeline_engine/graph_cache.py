@@ -33,7 +33,7 @@ from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 from modulo.core.pipeline_engine.jmespath_eval import evaluate_jmespath_condition
 from modulo.core.pipeline_engine.node_runner import (
     make_connector_fn,
-    make_hitl_gate_fn,
+    make_hitl_review_fn,
     make_manual_node_fn,
     make_node_fn,
     make_router_node_fn,
@@ -172,8 +172,8 @@ def _get_edge_type(edge: dict[str, Any]) -> str:
     return str(value) if value is not None else ""
 
 
-def _make_gate_id(source: str, target: str) -> str:
-    return f"hitl_gate_{source}_{target}"
+def _make_review_id(source: str, target: str) -> str:
+    return f"hitl_review_{source}_{target}"
 
 
 # ---------------------------------------------------------------------------
@@ -220,14 +220,14 @@ def _make_gate_kickback_router(
     normal_target: str,
     reject_target_str: str,
     *,
-    gate_id: str,
+    review_id: str,
 ) -> Callable[[dict[str, Any]], str]:
     """Build a router that kicks back to reject_target on HITL rejection.
 
     FAR-210 (reject→correction edge): a gate config MAY declare a
     ``correction_target``. The router still kicks a rejection back to the plain
     ``reject_target`` — the correction DISPATCH happens in the gate node itself
-    (``node_runner._hitl_gate``), which invokes
+    (``node_runner._hitl_review``), which invokes
     ``FeedbackManager.dispatch_reject_correction`` on a rejected gate that
     declares a ``correction_target`` (the automated reject→correction path).
     Routing a rejection to the ``correction_target`` here would be dead routing
@@ -239,7 +239,7 @@ def _make_gate_kickback_router(
     gate completed WITHOUT consuming a decision (condition / eval-condition /
     autonomy skip), and ``_hitl_decision`` is never cleared from state — a
     stale ``rejected`` from an EARLIER gate would misroute this edge to the
-    reject target. The decision's stamp must therefore match ``gate_id``; a
+    reject target. The decision's stamp must therefore match ``review_id``; a
     stale/foreign/missing stamp routes to the normal target.
     """
 
@@ -248,7 +248,7 @@ def _make_gate_kickback_router(
         if (
             decision
             and isinstance(decision, dict)
-            and decision.get("gate_id") == gate_id
+            and decision.get("review_id") == review_id
             and decision.get("action") == "rejected"
         ):
             return reject_target_str
@@ -411,7 +411,15 @@ def _make_loop_counter_router(
 # NOTE: only LIST-valued keys actually concatenate — dict-valued keys here
 # (none today; `_iteration_counts` is dict-valued but written by loop counters)
 # fall through to whole-key replacement. See `_pipeline_state_reducer`.
-_CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log", "_iteration_counts"})
+_CONCAT_KEYS: frozenset[str] = frozenset(
+    {
+        "artifacts",
+        "_hitl_reviews",
+        "_hitl_gates",  # _hitl_gates: transition shim (FAR-1104)
+        "_run_context_write_log",
+        "_iteration_counts",
+    }
+)
 
 
 def _should_concat_list(current: dict[str, Any], key: str, value: Any) -> bool:
@@ -431,7 +439,7 @@ def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> 
 
     - ``_CONCAT_KEYS`` (lists): every writer's list is appended, in superstep
       completion order. Each parallel branch contributes its own entries, so
-      ``artifacts`` / ``_run_context_write_log`` / ``_hitl_gates`` never
+      ``artifacts`` / ``_run_context_write_log`` / ``_hitl_reviews`` never
       clobber each other.
     - ``run_context`` (dict): merged per-key with LAST-WRITE-WINS — each write
       applies only the keys it carries onto the current ``run_context``; when
@@ -859,7 +867,7 @@ def _add_conditional_routing(
     graph.add_conditional_edges(source, router)
 
 
-def _add_hitl_gate_edge(
+def _add_hitl_review_edge(
     graph: StateGraph[Any],
     source: str,
     target: str,
@@ -878,12 +886,12 @@ def _add_hitl_gate_edge(
     Kick-back target priority: gate config ``reject_target`` first, then the
     source's reject edge target.
     """
-    gate_id = _make_gate_id(source, target)
-    hitl_config["gate_id"] = gate_id
+    review_id = _make_review_id(source, target)
+    hitl_config["review_id"] = review_id
     node_evals = eval_definitions_by_node.get(source) if eval_definitions_by_node is not None else None
     graph.add_node(
-        gate_id,
-        make_hitl_gate_fn(
+        review_id,
+        make_hitl_review_fn(
             hitl_config,
             eval_definitions=node_evals,
             session_factory=session_factory,
@@ -891,7 +899,7 @@ def _add_hitl_gate_edge(
             node_type_map=node_type_map,
         ),
     )
-    graph.add_edge(source, gate_id)
+    graph.add_edge(source, review_id)
 
     # Determine kick-back target for HITL rejection routing.
     # Priority: gate config reject_target > reject edge target.
@@ -904,15 +912,15 @@ def _add_hitl_gate_edge(
         gate_router = _make_gate_kickback_router(
             target,
             reject_target_str,
-            gate_id=gate_id,
+            review_id=review_id,
         )
-        graph.add_conditional_edges(gate_id, gate_router)
+        graph.add_conditional_edges(review_id, gate_router)
         target_ids.add(reject_target_str)
     else:
-        graph.add_edge(gate_id, target)
+        graph.add_edge(review_id, target)
 
-    gate_node_ids.add(gate_id)
-    target_ids.add(gate_id)
+    gate_node_ids.add(review_id)
+    target_ids.add(review_id)
 
 
 def _add_normal_edges(
@@ -931,9 +939,9 @@ def _add_normal_edges(
     """Add direct edges (or HITL-gated edges) for a source's normal edges."""
     for edge_def in normal:
         target = _get_edge_val(edge_def, "target", "target_node_id")
-        hitl_config = edge_def.get("hitl_gate_config")
+        hitl_config = edge_def.get("hitl_review_config")
         if hitl_config:
-            _add_hitl_gate_edge(
+            _add_hitl_review_edge(
                 graph,
                 source,
                 target,
@@ -968,10 +976,10 @@ def build_graph_from_json(
         {
           "nodes": [{"id": "<uuid>", "agent_id": "<uuid>", "role": "..."}],
           "edges": [{"source": "<uuid>", "target": "<uuid>",
-                      "type": "normal", "hitl_gate_config": {...}}]
+                      "type": "normal", "hitl_review_config": {...}}]
         }
 
-    For edges that carry a ``hitl_gate_config``, an intermediate gate node is
+    For edges that carry a ``hitl_review_config``, an intermediate gate node is
     inserted between the source and target.  At runtime the gate node checks
     the effective autonomy level (from pipeline default or run_context) and
     either interrupts for human review or auto-approves.  The gate node also
@@ -1126,8 +1134,8 @@ def build_graph_from_json(
             # it up unchanged.
             hitl_config = dict(source_node_def.get("hitl_config") or {})
             for edge in normal:
-                gate_id = _make_gate_id(source, _get_edge_val(edge, "target", "target_node_id"))
-                edge["hitl_gate_config"] = {**hitl_config, "gate_id": gate_id}
+                review_id = _make_review_id(source, _get_edge_val(edge, "target", "target_node_id"))
+                edge["hitl_review_config"] = {**hitl_config, "review_id": review_id}
             _add_normal_edges(
                 graph,
                 source,

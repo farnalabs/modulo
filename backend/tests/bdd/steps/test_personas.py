@@ -215,8 +215,8 @@ def only_admins_view_edit_backend(ctx):
 # ===========================================================================
 
 
-@given(parsers.parse('pipeline "{name}" has HITL gate "{gate}"'))
-def pipeline_has_hitl_gate(name, gate, ctx):
+@given(parsers.parse('pipeline "{name}" has HITL review "{gate}"'))
+def pipeline_has_hitl_review(name, gate, ctx):
     ctx["pipeline_name"] = name
     ctx["gate_name"] = gate
     ctx["gate_human_only"] = False
@@ -247,7 +247,7 @@ def mcp_review_hitl_human_only(ctx):
         with pytest.raises(PermissionError, match="human_only"):
             asyncio.run(
                 mock_approve(
-                    gate_id=str(uuid.uuid4()),
+                    review_id=str(uuid.uuid4()),
                     decision="approved",
                     claim_token="test",
                 )
@@ -490,7 +490,7 @@ def notification_webhook_configured(ctx, request):
     ctx["webhook_payload"] = {
         "event": "hitl.notification",
         "run_id": str(uuid.uuid4()),
-        "gate_id": str(uuid.uuid4()),
+        "review_id": str(uuid.uuid4()),
         "pipeline_name": "deploy-to-prod",
         "node": "production-deploy",
     }
@@ -1296,17 +1296,17 @@ def new_pipeline_same_topology(request):
 # ===========================================================================
 
 
-@given(parsers.parse('a run is waiting at HITL gate "{gate_id}"'))
-def run_waiting_at_hitl_gate(gate_id: str, ctx):
+@given(parsers.parse('a run is waiting at HITL review "{review_id}"'))
+def run_waiting_at_hitl_review(review_id: str, ctx):
     ctx["run_status"] = "awaiting_human"
-    ctx["gate_id"] = gate_id
+    ctx["review_id"] = review_id
     ctx["run_id"] = uuid.uuid4()
     from datetime import UTC, datetime, timedelta
 
     ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = gate_id
+    mock_gate.review_id = review_id
     mock_gate.claimed_by = None
     mock_gate.claimed_at = None
     mock_gate.claim_token = ctx["claim_token"]
@@ -1352,27 +1352,27 @@ def audit_log_records_approval(ctx):
 # ===========================================================================
 
 
-@given(parsers.parse('pipeline "{name}" has a HITL gate at "{gate_id}"'))
-def alice_pipeline_has_hitl_gate(name: str, gate_id: str, ctx):
+@given(parsers.parse('pipeline "{name}" has a HITL review at "{review_id}"'))
+def alice_pipeline_has_hitl_review(name: str, review_id: str, ctx):
     ctx["pipeline_name"] = name
     ctx["pipeline_id"] = uuid.uuid4()
-    ctx["gate_id"] = gate_id
+    ctx["review_id"] = review_id
     ctx["run_id"] = uuid.uuid4()
     ctx["human_only"] = True
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = gate_id
+    mock_gate.review_id = review_id
     mock_gate.human_only = True
     mock_gate.pipeline_id = ctx["pipeline_id"]
     mock_gate.claimed_by = None
     ctx["mock_gate"] = mock_gate
 
 
-@when(parsers.parse('a run reaches the "{gate_id}" gate'))
-def run_reaches_gate(gate_id: str, ctx):
+@when(parsers.parse('a run reaches the "{review_id}" gate'))
+def run_reaches_gate(review_id: str, ctx):
     ctx["run_status"] = "paused"
     ctx["run_id"] = uuid.uuid4()
-    ctx["current_gate"] = gate_id
+    ctx["current_gate"] = review_id
 
 
 @then("the run pauses")
@@ -1380,8 +1380,8 @@ def run_pauses(ctx):
     assert ctx["run_status"] == "paused", f"Expected paused, got {ctx['run_status']}"
 
 
-@then(parsers.parse("the HITL gate has human_only {value}"))
-def hitl_gate_human_only(value: str, ctx):
+@then(parsers.parse("the HITL review has human_only {value}"))
+def hitl_review_human_only(value: str, ctx):
     expected = value.lower() == "true"
     assert ctx.get("human_only") == expected, f"Expected human_only={expected}"
 
@@ -1491,13 +1491,13 @@ def alice_node_reads_from(provider_name: str, request):
 
 
 @given("a run is waiting at HITL gate")
-def run_waiting_at_hitl_gate_webhook(ctx):
+def run_waiting_at_hitl_review_webhook(ctx):
     ctx["run_id"] = uuid.uuid4()
-    ctx["gate_id"] = "deploy"
+    ctx["review_id"] = "deploy"
     ctx["run_status"] = "awaiting_human"
 
 
-@when("the HITL gate triggers a notification")
+@when("the HITL review triggers a notification")
 def hitl_triggers_notification(ctx):
     ctx["notification_sent"] = True
 
@@ -1512,7 +1512,7 @@ def webhook_post_to_slack(ctx):
         import asyncio
 
         result = asyncio.run(
-            mock_notifier.send(endpoint="slack", payload={"run_id": str(ctx["run_id"]), "gate_id": ctx["gate_id"]})
+            mock_notifier.send(endpoint="slack", payload={"run_id": str(ctx["run_id"]), "review_id": ctx["review_id"]})
         )
         assert result, "Webhook send failed"
     ctx["webhook_sent"] = True
@@ -1522,7 +1522,7 @@ def webhook_post_to_slack(ctx):
 def webhook_payload_includes_run_and_gate(ctx):
     assert ctx.get("webhook_sent"), "No webhook was sent"
     assert ctx.get("run_id") is not None, "Missing run ID"
-    assert ctx.get("gate_id") == "deploy", "Missing gate name"
+    assert ctx.get("review_id") == "deploy", "Missing gate name"
 
 
 # ===========================================================================

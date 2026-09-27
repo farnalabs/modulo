@@ -1,6 +1,6 @@
 Feature: Conditional HITL Gating
   As a pipeline author
-  I want HITL gates to fire only when eval results fall below a threshold
+  I want HITL reviews to fire only when eval results fall below a threshold
   So that low-quality output requires human review but good output flows through
 
   Background:
@@ -8,7 +8,7 @@ Feature: Conditional HITL Gating
 
   Scenario: Eval score below threshold triggers HITL interrupt
     Given node "content-generator" has an llm_judge eval "quality-check"
-    And the edge after "content-generator" has a HITL gate
+    And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     When the node outputs {"content": "Draft document"}
     And the llm_judge callable returns {"passed": false, "score": 0.45, "detail": "Poor quality"}
@@ -16,9 +16,9 @@ Feature: Conditional HITL Gating
     And a NodeInterrupt is raised
     And the run transitions to "awaiting_human"
 
-  Scenario: Eval score above threshold skips the HITL gate
+  Scenario: Eval score above threshold skips the HITL review
     Given node "content-generator" has an llm_judge eval "quality-check"
-    And the edge after "content-generator" has a HITL gate
+    And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     When the node outputs {"content": "Well-written document"}
     And the llm_judge callable returns {"passed": true, "score": 0.92, "detail": "High quality"}
@@ -31,7 +31,7 @@ Feature: Conditional HITL Gating
   # operator with boolean literals (`true`, `false`) does not compare correctly
   # against Python bool values. This is a known JMESPath limitation.
   Scenario: JMESPath condition on gate state skips the gate
-    Given the edge after "content-generator" has a HITL gate
+    Given the edge after "content-generator" has a HITL review
     And the gate has a JMESPath condition "run_context.draft_mode"
     When the run_context has draft_mode false
     And the run reaches the gate
@@ -40,7 +40,7 @@ Feature: Conditional HITL Gating
     And no interrupt is raised
 
   Scenario: JMESPath condition on gate state triggers the gate
-    Given the edge after "content-generator" has a HITL gate
+    Given the edge after "content-generator" has a HITL review
     And the gate has a JMESPath condition "run_context.draft_mode"
     When the run_context has draft_mode true
     And the run reaches the gate
@@ -50,7 +50,7 @@ Feature: Conditional HITL Gating
   Scenario: Eval block failure takes priority over HITL interrupt
     Given node "content-generator" has an llm_judge eval "quality-check"
     And the eval has failure_behaviour "block"
-    And the edge after "content-generator" has a HITL gate
+    And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     When the node outputs {"content": "Insecure content"}
     And the llm_judge callable returns {"passed": false, "score": 0.1, "detail": "Security violation"}
@@ -68,7 +68,7 @@ Feature: Conditional HITL Gating
 
   Scenario: Multiple evals in gate condition with any operator
     Given node "content-generator" has evals "quality-check, safety-check"
-    And the edge after "content-generator" has a HITL gate
+    And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.7 operator "lt"
     When the node outputs {"content": "Draft document"}
     And "quality-check" scores 0.6
@@ -76,9 +76,9 @@ Feature: Conditional HITL Gating
     Then the gate condition on "quality-check" evaluates to true
     And a NodeInterrupt is raised
 
-  Scenario: Reject routing from conditional HITL gate
+  Scenario: Reject routing from conditional HITL review
     Given node "content-generator" has an llm_judge eval "quality-check"
-    And the edge after "content-generator" has a HITL gate
+    And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     And the gate has reject_target "human-fix-node"
     When a human rejects the gate

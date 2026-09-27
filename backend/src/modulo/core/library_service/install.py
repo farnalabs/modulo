@@ -564,8 +564,8 @@ def _append_pipeline_template_pin(
             "target_node_id": node_id_map.get(target, target),
             "edge_type": edge.get("edge_type", "normal"),
         }
-        if edge.get("hitl_gate_config"):
-            new_edge["hitl_gate_config"] = edge["hitl_gate_config"]
+        if edge.get("hitl_review_config"):
+            new_edge["hitl_review_config"] = edge["hitl_review_config"]
         edges.append(new_edge)
 
 

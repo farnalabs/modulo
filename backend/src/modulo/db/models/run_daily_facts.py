@@ -8,7 +8,7 @@ fact row (in its own separate session) through the shared
 stale-run sweep terminalizers (``never_dispatched`` / ``capacity_timeout`` /
 ``worker_lost``), the ``dispatcher_reconcile`` terminalizers
 (``executor_superseded`` / ``claim_cap_exhausted`` / ``dispatch_failed`` /
-``hitl_gate_expired``) and ``fail_run_terminal`` (``executor_stalled`` /
+``hitl_review_expired``) and ``fail_run_terminal`` (``executor_stalled`` /
 ``executor_heartbeat_lost`` / ``executor_failed`` / ``executor_setup_failed``)
 — so no terminal run is ever invisible to analytics.
 The facts survive the 90-day run purge (``run_id`` is deliberately NOT a

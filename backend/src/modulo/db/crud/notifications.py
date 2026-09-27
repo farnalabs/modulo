@@ -141,11 +141,31 @@ def _not_expired_clause() -> ColumnElement[bool]:
     ``status=active``. It is NOT deleted: an explicit historical filter
     (``dismissed_self`` / ``dismissed_scope``) and the by-id detail read still
     retrieve it, so nothing is lost — it simply stops presenting as
-    active/actionable. ``expires_at`` is ``NOT NULL``
-    (``db/models/notification.py``), so every row carries a real TTL and no
-    NULL-means-never fallback is needed.
+    active/actionable.
+
+    **Why the ``expires_at IS NULL`` arm exists (do NOT delete it for a
+    coverage gate).** The ORM model declares ``NOT NULL``, but the model is not
+    the migration history:
+
+    * migration ``0003`` creates ``notifications.expires_at`` as
+      ``nullable=True``;
+    * the only tightening, in ``0110``, is CONDITIONAL —
+      ``IF ... is_nullable='YES' AND NOT EXISTS (... WHERE expires_at IS NULL)
+      THEN SET NOT NULL`` — so a database holding legacy NULL rows is left
+      NULLable forever;
+    * the unconditional backfill (``0029_fix_expiry_fields_non_null``, later
+      renumbered ``0057``) was **deleted** by the migration-tree rewrite in
+      #1477, so nothing ever backfills them;
+    * pre-#383 code wrote NULL (``create_notification`` gained its 90-day
+      default only in #383 — "runtime paths still wrote NULL").
+
+    So the arm is reachable on exactly the legacy deployments above, and a NULL
+    row silently vanishes from every live view without it (``NULL > now`` is
+    NULL, not TRUE). It costs one ``OR`` term on an already-filtered query and
+    is covered by ``test_never_expiring_row_is_present_on_every_live_view``.
     """
-    return Notification.expires_at > datetime.now(UTC)
+    moment = datetime.now(UTC)
+    return or_(Notification.expires_at.is_(None), Notification.expires_at > moment)
 
 
 def _hidden_from_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
@@ -320,15 +340,21 @@ def _apply_status_filter(query: Select[Any], *, user_id: uuid.UUID, status_filte
     can never disagree.
 
     * ``None`` (inbox default) and ``"active"`` are LIVE views: a row past its
-      ``expires_at`` is excluded, and ``"active"`` additionally excludes
-      anything dismissed out of this user's active view (per-user ``self``
-      dismissals AND org-wide ``scope`` dismissals).
+      ``expires_at`` is excluded, AND anything dismissed out of this user's
+      active view (per-user ``self`` dismissals AND org-wide ``scope``
+      dismissals) is excluded. The default view must hide dismissals too —
+      omitting ``status`` is a live view, so serving a dismissed row there
+      would contradict the dashboard, unread badge and ``status=active`` views
+      that already hide it.
     * ``dismissed_self`` / ``dismissed_scope`` are explicit historical filters:
       they still retrieve a dismissed row even if it has since expired.
+    * Any other value is a caller bug. The route validates ``status`` against
+      this vocabulary and answers 422; the ``else`` below is defence in depth
+      so a future caller can never fall through to an UNFILTERED read (expired
+      and dismissed rows returned as if live).
     """
     if status_filter in (None, "active"):
         query = query.where(_not_expired_clause())
-    if status_filter == "active":
         query = query.where(_hidden_from_user_clause(user_id))
     elif status_filter == "dismissed_self":
         query = query.where(
@@ -348,6 +374,13 @@ def _apply_status_filter(query: Select[Any], *, user_id: uuid.UUID, status_filte
                 )
             )
         )
+    else:
+        # Fail CLOSED. Before this guard an unknown value (``?status=nope``,
+        # or ``?status=`` — an empty query value) matched no branch and
+        # silently returned EVERY row, expired and dismissed included, with
+        # HTTP 200. Raising here means an unvalidated caller can never
+        # reproduce that unfiltered read even if the route's check is lost.
+        raise ValueError(f"Unknown notification status filter: {status_filter!r}")
     return query
 
 
@@ -414,7 +447,21 @@ async def dismiss_notification(
             Dismissal.dismissed_by_user_id == user_id,
         )
     )
-    if existing.scalar_one_or_none() is not None:
+    existing_dismissal = existing.scalar_one_or_none()
+    if existing_dismissal is not None:
+        # ESCALATION: a user who already filed a per-user ("self") dismissal
+        # may later escalate it to org-wide ("scope"). Without this branch the
+        # second call raised "already dismissed ... (concurrent)" and the
+        # org-wide hide was unreachable by that actor — "Review later" made
+        # "Dismiss for everyone" a dead button for the very user pressing it.
+        # The privilege gate above already ran for dismiss_scope == "scope",
+        # so an escalation is subject to exactly the same strategy/role check
+        # as a fresh scope dismissal. An identical-scope duplicate keeps the
+        # pre-existing refusal (it is a no-op re-dismiss, not an escalation).
+        if dismiss_scope == "scope" and existing_dismissal.dismiss_scope == "self":
+            existing_dismissal.dismiss_scope = "scope"
+            await session.flush()
+            return existing_dismissal
         raise ValueError("Notification already dismissed by this user")
 
     dismissal = Dismissal(

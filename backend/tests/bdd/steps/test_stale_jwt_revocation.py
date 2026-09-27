@@ -75,12 +75,12 @@ def user_still_holds_jwt(username: str, request) -> None:
     _shared_state(request)["tokens_valid"] = True
 
 
-@given(parsers.parse('a run "{run_name}" is awaiting human at gate "{gate_id}" with required_team_id "{team_name}"'))
-def run_awaiting_gate(run_name: str, gate_id: str, team_name: str, request) -> None:
+@given(parsers.parse('a run "{run_name}" is awaiting human at gate "{review_id}" with required_team_id "{team_name}"'))
+def run_awaiting_gate(run_name: str, review_id: str, team_name: str, request) -> None:
     state = _shared_state(request)
     team_id = state["teams"].setdefault(team_name, _mock_team(team_name)).id
     state.setdefault("runs", {})[run_name] = {"id": str(uuid.uuid4()), "status": "awaiting_human"}
-    state.setdefault("gates", {})[gate_id] = {"id": gate_id, "required_team_id": team_id}
+    state.setdefault("gates", {})[review_id] = {"id": review_id, "required_team_id": team_id}
 
 
 @when(parsers.parse('I revoke user "{username}"\'s session'))
@@ -128,10 +128,10 @@ def change_user_role(username: str, old_role: str, new_role: str, request) -> No
             state["memberships"][(user, team)] = new_role
 
 
-@when(parsers.parse('user "{username}" attempts to claim gate "{gate_id}" on run "{run_name}"'))
-def user_attempts_claim(username: str, gate_id: str, run_name: str, request) -> None:
+@when(parsers.parse('user "{username}" attempts to claim gate "{review_id}" on run "{run_name}"'))
+def user_attempts_claim(username: str, review_id: str, run_name: str, request) -> None:
     state = _shared_state(request)
-    gate = state.get("gates", {}).get(gate_id)
+    gate = state.get("gates", {}).get(review_id)
     is_member = _user_member_of_gate_team(state, username, gate)
 
     if gate and not is_member:
@@ -159,7 +159,7 @@ def documented_acceptable_gap() -> None:
     pass
 
 
-@then("the HITL gate enforcement uses a DB-live membership check")
+@then("the HITL review enforcement uses a DB-live membership check")
 def hitl_uses_db_live_check() -> None:
     pass
 

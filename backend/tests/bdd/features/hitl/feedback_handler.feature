@@ -1,6 +1,6 @@
 Feature: Feedback Handler
   As a pipeline author
-  I want rejected HITL gates to create structured feedback records
+  I want rejected HITL reviews to create structured feedback records
   So that I can review, triage, and learn from human rejections
 
   Scenario: Create feedback record on rejection

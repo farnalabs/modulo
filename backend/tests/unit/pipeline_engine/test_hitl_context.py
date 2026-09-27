@@ -1,6 +1,6 @@
 """Unit tests for FAR-613 fire-time HITL gate context capture.
 
-Covers ``build_hitl_gate_context`` and its helpers: the briefing bundle
+Covers ``build_hitl_review_context`` and its helpers: the briefing bundle
 (shape, trigger kinds, condition/node-id extraction, bounded artifacts,
 reason extraction, determinism), the FAR-688 matched-condition evidence
 (``condition_result`` as PRIMARY evidence), the failure-isolation contract
@@ -22,7 +22,8 @@ from modulo.core.pipeline_engine.hitl_context import (
     ARTIFACTS_BUDGET_CHARS,
     REASON_ABSENT,
     TRUNCATION_MARKER,
-    build_hitl_gate_context,
+    _resolve_consequences,
+    build_hitl_review_context,
     extract_condition_node_ids,
     serialize_value,
     slice_with_marker,
@@ -31,7 +32,7 @@ from modulo.core.pipeline_engine.hitl_context import (
 _UUID_SRC = "550e8400-e29b-41d4-a716-446655440000"
 _UUID_TGT = "660e8400-e29b-41d4-a716-446655440001"
 _UUID_OTHER = "770e8400-e29b-41d4-a716-446655440002"
-_GATE_ID = f"hitl_gate_{_UUID_SRC}_{_UUID_TGT}"
+_REVIEW_ID = f"hitl_review_{_UUID_SRC}_{_UUID_TGT}"
 _ORG_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 
@@ -54,7 +55,7 @@ def _run_mock(snapshot_id: uuid.UUID | None) -> MagicMock:
 def _edge_graph(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "nodes": [{"id": _UUID_SRC, "label": "Comment Generator"}, {"id": _UUID_TGT}],
-        "edges": [{"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config}],
+        "edges": [{"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config}],
     }
 
 
@@ -71,7 +72,7 @@ def _hitl_node_graph(config: dict[str, Any]) -> dict[str, Any]:
 async def _build(
     graph_json: dict[str, Any] | None,
     *,
-    gate_id: str = _GATE_ID,
+    review_id: str = _REVIEW_ID,
     completed_node_outputs: dict[str, Any] | None = None,
     pipeline_name: str | None = "PR Reviewer",
     condition_result: dict[str, Any] | None = None,
@@ -83,10 +84,10 @@ async def _build(
     with (
         patch("modulo.core.pipeline_engine.hitl_context.get_run", AsyncMock(return_value=_run_mock(uuid.uuid4()))),
     ):
-        return await build_hitl_gate_context(
+        return await build_hitl_review_context(
             session,
             run_id=_RUN_ID,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=_ORG_ID,
             pipeline_name=pipeline_name,
             completed_node_outputs=completed_node_outputs or {},
@@ -280,10 +281,10 @@ class TestLegacyFallback:
     async def test_missing_run_yields_none(self):
         session = _make_session({"nodes": [], "edges": []})
         with patch("modulo.core.pipeline_engine.hitl_context.get_run", AsyncMock(return_value=None)):
-            context = await build_hitl_gate_context(
+            context = await build_hitl_review_context(
                 session,
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 org_id=_ORG_ID,
                 pipeline_name="PR Reviewer",
                 completed_node_outputs={},
@@ -298,10 +299,10 @@ class TestFailureIsolation:
             "modulo.core.pipeline_engine.hitl_context.get_run",
             AsyncMock(side_effect=RuntimeError("db exploded")),
         ):
-            context = await build_hitl_gate_context(
+            context = await build_hitl_review_context(
                 session,
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 org_id=_ORG_ID,
                 pipeline_name="PR Reviewer",
                 completed_node_outputs={},
@@ -315,10 +316,10 @@ class TestFailureIsolation:
             "modulo.core.pipeline_engine.hitl_context.get_run",
             AsyncMock(return_value=_run_mock(uuid.uuid4())),
         ):
-            context = await build_hitl_gate_context(
+            context = await build_hitl_review_context(
                 session,
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 org_id=_ORG_ID,
                 pipeline_name="PR Reviewer",
                 completed_node_outputs={},
@@ -443,10 +444,10 @@ class TestExtractConditionNodeIds:
         assert not extract_condition_node_ids("")
 
 
-@pytest.mark.parametrize("gate_id", ["hitl_gate_not-a-gate", "some_node", "hitl_gate_onlyone"])
-async def test_non_topology_gate_ids_still_build_minimal_bundle(gate_id):
+@pytest.mark.parametrize("review_id", ["hitl_review_not-a-gate", "some_node", "hitl_review_onlyone"])
+async def test_non_topology_review_ids_still_build_minimal_bundle(review_id):
     graph = {"nodes": [], "edges": []}
-    context = await _build(graph, gate_id=gate_id)
+    context = await _build(graph, review_id=review_id)
     assert context is not None
     assert context["source_node_id"] is None
 
@@ -622,7 +623,7 @@ class TestConsequences:
                 {"id": _UUID_OTHER, "label": "Fixer"},
             ],
             "edges": [
-                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config},
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config},
             ],
         }
         context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
@@ -645,7 +646,7 @@ class TestConsequences:
                 {"id": _UUID_TGT, "label": "Next"},
             ],
             "edges": [
-                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config},
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config},
             ],
         }
         context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
@@ -660,16 +661,26 @@ class TestConsequences:
         assert context is not None
         assert context.get("consequences") is None
 
+    def test_edge_not_matching_review_id_yields_no_approve_target(self):
+        """An edge present in the graph but not the gate's own edge must not be
+        mistaken for the approve target: the topology-derived review_id gate
+        skips non-matching edges and falls through with no consequences."""
+        graph = {
+            "nodes": [{"id": _UUID_SRC}, {"id": _UUID_TGT}],
+            "edges": [{"source": _UUID_OTHER, "target": _UUID_TGT, "type": "normal"}],
+        }
+        assert _resolve_consequences(graph, _REVIEW_ID, None, None) is None
+
     async def test_no_consequences_when_gate_not_on_edge(self):
-        """HITL node gates have no edge with hitl_gate_config → no approve target."""
+        """HITL node gates have no edge with hitl_review_config → no approve target."""
         graph = _hitl_node_graph({"description": "Human review."})
         context = await _build(graph)
         assert context is not None
-        # Node gates: no edge with gate_id → no approve target resolved
+        # Node gates: no edge with review_id → no approve target resolved
         # (the node itself is the gate, not an edge target)
         consequences = context.get("consequences")
         if consequences is not None:
-            # approve target may be None if no edge carries this gate_id
+            # approve target may be None if no edge carries this review_id
             assert consequences.get("approve") is None or "node_id" in consequences.get("approve", {})
 
     async def test_consequences_node_labels_resolved_from_snapshot(self):
@@ -685,7 +696,7 @@ class TestConsequences:
                 {"id": _UUID_OTHER, "label": "Rollback"},
             ],
             "edges": [
-                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_gate_config": config},
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config},
             ],
         }
         context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})

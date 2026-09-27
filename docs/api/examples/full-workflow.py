@@ -319,10 +319,10 @@ def main():
             if gates:
                 print(f"  {len(gates)} HITL gate(s) to review:")
                 for g in gates:
-                    print(f"    Gate {g['gate_id']} (node: {g.get('node_id', 'N/A')})")
+                    print(f"    Gate {g['review_id']} (node: {g.get('node_id', 'N/A')})")
                     # Claim the gate
                     claim = client.post(
-                        f"/api/v1/runs/{run_id}/hitl/{g['gate_id']}/claim",
+                        f"/api/v1/runs/{run_id}/hitl/{g['review_id']}/claim",
                         json={"expiry_minutes": 5},
                         headers=headers,
                     )
@@ -331,7 +331,7 @@ def main():
                         print(f"      Claimed! Token: {ct[:20]}...")
                         # Approve it
                         approve = client.post(
-                            f"/api/v1/runs/{run_id}/hitl/{g['gate_id']}/approve",
+                            f"/api/v1/runs/{run_id}/hitl/{g['review_id']}/approve",
                             json={"claim_token": ct, "notes": "Approved by full-workflow.py"},
                             headers=headers,
                         )
