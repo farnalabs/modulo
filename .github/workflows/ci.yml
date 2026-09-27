@@ -1029,8 +1029,36 @@ jobs:
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Trigger Modulo Branch Fixer
+      - name: Skip if a merge-queue run is already in flight for this PR
+        id: queue-check
         if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          # A green CI run entered the merge queue, and then a THIRD-PARTY PR's
+          # merge (or a review event) advanced main and cancelled this PR's
+          # now-stale queue run. That cancellation surfaces as
+          # (failure() || cancelled()) here and dispatches a Branch Fixer run
+          # even though nothing is broken and the queue is already re-running
+          # this branch. If a merge-queue run for this branch is still in
+          # flight, the queue owns the outcome — do not dispatch a competing
+          # fixer run.
+          IN_FLIGHT=$(gh api \
+            "/repos/${{ github.repository }}/actions/runs?event=workflow_dispatch&status=in_progress&per_page=50" \
+            --jq "[.workflow_runs[] | select(.name == \"Merge: Queue\" and .head_branch == \"${BRANCH}\")] | length" \
+            2>/dev/null || echo "0")
+          IN_FLIGHT=${IN_FLIGHT:-0}
+          if [ "$IN_FLIGHT" -gt 0 ]; then
+            echo "queue_in_flight=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Merge queue run already in flight for '${BRANCH}' — skipping Branch Fixer dispatch (queue owns the outcome)."
+          else
+            echo "queue_in_flight=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Modulo Branch Fixer
+        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
