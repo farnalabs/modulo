@@ -2810,7 +2810,10 @@ async function triggerRun() {
       signal,
     }))
     showRunDialog.value = false
-    if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
+    // RunResponse's id field is run_id (POST /api/v1/runs) — reading `.id`
+    // navigated to /runs/undefined (FAR-1246). Typed off the generated schema
+    // so a field rename fails vue-tsc instead of silently breaking the nav.
+    if (data) router.push({ name: 'run-detail', params: { id: data.run_id } })
   } catch (e: unknown) {
     runError.value = formatApiError(e)
   } finally {
