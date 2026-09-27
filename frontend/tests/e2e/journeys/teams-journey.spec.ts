@@ -55,8 +55,11 @@ test.describe('Real-stack journeys: team lifecycle', { tag: '@regression' }, () 
       await page.getByTestId('settings-teams-create-description').fill('Created by the FAR-1242 real-stack e2e journey')
       await page.getByTestId('settings-teams-create-submit').click()
 
-      // Observable effect: the creation is confirmed by the form...
-      await expect(page.getByText(/Team created/i)).toBeVisible({ timeout: 30_000 })
+      // Observable effect: the creation is confirmed by the form. The
+      // rendered message is `Team "<name>" created.` (en-US
+      // views.SettingsTeamsView.team_created), so match the name between the
+      // two words — a bare /Team created/ never matches it.
+      await expect(page.getByText(new RegExp(`Team "${name}" created\\.`, 'i'))).toBeVisible({ timeout: 30_000 })
 
       // ...and the team really persisted; the owning row renders with a
       // zero owned-resource count (a fresh team owns nothing).
