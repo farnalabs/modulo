@@ -13,6 +13,9 @@ module.exports = {
       fontFamily: {
         sans: ['"Inter Variable"', 'Inter', ...defaultTheme.fontFamily.sans],
         mono: ['"JetBrains Mono Variable"', '"JetBrains Mono"', ...defaultTheme.fontFamily.mono],
+        // Brand monospace stack (matches json-viewer.css and the agent theme).
+        // Used for canvas node kind labels (FAR-1249).
+        'brand-mono': ['"JetBrains Mono Variable"', '"JetBrains Mono"', '"SF Mono"', '"Cascadia Code"', 'Consolas', 'ui-monospace', 'monospace'],
       },
       colors: {
         background: 'hsl(var(--background))',

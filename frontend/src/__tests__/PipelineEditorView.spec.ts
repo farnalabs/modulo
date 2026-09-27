@@ -1096,6 +1096,42 @@ describe('PipelineEditorView — run dialog', () => {
     wrapper.unmount()
   })
 
+  it('navigates to the created run via the RunResponse run_id, not an id field (FAR-1246)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent Node', description: '' } }]
+    vm.rawNodes = [{ id: 'node-1', node_type: 'agent', label: 'Agent Node', description: '', position: { x: 0, y: 0 } }]
+    await nextTick()
+
+    // Real POST /api/v1/runs wire shape: RunResponse's id field is run_id
+    // (schema.ts RunResponse), never `id`. Shaping the mock as `{ id }` would
+    // mask exactly the bug this test regresses on.
+    const runId = '01994f6c-1f4a-7c1b-9a1e-3d5f7a9b2c41'
+    ;(api.POST as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
+      Promise.resolve({
+        data: { run_id: runId, status: 'queued', pipeline_id: 'test-pipeline-id' },
+        error: undefined,
+      }),
+    )
+
+    await wrapper.find('[data-testid="pipeline-editor-run"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="pipeline-editor-run-prompt"]').setValue('do the thing')
+    await wrapper.find('[data-testid="pipeline-editor-run-submit"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const nav = vi.mocked(router.push).mock.calls.find(
+      (c) => typeof c[0] === 'object' && (c[0] as { name?: string }).name === 'run-detail',
+    )
+    expect(nav, 'triggerRun must push the run-detail route').toBeTruthy()
+    expect(nav![0]).toEqual({ name: 'run-detail', params: { id: runId } })
+    wrapper.unmount()
+  })
+
   it('renders the webhook info instead of the prompt for webhook-triggered pipelines', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
@@ -2276,7 +2312,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     expect(llmEdge.data.routing_label).toBe('go')
 
     const normalEdge = vm.convertBackendEdge({ id: 'e3', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal' }, 2)
-    expect(normalEdge.style.stroke).toBe('#888')
+    expect(normalEdge.style.stroke).toBe('hsl(var(--muted-foreground)/0.6)')
     expect(normalEdge.animated).toBe(false)
     wrapper.unmount()
   })
