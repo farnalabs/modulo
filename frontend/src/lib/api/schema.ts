@@ -3065,7 +3065,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Claim Gate
+         * Claim Review
          * @description Atomically claim a HITL review. Returns a claim_token for approve/reject.
          *
          *     FAR-609: claim is human_only too — a non-browser credential (API key /
@@ -3081,7 +3081,7 @@ export interface paths {
          *     pending list on the next refresh, and the claim token simply expires
          *     unused.
          */
-        post: operations["claim_gate_api_v1_runs__run_id__hitl__review_id__claim_post"];
+        post: operations["claim_review_api_v1_runs__run_id__hitl__review_id__claim_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3098,10 +3098,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Approve Gate
+         * Approve Review
          * @description Approve an interrupted HITL gate and resume the run.
          */
-        post: operations["approve_gate_api_v1_runs__run_id__hitl__review_id__approve_post"];
+        post: operations["approve_review_api_v1_runs__run_id__hitl__review_id__approve_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3118,14 +3118,14 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Approve Gate With Modification
+         * Approve Review With Modification
          * @description Approve a HITL review with a modified output payload.
          *
          *     The human reviewer's modified output replaces the agent's original output
          *     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
          *     documenting the change.
          */
-        post: operations["approve_gate_with_modification_api_v1_runs__run_id__hitl__review_id__approve_with_modification_post"];
+        post: operations["approve_review_with_modification_api_v1_runs__run_id__hitl__review_id__approve_with_modification_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3142,10 +3142,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reject Gate
+         * Reject Review
          * @description Reject an interrupted HITL gate and route to reject_target or fail.
          */
-        post: operations["reject_gate_api_v1_runs__run_id__hitl__review_id__reject_post"];
+        post: operations["reject_review_api_v1_runs__run_id__hitl__review_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3204,10 +3204,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Run Pending Gates
+         * List Run Pending Reviews
          * @description List all pending (undecided) HITL gates for a specific run.
          */
-        get: operations["list_run_pending_gates_api_v1_runs__run_id__hitl_pending_get"];
+        get: operations["list_run_pending_reviews_api_v1_runs__run_id__hitl_pending_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3224,7 +3224,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Org Pending Gates
+         * List Org Pending Reviews
          * @description List pending HITL reviews across the organisation.
          *
          *     Gates on terminal runs are excluded (they are data rot, not pending work):
@@ -3232,7 +3232,7 @@ export interface paths {
          *     ``awaiting_human``, ``claimed``, or ``hitl_parked`` status (FAR-612,
          *     FAR-604).
          */
-        get: operations["list_org_pending_gates_api_v1_hitl_pending_get"];
+        get: operations["list_org_pending_reviews_api_v1_hitl_pending_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3241,7 +3241,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/hitl/gates": {
+    "/api/v1/hitl/reviews": {
         parameters: {
             query?: never;
             header?: never;
@@ -3249,7 +3249,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Org Gates
+         * List Org Reviews
          * @description Paginated org-wide gate listing including DECIDED gates (FAR-692).
          *
          *     The review page's status filter was a no-op for approved/rejected because
@@ -3276,9 +3276,9 @@ export interface paths {
          *     ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
          *     consumers depend on its undecided-only shape). The response envelope
          *     mirrors the repo's standard list convention (items/total/page/page_size,
-         *     as the runs list uses) with the existing ``GateResponse`` items.
+         *     as the runs list uses) with the existing ``ReviewResponse`` items.
          */
-        get: operations["list_org_gates_api_v1_hitl_gates_get"];
+        get: operations["list_org_reviews_api_v1_hitl_reviews_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12666,62 +12666,6 @@ export interface components {
             /** Edge Count */
             edge_count: number;
         };
-        /**
-         * GateListResponse
-         * @description Paginated org gate listing (FAR-692) — the repo's standard list envelope.
-         */
-        GateListResponse: {
-            /** Items */
-            items: components["schemas"]["GateResponse"][];
-            /** Total */
-            total: number;
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-        };
-        /** GateResponse */
-        GateResponse: {
-            /**
-             * Run Id
-             * Format: uuid
-             */
-            run_id: string;
-            /** Review Id */
-            review_id: string;
-            /**
-             * Pipeline Id
-             * Format: uuid
-             */
-            pipeline_id: string;
-            /** Pipeline Name */
-            pipeline_name?: string | null;
-            /** Claimed By */
-            claimed_by?: string | null;
-            /** Claimed At */
-            claimed_at?: string | null;
-            /** Expires At */
-            expires_at?: string | null;
-            /** Decision */
-            decision?: string | null;
-            /** Decision At */
-            decision_at?: string | null;
-            /** Label */
-            label?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Context */
-            context?: {
-                [key: string]: unknown;
-            } | null;
-            /** Claimed By Name */
-            claimed_by_name?: string | null;
-            /**
-             * Claimed By Me
-             * @default false
-             */
-            claimed_by_me: boolean;
-        };
         /** GetOrgGuardrailsKillSwitchResponse */
         GetOrgGuardrailsKillSwitchResponse: {
             /** Enabled */
@@ -15044,11 +14988,6 @@ export interface components {
             /** New Password */
             new_password: string;
         };
-        /** PendingGatesResponse */
-        PendingGatesResponse: {
-            /** Gates */
-            gates: components["schemas"]["GateResponse"][];
-        };
         /** PendingHitlReview */
         PendingHitlReview: {
             /**
@@ -15076,6 +15015,11 @@ export interface components {
             required_team_id?: string | null;
             /** Required Team Name */
             required_team_name?: string | null;
+        };
+        /** PendingReviewsResponse */
+        PendingReviewsResponse: {
+            /** Reviews */
+            reviews: components["schemas"]["ReviewResponse"][];
         };
         /** PermissionResponse */
         PermissionResponse: {
@@ -16672,6 +16616,62 @@ export interface components {
             action: string;
             /** Annotation */
             annotation?: string | null;
+        };
+        /**
+         * ReviewListResponse
+         * @description Paginated org review listing (FAR-692) — the repo's standard list envelope.
+         */
+        ReviewListResponse: {
+            /** Items */
+            items: components["schemas"]["ReviewResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** ReviewResponse */
+        ReviewResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Review Id */
+            review_id: string;
+            /**
+             * Pipeline Id
+             * Format: uuid
+             */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /** Claimed By */
+            claimed_by?: string | null;
+            /** Claimed At */
+            claimed_at?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Decision */
+            decision?: string | null;
+            /** Decision At */
+            decision_at?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            } | null;
+            /** Claimed By Name */
+            claimed_by_name?: string | null;
+            /**
+             * Claimed By Me
+             * @default false
+             */
+            claimed_by_me: boolean;
         };
         /** RotateKeyRequest */
         RotateKeyRequest: {
@@ -26497,7 +26497,7 @@ export interface operations {
             };
         };
     };
-    claim_gate_api_v1_runs__run_id__hitl__review_id__claim_post: {
+    claim_review_api_v1_runs__run_id__hitl__review_id__claim_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26535,7 +26535,7 @@ export interface operations {
             };
         };
     };
-    approve_gate_api_v1_runs__run_id__hitl__review_id__approve_post: {
+    approve_review_api_v1_runs__run_id__hitl__review_id__approve_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26575,7 +26575,7 @@ export interface operations {
             };
         };
     };
-    approve_gate_with_modification_api_v1_runs__run_id__hitl__review_id__approve_with_modification_post: {
+    approve_review_with_modification_api_v1_runs__run_id__hitl__review_id__approve_with_modification_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26615,7 +26615,7 @@ export interface operations {
             };
         };
     };
-    reject_gate_api_v1_runs__run_id__hitl__review_id__reject_post: {
+    reject_review_api_v1_runs__run_id__hitl__review_id__reject_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26735,7 +26735,7 @@ export interface operations {
             };
         };
     };
-    list_run_pending_gates_api_v1_runs__run_id__hitl_pending_get: {
+    list_run_pending_reviews_api_v1_runs__run_id__hitl_pending_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26754,7 +26754,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PendingGatesResponse"];
+                    "application/json": components["schemas"]["PendingReviewsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -26768,7 +26768,7 @@ export interface operations {
             };
         };
     };
-    list_org_pending_gates_api_v1_hitl_pending_get: {
+    list_org_pending_reviews_api_v1_hitl_pending_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26785,7 +26785,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PendingGatesResponse"];
+                    "application/json": components["schemas"]["PendingReviewsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -26799,7 +26799,7 @@ export interface operations {
             };
         };
     };
-    list_org_gates_api_v1_hitl_gates_get: {
+    list_org_reviews_api_v1_hitl_reviews_get: {
         parameters: {
             query?: {
                 status?: "undecided" | "pending" | "claimed" | "approved" | "rejected" | "all";
@@ -26819,7 +26819,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateListResponse"];
+                    "application/json": components["schemas"]["ReviewListResponse"];
                 };
             };
             /** @description Validation Error */

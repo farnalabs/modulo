@@ -2191,7 +2191,7 @@ class TestHitlHelpers(_AuthContext):
             result = await _review_hitl_impl(
                 run_id=str(uuid.uuid4()), review_id="gate", action="claim", claim_token=None, reason=None, output=None
             )
-        assert result["error"] == "gate_not_found"
+        assert result["error"] == "review_not_found"
 
     async def test_review_impl_degenerate_parse(self) -> None:
         with (

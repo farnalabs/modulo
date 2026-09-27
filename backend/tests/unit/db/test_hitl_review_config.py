@@ -22,10 +22,10 @@ from modulo.db.crud.hitl_review_config import (
     make_review_id,
     normalize_gate_description,
     parse_hitl_review_id,
-    resolve_gate_human_only_map,
     resolve_hitl_review_config,
     resolve_review_description,
     resolve_review_descriptions,
+    resolve_review_human_only_map,
     snapshot_review_config_map,
 )
 
@@ -815,7 +815,7 @@ class TestResolveGateHumanOnlyMap:
         gate = self._gate(_RUN_ID, _review_id(), stamped={"human_only": True})
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): True}
         assert session.execute.await_count == 0
@@ -824,7 +824,7 @@ class TestResolveGateHumanOnlyMap:
         gate = self._gate(_RUN_ID, _review_id(), stamped={"human_only": False})
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): False}
 
@@ -842,7 +842,7 @@ class TestResolveGateHumanOnlyMap:
         gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): False}
 
@@ -856,7 +856,7 @@ class TestResolveGateHumanOnlyMap:
         gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): True}
 
@@ -879,7 +879,7 @@ class TestResolveGateHumanOnlyMap:
             "modulo.db.crud.hitl_review_config.snapshot_review_config_map",
             side_effect=snapshot_review_config_map,
         ) as map_mock:
-            result = await resolve_gate_human_only_map(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
+            result = await resolve_review_human_only_map(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
 
         assert map_mock.call_count == 1
         assert result == {(_RUN_ID, gate_a.review_id): True, (_RUN_ID, gate_b.review_id): True}
@@ -888,7 +888,7 @@ class TestResolveGateHumanOnlyMap:
         gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): True}
 
@@ -896,14 +896,14 @@ class TestResolveGateHumanOnlyMap:
         gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, None)], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): True}
 
     async def test_empty_gates_short_circuits_without_queries(self) -> None:
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_human_only_map(session, gates=[], org_id=_ORG_ID)
+        result = await resolve_review_human_only_map(session, gates=[], org_id=_ORG_ID)
 
         assert result == {}
         assert session.execute.await_count == 0

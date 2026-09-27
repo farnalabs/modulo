@@ -122,7 +122,7 @@ def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
 # Repeated log/decorator keys (S1192).
-_CODE_HITL_CLAIM_GATE = "hitl.claim_gate"
+_CODE_HITL_CLAIM_REVIEW = "hitl.claim_review"
 _PERM_HITL_LIST = "hitl.list"
 
 #: FAR-634: the audit event type emitted on EVERY human_only denial (REST +
@@ -551,8 +551,8 @@ async def _validate_choice_answer(
     "/runs/{run_id}/hitl/{review_id}/claim",
     status_code=status.HTTP_200_OK,
 )
-@handle_db_errors(_CODE_HITL_CLAIM_GATE)
-async def claim_gate(
+@handle_db_errors(_CODE_HITL_CLAIM_REVIEW)
+async def claim_review(
     run_id: uuid.UUID,
     review_id: str,
     req: ClaimRequest,
@@ -612,7 +612,7 @@ async def claim_gate(
                 # actual status so the operator sees why.
                 raise ProblemException(ProblemType.HITL_RUN_NOT_AWAITING, detail=str(exc)) from exc
             except NotTeamMemberError as exc:
-                logger.warning("hitl.claim_gate.team_access_denied: %s", exc)
+                logger.warning("hitl.claim_review.team_access_denied: %s", exc)
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
             # FAR-612: flip the run to "claimed" through the fenced transition
@@ -635,13 +635,13 @@ async def claim_gate(
                 allowed_from=frozenset({"awaiting_human"}),
             )
     except ProgrammingError as exc:
-        logger.exception(_CODE_HITL_CLAIM_GATE)
+        logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception(_CODE_HITL_CLAIM_GATE)
+        logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -655,7 +655,7 @@ async def claim_gate(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("hitl.claim_gate.unexpected_error")
+        logger.exception("hitl.claim_review.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
@@ -925,8 +925,8 @@ async def approve_review_with_modification(
     "/runs/{run_id}/hitl/{review_id}/reject",
     status_code=status.HTTP_200_OK,
 )
-@handle_db_errors("hitl.reject_gate")
-async def reject_gate(
+@handle_db_errors("hitl.reject_review")
+async def reject_review(
     run_id: uuid.UUID,
     review_id: str,
     req: RejectRequest,
@@ -969,7 +969,7 @@ async def reject_gate(
             check_sandbox_capacity=False,
         )
     except Exception as exc:
-        logger.exception("hitl.reject_gate.resume_failed")
+        logger.exception("hitl.reject_review.resume_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to resume pipeline after rejection",
@@ -1110,8 +1110,8 @@ async def submit_manual_output(
 @router.get(
     "/runs/{run_id}/hitl/pending",
 )
-@handle_db_errors("hitl.list_run_pending_gates")
-async def list_run_pending_gates(
+@handle_db_errors("hitl.list_run_pending_reviews")
+async def list_run_pending_reviews(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
@@ -1184,13 +1184,13 @@ async def list_run_pending_gates(
             # stamp, resolved inside the same transaction/RLS context.
             claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
-        logger.exception("hitl.list_run_pending_gates")
+        logger.exception("hitl.list_run_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("hitl.list_run_pending_gates")
+        logger.exception("hitl.list_run_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1198,7 +1198,7 @@ async def list_run_pending_gates(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("hitl.list_run_pending_gates.unexpected_error")
+        logger.exception("hitl.list_run_pending_reviews.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
@@ -1222,8 +1222,8 @@ async def list_run_pending_gates(
 @router.get(
     "/hitl/pending",
 )
-@handle_db_errors("hitl.list_org_pending_gates")
-async def list_org_pending_gates(
+@handle_db_errors("hitl.list_org_pending_reviews")
+async def list_org_pending_reviews(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
 ) -> PendingReviewsResponse:
@@ -1267,13 +1267,13 @@ async def list_org_pending_gates(
             # stamp, resolved inside the same transaction/RLS context.
             claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
-        logger.exception("hitl.list_org_pending_gates")
+        logger.exception("hitl.list_org_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("hitl.list_org_pending_gates")
+        logger.exception("hitl.list_org_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1281,7 +1281,7 @@ async def list_org_pending_gates(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("hitl.list_org_pending_gates.unexpected_error")
+        logger.exception("hitl.list_org_pending_reviews.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
@@ -1546,7 +1546,7 @@ async def _load_review_label_map(session: AsyncSession, gates: list[HitlClaim]) 
             labels_by_snapshot[snap_id] = _build_review_label_map(graph_json)
         except Exception:
             # One corrupted snapshot must not break the whole pending list.
-            logger.exception("hitl.list_org_pending_gates.label_map_failed")
+            logger.exception("hitl.list_org_pending_reviews.label_map_failed")
 
     review_label_map: dict[tuple[uuid.UUID, str], str] = {}
     for g in gates:

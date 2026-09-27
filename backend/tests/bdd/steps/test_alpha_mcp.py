@@ -538,16 +538,16 @@ def mcp_attempt_approve(request):
 @then("the response contains the pending gate")
 def response_contains_gate(request):
     data = _mcp_response_payload(request)
-    assert isinstance(data.get("gates"), list), data
+    assert isinstance(data.get("reviews"), list), data
     run_id_str = str(getattr(request.node, "_run_id", uuid.uuid4()))
     review_id = getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "pre-deploy"
-    matches = [g for g in data["gates"] if g.get("run_id") == run_id_str and g.get("review_id") == review_id]
+    matches = [g for g in data["reviews"] if g.get("run_id") == run_id_str and g.get("review_id") == review_id]
     assert matches, f"pending gate {review_id!r} on run {run_id_str!r} not in response: {data}"
 
 
 @then("the response includes run_id and review_id")
 def response_includes_ids(request):
-    gate = _mcp_response_payload(request)["gates"][0]
+    gate = _mcp_response_payload(request)["reviews"][0]
     assert gate.get("run_id")
     assert gate.get("review_id")
 
@@ -583,7 +583,7 @@ def pending_gate_requires_human(request):
     review_id = (
         getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
     )
-    gates = data.get("gates", [])
+    gates = data.get("reviews", [])
     gate = next(
         (g for g in gates if g.get("run_id") == run_id_str and g.get("review_id") == review_id),
         None,

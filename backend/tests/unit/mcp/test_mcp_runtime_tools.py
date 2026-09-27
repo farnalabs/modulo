@@ -519,22 +519,22 @@ class TestListPendingHitl(_AuthContext):
         assert result["page_size"] == 20
         assert result["total"] == 2
         assert result["has_more"] is False
-        assert result["gates"][0]["run_id"] == str(gates[0].run_id)
-        assert result["gates"][0]["review_id"] == "gate-1"
-        assert result["gates"][0]["pipeline_id"] == str(gates[0].pipeline_id)
-        assert result["gates"][0]["claimed_by"] is None
-        assert result["gates"][0]["expires_at"] == expires_at.isoformat()
-        assert result["gates"][0]["required_team_id"] is None
-        assert result["gates"][1]["claimed_by"] == str(gates[1].account_id)
-        assert result["gates"][1]["expires_at"] is None
-        assert result["gates"][1]["required_team_id"] == str(gates[1].required_team_id)
+        assert result["reviews"][0]["run_id"] == str(gates[0].run_id)
+        assert result["reviews"][0]["review_id"] == "gate-1"
+        assert result["reviews"][0]["pipeline_id"] == str(gates[0].pipeline_id)
+        assert result["reviews"][0]["claimed_by"] is None
+        assert result["reviews"][0]["expires_at"] == expires_at.isoformat()
+        assert result["reviews"][0]["required_team_id"] is None
+        assert result["reviews"][1]["claimed_by"] == str(gates[1].account_id)
+        assert result["reviews"][1]["expires_at"] is None
+        assert result["reviews"][1]["required_team_id"] == str(gates[1].required_team_id)
         # FAR-613 briefing fields: unresolvable configs map to None.
-        assert result["gates"][0]["description"] is None
-        assert result["gates"][0]["context"] is None
+        assert result["reviews"][0]["description"] is None
+        assert result["reviews"][0]["context"] is None
         # FAR-609: an unresolvable gate-config falls back to the fail-safe
-        # DEFAULT_HUMAN_ONLY (True) so MCP never under-reports a gate.
-        assert result["gates"][0]["human_only"] is True
-        assert result["gates"][1]["human_only"] is True
+        # DEFAULT_HUMAN_ONLY (True) so MCP never under-reports a review.
+        assert result["reviews"][0]["human_only"] is True
+        assert result["reviews"][1]["human_only"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -583,11 +583,11 @@ class TestListPendingHitl(_AuthContext):
 
         result = await list_pending_hitl()
 
-        assert result["gates"][0]["description"] == "MCP briefing description."
-        assert result["gates"][0]["context"] == context
+        assert result["reviews"][0]["description"] == "MCP briefing description."
+        assert result["reviews"][0]["context"] == context
         # FAR-609: a snapshot config without an explicit human_only flag falls
         # back to the fail-safe True default.
-        assert result["gates"][0]["human_only"] is True
+        assert result["reviews"][0]["human_only"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -607,7 +607,7 @@ class TestListPendingHitl(_AuthContext):
 
         result = await list_pending_hitl()
 
-        assert not result["gates"]
+        assert not result["reviews"]
         assert result["total"] == 0
         assert result["has_more"] is False
 
@@ -645,7 +645,7 @@ class TestListPendingHitl(_AuthContext):
         result = await list_pending_hitl()
 
         assert result["total"] == 25
-        assert len(result["gates"]) == 20
+        assert len(result["reviews"]) == 20
         assert result["has_more"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1682,7 +1682,7 @@ class TestReviewHitl(_AuthContext):
         run_id = str(run_id_uuid)
         result = await review_hitl(run_id=run_id, review_id="gate-1", action="claim")
 
-        assert result["error"] == "gate_not_found"
+        assert result["error"] == "review_not_found"
         assert result["run_id"] == run_id
         assert result["review_id"] == "gate-1"
 

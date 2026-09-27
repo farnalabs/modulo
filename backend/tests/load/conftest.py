@@ -165,7 +165,7 @@ def get_pending_hitl(
     headers = _auth_headers(token)
     resp = client.get(f"{base_url}/runs/{run_id}/hitl/pending", headers=headers, timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
-    return resp.json().get("gates", [])
+    return resp.json().get("reviews", [])
 
 
 def _hitl_action(

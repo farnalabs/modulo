@@ -277,10 +277,10 @@ async def _batch_load_snapshot_graphs(
     run_ids: set[uuid.UUID],
     org_id: uuid.UUID,
 ) -> tuple[dict[uuid.UUID, uuid.UUID], dict[uuid.UUID, dict[str, Any]]]:
-    """Batch-load the pending gates' runs + snapshot graph JSON (two IN queries).
+    """Batch-load the pending reviews' runs + snapshot graph JSON (two IN queries).
 
-    Shared by the pending-gate resolvers (:func:`resolve_review_descriptions`
-    and :func:`resolve_gate_human_only_map`) so a page of gates costs the same
+    Shared by the pending-review resolvers (:func:`resolve_review_descriptions`
+    and :func:`resolve_review_human_only_map`) so a page of reviews costs the same
     two queries no matter how many fields the surface renders. Returns
     ``(snapshot_id_by_run, graph_by_snapshot)``; runs without a snapshot or
     snapshots without a dict ``graph_json`` are simply absent from the maps.
@@ -314,24 +314,24 @@ async def resolve_review_descriptions(
     gates: Sequence[HitlClaim],
     org_id: uuid.UUID,
 ) -> dict[tuple[uuid.UUID, str], str | None]:
-    """Resolve each gate's description for the pending surfaces (FAR-613/688).
+    """Resolve each review's description for the pending surfaces (FAR-613/688).
 
     The org-level pending surfaces (REST ``GET /api/v1/hitl/pending`` and the
     MCP ``list_pending_hitl`` tool) share this — batched, two IN queries over
-    the pending gates' runs + snapshots, never a per-gate snapshot walk.
+    the pending reviews' runs + snapshots, never a per-review snapshot walk.
     Keys are ``(run_id, review_id)``. Precedence is context-first
     (:func:`resolve_review_description`) — the fire-time captured description
-    wins, the snapshot config is the fallback. A gate whose snapshot is
+    wins, the snapshot config is the fallback. A review whose snapshot is
     missing and whose capture carries no usable description maps to None
     (the UI renders the muted no-description fallback). The snapshot config
-    map is memoised per snapshot id within one call (several pending gates
-    often share one run/snapshot — one walk per snapshot, not per gate).
+    map is memoised per snapshot id within one call (several pending reviews
+    often share one run/snapshot — one walk per snapshot, not per review).
     The queries add explicit ``organisation_id`` filters as defence in depth
     (callers already set the RLS org context).
     """
-    description_by_gate: dict[tuple[uuid.UUID, str], str | None] = {}
+    description_by_review: dict[tuple[uuid.UUID, str], str | None] = {}
     if not gates:
-        return description_by_gate
+        return description_by_review
     snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
         session, run_ids={g.run_id for g in gates}, org_id=org_id
     )
@@ -341,29 +341,29 @@ async def resolve_review_descriptions(
         if snapshot_id is not None and snapshot_id not in config_map_by_snapshot:
             graph = graph_by_snapshot.get(snapshot_id)
             config_map_by_snapshot[snapshot_id] = snapshot_review_config_map(graph) if isinstance(graph, dict) else {}
-        # A missing snapshot (or an unlisted run) leaves the gate without a
+        # A missing snapshot (or an unlisted run) leaves the review without a
         # snapshot config — context-first still applies from the claim row.
         config = config_map_by_snapshot.get(snapshot_id, {}).get(gate.review_id) if snapshot_id is not None else None
-        description_by_gate[(gate.run_id, gate.review_id)] = resolve_review_description(
+        description_by_review[(gate.run_id, gate.review_id)] = resolve_review_description(
             gate.context_json if isinstance(gate.context_json, dict) else None, config
         )
-    return description_by_gate
+    return description_by_review
 
 
-async def resolve_gate_human_only_map(
+async def resolve_review_human_only_map(
     session: AsyncSession,
     *,
     gates: Sequence[HitlClaim],
     org_id: uuid.UUID,
 ) -> dict[tuple[uuid.UUID, str], bool]:
-    """Resolve each pending gate's ``human_only`` flag (fail-safe by default).
+    """Resolve each pending review's ``human_only`` flag (fail-safe by default).
 
     The MCP ``list_pending_hitl`` surface uses this to tell an agent client
-    which pending gates REQUIRE a browser human before it attempts an action
-    (human_only gates cannot be claimed or decided through MCP — FAR-609 /
-    FAR-610). Keys are ``(run_id, review_id)`` and every gate maps to a boolean.
+    which pending reviews REQUIRE a browser human before it attempts an action
+    (human_only reviews cannot be claimed or decided through MCP — FAR-609 /
+    FAR-610). Keys are ``(run_id, review_id)`` and every review maps to a boolean.
 
-    Resolution order per gate:
+    Resolution order per review:
 
     0. STAMP (FAR-634) — the executor stamps the fire-time resolved config
        onto ``hitl_claims.gate_config_json``; that column on the ALREADY-LOADED
@@ -371,19 +371,19 @@ async def resolve_gate_human_only_map(
        :func:`human_only_effective`.
     1. SNAPSHOT — the run's immutable ``PipelineSnapshot`` config map
        (:func:`snapshot_review_config_map`), batched like
-       :func:`resolve_review_descriptions` so a page of gates is two IN queries.
-    2. FAIL-SAFE — an unresolvable gate maps to :data:`DEFAULT_HUMAN_ONLY`
+       :func:`resolve_review_descriptions` so a page of reviews is two IN queries.
+    2. FAIL-SAFE — an unresolvable review maps to :data:`DEFAULT_HUMAN_ONLY`
        (True), the same default every enforcement surface reads, so the pending
-       surface can never under-report a gate as actionable by an agent.
+       surface can never under-report a review as actionable by an agent.
     """
-    human_only_by_gate: dict[tuple[uuid.UUID, str], bool] = {}
+    human_only_by_review: dict[tuple[uuid.UUID, str], bool] = {}
     if not gates:
-        return human_only_by_gate
+        return human_only_by_review
     unstamped_run_ids: set[uuid.UUID] = set()
     for gate in gates:
         stamped = getattr(gate, "gate_config_json", None)
         if isinstance(stamped, dict):
-            human_only_by_gate[(gate.run_id, gate.review_id)] = human_only_effective(stamped)
+            human_only_by_review[(gate.run_id, gate.review_id)] = human_only_effective(stamped)
         else:
             unstamped_run_ids.add(gate.run_id)
     snapshot_id_by_run, graph_by_snapshot = await _batch_load_snapshot_graphs(
@@ -391,15 +391,15 @@ async def resolve_gate_human_only_map(
     )
     config_map_by_snapshot: dict[uuid.UUID, dict[str, dict[str, Any]]] = {}
     for gate in gates:
-        if (gate.run_id, gate.review_id) in human_only_by_gate:
+        if (gate.run_id, gate.review_id) in human_only_by_review:
             continue
         snapshot_id = snapshot_id_by_run.get(gate.run_id)
         if snapshot_id is not None and snapshot_id not in config_map_by_snapshot:
             graph = graph_by_snapshot.get(snapshot_id)
             config_map_by_snapshot[snapshot_id] = snapshot_review_config_map(graph) if isinstance(graph, dict) else {}
         config = config_map_by_snapshot.get(snapshot_id, {}).get(gate.review_id) if snapshot_id is not None else None
-        human_only_by_gate[(gate.run_id, gate.review_id)] = human_only_effective(config)
-    return human_only_by_gate
+        human_only_by_review[(gate.run_id, gate.review_id)] = human_only_effective(config)
+    return human_only_by_review
 
 
 async def _config_from_live_edges(
@@ -408,7 +408,7 @@ async def _config_from_live_edges(
     org_id: uuid.UUID,
     review_id: str,
 ) -> dict[str, Any] | None:
-    """Look the gate's edge up in the LIVE ``pipeline_edges`` table (fallback)."""
+    """Look the review's edge up in the LIVE ``pipeline_edges`` table (fallback)."""
     parsed = parse_hitl_review_id(review_id)
     if parsed is None:
         return None

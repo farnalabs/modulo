@@ -4172,19 +4172,19 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
         # precedence the REST pending endpoints use) while the session is
         # open. Context comes from the claim row itself.
         from modulo.db.crud.hitl_review_config import (
-            resolve_gate_human_only_map,
             resolve_review_descriptions,
+            resolve_review_human_only_map,
         )
 
-        description_by_gate = await resolve_review_descriptions(s, gates=gates, org_id=org_id)
-        # FAR-609/610: tell the agent client which pending gates REQUIRE a
-        # browser human — human_only gates cannot be claimed or decided through
+        description_by_review = await resolve_review_descriptions(s, gates=gates, org_id=org_id)
+        # FAR-609/610: tell the agent client which pending reviews REQUIRE a
+        # browser human — human_only reviews cannot be claimed or decided through
         # MCP. Resolved via the shared batched flag map (claim-stamped config
         # preferred; snapshot config fallback; fail-safe True default) so an
         # agent can see before it attempts an action.
-        human_only_by_gate = await resolve_gate_human_only_map(s, gates=gates, org_id=org_id)
+        human_only_by_review = await resolve_review_human_only_map(s, gates=gates, org_id=org_id)
     return {
-        "gates": [
+        "reviews": [
             {
                 "run_id": str(g.run_id),
                 "review_id": g.review_id,
@@ -4192,9 +4192,9 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
                 "claimed_by": str(g.account_id) if g.account_id else None,
                 "expires_at": _iso_or_none(g.expires_at),
                 "required_team_id": str(g.required_team_id) if g.required_team_id else None,
-                "description": description_by_gate.get((g.run_id, g.review_id)),
+                "description": description_by_review.get((g.run_id, g.review_id)),
                 "context": g.context_json if isinstance(g.context_json, dict) else None,
-                "human_only": human_only_by_gate.get((g.run_id, g.review_id)),
+                "human_only": human_only_by_review.get((g.run_id, g.review_id)),
             }
             for g in gates
         ],
@@ -4208,7 +4208,7 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
 async def _load_pending_hitl_reviews(
     s: AsyncSession, base_where: list[Any], page: int, page_size: int
 ) -> tuple[list[HitlClaim], int]:
-    """Load a page of pending HITL gates plus the total count (one transaction)."""
+    """Load a page of pending HITL reviews plus the total count (one transaction)."""
     from sqlalchemy import func, select
 
     from modulo.db.models.pipeline import Pipeline
@@ -4244,7 +4244,7 @@ async def _load_pending_hitl_reviews(
 
 @mcp.tool(
     description=(
-        "List the unclaimed, undecided HITL gates for the organisation "
+        "List the unclaimed, undecided HITL reviews for the organisation "
         "(their runs are in awaiting_human). Read-only inspection: claim or "
         "decide via review_hitl."
     ),
@@ -4260,7 +4260,7 @@ async def list_hitl_reviews(limit: int = 20) -> dict[str, Any]:
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_hitl_reviews failed")
-        return _tool_error("Failed to list HITL gates")
+        return _tool_error("Failed to list HITL reviews")
 
 
 async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
@@ -4284,7 +4284,7 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
         key_team_id = _ctx_team_id_val()
         if key_team_id is not None:
             # Same team boundary as list_pending_hitl: a team-scoped key only
-            # sees gates for runs owned by its own team (or org-level runs).
+            # sees reviews for runs owned by its own team (or org-level runs).
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
         result = await s.execute(
@@ -4297,7 +4297,7 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
         )
         rows = result.all()
     return {
-        "gates": [
+        "reviews": [
             {
                 "run_id": str(gate.run_id),
                 "review_id": gate.review_id,
@@ -4317,9 +4317,9 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
 
 @mcp.tool(
     description=(
-        "Get read-only detail for one HITL gate: run status, the gate config AS "
+        "Get read-only detail for one HITL review: run status, the review config AS "
         "CAPTURED IN THAT RUN'S SNAPSHOT (label, condition, human_only, "
-        "claim_expiry_minutes, reject_target, required_team_id), and the gate's "
+        "claim_expiry_minutes, reject_target, required_team_id), and the review's "
         "claim/decision state. Decide via review_hitl or the browser UI."
     ),
 )
@@ -4334,7 +4334,7 @@ async def get_hitl_review(run_id: str, review_id: str) -> dict[str, Any]:
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_hitl_review failed")
-        return _tool_error("Failed to get HITL gate")
+        return _tool_error("Failed to get HITL review")
 
 
 async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
@@ -4356,15 +4356,15 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
             return {"error": "run_not_found", "run_id": run_id}
         gate = await HITLManager().get_gate(s, run_id=rid, review_id=review_id, org_id=org_id)
         if gate is None:
-            return {"error": "gate_not_found", "run_id": run_id, "review_id": review_id}
+            return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
         # FAR-610 resolution order: the run's snapshot graph is authoritative
-        # for the gate that fired; the live edges/nodes are the fallbacks.
+        # for the review that fired; the live edges/nodes are the fallbacks.
         config = await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id, run=run)
     result = {
         "run_id": run_id,
         "review_id": review_id,
         "run_status": run.status,
-        "gate_fired": True,
+        "review_fired": True,
         "claimed_by": str(gate.account_id) if gate.account_id else None,
         "claimed_at": _iso_or_none(gate.claimed_at),
         "expires_at": _iso_or_none(gate.expires_at),
@@ -4372,10 +4372,10 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
         "decision_at": _iso_or_none(gate.decision_at),
     }
     if config is None:
-        result["gate_config"] = None
+        result["review_config"] = None
     else:
         required_team = config.get("required_team_id")
-        result["gate_config"] = {
+        result["review_config"] = {
             "label": config.get("label"),
             "condition": config.get("condition"),
             "human_only": human_only_effective(config),
@@ -4404,7 +4404,7 @@ async def get_pipeline_reviews(pipeline_id: str) -> dict[str, Any]:
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_pipeline_reviews failed")
-        return _tool_error("Failed to get pipeline gates")
+        return _tool_error("Failed to get pipeline reviews")
 
 
 async def _get_pipeline_reviews_impl(pipeline_id: str) -> dict[str, Any]:
@@ -4436,7 +4436,7 @@ async def _get_pipeline_reviews_impl(pipeline_id: str) -> dict[str, Any]:
         for e in edges
         if isinstance(e.hitl_review_config, dict)
     ]
-    return {"pipeline_id": pipeline_id, "gates": gates, "gate_count": len(gates)}
+    return {"pipeline_id": pipeline_id, "reviews": gates, "review_count": len(gates)}
 
 
 _TEAM_SCOPE_ERROR = object()
@@ -4813,9 +4813,9 @@ async def _dispatch_hitl_action(
 
 def _hitl_error_response(exc: BaseException, run_id: str, review_id: str) -> dict[str, Any]:
     if isinstance(exc, GateNotFoundError):
-        return {"error": "gate_not_found", "run_id": run_id, "review_id": review_id}
+        return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
     if isinstance(exc, NotTeamMemberError):
-        return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
+        return {"error": "not_team_member", "detail": "You are not a member of the team required by this review"}
     if isinstance(exc, AlreadyClaimedError):
         return {"error": "already_claimed", "detail": "Gate is already held by another client"}
     if isinstance(exc, ClaimTokenInvalidError):
@@ -4881,7 +4881,7 @@ async def _review_hitl_impl(
         if run is _TEAM_SCOPE_ERROR:
             return _team_scope_error("run", run_id)
         if run is None:
-            return {"error": "gate_not_found", "run_id": run_id, "review_id": review_id}
+            return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
 
         if action in ("claim", "approve", "deliver_manual"):
             # FAR-610: deliver_manual is a decision exactly like approve — a

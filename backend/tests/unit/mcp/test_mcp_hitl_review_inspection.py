@@ -96,7 +96,7 @@ class TestListHitlReviews(_AuthContext):
 
         out = await list_hitl_reviews()
 
-        assert not out["gates"]
+        assert not out["reviews"]
         assert out["limit"] == 20
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
@@ -118,7 +118,7 @@ class TestListHitlReviews(_AuthContext):
 
         out = await list_hitl_reviews()
 
-        fetched = out["gates"][0]
+        fetched = out["reviews"][0]
         assert fetched["review_id"] == "hitl_review_a_b"
         assert fetched["pipeline_name"] == "PR Reviewer"
         assert fetched["pipeline_id"] == str(pipeline_id)
@@ -139,7 +139,7 @@ class TestListHitlReviews(_AuthContext):
         out = await list_hitl_reviews(limit=10_000)
 
         assert out["limit"] == 100
-        assert not out["gates"]
+        assert not out["reviews"]
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +182,8 @@ class TestGetHitlReview(_AuthContext):
         out = await get_hitl_review(run_id=str(run.id), review_id="hitl_review_a_b")
 
         assert out["run_status"] == "awaiting_human"
-        assert out["gate_fired"] is True
-        config = out["gate_config"]
+        assert out["review_fired"] is True
+        config = out["review_config"]
         assert config["human_only"] is True
         assert config["label"] == "Approve Review"
         assert config["claim_expiry_minutes"] == 60
@@ -212,7 +212,7 @@ class TestGetHitlReview(_AuthContext):
 
         out = await get_hitl_review(run_id=str(run.id), review_id="missing")
 
-        assert out == {"error": "gate_not_found", "run_id": str(run.id), "review_id": "missing"}
+        assert out == {"error": "review_not_found", "run_id": str(run.id), "review_id": "missing"}
         mock_resolve_config.assert_not_awaited()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -275,8 +275,8 @@ class TestGetPipelineGates(_AuthContext):
         out = await get_pipeline_reviews(pipeline_id=str(pid))
 
         assert out["pipeline_id"] == str(pid)
-        assert not out["gates"]
-        assert out["gate_count"] == 0
+        assert not out["reviews"]
+        assert out["review_count"] == 0
         assert mock_graph.await_args.args[1] == pid
 
     @patch("modulo.db.crud.pipeline.get_pipeline_graph", new_callable=AsyncMock)
@@ -303,12 +303,12 @@ class TestGetPipelineGates(_AuthContext):
 
         out = await get_pipeline_reviews(pipeline_id=str(pid))
 
-        edge_gate = out["gates"][0]
-        assert edge_gate["source_node_id"] == str(gated.source_node_id)
-        assert edge_gate["target_node_id"] == str(gated.target_node_id)
-        assert edge_gate["edge_type"] == "normal"
-        assert edge_gate["hitl_review_config"] == config
-        assert out["gate_count"] == 1
+        edge_review = out["reviews"][0]
+        assert edge_review["source_node_id"] == str(gated.source_node_id)
+        assert edge_review["target_node_id"] == str(gated.target_node_id)
+        assert edge_review["edge_type"] == "normal"
+        assert edge_review["hitl_review_config"] == config
+        assert out["review_count"] == 1
 
     @patch("modulo.db.crud.pipeline.get_pipeline_graph", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._pipeline_owner_team_id", new_callable=AsyncMock)
@@ -500,8 +500,8 @@ class TestHitlInspectionBranches(_AuthContext):
 
         out = await get_hitl_review(run_id=str(run.id), review_id="hitl_review_a_b")
 
-        assert out["gate_config"] is None
-        assert out["gate_fired"] is True
+        assert out["review_config"] is None
+        assert out["review_fired"] is True
 
     @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

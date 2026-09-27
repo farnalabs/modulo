@@ -655,7 +655,7 @@ class TestListPendingHitlTeamScope(_AuthContext):
             result = await list_pending_hitl()
 
         assert result["total"] == 0
-        assert not result["gates"]
+        assert not result["reviews"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_pending_hitl_org_wide_key_no_team_filter(self, mock_validate_auth: AsyncMock) -> None:

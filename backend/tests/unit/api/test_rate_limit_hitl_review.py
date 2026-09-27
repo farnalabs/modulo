@@ -229,7 +229,7 @@ class TestHitlReviewRateLimit:
         app = FastAPI()
         app.add_api_route(
             "/api/v1/runs/run-123/hitl/gate-abc/pending",
-            lambda: {"gates": []},
+            lambda: {"reviews": []},
             methods=["GET"],
             include_in_schema=False,
         )
