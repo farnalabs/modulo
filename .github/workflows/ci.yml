@@ -1036,23 +1036,62 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           # A green CI run entered the merge queue, and then a THIRD-PARTY PR's
           # merge (or a review event) advanced main and cancelled this PR's
           # now-stale queue run. That cancellation surfaces as
           # (failure() || cancelled()) here and dispatches a Branch Fixer run
           # even though nothing is broken and the queue is already re-running
-          # this branch. If a merge-queue run for this branch is still in
-          # flight, the queue owns the outcome — do not dispatch a competing
-          # fixer run.
-          IN_FLIGHT=$(gh api \
-            "/repos/${{ github.repository }}/actions/runs?event=workflow_dispatch&status=in_progress&per_page=50" \
-            --jq "[.workflow_runs[] | select(.name == \"Merge: Queue\" and .head_branch == \"${BRANCH}\")] | length" \
-            2>/dev/null || echo "0")
-          IN_FLIGHT=${IN_FLIGHT:-0}
+          # this branch. If a merge-queue run for this PR is still in flight,
+          # the queue owns the outcome — do not dispatch a competing fixer run.
+          #
+          # How a queue run is associated with THIS PR (verified against the
+          # Actions API): review-triggered runs carry this PR's head ref AND
+          # head SHA and list the PR in pull_requests[]; check_suite runs on a
+          # PR head carry it too. The schedule/repository_dispatch sweeps run on
+          # main (head_branch 'main', prs []), so they match none of the tests
+          # below. We therefore match on head branch, head SHA, OR the run's
+          # associated PR — never on event, because the queue deliberately
+          # avoids workflow_dispatch (HTTP 422 caching bug) and its real triggers
+          # are pull_request_review / check_suite / schedule /
+          # repository_dispatch. status must include `queued` as well as
+          # `in_progress`: the queue's concurrency group is FIFO
+          # (cancel-in-progress: false), so a fixer racing a still-queued run is
+          # exactly the race this guard must lose.
+          #
+          # Fail CLOSED on any query/parse failure: the old `|| echo 0`
+          # converted an API/jq blip into "no queue run in flight" and re-
+          # dispatched the fixer against a live queue run — silently
+          # reintroducing the bug this guard exists to fix.
+          if ! RUNS_JSON=$(gh api \
+            "/repos/${{ github.repository }}/actions/workflows/merge-queue.yml/runs?per_page=100" \
+            2>/dev/null); then
+            echo "queue_in_flight=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Could not query 'Merge: Queue' runs (GitHub API error) — failing CLOSED and skipping Branch Fixer dispatch to avoid racing the queue."
+            exit 0
+          fi
+          IN_FLIGHT=$(printf '%s' "$RUNS_JSON" | jq \
+            --arg branch "${BRANCH}" \
+            --arg sha "${HEAD_SHA}" \
+            --argjson pr "${PR_NUM:-0}" \
+            '[ .workflow_runs[]
+               | select(.status == "queued" or .status == "in_progress")
+               | select(
+                   .head_branch == $branch
+                   or .head_sha == $sha
+                   or ([.pull_requests[]?.number] | index($pr) != null)
+                 )
+             ] | length' 2>/dev/null) || IN_FLIGHT=""
+          if [ -z "$IN_FLIGHT" ]; then
+            echo "queue_in_flight=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Could not parse 'Merge: Queue' runs (jq failed) — failing CLOSED and skipping Branch Fixer dispatch to avoid racing the queue."
+            exit 0
+          fi
           if [ "$IN_FLIGHT" -gt 0 ]; then
             echo "queue_in_flight=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Merge queue run already in flight for '${BRANCH}' — skipping Branch Fixer dispatch (queue owns the outcome)."
+            echo "::notice::Merge queue run already in flight for PR #${PR_NUM} ('${BRANCH}') — skipping Branch Fixer dispatch (queue owns the outcome)."
           else
             echo "queue_in_flight=false" >> "$GITHUB_OUTPUT"
           fi
