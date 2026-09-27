@@ -50,7 +50,7 @@
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
           :node-types="nodeTypes"
-          :default-edge-options="{ type: 'smoothstep', animated: true, style: { stroke: '#888', strokeWidth: 2 } }"
+          :default-edge-options="{ type: 'smoothstep', animated: true, style: { stroke: CANVAS_EDGE_STROKE, strokeWidth: 2 } }"
           fit-view-on-init
           @drop="onDrop"
           @dragover="onDragOver"
@@ -156,6 +156,7 @@ import VersionHistoryDropdown from './VersionHistoryDropdown.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
 import { computeLifecycleMapLayout } from '../../../stores/lifecycleMaps'
+import { CANVAS_EDGE_STROKE } from '../../../constants/canvas'
 import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
 import Button from 'primevue/button'
 

@@ -2276,7 +2276,7 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     expect(llmEdge.data.routing_label).toBe('go')
 
     const normalEdge = vm.convertBackendEdge({ id: 'e3', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal' }, 2)
-    expect(normalEdge.style.stroke).toBe('#888')
+    expect(normalEdge.style.stroke).toBe('hsl(var(--muted-foreground)/0.6)')
     expect(normalEdge.animated).toBe(false)
     wrapper.unmount()
   })
