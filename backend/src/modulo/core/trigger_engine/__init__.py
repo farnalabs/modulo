@@ -1651,6 +1651,13 @@ class TriggerEngine:
             raw_payload=delivery.raw_payload,
             org_id=delivery.org_id,
         )
+        # A delivery that reached run creation counts as this trigger having
+        # fired — stamp ``last_fired_at`` so the trigger list/UI (and the
+        # staging webhook e2e journey) reflects the real delivery time, the
+        # same way cron/polling stamp it on run creation. Coalesced,
+        # backpressured and refused deliveries return/raise earlier and
+        # correctly leave the stamp alone.
+        delivery.trigger.last_fired_at = datetime.now(UTC)
         return run, trigger_event
 
 
