@@ -62,7 +62,7 @@
           </table>
         </div>
 
-        <div v-if="deleteConfirmId" data-testid="paramschema-delete-confirm" class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
+        <div v-if="deleteConfirmId" class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
           <p class="text-sm font-medium text-destructive">
             {{ $t('views.ParameterSchemasView.delete_confirm', { name: deleteConfirmName }) }}
           </p>
@@ -519,7 +519,7 @@
             </div>
           </div>
 
-          <div v-if="deleteSetConfirmId" data-testid="paramschema-delete-set-confirm" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
+          <div v-if="deleteSetConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
             <p class="text-sm font-medium text-destructive">
               {{ $t('views.ParameterSchemasView.delete_set_confirm', { name: deleteSetConfirmName }) }}
             </p>

@@ -1734,9 +1734,6 @@ elements:
       - testid: paramschema-delete
         type: button
         dynamic_testid: false
-      - testid: paramschema-delete-confirm
-        type: element
-        dynamic_testid: false
       - testid: paramschema-back
         type: button
         dynamic_testid: false
@@ -1763,9 +1760,6 @@ elements:
         dynamic_testid: false
       - testid: paramschema-delete-set
         type: button
-        dynamic_testid: false
-      - testid: paramschema-delete-set-confirm
-        type: element
         dynamic_testid: false
       - testid: paramschema-set-name
         type: input
