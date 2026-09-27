@@ -749,6 +749,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > "PRD to Tickets (imported)". Removed the five scenarios from
 > `PINNED_AWAITING_IMPLEMENTATION`; `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-27):** completed the reverse testid-coverage
+> guard (`OWNED_PAGES` in `test_product_map_consistency.py`) across every
+> manifest route. `/admin/trigger-events` — the FAR-1255 org-wide trigger event
+> log page shipped 2026-09-26 — was the last route not mapped to its owning
+> view (`SettingsTriggerEventLogView.vue`); its six documented elements
+> (`settings-trigger-event-log-*`) were registered but unguarded, so a newly
+> shipped testid on the page could silently stay invisible to Assistant's docs
+> indexer / `/api/v1/manifest`. It is now mapped and the guard covers 100% of
+> manifest routes. Reconciled `feat-org`'s stale "org settings UI not yet
+> built" Known Gap (`docs/product-map/admin/org.md`): the `/admin/org` UI ships
+> and its surface is manifest-documented, so the remaining gap is re-scoped to
+> the `@awaiting-implementation` UI-journey BDD scenarios and the manifest
+> `feat-org` registry gained the shipped UI behaviour + scoped deferral.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
