@@ -12,6 +12,12 @@ import { createErrorTracker } from './lib/error-tracking'
 import { loadMonitorConfig, loadBackends } from './monitor'
 import { VueQueryPlugin } from '@tanstack/vue-query'
 import { onAuthChange } from './lib/api/client'
+// Self-hosted fonts (FAR-1253): Modulo is self-hosted only, so the SPA must
+// never call a third-party font CDN. These bundle Inter and JetBrains Mono as
+// same-origin woff2 assets (font families 'Inter Variable' /
+// 'JetBrains Mono Variable'), which load under the CSP's `font-src 'self'`.
+import '@fontsource-variable/inter'
+import '@fontsource-variable/jetbrains-mono'
 import './style.css'
 import 'overlayscrollbars/styles/overlayscrollbars.css'
 
