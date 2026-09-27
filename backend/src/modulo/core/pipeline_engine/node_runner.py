@@ -1105,7 +1105,8 @@ async def _read_log_tail_via_provider(sandbox_id: str | None, *, max_bytes: int 
     """FAR-1050 R1 flag-ON path: read the E2B log tail via ``read_log_tail``.
 
     Gated sibling of :func:`_fetch_sandbox_log_tail` (``MODULO_E2B_VIA_PROVIDER``,
-    default OFF). Resolves the key with the SAME fallback chain as the legacy
+    ON by default since R5; ``=false`` reverts to the legacy probe). Resolves
+    the key with the SAME fallback chain as the legacy
     probe (runtime bridge / ``MODULO_E2B_API_KEY``, then legacy
     ``E2B_API_KEY``) so flipping the flag never changes which credential is
     used; empty on no key. Never raises — provider build failure, provider
@@ -1156,9 +1157,10 @@ async def _apply_isolation_via_provider(
     """FAR-1050 R3 flag-ON path: enforce the sandbox policy via ``apply_isolation``.
 
     Gated sibling of the engine-side ``apply_sandbox_policy(sandbox, ...)``
-    invocation (``MODULO_E2B_VIA_PROVIDER``, default OFF — with the flag OFF
-    this helper is unreachable and the legacy invocation is byte-for-byte
-    unchanged). Key resolution mirrors the legacy enforcement gate (runtime
+    invocation (``MODULO_E2B_VIA_PROVIDER``, ON by default since R5 — set it
+    ``false`` to revert, at which point this helper is unreachable and the
+    legacy invocation is byte-for-byte unchanged). Key resolution mirrors the
+    legacy enforcement gate (runtime
     bridge / ``MODULO_E2B_API_KEY``, then legacy ``E2B_API_KEY``).
 
     Failure semantics at this invocation point:
@@ -1227,8 +1229,9 @@ def _file_io_via_provider_enabled() -> bool:
     fail-open shell the dispatch already uses for its other settings
     reads (the idempotency / connector killswitches): an unreadable flag
     resolves to the flag-OFF value, i.e. the legacy direct path. A settings
-    outage must never be able to kill a dispatch, and the flag's default
-    is OFF anyway, so fail-open and fail-default agree here.
+    outage must never be able to kill a dispatch. Since R5 the flag's product
+    default is ON, so fail-open deliberately diverges from the default and
+    lands on the legacy path.
     """
     try:
         return bool(get_settings().modulo_e2b_via_provider)
@@ -1362,9 +1365,10 @@ async def _list_fs_entries_via_provider(
 # FAR-1050 R4 — the dispatch rewire (create / stream / kill)
 # ---------------------------------------------------------------------------
 #
-# The R4 gate shape mirrors R1/R2b/R3 (``MODULO_E2B_VIA_PROVIDER``, default
-# OFF): with the flag OFF every branch below is unreachable and the legacy
-# direct path stays byte-for-byte unchanged. Unlike the file/log/isolation
+# The R4 gate shape mirrors R1/R2b/R3 (``MODULO_E2B_VIA_PROVIDER``; ON by
+# default since R5, ``false`` reverts): with the flag OFF every branch below
+# is unreachable and the legacy direct path stays byte-for-byte unchanged.
+# Unlike the file/log/isolation
 # sites, create-stream-kill are ONE atomic sequence — a settings flip between
 # create and kill would strand a sandbox (provider-created, legacy-killed, or
 # vice versa) — so the dispatch reads the flag ONCE per dispatch and threads
@@ -1376,8 +1380,9 @@ def _dispatch_via_provider_enabled() -> bool:
     """Read ``MODULO_E2B_VIA_PROVIDER`` at the R4 dispatch seam (FAR-1050).
 
     Fail-open shell identical to :func:`_file_io_via_provider_enabled`: an
-    unreadable settings store resolves to the flag's default (OFF = the
-    legacy direct path), so a settings outage can never take a dispatch down.
+    unreadable settings store deliberately resolves to OFF — the legacy direct
+    path — even though OFF is the revert value, not the R5 product default, so
+    a settings outage can never take a dispatch down.
     """
     try:
         return bool(get_settings().modulo_e2b_via_provider)
