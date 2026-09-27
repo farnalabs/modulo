@@ -62,7 +62,6 @@ class Evidence(Base, TimestampMixin):
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
 
     key: Mapped[str] = mapped_column(Text(), nullable=False)

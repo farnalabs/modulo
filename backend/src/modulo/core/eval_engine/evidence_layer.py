@@ -2,14 +2,14 @@
 
 This module provides three capabilities for the generic Evidence layer:
 
-- **Subject-scoped fetch** (§5/§6): ``fetch()`` queries the evidence table
+- **Subject-scoped fetch** (§6): ``fetch()`` queries the evidence table
   for the most recent row per distinct key for a given subject, scoped by
   organisation.  Uses ``DISTINCT ON`` for cross-key snapshot consistency.
-- **Producer write-authorisation** (§6): ``assert_write_authorisation()``
+- **Producer write-authorisation** (§5): ``assert_write_authorisation()``
   enforces key-namespace ownership via the ``KEY_NAMESPACE_OWNERSHIP`` map.
   The CHECK constraint on ``producer_type`` (§3.1) is authoritative for the
   valid producer-type vocabulary; this map is application-level only.
-- **RunEvidence fold-in mapping** (§7): ``map_run_evidence_to_evidence()``
+- **RunEvidence fold-in mapping** (§3.2): ``map_run_evidence_to_evidence()``
   translates existing ``RunEvidence`` tri-state rows into the generic
   Evidence format.
 
@@ -57,7 +57,7 @@ def assert_write_authorisation(producer_type: str, key: str) -> None:
     The CHECK constraint on ``evidence.producer_type`` (§3.1) is
     authoritative for the valid producer-type vocabulary.  This
     application-level map enforces key-prefix ownership within that
-    vocabulary.  **Known residual** (§6.4): a DB-level second layer is
+    vocabulary.      **Known residual** (§5.4): a DB-level second layer is
     accepted as unnecessary for this slice because the key-prefix
     vocabulary grows across chunks.
     """
@@ -120,7 +120,7 @@ async def fetch(
 
 
 # ---------------------------------------------------------------------------
-# §7 — RunEvidence fold-in mapping
+# §3.2 — RunEvidence fold-in mapping
 # ---------------------------------------------------------------------------
 
 
