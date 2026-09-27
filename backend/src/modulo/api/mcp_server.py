@@ -4172,11 +4172,11 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
         # precedence the REST pending endpoints use) while the session is
         # open. Context comes from the claim row itself.
         from modulo.db.crud.hitl_review_config import (
-            resolve_gate_descriptions,
             resolve_gate_human_only_map,
+            resolve_review_descriptions,
         )
 
-        description_by_gate = await resolve_gate_descriptions(s, gates=gates, org_id=org_id)
+        description_by_gate = await resolve_review_descriptions(s, gates=gates, org_id=org_id)
         # FAR-609/610: tell the agent client which pending gates REQUIRE a
         # browser human — human_only gates cannot be claimed or decided through
         # MCP. Resolved via the shared batched flag map (claim-stamped config
@@ -9204,16 +9204,16 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
             # (context-first, snapshot fallback — the context IS the fire-time
             # truth): the shared helper in ``hitl_review_config`` is the SAME
             # rule the REST pending endpoints apply via
-            # ``resolve_gate_descriptions``, so every surface renders one
+            # ``resolve_review_descriptions``, so every surface renders one
             # description for the same gate. The snapshot-config fallback
             # read runs only when the capture carries no usable description
             # (gates that fired before capture existed).
             context = gate.context_json if isinstance(gate.context_json, dict) else None
-            from modulo.db.crud.hitl_review_config import resolve_gate_description, resolve_hitl_review_config
+            from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_description
 
-            description = resolve_gate_description(context, None)
+            description = resolve_review_description(context, None)
             if description is None:
-                description = resolve_gate_description(
+                description = resolve_review_description(
                     None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id)
                 )
     if gate is None:

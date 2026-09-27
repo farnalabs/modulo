@@ -231,7 +231,7 @@ def _call_list_pending_hitl(request, *, gate_config: dict | None = None, review_
             return_value=([claim], 1),
         ),
         patch(
-            "modulo.db.crud.hitl_review_config.resolve_gate_descriptions",
+            "modulo.db.crud.hitl_review_config.resolve_review_descriptions",
             new_callable=AsyncMock,
             return_value={(run_id, review_id): "Approve the pre-deploy gate"},
         ),

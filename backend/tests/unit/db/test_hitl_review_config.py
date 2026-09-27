@@ -22,11 +22,11 @@ from modulo.db.crud.hitl_review_config import (
     make_review_id,
     normalize_gate_description,
     parse_hitl_review_id,
-    resolve_gate_description,
-    resolve_gate_descriptions,
     resolve_gate_human_only_map,
     resolve_hitl_review_config,
-    snapshot_gate_config_map,
+    resolve_review_description,
+    resolve_review_descriptions,
+    snapshot_review_config_map,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -582,7 +582,7 @@ class TestSnapshotGateConfigMap:
             "nodes": [],
             "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": config}],
         }
-        assert snapshot_gate_config_map(graph) == {_review_id(): config}
+        assert snapshot_review_config_map(graph) == {_review_id(): config}
 
     def test_covers_node_gate_shape_over_outgoing_edges(self) -> None:
         config = {"description": "Human confirms the resolution."}
@@ -590,7 +590,7 @@ class TestSnapshotGateConfigMap:
             "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": config}],
             "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID)}],
         }
-        assert snapshot_gate_config_map(graph) == {_review_id(): config}
+        assert snapshot_review_config_map(graph) == {_review_id(): config}
 
     def test_node_gate_does_not_shadow_a_matching_edge_gate(self) -> None:
         edge_config = {"description": "Edge-level description wins."}
@@ -599,14 +599,14 @@ class TestSnapshotGateConfigMap:
             "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": node_config}],
             "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": edge_config}],
         }
-        assert snapshot_gate_config_map(graph) == {_review_id(): edge_config}
+        assert snapshot_review_config_map(graph) == {_review_id(): edge_config}
 
     def test_inert_hitl_config_on_non_hitl_node_ignored(self) -> None:
         graph = {
             "nodes": [{"id": str(_SOURCE_ID), "node_type": "agent", "hitl_config": {"description": "inert"}}],
             "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID)}],
         }
-        assert not snapshot_gate_config_map(graph)
+        assert not snapshot_review_config_map(graph)
 
 
 class TestNormalizeGateDescription:
@@ -629,21 +629,21 @@ class TestResolveGateDescriptionPrecedence:
     def test_captured_context_description_wins(self) -> None:
         context = {"description": "Fire-time captured briefing."}
         config = {"description": "Snapshot config description."}
-        assert resolve_gate_description(context, config) == "Fire-time captured briefing."
+        assert resolve_review_description(context, config) == "Fire-time captured briefing."
 
     def test_snapshot_config_is_the_fallback(self) -> None:
         config = {"description": "Snapshot config description."}
-        assert resolve_gate_description(None, config) == "Snapshot config description."
-        assert resolve_gate_description({}, config) == "Snapshot config description."
-        assert resolve_gate_description({"description": "   "}, config) == "Snapshot config description."
+        assert resolve_review_description(None, config) == "Snapshot config description."
+        assert resolve_review_description({}, config) == "Snapshot config description."
+        assert resolve_review_description({"description": "   "}, config) == "Snapshot config description."
 
     def test_unusable_on_both_surfaces_maps_none(self) -> None:
-        assert resolve_gate_description(None, None) is None
-        assert resolve_gate_description(None, {"label": "no description"}) is None
-        assert resolve_gate_description({"condition": "x"}, None) is None
+        assert resolve_review_description(None, None) is None
+        assert resolve_review_description(None, {"label": "no description"}) is None
+        assert resolve_review_description({"condition": "x"}, None) is None
 
     def test_context_description_is_normalised(self) -> None:
-        assert resolve_gate_description({"description": "  padded.  "}, None) == "padded."
+        assert resolve_review_description({"description": "  padded.  "}, None) == "padded."
 
 
 class TestResolveGateDescriptions:
@@ -694,7 +694,7 @@ class TestResolveGateDescriptions:
             snapshot_rows=[(_SNAPSHOT_ID, graph)],
         )
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, edge_review_id): "Edge gate why."}
 
@@ -716,7 +716,7 @@ class TestResolveGateDescriptions:
         }
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): "Captured at fire time."}
 
@@ -740,10 +740,10 @@ class TestResolveGateDescriptions:
         import unittest.mock
 
         with unittest.mock.patch(
-            "modulo.db.crud.hitl_review_config.snapshot_gate_config_map",
-            side_effect=snapshot_gate_config_map,
+            "modulo.db.crud.hitl_review_config.snapshot_review_config_map",
+            side_effect=snapshot_review_config_map,
         ) as map_mock:
-            result = await resolve_gate_descriptions(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
+            result = await resolve_review_descriptions(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
 
         assert map_mock.call_count == 1
         assert result == {
@@ -755,7 +755,7 @@ class TestResolveGateDescriptions:
         gate = self._gate(_RUN_ID, _review_id())
         session = self._make_batched_session(run_rows=[(_RUN_ID, None)], snapshot_rows=[])
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): None}
 
@@ -769,14 +769,14 @@ class TestResolveGateDescriptions:
         }
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 
-        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[gate], org_id=_ORG_ID)
 
         assert result == {(_RUN_ID, gate.review_id): None}
 
     async def test_empty_gates_short_circuits_without_queries(self) -> None:
         session = self._make_batched_session(run_rows=[], snapshot_rows=[])
 
-        result = await resolve_gate_descriptions(session, gates=[], org_id=_ORG_ID)
+        result = await resolve_review_descriptions(session, gates=[], org_id=_ORG_ID)
 
         assert result == {}
         assert session.execute.await_count == 0
@@ -876,8 +876,8 @@ class TestResolveGateHumanOnlyMap:
         import unittest.mock
 
         with unittest.mock.patch(
-            "modulo.db.crud.hitl_review_config.snapshot_gate_config_map",
-            side_effect=snapshot_gate_config_map,
+            "modulo.db.crud.hitl_review_config.snapshot_review_config_map",
+            side_effect=snapshot_review_config_map,
         ) as map_mock:
             result = await resolve_gate_human_only_map(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
 

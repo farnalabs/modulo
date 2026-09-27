@@ -426,7 +426,7 @@ def test_list_org_pending_gates_resolves_pipeline_names(client: tuple[TestClient
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gates = resp.json()["gates"]
+    gates = resp.json()["reviews"]
     assert len(gates) == 1
     assert gates[0]["pipeline_name"] == pipeline_name
 
@@ -439,7 +439,7 @@ def test_list_org_pending_gates_no_gates_skips_pipeline_query(client: tuple[Test
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    assert not resp.json()["gates"]
+    assert not resp.json()["reviews"]
 
 
 def test_list_org_pending_gates_requests_include_claimed(
@@ -460,7 +460,7 @@ def test_list_org_pending_gates_requests_include_claimed(
     list_pending.assert_awaited_once()
     assert list_pending.await_args.args[1] == _ORG_ID
     assert list_pending.await_args.kwargs["include_claimed"] is True
-    gates = resp.json()["gates"]
+    gates = resp.json()["reviews"]
     assert len(gates) == 2
     claimed_rows = [g for g in gates if g["claimed_by"] is not None]
     assert len(claimed_rows) == 1
@@ -524,7 +524,7 @@ def test_list_org_pending_gates_resolves_gate_labels(
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gates = resp.json()["gates"]
+    gates = resp.json()["reviews"]
     assert len(gates) == 2
     assert gates[0]["review_id"] == "hitl_review_planner_deploy"
     assert gates[0]["label"] == "Deploy gate"
@@ -577,12 +577,12 @@ def test_list_org_pending_gates_resolves_claimant_names(
             "modulo.api.routes.hitl.HITLManager.list_pending",
             new=AsyncMock(return_value=[mine, theirs, ghost]),
         ),
-        patch("modulo.api.routes.hitl.resolve_gate_descriptions", new=AsyncMock(return_value={})),
+        patch("modulo.api.routes.hitl.resolve_review_descriptions", new=AsyncMock(return_value={})),
     ):
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gates = resp.json()["gates"]
+    gates = resp.json()["reviews"]
     assert len(gates) == 3
     own = next(g for g in gates if g["review_id"] == "gate-1")
     foreign = next(g for g in gates if g["review_id"] == "gate-2")
@@ -667,7 +667,7 @@ def test_list_run_pending_gates_carries_description_and_context(client: tuple[Te
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gate_payload = resp.json()["gates"][0]
+    gate_payload = resp.json()["reviews"][0]
     assert gate_payload["description"] == "Why this gate needs a human decision."
     assert gate_payload["context"] == context
 
@@ -708,7 +708,7 @@ def test_list_run_pending_gates_prefers_the_captured_description(client: tuple[T
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gate_payload = resp.json()["gates"][0]
+    gate_payload = resp.json()["reviews"][0]
     assert gate_payload["description"] == "Captured fire-time briefing."
 
 
@@ -720,7 +720,7 @@ def test_list_run_pending_gates_resolves_context_description_without_a_snapshot(
     inside the snapshot branch never ran and the captured briefing was muted
     behind the no-description fallback. The empty-map fallback now resolves
     from the claim row ALONE (context-first, no snapshot fallback) — the same
-    behaviour the org-level ``resolve_gate_descriptions`` resolver applies."""
+    behaviour the org-level ``resolve_review_descriptions`` resolver applies."""
     http, session = client
     context = {
         "trigger": "condition",
@@ -748,7 +748,7 @@ def test_list_run_pending_gates_resolves_context_description_without_a_snapshot(
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gate_payload = resp.json()["gates"][0]
+    gate_payload = resp.json()["reviews"][0]
     assert gate_payload["description"] == "Captured fire-time briefing without a snapshot."
 
 
@@ -778,7 +778,7 @@ def test_list_org_pending_gates_carries_description_and_context(client: tuple[Te
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gate_payload = resp.json()["gates"][0]
+    gate_payload = resp.json()["reviews"][0]
     assert gate_payload["pipeline_name"] == "Reviewer Pipeline"
     assert gate_payload["description"] == "Org-level briefing."
     assert gate_payload["context"] == {"trigger": "node", "reason": "two failures"}
@@ -787,7 +787,7 @@ def test_list_org_pending_gates_carries_description_and_context(client: tuple[Te
 def test_list_org_pending_gates_prefers_the_captured_description(client: tuple[TestClient, AsyncMock]) -> None:
     """FAR-688: context-first precedence at the org-level endpoint — the
     fire-time captured description wins over the snapshot config's
-    description, via the same ``resolve_gate_descriptions`` helper the
+    description, via the same ``resolve_review_descriptions`` helper the
     MCP ``list_pending_hitl`` surface applies."""
     http, session = client
     context = {
@@ -819,7 +819,7 @@ def test_list_org_pending_gates_prefers_the_captured_description(client: tuple[T
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gate_payload = resp.json()["gates"][0]
+    gate_payload = resp.json()["reviews"][0]
     assert gate_payload["description"] == "Captured org briefing."
 
 
@@ -863,7 +863,7 @@ def test_list_run_pending_gates_resolves_claimant_names(
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gates = resp.json()["gates"]
+    gates = resp.json()["reviews"]
     assert len(gates) == 2
     own = next(g for g in gates if g["review_id"] == "hitl_review_src-1_tgt-2")
     foreign = next(g for g in gates if g["review_id"] == "hitl_review_src-3_tgt-4")
@@ -899,13 +899,13 @@ def test_pending_gate_without_context_or_description_renders_null_fields(client:
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    gate_payload = resp.json()["gates"][0]
+    gate_payload = resp.json()["reviews"][0]
     assert gate_payload["description"] is None
     assert gate_payload["context"] is None
 
 
 # ---------------------------------------------------------------------------
-# GET /hitl/gates — paginated org gate listing incl. decided gates (FAR-692)
+# GET /hitl/reviews — paginated org gate listing incl. decided gates (FAR-692)
 # ---------------------------------------------------------------------------
 
 
@@ -919,7 +919,7 @@ def _decided_gate(*, decision: str = "approved", account_id: uuid.UUID | None = 
 
 
 def _capture_gates_execute(session: AsyncMock, *, gates: list[MagicMock], total: int | None = None) -> list[object]:
-    """Wire session.execute to a statement-shape dispatch for /hitl/gates.
+    """Wire session.execute to a statement-shape dispatch for /hitl/reviews.
 
     The endpoint issues a count() over hitl_claims, then (when total > 0) the
     page query, plus pipeline / run / snapshot / account enrichment selects
@@ -976,7 +976,7 @@ def test_list_org_gates_default_status_is_undecided(client: tuple[TestClient, As
     http, session = client
     captured = _capture_gates_execute(session, gates=[_org_gate()])
 
-    resp = http.get("/api/v1/hitl/gates")
+    resp = http.get("/api/v1/hitl/reviews")
 
     assert resp.status_code == 200, resp.text
     where = " ".join(_where_sql(s) for s in captured)
@@ -1015,7 +1015,7 @@ def test_list_org_gates_status_filter_compiles_the_right_where(
     # total > 0 so the endpoint actually issues the page query to inspect.
     captured = _capture_gates_execute(session, gates=[], total=1)
 
-    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+    resp = http.get(f"/api/v1/hitl/reviews?status={status_param}")
 
     assert resp.status_code == 200, resp.text
     page_stmts = _page_statements(captured)
@@ -1037,7 +1037,7 @@ def test_list_org_gates_pending_work_statuses_join_and_fence_to_actionable_runs(
     # total > 0 so the endpoint actually issues the page query to inspect.
     captured = _capture_gates_execute(session, gates=[], total=1)
 
-    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+    resp = http.get(f"/api/v1/hitl/reviews?status={status_param}")
 
     assert resp.status_code == 200, resp.text
     page_stmts = _page_statements(captured)
@@ -1062,7 +1062,7 @@ def test_list_org_gates_history_statuses_are_not_run_fenced(
     http, session = client
     captured = _capture_gates_execute(session, gates=[], total=1)
 
-    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+    resp = http.get(f"/api/v1/hitl/reviews?status={status_param}")
 
     assert resp.status_code == 200, resp.text
     page_stmts = _page_statements(captured)
@@ -1081,7 +1081,7 @@ def test_list_org_gates_status_all_skips_the_decision_filter(client: tuple[TestC
     http, session = client
     captured = _capture_gates_execute(session, gates=[_org_gate()])
 
-    resp = http.get("/api/v1/hitl/gates?status=all")
+    resp = http.get("/api/v1/hitl/reviews?status=all")
 
     assert resp.status_code == 200, resp.text
     page_stmts = _page_statements(captured)
@@ -1095,7 +1095,7 @@ def test_list_org_gates_invalid_status_returns_422(client: tuple[TestClient, Asy
     check in the handler."""
     http, _session = client
 
-    resp = http.get("/api/v1/hitl/gates?status=bogus")
+    resp = http.get("/api/v1/hitl/reviews?status=bogus")
 
     assert resp.status_code == 422, resp.text
 
@@ -1104,7 +1104,7 @@ def test_list_org_gates_pagination_respected(client: tuple[TestClient, AsyncMock
     http, session = client
     captured = _capture_gates_execute(session, gates=[_org_gate()], total=42)
 
-    resp = http.get("/api/v1/hitl/gates?page=3&page_size=10")
+    resp = http.get("/api/v1/hitl/reviews?page=3&page_size=10")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1126,7 +1126,7 @@ def test_list_org_gates_page_size_clamped_at_100(client: tuple[TestClient, Async
     http, session = client
     captured = _capture_gates_execute(session, gates=[_org_gate()])
 
-    resp = http.get("/api/v1/hitl/gates?page_size=500")
+    resp = http.get("/api/v1/hitl/reviews?page_size=500")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1139,7 +1139,7 @@ def test_list_org_gates_zero_total_skips_the_page_query(client: tuple[TestClient
     http, session = client
     captured = _capture_gates_execute(session, gates=[], total=0)
 
-    resp = http.get("/api/v1/hitl/gates")
+    resp = http.get("/api/v1/hitl/reviews")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1149,7 +1149,7 @@ def test_list_org_gates_zero_total_skips_the_page_query(client: tuple[TestClient
 
 
 def test_list_org_gates_decided_gates_carry_label_claimant_and_me(client: tuple[TestClient, AsyncMock]) -> None:
-    """A decided gate renders through the same GateResponse contract as the
+    """A decided gate renders through the same ReviewResponse contract as the
     pending queue: snapshot label (FAR-686), claimant display name + the
     caller-owns stamp (FAR-691), decision + decision_at."""
     http, session = client
@@ -1194,8 +1194,8 @@ def test_list_org_gates_decided_gates_carry_label_claimant_and_me(client: tuple[
 
     session.execute = AsyncMock(side_effect=_execute)
 
-    with patch("modulo.api.routes.hitl.resolve_gate_descriptions", new=AsyncMock(return_value={})):
-        resp = http.get("/api/v1/hitl/gates?status=approved")
+    with patch("modulo.api.routes.hitl.resolve_review_descriptions", new=AsyncMock(return_value={})):
+        resp = http.get("/api/v1/hitl/reviews?status=approved")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1213,7 +1213,7 @@ def test_list_org_gates_decided_gates_carry_label_claimant_and_me(client: tuple[
 def test_list_org_gates_error_mapping(client: tuple[TestClient, AsyncMock], exc: Exception, expected: int) -> None:
     http, session = client
     session.execute = AsyncMock(side_effect=exc)
-    resp = http.get("/api/v1/hitl/gates")
+    resp = http.get("/api/v1/hitl/reviews")
 
     assert resp.status_code == expected, resp.text
 

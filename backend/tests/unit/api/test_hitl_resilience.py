@@ -431,9 +431,9 @@ class TestListOrgPendingGatesSQLAlchemyError:
         assert resp.status_code == 503
 
 
-class TestGateResponseLabel:
-    def test_gate_to_response_passes_label_through(self) -> None:
-        from modulo.api.routes.hitl import _gate_to_response
+class TestReviewResponseLabel:
+    def test_review_to_response_passes_label_through(self) -> None:
+        from modulo.api.routes.hitl import _review_to_response
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
@@ -445,13 +445,13 @@ class TestGateResponseLabel:
         claim.decision = None
         claim.decision_at = None
 
-        resp = _gate_to_response(claim, pipeline_name="My Pipeline", label="Deploy gate")
+        resp = _review_to_response(claim, pipeline_name="My Pipeline", label="Deploy gate")
 
         assert resp.review_id == "hitl_review_planner_deploy"
         assert resp.label == "Deploy gate"
 
-    def test_gate_to_response_label_defaults_to_none(self) -> None:
-        from modulo.api.routes.hitl import _gate_to_response
+    def test_review_to_response_label_defaults_to_none(self) -> None:
+        from modulo.api.routes.hitl import _review_to_response
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
@@ -463,12 +463,12 @@ class TestGateResponseLabel:
         claim.decision = None
         claim.decision_at = None
 
-        resp = _gate_to_response(claim)
+        resp = _review_to_response(claim)
 
         assert resp.label is None
 
-    def test_build_gate_label_map_from_snapshot_edges(self) -> None:
-        from modulo.api.routes.hitl import _build_gate_label_map
+    def test_build_review_label_map_from_snapshot_edges(self) -> None:
+        from modulo.api.routes.hitl import _build_review_label_map
 
         graph = {
             "edges": [
@@ -481,7 +481,7 @@ class TestGateResponseLabel:
             ]
         }
 
-        assert _build_gate_label_map(graph) == {
+        assert _build_review_label_map(graph) == {
             "hitl_review_planner_deploy": "Deploy gate",
             "hitl_review_a_b": "Review gate",
         }
@@ -540,7 +540,7 @@ class TestListRunPendingGatesLabelResolution:
             app.dependency_overrides.clear()
 
         assert resp.status_code == 200
-        gates = resp.json()["gates"]
+        gates = resp.json()["reviews"]
         assert gates[0]["review_id"] == "hitl_review_planner_deploy"
         assert gates[0]["label"] == "Deploy gate"
 
@@ -587,7 +587,7 @@ class TestListRunPendingGatesLabelResolution:
             app.dependency_overrides.clear()
 
         assert resp.status_code == 200
-        assert resp.json()["gates"][0]["label"] is None
+        assert resp.json()["reviews"][0]["label"] is None
 
 
 # ---------------------------------------------------------------------------

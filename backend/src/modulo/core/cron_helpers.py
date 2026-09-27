@@ -4667,7 +4667,7 @@ async def _awaiting_human_has_committed_decision(
     run is currently waiting at:
 
     * A CLAIMED-but-undecided claim row: SKIP unconditionally (FAR-541
-      iteration 4, FIX C). Under ``uq_hitl_claims_run_gate``
+      iteration 4, FIX C). Under ``uq_hitl_claims_run_review``
       (``UNIQUE (run_id, review_id)``) a claimed-UNDECIDED row and a DECIDED
       row for the same gate cannot coexist, so the former "claimed +
       same-gate committed decision" identity match was structurally dead —

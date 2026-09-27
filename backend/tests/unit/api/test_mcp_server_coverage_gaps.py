@@ -2788,7 +2788,7 @@ class TestResourceGaps(_AuthContext):
         """FAR-688: a capture with no usable description falls back to the
         snapshot config's description — the same context-first/snapshot-
         fallback precedence the REST pending surfaces apply via
-        ``resolve_gate_description``."""
+        ``resolve_review_description``."""
         gate = MagicMock()
         gate.pipeline_id = uuid.uuid4()
         gate.decision = None

@@ -50,7 +50,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "gates",
+          "unit": "reviews",
           "custom": {
             "drawStyle": "bars",
             "barAlignment": 0,
