@@ -36,6 +36,7 @@ from modulo.auth.passwords import hash_password, verify_password
 from modulo.core.demo import DEMO_ORG_SLUG
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.lifecycle_map.validation import normalize_content
+from modulo.db.crud import pipeline as pipeline_crud
 from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_run_node_outputs
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -1694,19 +1695,27 @@ async def test_human_review_run_records_the_approval(session: AsyncSession, monk
     assert review_id not in (run.node_token_usage or {})
 
 
-async def test_second_seed_rewrites_no_run_trace(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The node-level trace is deterministic: an unchanged re-seed writes no run_node_outputs."""
+async def test_second_seed_rewrites_no_run_trace(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The node-level trace is deterministic: an unchanged re-seed writes no run_node_outputs.
+
+    The writes are observed by spying on the persistence primitives rather than
+    scraping ``caplog.records``: that buffer covers the whole test phase, so in
+    the full suite a preceding test that leaves the root logger at INFO makes
+    seed 1's creation-time ``demo_seed.run_trace_written`` records land inside
+    this test's capture window (the ``at_level`` block only changes levels, it
+    does not delimit capture). Spying on the writes is immune to logging config.
+    """
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
-        await _run_seed(session, monkeypatch, _demo_settings())
+    trace_writes = AsyncMock(wraps=replace_run_node_outputs)
+    edge_writes = AsyncMock(wraps=pipeline_crud.replace_pipeline_graph)
+    monkeypatch.setattr("modulo.db.crud.run_node_outputs.replace_run_node_outputs", trace_writes)
+    monkeypatch.setattr("modulo.db.crud.pipeline.replace_pipeline_graph", edge_writes)
 
-    rewrites = [r.getMessage() for r in caplog.records if r.getMessage() == "demo_seed.run_trace_written"]
-    edge_rewrites = [r.getMessage() for r in caplog.records if "pipeline_edges" in r.getMessage()]
-    assert not rewrites
-    assert not edge_rewrites
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert trace_writes.await_count == 0
+    assert edge_writes.await_count == 0
 
 
 async def test_seed_creates_the_delivery_lifecycle_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
