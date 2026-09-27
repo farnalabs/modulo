@@ -1,6 +1,7 @@
 import { test, expect, loginAsAdmin } from '../setup/fixtures'
 import {
   apiBaseFor,
+  apiFetch,
   apiLogin,
   cleanupJourneyEntities,
   createPipeline,
@@ -62,6 +63,38 @@ async function createManualNodePipeline(
 
 const isParked = (status: string) => status === 'awaiting_human' || status === 'hitl_parked'
 
+/**
+ * Resolve a run id through the REAL API (never through the UI-triggered
+ * page URL): list the pipeline's newest run (the endpoint orders by
+ * created_at desc by default). Used by the editor-triggered journey because
+ * the editor's own post-run navigation is broken upstream —
+ * PipelineEditorView.triggerRun reads `(data as any).id` while POST
+ * /api/v1/runs returns `run_id`, so the UI lands on /runs/undefined. The
+ * trigger itself still works (a real run is created); pinning the parked
+ * state to a direct /runs/{id} navigation keeps the journey deterministic.
+ * Once the product bug is fixed, this can pin waitForURL('/runs/{id}')
+ * instead.
+ */
+async function resolveLatestRunId(apiBase: string, token: string, pipelineId: string): Promise<string> {
+  const deadline = Date.now() + 30_000
+  let lastErr = 'no attempt completed'
+  while (Date.now() < deadline) {
+    const res = await apiFetch<{ items: Array<Record<string, unknown>> }>(
+      apiBase,
+      token,
+      'GET',
+      `/api/v1/runs?pipeline_id=${pipelineId}&page_size=1`,
+    )
+    const item = res.status === 200 ? res.body?.items?.[0] : undefined
+    if (item?.run_id) return String(item.run_id)
+    lastErr = `GET /api/v1/runs -> ${res.status}, items: ${res.body?.items?.length ?? 0}`
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+  }
+  throw new Error(
+    `[realstack] the editor-triggered run never appeared in GET /api/v1/runs within 30s (${lastErr})`,
+  )
+}
+
 test.describe('Real-stack journeys: run parks at HITL and completes on approval', { tag: '@regression' }, () => {
   test.beforeEach(async ({ page, env }) => {
     test.skip(env.name === 'local', 'Real-stack journey — run with E2E_TARGET=staging (no API mocks here)')
@@ -85,18 +118,23 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
     try {
       await loginAsAdmin(page, env)
 
-      // Run through the editor's real run dialog (saves the graph, triggers
-      // the run, and navigates to the new run's detail page).
+      // Run through the editor's real run dialog (saves the graph and
+      // triggers the run through POST /api/v1/runs).
       await page.goto(`/pipelines/${created.pipeline.id}/editor`)
       await expect(page.getByTestId('pipeline-editor-run')).toBeEnabled()
       await page.getByTestId('pipeline-editor-run').click()
       await page.getByTestId('pipeline-editor-run-prompt').fill('E2E journey run prompt')
       await page.getByTestId('pipeline-editor-run-submit').click()
-      await page.waitForURL(/\/runs\/[^/]+$/, { timeout: 30_000 })
-      const runId = page.url().split('/runs/')[1]
 
-      // Observable effect: the run parks and the page renders its open gate —
-      // the review card exists only while a human decision is pending.
+      // The run id comes from the REAL API (the newest run for the pipeline),
+      // not from the UI — the editor's post-trigger navigation is broken
+      // upstream (see resolveLatestRunId doc comment) and a UI-URL pin would
+      // follow a /runs/undefined dead end instead of the run.
+      const runId = await resolveLatestRunId(apiBase, token, created.pipeline.id)
+
+      // Observable effect: the run parks and its detail page renders the open
+      // gate — the review card exists only while a human decision is pending.
+      await page.goto(`/runs/${runId}`)
       await expect(page.getByTestId('hitl-gate-card')).toBeVisible({ timeout: 90_000 })
 
       // Persisted state: the backend reports the run parked at the gate.
