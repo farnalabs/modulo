@@ -45,12 +45,15 @@ test.describe('Real-stack journeys: eval definition lifecycle', { tag: '@regress
     let deletedThroughUi = false
 
     try {
+      // Precondition: the eval surface is reachable in this plan tier. Probe
+      // BEFORE minting the pipeline: GET /evals is gated by the plan
+      // permission, so a tier that lacks evals would otherwise leave a
+      // pipeline behind that only the finally-cleanup deletes.
+      const precheck = await apiFetch(apiBase, token, 'GET', '/api/v1/evals')
+      test.skip(precheck.status !== 200, `eval surface unavailable on this target (GET /api/v1/evals -> ${precheck.status})`)
+
       const pipeline = await createPipeline(apiBase, token, pipelineName)
       pipelineId = pipeline.id
-
-      // Precondition: the eval surface is reachable in this plan tier.
-      const precheck = await apiFetch(apiBase, token, 'GET', `/api/v1/evals?pipeline_id=${pipeline.id}`)
-      test.skip(precheck.status !== 200, `eval surface unavailable on this target (GET /api/v1/evals -> ${precheck.status})`)
 
       await loginAsAdmin(page, env)
       await page.goto('/evals/editor')

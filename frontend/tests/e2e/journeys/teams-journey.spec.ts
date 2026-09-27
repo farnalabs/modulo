@@ -42,7 +42,7 @@ test.describe('Real-stack journeys: team lifecycle', { tag: '@regression' }, () 
     test.skip(precheck.status !== 200, `team RBAC surface unavailable on this target (GET /api/v1/admin/teams -> ${precheck.status})`)
 
     const name = uniqueName('E2E Journey Team')
-    const memberTeamId = uniqueName('E2E Journey Team Renamed')
+    const renamedName = uniqueName('E2E Journey Team Renamed')
     let teamId: string | null = null
 
     try {
@@ -69,17 +69,17 @@ test.describe('Real-stack journeys: team lifecycle', { tag: '@regression' }, () 
       // Rename through the row's Rename action.
       const card = page.locator('.card').filter({ hasText: name }).first()
       await card.getByRole('button', { name: 'Rename' }).click()
-      await page.getByTestId('settings-teams-rename-name').fill(memberTeamId)
+      await page.getByTestId('settings-teams-rename-name').fill(renamedName)
       await page.getByTestId('settings-teams-rename-save').click()
 
       // The card re-renders with the new name...
-      const renamedCard = page.locator('.card').filter({ hasText: memberTeamId }).first()
+      const renamedCard = page.locator('.card').filter({ hasText: renamedName }).first()
       await expect(renamedCard).toBeVisible({ timeout: 30_000 })
       // ...and the rename persisted through the real backend. The PUT is
       // optimistic-concurrency guarded with expected_updated_at, so a stale
       // payload would never just overwrite.
       const afterRename = await listTeams(apiBase, token)
-      expect(afterRename.items.find((t) => t.id === teamId)?.name).toBe(memberTeamId)
+      expect(afterRename.items.find((t) => t.id === teamId)?.name).toBe(renamedName)
 
       // Delete through the row's Delete action + inline confirmation.
       await renamedCard.getByRole('button', { name: 'Delete' }).click()

@@ -100,9 +100,9 @@ test.describe('Real-stack journeys: parameter schema + set', { tag: '@regression
       // DELETE the set through the real UI seam (the sets list refreshes
       // through the real backend after the confirm).
       await page.getByTestId('paramschema-delete-set').first().click()
-      const setDeleteButton = page.getByRole('button', { name: 'Delete' }).last()
-      await expect(setDeleteButton).toBeVisible()
-      await setDeleteButton.click()
+      const setConfirm = page.getByTestId('paramschema-delete-set-confirm')
+      await expect(setConfirm).toBeVisible()
+      await setConfirm.getByRole('button', { name: 'Delete' }).click()
       await expect.poll(async () => {
         const res = await apiFetch<Array<{ id: string; name: string }>>(
           apiBase,
@@ -118,8 +118,9 @@ test.describe('Real-stack journeys: parameter schema + set', { tag: '@regression
       const schemaRow = page.locator('tr').filter({ hasText: schemaName }).first()
       await expect(schemaRow).toBeVisible({ timeout: 30_000 })
       await schemaRow.getByTestId('paramschema-delete').click()
-      await expect(page.getByRole('button', { name: 'Delete' }).last()).toBeEnabled()
-      await page.getByRole('button', { name: 'Delete' }).last().click()
+      const schemaConfirm = page.getByTestId('paramschema-delete-confirm')
+      await expect(schemaConfirm.getByRole('button', { name: 'Delete' })).toBeEnabled()
+      await schemaConfirm.getByRole('button', { name: 'Delete' }).click()
 
       // Persisted: the schema really dropped out of the backend list.
       const createdId = created?.id ?? null
