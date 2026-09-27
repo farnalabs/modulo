@@ -56,9 +56,15 @@ test.describe('Real-stack journeys: run cancellation', { tag: '@regression' }, (
       await loginAsAdmin(page, env)
       await page.goto('/runs')
 
-      // Operator seam: cancel from the list row.
+      // Operator seam: cancel from the list row. Cancellation is the runs
+      // list's two-step in-row confirm (mirrors rerun): the first click only
+      // arms the control — its label flips from "Stop" to "Confirm?" — and
+      // the second click commits the cancel request. A single click leaves the
+      // run parked at the gate, so the button must be clicked twice.
       const cancelButton = page.getByTestId(`runs-list-cancel-${run.run_id}`)
       await expect(cancelButton).toBeVisible({ timeout: 30_000 })
+      await cancelButton.click()
+      await expect(cancelButton).toContainText(/confirm/i, { timeout: 10_000 })
       await cancelButton.click()
 
       // Persisted: the run really terminalised as cancelled...
