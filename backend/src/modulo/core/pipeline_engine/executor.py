@@ -2367,7 +2367,7 @@ class PipelineExecutor:
                     # FAR-1102 chunk 4: PolicyGate metadata for decision-record
                     # construction.  None when no gate exists (guardrail-typed
                     # Evals or backfill-rejected bindings).
-                    policy_review_id=policy_gate.id if policy_gate is not None else None,
+                    policy_gate_id=policy_gate.id if policy_gate is not None else None,
                     policy_gate_version=policy_gate.version if policy_gate is not None else None,
                     policy_gate_node_id=policy_gate.node_id if policy_gate is not None else None,
                 )

@@ -3066,7 +3066,7 @@ export interface paths {
         put?: never;
         /**
          * Claim Gate
-         * @description Atomically claim a HITL gate. Returns a claim_token for approve/reject.
+         * @description Atomically claim a HITL review. Returns a claim_token for approve/reject.
          *
          *     FAR-609: claim is human_only too — a non-browser credential (API key /
          *     non-browser JWT) cannot CLAIM nor decide a human_only gate, so the same
@@ -3119,7 +3119,7 @@ export interface paths {
         put?: never;
         /**
          * Approve Gate With Modification
-         * @description Approve a HITL gate with a modified output payload.
+         * @description Approve a HITL review with a modified output payload.
          *
          *     The human reviewer's modified output replaces the agent's original output
          *     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
@@ -3163,7 +3163,7 @@ export interface paths {
         put?: never;
         /**
          * Deliver Manual Output
-         * @description Deliver manually-supplied output at a HITL gate and resume the run.
+         * @description Deliver manually-supplied output at a HITL review and resume the run.
          *
          *     The reviewer provides the output directly instead of routing to a
          *     correction run or back to the agent. The output is validated and the
@@ -3278,7 +3278,7 @@ export interface paths {
          *     mirrors the repo's standard list convention (items/total/page/page_size,
          *     as the runs list uses) with the existing ``GateResponse`` items.
          */
-        get: operations["list_org_reviews_api_v1_hitl_reviews_get"];
+        get: operations["list_org_gates_api_v1_hitl_gates_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10562,7 +10562,7 @@ export interface components {
              * Format: uuid
              */
             run_id: string;
-            /** Gate Id */
+            /** Review Id */
             review_id: string;
             /** Claim Token */
             claim_token: string;
@@ -11541,7 +11541,7 @@ export interface components {
         };
         /** CreateFeedbackRequest */
         CreateFeedbackRequest: {
-            /** Gate Id */
+            /** Review Id */
             review_id: string;
             /** Rejection Reason */
             rejection_reason: string;
@@ -11911,7 +11911,7 @@ export interface components {
              */
             edge_type: string;
             /**
-             * Hitl Gate
+             * Hitl Review
              * @default false
              */
             hitl_review: boolean;
@@ -12687,7 +12687,7 @@ export interface components {
              * Format: uuid
              */
             run_id: string;
-            /** Gate Id */
+            /** Review Id */
             review_id: string;
             /**
              * Pipeline Id
@@ -13072,6 +13072,36 @@ export interface components {
                 [key: string]: boolean;
             };
         };
+        /**
+         * HitlResponseContract
+         * @description FAR-860: typed response contract for a HITL review.
+         *
+         *     ``kind: approval`` = today's behaviour (approve/reject) — the default
+         *     and backward-compatible; an absent contract behaves identically.
+         *     ``kind: choice`` REQUIRES a non-empty ``options`` list with UNIQUE
+         *     non-empty ids and non-empty labels.
+         */
+        HitlResponseContract: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "approval" | "choice";
+            /** Options */
+            options?: components["schemas"]["HitlResponseOption"][] | null;
+        };
+        /**
+         * HitlResponseOption
+         * @description A single selectable option for a ``kind: choice`` HITL gate (FAR-860).
+         */
+        HitlResponseOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Description */
+            description?: string | null;
+        };
         /** HitlReviewConfig */
         HitlReviewConfig: {
             /** Label */
@@ -13108,36 +13138,6 @@ export interface components {
             subject_path?: string | null;
             /** @description FAR-860: typed response contract. Absent/None = today's approve/reject behaviour (backward-compatible). kind='choice' declares agent-defined options; the human's answer is injected into run state as hitl_answer_<review_id> for downstream conditional edges. */
             response_contract?: components["schemas"]["HitlResponseContract"] | null;
-        };
-        /**
-         * HitlResponseContract
-         * @description FAR-860: typed response contract for a HITL gate.
-         *
-         *     ``kind: approval`` = today's behaviour (approve/reject) — the default
-         *     and backward-compatible; an absent contract behaves identically.
-         *     ``kind: choice`` REQUIRES a non-empty ``options`` list with UNIQUE
-         *     non-empty ids and non-empty labels.
-         */
-        HitlResponseContract: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "approval" | "choice";
-            /** Options */
-            options?: components["schemas"]["HitlResponseOption"][] | null;
-        };
-        /**
-         * HitlResponseOption
-         * @description A single selectable option for a ``kind: choice`` HITL gate (FAR-860).
-         */
-        HitlResponseOption: {
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Description */
-            description?: string | null;
         };
         /** HousekeepingCategory */
         HousekeepingCategory: {
@@ -15066,7 +15066,7 @@ export interface components {
              * Format: uuid
              */
             pipeline_id: string;
-            /** Gate Id */
+            /** Review Id */
             review_id: string;
             /** Claimed By */
             claimed_by: string | null;
@@ -18889,7 +18889,7 @@ export interface components {
             recent_runs: components["schemas"]["RunSummary"][];
             /** Runs Total */
             runs_total: number;
-            /** Pending Hitl Gates */
+            /** Pending Hitl Reviews */
             pending_hitl_reviews: components["schemas"]["PendingHitlReview"][];
             /** Views */
             views?: components["schemas"]["ViewInfo"][] | null;
@@ -26799,7 +26799,7 @@ export interface operations {
             };
         };
     };
-    list_org_reviews_api_v1_hitl_reviews_get: {
+    list_org_gates_api_v1_hitl_gates_get: {
         parameters: {
             query?: {
                 status?: "undecided" | "pending" | "claimed" | "approved" | "rejected" | "all";

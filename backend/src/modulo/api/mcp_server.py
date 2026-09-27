@@ -3976,7 +3976,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     (if any) in the same transaction. Hard-delete removes the ``Eval`` row
     (``PolicyGate`` cascades via ``ON DELETE CASCADE``); ``PolicyGateDecision``
     rows block hard-delete via RESTRICT — both keys checked (``eval_id``
-    direct and ``policy_review_id`` cascade).
+    direct and ``policy_gate_id`` cascade).
     """
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -4024,7 +4024,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
         else:
             # Hard-delete: PolicyGate cascades via ON DELETE CASCADE;
             # PolicyGateDecision rows block via RESTRICT (both keys:
-            # eval_id direct + policy_review_id cascade).
+            # eval_id direct + policy_gate_id cascade).
             try:
                 await s.delete(eval_row)
                 await s.flush()
@@ -4033,7 +4033,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
                     "error": "delete_blocked_by_decisions",
                     "detail": (
                         "Cannot hard-delete eval: existing decision rows prevent"
-                        " removal (RESTRICT on eval_id and/or policy_review_id)"
+                        " removal (RESTRICT on eval_id and/or policy_gate_id)"
                     ),
                 }
         if is_guardrail:
