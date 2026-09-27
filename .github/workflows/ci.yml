@@ -1071,12 +1071,21 @@ jobs:
           for i in 1 2 3 4 5; do
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
+            # it to `run:` steps) from aborting this retry loop on the FIRST
+            # curl failure. Without it a curl timeout (exit 28) killed the step
+            # immediately, so the HTTP 000 retry branch below (the whole point
+            # of the loop) never ran and a transient webhook blip permanently
+            # lost the dispatch.
             RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
               -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
+              -d "${BODY}") || RESPONSE=""
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            # A failed curl writes no body, so tail -1 is empty; normalise it to
+            # the HTTP 000 sentinel the retry/no-op branches key off.
+            [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
@@ -1180,12 +1189,21 @@ jobs:
           for i in 1 2 3 4 5; do
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
+            # it to `run:` steps) from aborting this retry loop on the FIRST
+            # curl failure. Without it a curl timeout (exit 28) killed the step
+            # immediately, so the HTTP 000 retry branch below (the whole point
+            # of the loop) never ran and a transient webhook blip permanently
+            # lost the dispatch.
             RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
               -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
+              -d "${BODY}") || RESPONSE=""
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            # A failed curl writes no body, so tail -1 is empty; normalise it to
+            # the HTTP 000 sentinel the retry/no-op branches key off.
+            [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
@@ -1297,12 +1315,21 @@ jobs:
           for i in 1 2 3 4 5; do
             TIMESTAMP=$(date +%s)
             HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+            # `|| RESPONSE=""` stops the default `bash -e` (GitHub Actions adds
+            # it to `run:` steps) from aborting this retry loop on the FIRST
+            # curl failure. Without it a curl timeout (exit 28) killed the step
+            # immediately, so the HTTP 000 retry branch below (the whole point
+            # of the loop) never ran and a transient webhook blip permanently
+            # lost the review trigger.
             RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 30 -X POST "${MODULO_WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
               -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}")
+              -d "${BODY}") || RESPONSE=""
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            # A failed curl writes no body, so tail -1 is empty; normalise it to
+            # the HTTP 000 sentinel the retry/no-op branches key off.
+            [ -n "$HTTP_CODE" ] || HTTP_CODE="000"
             BODY_RESP=$(echo "$RESPONSE" | sed '$d')
             LAST_HTTP="$HTTP_CODE"
             if [ "$HTTP_CODE" = "202" ]; then
