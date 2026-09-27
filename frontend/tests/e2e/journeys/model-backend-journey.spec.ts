@@ -59,20 +59,20 @@ test.describe('Real-stack journeys: model backend registration', { tag: '@regres
       expect(listRes.status).toBe(200)
       const created = listRes.body?.items.find((b) => b.name === name)
       expect(created, 'created backend must be returned by GET /api/v1/model-backends').toBeTruthy()
-      createdBackendId = created?.id ?? null
+      if (!created) throw new Error('[realstack] created backend missing from GET /api/v1/model-backends')
+      createdBackendId = created.id
 
-      const detailRes = await apiFetch<BackendDetail>(apiBase, token, 'GET', `/api/v1/model-backends/${createdBackendId}`)
+      const detailRes = await apiFetch<BackendDetail>(apiBase, token, 'GET', `/api/v1/model-backends/${created.id}`)
       expect(detailRes.status).toBe(200)
       expect(detailRes.body?.provider).toBe('ollama')
 
       // Cleanup through the UI seam: remove it again so the shared instance
       // keeps no residue.
-      const backendId = createdBackendId
-      const del = await apiFetch(apiBase, token, 'DELETE', `/api/v1/model-backends/${backendId}`)
+      const del = await apiFetch(apiBase, token, 'DELETE', `/api/v1/model-backends/${created.id}`)
       expect(del.status).toBe(204)
       createdBackendId = null
 
-      const goneRes = await apiFetch<BackendDetail>(apiBase, token, 'GET', `/api/v1/model-backends/${backendId}`)
+      const goneRes = await apiFetch<BackendDetail>(apiBase, token, 'GET', `/api/v1/model-backends/${created.id}`)
       expect(goneRes.status).toBe(404)
     } finally {
       if (createdBackendId) await apiFetch(apiBase, token, 'DELETE', `/api/v1/model-backends/${createdBackendId}`)

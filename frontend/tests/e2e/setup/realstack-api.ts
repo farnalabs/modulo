@@ -206,7 +206,7 @@ export async function deleteSchema(apiBase: string, token: string, schemaId: str
   }
 }
 
-interface SchemaListResponse {
+export interface SchemaListResponse {
   items: Array<{ id: string; name: string }>
 }
 

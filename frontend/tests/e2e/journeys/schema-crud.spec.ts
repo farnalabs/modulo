@@ -5,6 +5,7 @@ import {
   apiLogin,
   deleteSchema,
   uniqueName,
+  type SchemaListResponse,
 } from '../setup/realstack-api'
 
 /**
@@ -15,11 +16,6 @@ import {
  * against, yet schemas.spec.ts only checks that the three tabs render. This
  * journey creates a schema through the editor UI and proves it persisted.
  */
-
-interface SchemaListItem {
-  id: string
-  name: string
-}
 
 test.describe('Real-stack journeys: schema registry', { tag: '@regression' }, () => {
   test.beforeEach(async ({ page, env }) => {
