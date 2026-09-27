@@ -49,7 +49,11 @@ test.describe('Real-stack journeys: run cancellation', { tag: '@regression' }, (
       await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'awaiting_human' || s === 'hitl_parked', { timeoutMs: 120_000 })
 
       // Resolve the acting account (cancelled_by must be this principal).
-      const meRes = await apiFetch<{ id: string }>(apiBase, token, 'GET', '/api/v1/me')
+      // Use the canonical auth/me endpoint — it returns the account's `id`.
+      // viewmodel's /api/v1/me returns user/org/team info WITHOUT a top-level
+      // id, so the previous lookup always resolved to undefined and the
+      // assertion below compared against undefined on every run.
+      const meRes = await apiFetch<{ id: string }>(apiBase, token, 'GET', '/api/v1/auth/me')
       expect(meRes.status).toBe(200)
       const adminAccountId = meRes.body?.id
 
