@@ -5,7 +5,7 @@ import {
   apiLogin,
   createPipeline,
   deleteEvalBestEffort,
-  deletePipeline,
+  deletePipelineBestEffort,
   listEvals,
   uniqueName,
 } from '../setup/realstack-api'
@@ -100,7 +100,7 @@ test.describe('Real-stack journeys: eval definition lifecycle', { tag: '@regress
       evalId = null
     } finally {
       if (evalId && !deletedThroughUi) await deleteEvalBestEffort(apiBase, token, evalId)
-      if (pipelineId) await deletePipeline(apiBase, token, pipelineId)
+      if (pipelineId) await deletePipelineBestEffort(apiBase, token, pipelineId)
     }
   })
 })

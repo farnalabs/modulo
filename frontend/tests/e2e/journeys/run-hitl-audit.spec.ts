@@ -29,16 +29,13 @@ import {
 const isParked = (status: string) => status === 'awaiting_human' || status === 'hitl_parked'
 
 /**
- * Resolve a run id through the REAL API (never through the UI-triggered
- * page URL): list the pipeline's newest run (the endpoint orders by
- * created_at desc by default). Used by the editor-triggered journey because
- * the editor's own post-run navigation is broken upstream —
- * PipelineEditorView.triggerRun reads `(data as any).id` while POST
- * /api/v1/runs returns `run_id`, so the UI lands on /runs/undefined. The
- * trigger itself still works (a real run is created); pinning the parked
- * state to a direct /runs/{id} navigation keeps the journey deterministic.
- * Once the product bug is fixed, this can pin waitForURL('/runs/{id}')
- * instead.
+ * Resolve a run id through the REAL API (never through the UI-triggered page
+ * URL): list the pipeline's newest run (the endpoint orders by created_at
+ * desc by default). This keeps the parked-state pin independent of the
+ * editor's post-trigger client-side navigation timing. The editor now routes
+ * to the run it created (PipelineEditorView reads `run_id`, fixed by #1013),
+ * so the UI path works too; resolving out-of-band avoids racing the SPA route
+ * change and lets the journey assert the parked state deterministically.
  */
 async function resolveLatestRunId(apiBase: string, token: string, pipelineId: string): Promise<string> {
   const deadline = Date.now() + 30_000
@@ -91,10 +88,9 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await page.getByTestId('pipeline-editor-run-prompt').fill('E2E journey run prompt')
       await page.getByTestId('pipeline-editor-run-submit').click()
 
-      // The run id comes from the REAL API (the newest run for the pipeline),
-      // not from the UI — the editor's post-trigger navigation is broken
-      // upstream (see resolveLatestRunId doc comment) and a UI-URL pin would
-      // follow a /runs/undefined dead end instead of the run.
+      // The run id comes from the REAL API (the newest run for the pipeline):
+      // resolving it out-of-band keeps the parked-state pin deterministic and
+      // independent of the editor's post-trigger client-side navigation.
       const runId = await resolveLatestRunId(apiBase, token, created.pipeline.id)
 
       // Observable effect: the run parks and its detail page renders the open

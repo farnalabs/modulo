@@ -1,4 +1,5 @@
-import { test, expect, loginAsAdmin, loginThroughUi } from '../setup/fixtures'
+import { test, expect, loginAsAdmin } from '../setup/fixtures'
+import { loginThroughUi } from '../setup/login'
 import {
   apiBaseFor,
   apiFetch,
@@ -6,6 +7,7 @@ import {
   createJourneyUser,
   createPipeline,
   deactivateJourneyUser,
+  deletePipelineBestEffort,
   uniqueName,
   type JourneyUser,
 } from '../setup/realstack-api'
@@ -145,7 +147,7 @@ test.describe('Real-stack journeys: RBAC/tenancy boundary', { tag: '@regression'
     } finally {
       if (viewerContext) await viewerContext.close().catch(() => {})
       await deactivateJourneyUser(apiBase, adminToken, viewer?.id ?? '')
-      await deletePipeline(apiBase, adminToken, pipeline.id)
+      await deletePipelineBestEffort(apiBase, adminToken, pipeline.id)
     }
   })
 

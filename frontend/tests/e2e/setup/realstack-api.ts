@@ -198,6 +198,15 @@ export async function deletePipeline(apiBase: string, token: string, pipelineId:
   }
 }
 
+/** Best-effort pipeline deletion (404-tolerant). Never throws over the caller. */
+export async function deletePipelineBestEffort(apiBase: string, token: string, pipelineId: string): Promise<void> {
+  try {
+    await deletePipeline(apiBase, token, pipelineId)
+  } catch (err) {
+    console.warn('[realstack] cleanup: pipeline delete failed:', err instanceof Error ? err.message : String(err))
+  }
+}
+
 export async function deleteSchema(apiBase: string, token: string, schemaId: string): Promise<void> {
   let res = await apiFetch(apiBase, token, 'DELETE', `/api/v1/schemas/${schemaId}`)
   if (res.status === 409) {
@@ -407,18 +416,31 @@ export async function createManualNodePipeline(
   schemaName: string,
 ): Promise<ManualNodePipeline> {
   const schemaId = await createSchemaWithVersion(apiBase, token, schemaName)
-  const pipeline = await createPipeline(apiBase, token, pipelineName)
-  const nodeId = crypto.randomUUID()
-  await setPipelineGraph(apiBase, token, pipeline.id, [
-    {
-      id: nodeId,
-      node_type: 'manual',
-      label: 'E2E Human Input',
-      position: { x: 120, y: 120 },
-      output_schema_id: schemaId,
-    },
-  ])
-  return { pipeline, schemaId, nodeId }
+  let pipeline: PipelineRef | null = null
+  try {
+    pipeline = await createPipeline(apiBase, token, pipelineName)
+    const nodeId = crypto.randomUUID()
+    await setPipelineGraph(apiBase, token, pipeline.id, [
+      {
+        id: nodeId,
+        node_type: 'manual',
+        label: 'E2E Human Input',
+        position: { x: 120, y: 120 },
+        output_schema_id: schemaId,
+      },
+    ])
+    return { pipeline, schemaId, nodeId }
+  } catch (err) {
+    // A partial creation must not leak: the caller only ever receives ids on
+    // success, so delete whatever was created before rethrowing.
+    await cleanupJourneyEntities({
+      pipelineIds: pipeline ? [pipeline.id] : [],
+      schemaIds: [schemaId],
+      token,
+      apiBase,
+    })
+    throw err
+  }
 }
 
 export interface JourneyUser {
@@ -496,23 +518,6 @@ export async function listTeams(apiBase: string, token: string): Promise<AdminTe
   return res.body ?? { items: [] }
 }
 
-interface TeamResponse {
-  id: string
-  name: string
-}
-
-/** Create a team (admin). Returns the persisted row. */
-export async function createTeam(apiBase: string, token: string, name: string, description?: string): Promise<TeamResponse> {
-  const res = await apiFetch<TeamResponse>(apiBase, token, 'POST', '/api/v1/admin/teams', {
-    name,
-    description: description ?? null,
-  })
-  if (res.status !== 201 || !res.body?.id) {
-    throw new Error(`[realstack] team create failed: ${res.status} ${res.text.slice(0, 300)}`)
-  }
-  return res.body
-}
-
 /** Best-effort team deletion (404-tolerant). Never throws over the caller. */
 export async function deleteTeamBestEffort(apiBase: string, token: string, teamId: string): Promise<void> {
   try {
@@ -531,24 +536,6 @@ export interface LifecycleMapDetail {
   current_version: number
   stages: Array<Record<string, unknown>>
   archived_at: string | null
-}
-
-/** Create a lifecycle map (admin); content_json carries the stage graph. */
-export async function createLifecycleMap(
-  apiBase: string,
-  token: string,
-  name: string,
-  contentJson: Record<string, unknown> = {},
-): Promise<LifecycleMapDetail> {
-  const res = await apiFetch<LifecycleMapDetail>(apiBase, token, 'POST', '/api/v1/lifecycle-maps', {
-    name,
-    description: 'Created by the FAR-1242 real-stack e2e journeys',
-    content_json: contentJson,
-  })
-  if (res.status !== 201 || !res.body?.id) {
-    throw new Error(`[realstack] lifecycle map create failed: ${res.status} ${res.text.slice(0, 300)}`)
-  }
-  return res.body
 }
 
 /** Fetch a lifecycle map's persisted detail. */
@@ -630,11 +617,6 @@ export async function deleteEvalBestEffort(apiBase: string, token: string, evalI
   }
 }
 
-export interface AdminRecordResult {
-  items: Array<Record<string, unknown>>
-  itemsPlus200: boolean
-}
-
 /**
  * Admin precondition: the target exposes the parameter-schema surface
  * (team-tier feature). Journeys that need it must skip cleanly when the
@@ -643,21 +625,6 @@ export interface AdminRecordResult {
 export async function hasParameterSchemaAccess(apiBase: string, token: string): Promise<boolean> {
   const res = await apiFetch(apiBase, token, 'GET', '/api/v1/parameter-schemas?page=1&page_size=1')
   return res.status === 200
-}
-
-export interface ParameterSetItem {
-  id: string
-  name: string
-  values: Record<string, unknown>
-}
-
-/** List a parameter schema's sets (admin). The endpoint returns a bare array. */
-export async function listParameterSets(apiBase: string, token: string, schemaId: string): Promise<ParameterSetItem[]> {
-  const res = await apiFetch<ParameterSetItem[]>(apiBase, token, 'GET', `/api/v1/parameter-schemas/${schemaId}/sets`)
-  if (res.status !== 200) {
-    throw new Error(`[realstack] parameter set list failed: ${res.status} ${res.text.slice(0, 300)}`)
-  }
-  return res.body ?? []
 }
 
 /** Best-effort parameter schema deletion (page 1 lists + clean 200/404). */
@@ -670,9 +637,4 @@ export async function deleteParameterSchemaBestEffort(apiBase: string, token: st
   } catch (err) {
     console.warn('[realstack] cleanup: parameter schema delete failed:', err instanceof Error ? err.message : String(err))
   }
-}
-
-/** #8-char prefix, mirroring the app's shortId used for run ids in tables. */
-export function shortId(id: string): string {
-  return '#' + id.slice(0, 8)
 }
