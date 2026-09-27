@@ -42,6 +42,7 @@ from modulo.db.models.eval_suite_run import (
     is_terminal,
     transition_state,
 )
+from modulo.db.models.evidence import Evidence
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.invitation import Invitation
@@ -130,6 +131,7 @@ __all__ = [
     "EvalDefinition",
     "EvalResult",
     "EvalSuite",
+    "Evidence",
     "FeatureFlagCatalog",
     "FeedbackRecord",
     "HitlClaim",
