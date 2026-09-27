@@ -127,9 +127,9 @@ def when_query_issues(ctx, resource, component) -> None:
     _run_query(ctx, ConnectorQuery(resource=resource, filters={"component": component}, limit=10))
 
 
-@when(parsers.parse('I query resource "{resource}" with id "{gate_id}"'))
-def when_query_quality_gate(ctx, resource, gate_id) -> None:
-    _run_query(ctx, ConnectorQuery(resource=resource, filters={"id": gate_id}))
+@when(parsers.parse('I query resource "{resource}" with id "{review_id}"'))
+def when_query_quality_gate(ctx, resource, review_id) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, filters={"id": review_id}))
 
 
 @when(parsers.parse('I query resource "{resource}" without project filter'))

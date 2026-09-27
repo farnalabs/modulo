@@ -102,7 +102,7 @@ from modulo.api.mcp_server import (
     list_secrets,
     list_trigger_events,
     perform_housekeeping,
-    resource_hitl_gate,
+    resource_hitl_review,
     resource_model_backends,
     resource_pipeline_snapshot_detail,
     resource_pipeline_snapshots,
@@ -1602,7 +1602,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
 
     async def test_hitl_denial_audit_without_user_context(self) -> None:
         ms._ctx_user_id.set(None)
-        exc = ms.HitlGateWeakeningDenied(
+        exc = ms.HitlReviewWeakeningDenied(
             reason_code="gate_removed",
             correlation_keys=[("a", "b", "normal")],
             weakening_types=["remove"],
@@ -1616,7 +1616,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         assert mock_audit.await_count == 1
 
     async def test_hitl_denial_audit_reraises_cancellation(self) -> None:
-        exc = ms.HitlGateWeakeningDenied(reason_code="gate_removed", payload_json=None)
+        exc = ms.HitlReviewWeakeningDenied(reason_code="gate_removed", payload_json=None)
         with (
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch("modulo.core.audit_logger.append_audit_event", side_effect=asyncio.CancelledError),
@@ -2189,7 +2189,7 @@ class TestHitlHelpers(_AuthContext):
             patch.object(ms, "get_run", new=AsyncMock(return_value=None)),
         ):
             result = await _review_hitl_impl(
-                run_id=str(uuid.uuid4()), gate_id="gate", action="claim", claim_token=None, reason=None, output=None
+                run_id=str(uuid.uuid4()), review_id="gate", action="claim", claim_token=None, reason=None, output=None
             )
         assert result["error"] == "gate_not_found"
 
@@ -2201,7 +2201,7 @@ class TestHitlHelpers(_AuthContext):
         ):
             await _review_hitl_impl(
                 run_id=str(uuid.uuid4()),
-                gate_id="gate",
+                review_id="gate",
                 action="claim",
                 claim_token=None,
                 reason=None,
@@ -2215,7 +2215,7 @@ class TestHitlHelpers(_AuthContext):
             patch.object(ms, "_review_hitl_impl", side_effect=OperationalError("s", {}, Exception())),
             pytest.raises(OperationalError),
         ):
-            await ms.review_hitl(run_id=str(uuid.uuid4()), gate_id="gate", action="claim")
+            await ms.review_hitl(run_id=str(uuid.uuid4()), review_id="gate", action="claim")
 
 
 # ---------------------------------------------------------------------------
@@ -2714,22 +2714,22 @@ class TestResourceGaps(_AuthContext):
         assert result.startswith("Model Backends (1):")
         assert "openai/gpt-x" in result
 
-    async def test_resource_hitl_gate_invalid_uuid(self) -> None:
+    async def test_resource_hitl_review_invalid_uuid(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
-            result = await resource_hitl_gate("nope", "gate")
+            result = await resource_hitl_review("nope", "gate")
         assert result.startswith("error:")
 
-    async def test_resource_hitl_gate_not_found(self) -> None:
+    async def test_resource_hitl_review_not_found(self) -> None:
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=None)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
-            result = await resource_hitl_gate(str(uuid.uuid4()), "gate")
+            result = await resource_hitl_review(str(uuid.uuid4()), "gate")
         assert "not found" in result
 
-    async def test_resource_hitl_gate_success_with_team(self) -> None:
+    async def test_resource_hitl_review_success_with_team(self) -> None:
         gate = MagicMock()
         gate.pipeline_id = uuid.uuid4()
         gate.decision = None
@@ -2754,12 +2754,12 @@ class TestResourceGaps(_AuthContext):
             patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
             patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
         ):
-            result = await resource_hitl_gate(str(uuid.uuid4()), "gate")
+            result = await resource_hitl_review(str(uuid.uuid4()), "gate")
         assert "Gate: gate" in result
         assert "Required team name: platform" in result
         assert "Claim expires:" in result
 
-    async def test_resource_hitl_gate_truncates_the_fire_context_with_a_marker(self) -> None:
+    async def test_resource_hitl_review_truncates_the_fire_context_with_a_marker(self) -> None:
         """FAR-688: the fire-context dump is a fixed slice, marked when
         truncated so the agent can tell a partial dump from a complete one —
         marker-WITHIN-cap, so the line is exactly the prefix plus the cap."""
@@ -2779,12 +2779,12 @@ class TestResourceGaps(_AuthContext):
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
         ):
-            result = await resource_hitl_gate(str(uuid.uuid4()), "gate")
+            result = await resource_hitl_review(str(uuid.uuid4()), "gate")
         fire_context_line = next(line for line in result.splitlines() if line.startswith("Fire context: "))
         assert fire_context_line.endswith("…(truncated)")
         assert len(fire_context_line) == len("Fire context: ") + 2048
 
-    async def test_resource_hitl_gate_falls_back_to_the_snapshot_description(self) -> None:
+    async def test_resource_hitl_review_falls_back_to_the_snapshot_description(self) -> None:
         """FAR-688: a capture with no usable description falls back to the
         snapshot config's description — the same context-first/snapshot-
         fallback precedence the REST pending surfaces apply via
@@ -2807,7 +2807,7 @@ class TestResourceGaps(_AuthContext):
                 {
                     "source": "src-1",
                     "target": "tgt-2",
-                    "hitl_gate_config": {"description": "Snapshot briefing."},
+                    "hitl_review_config": {"description": "Snapshot briefing."},
                 }
             ],
         }
@@ -2816,7 +2816,7 @@ class TestResourceGaps(_AuthContext):
         session = _mock_session()
         session.execute.side_effect = [
             _make_execute_result(scalar_one_or_none=gate),
-            # FAR-634: ``resolve_hitl_gate_config`` now probes the claim-stamped
+            # FAR-634: ``resolve_hitl_review_config`` now probes the claim-stamped
             # ``gate_config_json`` fast path first (O(1) claim-row lookup). This
             # legacy capture predates the stamp, so the probe returns None and
             # the resolver falls through to the snapshot walk below.
@@ -2828,9 +2828,9 @@ class TestResourceGaps(_AuthContext):
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
             patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.hitl_gate_config.get_run", new=AsyncMock(return_value=snapshot_run)),
+            patch("modulo.db.crud.hitl_review_config.get_run", new=AsyncMock(return_value=snapshot_run)),
         ):
-            result = await resource_hitl_gate(str(uuid.uuid4()), "hitl_gate_src-1_tgt-2")
+            result = await resource_hitl_review(str(uuid.uuid4()), "hitl_review_src-1_tgt-2")
         assert "Description: Snapshot briefing." in result
 
     async def test_hitl_required_team_name_unknown_team(self) -> None:

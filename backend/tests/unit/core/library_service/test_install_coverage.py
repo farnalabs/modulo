@@ -487,7 +487,7 @@ def _make_pipeline_template_pin(pid: uuid.UUID) -> LibraryPrimitive:
             {"id": "n0", "node_type": "agent", "agent_index": 0, "position": {"x": 1, "y": 2}},
         ],
         "edges": [
-            {"source_node_id": "n0", "target_node_id": "n1", "edge_type": "normal", "hitl_gate_config": {"k": "v"}},
+            {"source_node_id": "n0", "target_node_id": "n1", "edge_type": "normal", "hitl_review_config": {"k": "v"}},
         ],
     }
     return _prim(pid, primitive_type="pipeline_template", name="Tpl", slug="tpl", content_json=content)
@@ -592,7 +592,7 @@ class TestBuildBundleFromPins:
         node = bundle["pipeline"]["graph_nodes_json"][0]
         assert node["agent_id"] == bundle["agents"][0]["id"]
         assert node["position"] == {"x": 1, "y": 2}
-        assert bundle["edges"][0]["hitl_gate_config"] == {"k": "v"}
+        assert bundle["edges"][0]["hitl_review_config"] == {"k": "v"}
 
     def test_workflow_pin_merges_bundle(self) -> None:
         pid = uuid.uuid4()
@@ -649,7 +649,7 @@ class TestAppendPipelineTemplatePin:
         assert agents[0]["input_schema_id"] == schema_ids["ctx"]
         assert agents[0]["output_schema_id"] == schema_ids["out"]
         assert graph_nodes[0]["agent_id"] == agents[0]["id"]
-        assert edges[0]["hitl_gate_config"] == {"k": "v"}
+        assert edges[0]["hitl_review_config"] == {"k": "v"}
 
 
 # ---------------------------------------------------------------------------

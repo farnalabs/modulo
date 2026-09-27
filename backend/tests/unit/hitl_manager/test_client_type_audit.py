@@ -34,7 +34,7 @@ async def _approve_payload(client_type: str | None) -> dict:
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         kwargs = {} if client_type is None else {"client_type": client_type}
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", **kwargs)
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", **kwargs)
     return mock_audit.await_args.kwargs["payload_json"]
 
 
@@ -65,7 +65,7 @@ class TestRejectAndDeliverManualClientType:
             await mgr.reject(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 actor_id=_USER,
@@ -79,7 +79,7 @@ class TestRejectAndDeliverManualClientType:
         session, _gate_decided = _decided("rejected")
         with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
-            await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
+            await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
         assert "client_type" not in mock_audit.await_args.kwargs["payload_json"]
 
     async def test_deliver_manual_records_client_type(self):
@@ -89,7 +89,7 @@ class TestRejectAndDeliverManualClientType:
             await mgr.deliver_manual(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 output={"value": 1},
@@ -109,7 +109,7 @@ class TestApproveWithModificationClientType:
             await mgr.approve_with_modification(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 modified_output={"value": 42},
@@ -130,7 +130,7 @@ class TestApproveWithModificationClientType:
             await mgr.approve_with_modification(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 modified_output={"value": 42},
@@ -153,7 +153,7 @@ class TestApproveWithModificationClientType:
             await mgr.approve_with_modification(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 modified_output={"value": 42},
@@ -180,7 +180,7 @@ class TestClaimClientType:
             await mgr.claim(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claimant_id=_USER,
                 client_type=_BROWSER,
@@ -197,6 +197,6 @@ class TestClaimClientType:
 
         with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
             mgr = HITLManager()
-            await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+            await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
         assert "client_type" not in mock_audit.await_args.kwargs["payload_json"]

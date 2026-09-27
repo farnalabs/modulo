@@ -1,29 +1,29 @@
-Feature: Team-Scoped HITL Gates
+Feature: Team-Scoped HITL Reviews
   As a pipeline author
-  I want to require a specific team to approve HITL gates
+  I want to require a specific team to approve HITL reviews
   So that only the right team reviews sensitive decisions
 
-  Scenario: HITL gate with required_team_id is claimable by team members only
+  Scenario: HITL review with required_team_id is claimable by team members only
     Given a team "engineering" exists
     And user "alice" is a member of team "engineering" with role "operator"
     And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering"
-    When user "alice" claims the HITL gate "gate-1" on run "run-1"
+    When user "alice" claims the HITL review "gate-1" on run "run-1"
     Then the response status is 200
     And the response contains a claim_token
 
-  Scenario: Non-member cannot claim team-required HITL gate
+  Scenario: Non-member cannot claim team-required HITL review
     Given a team "engineering" exists
     And user "bob" is not a member of team "engineering"
     And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering"
-    When user "bob" claims the HITL gate "gate-1" on run "run-1"
+    When user "bob" claims the HITL review "gate-1" on run "run-1"
     Then the response status is 403
     And the error indicates the gate requires team "engineering"
 
-  Scenario: Team viewer cannot claim team-required HITL gate
+  Scenario: Team viewer cannot claim team-required HITL review
     Given a team "engineering" exists
     And user "alice" is a member of team "engineering" with role "viewer"
     And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering"
-    When user "alice" claims the HITL gate "gate-1" on run "run-1"
+    When user "alice" claims the HITL review "gate-1" on run "run-1"
     Then the response status is 403
     And the error indicates the gate requires team "engineering"
 
@@ -42,7 +42,7 @@ Feature: Team-Scoped HITL Gates
     Then the response contains required_team_id "engineering"
     And the response contains required_team_name "engineering"
 
-  Scenario: Team operator can approve team HITL gate
+  Scenario: Team operator can approve team HITL review
     Given a team "engineering" exists
     And user "alice" is a member of team "engineering" with role "operator"
     And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering"

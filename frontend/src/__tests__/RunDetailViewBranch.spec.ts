@@ -297,7 +297,7 @@ describe('RunDetailView — branch coverage sweep', () => {
     getMock.mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: baseRun({ status: 'awaiting_human' }), error: undefined })
       if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: { outputs_json: null }, error: undefined })
-      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [{ gate_id: 'g1', label: 'Review' }] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [{ review_id: 'g1', label: 'Review' }] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mountView()

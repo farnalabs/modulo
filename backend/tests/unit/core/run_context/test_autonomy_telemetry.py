@@ -57,7 +57,7 @@ async def test_emits_event_with_expected_payload(monkeypatch: pytest.MonkeyPatch
         _session_factory,
         org_id=org_id,
         run_id=run_id,
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="fully_autonomous",
         gate_outcome="skipped",
         pipeline_id=pipeline_id,
@@ -79,7 +79,7 @@ async def test_emits_event_with_expected_payload(monkeypatch: pytest.MonkeyPatch
     assert str(captured["resource_id"]) == str(run_id)
     assert captured["payload_json"]["autonomy_level"] == "fully_autonomous"
     assert captured["payload_json"]["gate_outcome"] == "skipped"
-    assert captured["payload_json"]["gate_id"] == "g1"
+    assert captured["payload_json"]["review_id"] == "g1"
     assert str(captured["payload_json"]["pipeline_id"]) == str(pipeline_id)
     assert captured["payload_json"]["actor"] == "system"
     summary = captured["payload_json"]["summary"]
@@ -103,7 +103,7 @@ async def test_noop_when_session_factory_missing(monkeypatch: pytest.MonkeyPatch
         None,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="manual_approval",
         gate_outcome="fired",
     )
@@ -126,7 +126,7 @@ async def test_invalid_gate_outcome_is_skipped(monkeypatch: pytest.MonkeyPatch) 
         _session_factory,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="manual_approval",
         gate_outcome="bogus",
     )
@@ -152,7 +152,7 @@ async def test_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
         _session_factory,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="notify_on_complete",
         gate_outcome="auto_approved",
     )
@@ -182,7 +182,7 @@ async def test_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> No
             _session_factory,
             org_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
-            gate_id="g1",
+            review_id="g1",
             autonomy_level="manual_approval",
             gate_outcome="fired",
         )
@@ -202,7 +202,7 @@ async def test_noop_when_org_id_missing(monkeypatch: pytest.MonkeyPatch) -> None
         _session_factory,
         org_id=None,
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="manual_approval",
         gate_outcome="fired",
     )
@@ -257,7 +257,7 @@ async def test_nullable_fields_are_serialized_as_none(monkeypatch: pytest.Monkey
         _session_factory,
         org_id=uuid.uuid4(),
         run_id=None,
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="manual_approval",
         gate_outcome="fired",
         pipeline_id=None,
@@ -283,7 +283,7 @@ async def test_human_only_flag_recorded(monkeypatch: pytest.MonkeyPatch) -> None
         _session_factory,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="manual_approval",
         gate_outcome="fired",
         human_only=True,

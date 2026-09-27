@@ -44,15 +44,15 @@ vi.mock('../lib/api/client', () => {
         error: undefined
       })
     }
-    if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/claim') {
+    if (url === '/api/v1/runs/{run_id}/hitl/{review_id}/claim') {
       if (mockClaimError) return Promise.resolve({ data: null, error: mockClaimError })
       return Promise.resolve({ data: mockClaimResult, error: undefined })
     }
-    if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve') {
+    if (url === '/api/v1/runs/{run_id}/hitl/{review_id}/approve') {
       if (mockApproveError) return Promise.resolve({ data: null, error: mockApproveError })
       return Promise.resolve({ data: mockApproveResult, error: undefined })
     }
-    if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/reject') {
+    if (url === '/api/v1/runs/{run_id}/hitl/{review_id}/reject') {
       if (mockRejectError) return Promise.resolve({ data: null, error: mockRejectError })
       return Promise.resolve({ data: mockRejectResult, error: undefined })
     }
@@ -1934,7 +1934,7 @@ beforeEach(() => {
 describe('RunDetailView HITL gates', () => {
   function gate(overrides: Record<string, unknown> = {}) {
     return {
-      gate_id: 'gate-1',
+      review_id: 'gate-1',
       run_id: 'test-run-id',
       label: 'Review the deploy plan',
       claimed_by: null,
@@ -1960,15 +1960,15 @@ describe('RunDetailView HITL gates', () => {
     // api.POST implementation wholesale (e.g. the cancel-error test), which
     // would otherwise leak into these claim/approve/reject flows.
     ;(api.POST as any).mockImplementation((url: string) => {
-      if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/claim') {
+      if (url === '/api/v1/runs/{run_id}/hitl/{review_id}/claim') {
         if (mockClaimError) return Promise.resolve({ data: null, error: mockClaimError })
         return Promise.resolve({ data: mockClaimResult, error: undefined })
       }
-      if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve') {
+      if (url === '/api/v1/runs/{run_id}/hitl/{review_id}/approve') {
         if (mockApproveError) return Promise.resolve({ data: null, error: mockApproveError })
         return Promise.resolve({ data: mockApproveResult, error: undefined })
       }
-      if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/reject') {
+      if (url === '/api/v1/runs/{run_id}/hitl/{review_id}/reject') {
         if (mockRejectError) return Promise.resolve({ data: null, error: mockRejectError })
         return Promise.resolve({ data: mockRejectResult, error: undefined })
       }
@@ -2004,10 +2004,10 @@ describe('RunDetailView HITL gates', () => {
     await flushPromises()
     await nextTick()
 
-    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/claim')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/claim')
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: 'test-run-id', gate_id: 'gate-1' } },
+      params: { path: { run_id: 'test-run-id', review_id: 'gate-1' } },
       body: { expiry_minutes: 15 },
     })
 
@@ -2059,9 +2059,9 @@ describe('RunDetailView HITL gates', () => {
     await flushPromises()
     await nextTick()
 
-    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/approve')
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: 'test-run-id', gate_id: 'gate-1' } },
+      params: { path: { run_id: 'test-run-id', review_id: 'gate-1' } },
       body: { claim_token: 'ct-123', notes: 'looks good' },
     })
     // the run flips to running and the gate section goes away
@@ -2107,9 +2107,9 @@ describe('RunDetailView HITL gates', () => {
     await flushPromises()
     await nextTick()
 
-    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/reject')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/reject')
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: 'test-run-id', gate_id: 'gate-1' } },
+      params: { path: { run_id: 'test-run-id', review_id: 'gate-1' } },
       body: { claim_token: 'ct-123', reason: 'Rejected by reviewer' },
     })
     // FAR-631: same hoist as the approve flow — the reject success message
@@ -2174,7 +2174,7 @@ describe('RunDetailView HITL gates', () => {
     expect(fallback.exists()).toBe(true)
     expect(fallback.text()).toContain('No description provided for this gate')
     // The gate stays claimable — the legacy briefing never breaks the flow.
-    // The claim control is the shared HitlGateCard's `hitl-gate-claim` button.
+    // The claim control is the shared HitlReviewCard's `hitl-gate-claim` button.
     expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -2793,8 +2793,8 @@ describe('RunDetailView cancellation reason (FAR-1233)', () => {
     const expected: Record<string, string> = {
       user_requested: 'An operator cancelled it on request.',
       agent_requested: 'An agent cancelled it through the API.',
-      hitl_gate_expired: 'It was cancelled automatically: the human review gate expired without a decision.',
-      hitl_gate_missing: 'It was cancelled automatically: the human review gate was never created.',
+      hitl_review_expired: 'It was cancelled automatically: the human review gate expired without a decision.',
+      hitl_review_missing: 'It was cancelled automatically: the human review gate was never created.',
     }
     for (const [reason, message] of Object.entries(expected)) {
       const wrapper = await mountCancelled(cancelledDetail(reason))
@@ -2814,7 +2814,7 @@ describe('RunDetailView cancellation reason (FAR-1233)', () => {
   })
 
   it('attributes a system-owned cancellation', async () => {
-    const wrapper = await mountCancelled(cancelledDetail('hitl_gate_expired', 'system'))
+    const wrapper = await mountCancelled(cancelledDetail('hitl_review_expired', 'system'))
     expect(wrapper.find('[data-testid="run-detail-cancelled-by"]').text()).toBe('Cancelled by the system')
     wrapper.unmount()
   })

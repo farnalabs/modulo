@@ -132,7 +132,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     await flushPromises()
     const vm = wrapper.vm as any
     vm.rawEdges = [
-      { id: 'e1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_gate_config: { label: 'Gate', description: 'Short', claim_expiry_minutes: 15 } },
+      { id: 'e1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_review_config: { label: 'Gate', description: 'Short', claim_expiry_minutes: 15 } },
     ]
     vm.selectedEdgeData = vm.rawEdges[0]
     vm.populateEdgeForm(vm.rawEdges[0])
@@ -157,7 +157,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     await flushPromises()
     const vm = wrapper.vm as any
     vm.rawEdges = [
-      { id: 'e1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_gate_config: null },
+      { id: 'e1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_review_config: null },
     ]
     vm.selectedEdgeData = vm.rawEdges[0]
     vm.populateEdgeForm(vm.rawEdges[0])
@@ -446,9 +446,9 @@ describe('PipelineEditorView — branch coverage sweep', () => {
       { id: 'h3', node_type: 'agent', hitl_config: null },
     ]
     const edges = [
-      { id: 'e1', source_node_id: 'n1', target_node_id: 'n2', hitl_gate_config: { label: 'Gate', description: 'Short' } },
-      { id: 'e2', source_node_id: 'h1', target_node_id: 'n2', hitl_gate_config: { label: 'Gate', description: 'Short' } }, // from hitl node — should be skipped
-      { id: 'e3', source_node_id: 'n3', target_node_id: 'n4', hitl_gate_config: { label: 'Gate', description: 'This is a long enough description for the gate' } },
+      { id: 'e1', source_node_id: 'n1', target_node_id: 'n2', hitl_review_config: { label: 'Gate', description: 'Short' } },
+      { id: 'e2', source_node_id: 'h1', target_node_id: 'n2', hitl_review_config: { label: 'Gate', description: 'Short' } }, // from hitl node — should be skipped
+      { id: 'e3', source_node_id: 'n3', target_node_id: 'n4', hitl_review_config: { label: 'Gate', description: 'This is a long enough description for the gate' } },
     ]
 
     const issues = vm.findLegacyHitlDescriptionIssues(nodes, edges)

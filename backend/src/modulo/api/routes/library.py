@@ -1670,9 +1670,9 @@ def _convert_template_edges(
             "target_node_id": node_id_map.get(old_target, old_target),
             "edge_type": edge.get("edge_type", "normal"),
         }
-        hitl_config = edge.get("hitl_gate_config")
+        hitl_config = edge.get("hitl_review_config")
         if hitl_config:
-            pipeline_edge["hitl_gate_config"] = hitl_config
+            pipeline_edge["hitl_review_config"] = hitl_config
         pipeline_edges.append(pipeline_edge)
     return pipeline_edges
 
@@ -1694,7 +1694,7 @@ def _add_pipeline_edges(
                 target_node_id=uuid.UUID(edge_data["target_node_id"]),
                 edge_type=edge_data["edge_type"],
                 condition_expression=edge_data.get("condition_expression"),
-                hitl_gate_config=edge_data.get("hitl_gate_config"),
+                hitl_review_config=edge_data.get("hitl_review_config"),
                 source_port=edge_data.get("source_port", "out"),
                 target_port=edge_data.get("target_port", "in"),
             )

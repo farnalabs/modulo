@@ -124,7 +124,7 @@ def _hitl_graph(node_a: str, node_b: str, backend_id: str, gate_config: dict) ->
                 "source": node_a,
                 "target": node_b,
                 "type": "normal",
-                "hitl_gate_config": gate_config,
+                "hitl_review_config": gate_config,
             },
         ],
     }
@@ -195,11 +195,11 @@ async def _run_status(engine: AsyncEngine, run_id: uuid.UUID) -> tuple[str, Any]
     return row[0], row[1]
 
 
-async def _read_gate_id(engine: AsyncEngine, org_id: uuid.UUID, run_id: uuid.UUID) -> str:
+async def _read_review_id(engine: AsyncEngine, org_id: uuid.UUID, run_id: uuid.UUID) -> str:
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text("SELECT gate_id FROM hitl_claims WHERE organisation_id=:oid AND run_id=:rid LIMIT 1"),
+                text("SELECT review_id FROM hitl_claims WHERE organisation_id=:oid AND run_id=:rid LIMIT 1"),
                 {"oid": str(org_id), "rid": str(run_id)},
             )
         ).fetchone()
@@ -211,7 +211,7 @@ async def _commit_decision(
     engine: AsyncEngine,
     org_id: uuid.UUID,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     *,
     decision: str,
     decision_payload: dict[str, Any],
@@ -221,14 +221,14 @@ async def _commit_decision(
             text(
                 "UPDATE hitl_claims SET decision=:d, decision_at=now(), "
                 "decision_payload=CAST(:p AS json) "
-                "WHERE organisation_id=:oid AND run_id=:rid AND gate_id=:gid"
+                "WHERE organisation_id=:oid AND run_id=:rid AND review_id=:gid"
             ),
             {
                 "d": decision,
                 "p": json.dumps(decision_payload),
                 "oid": str(org_id),
                 "rid": str(run_id),
-                "gid": gate_id,
+                "gid": review_id,
             },
         )
 
@@ -284,9 +284,9 @@ async def _interrupt_run(
 async def _gate_result(gate_config: dict, payload: dict[str, Any]) -> dict:
     """Invoke the HITL gate node directly with the committed decision and return
     its artifact — the exact routing a resume applies."""
-    from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
-    gate_fn = make_hitl_gate_fn(gate_config)
+    gate_fn = make_hitl_review_fn(gate_config)
     result = await gate_fn({"_hitl_decision": payload, "run_context": {"input": {}}})
     return result["artifacts"][0]
 
@@ -330,10 +330,10 @@ async def test_hitl_resume_roundtrip_approve_with_modification(
     account_id = await _seed_account(db_engine, org_id, "hitl-approve@test.local")
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlApprove", account_id)
     backend_id = uuid.uuid4()
-    # FAR-541: the gate id is deterministic (hitl_gate_<source>_<target>); the
+    # FAR-541: the gate id is deterministic (hitl_review_<source>_<target>); the
     # decision payload must carry the SAME stamp the per-gate consumer checks.
     gate_config: dict[str, Any] = {
-        "gate_id": "hitl_gate_a_b",
+        "review_id": "hitl_review_a_b",
         "human_only": True,
         "overdue_threshold_minutes": 60,
         "required_team_id": None,
@@ -351,17 +351,17 @@ async def test_hitl_resume_roundtrip_approve_with_modification(
     status, _ = await _run_status(db_engine, run_id)
     assert status == "awaiting_human"
 
-    gate_id = await _read_gate_id(db_engine, org_id, run_id)
+    review_id = await _read_review_id(db_engine, org_id, run_id)
     # FAR-541 (iteration 3): the real writer contract — approve-with-modification
     # (routes/hitl.py) submits action "approved" plus a "modified_output" member;
     # the retired "approved_with_modification" action was never produced by any
     # writer and the gate consumer fails closed on it.
     payload = {
         "action": "approved",
-        "gate_id": gate_id,
+        "review_id": review_id,
         "modified_output": {"answer": "human-edited"},
     }
-    await _commit_decision(db_engine, org_id, run_id, gate_id, decision="approved", decision_payload=payload)
+    await _commit_decision(db_engine, org_id, run_id, review_id, decision="approved", decision_payload=payload)
 
     # B1-reconcile: the reconstructed resume payload is the EXACT committed
     # decision, never {} (which would silently drop the human's modification).
@@ -403,10 +403,10 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
     account_id = await _seed_account(db_engine, org_id, "hitl-reject@test.local")
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlReject", account_id)
     backend_id = uuid.uuid4()
-    # FAR-541: the gate id is deterministic (hitl_gate_<source>_<target>); the
+    # FAR-541: the gate id is deterministic (hitl_review_<source>_<target>); the
     # decision payload must carry the SAME stamp the per-gate consumer checks.
     gate_config: dict[str, Any] = {
-        "gate_id": "hitl_gate_a_b",
+        "review_id": "hitl_review_a_b",
         "human_only": True,
         "overdue_threshold_minutes": 60,
         "required_team_id": None,
@@ -421,9 +421,9 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
     }
     await _interrupt_run(db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures)
 
-    gate_id = await _read_gate_id(db_engine, org_id, run_id)
-    payload = {"action": "rejected", "gate_id": gate_id, "reason": "wrong answer"}
-    await _commit_decision(db_engine, org_id, run_id, gate_id, decision="rejected", decision_payload=payload)
+    review_id = await _read_review_id(db_engine, org_id, run_id)
+    payload = {"action": "rejected", "review_id": review_id, "reason": "wrong answer"}
+    await _commit_decision(db_engine, org_id, run_id, review_id, decision="rejected", decision_payload=payload)
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 

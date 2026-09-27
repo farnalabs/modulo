@@ -1,6 +1,6 @@
 """End-to-end test: answer injection reaches conditional edge routing (MAJOR-3).
 
-Proves that when ``_inject_answer_state`` places ``hitl_answer_<gate_id>``
+Proves that when ``_inject_answer_state`` places ``hitl_answer_<review_id>``
 into the gate node's return dict, the pipeline engine's state reducer merges
 it into state, and a downstream conditional edge's JMESPath evaluator reads
 it to make a routing decision.
@@ -21,11 +21,11 @@ from modulo.core.pipeline_engine.graph_cache import (
 )
 from modulo.core.pipeline_engine.jmespath_eval import evaluate_jmespath_condition
 from modulo.core.pipeline_engine.node_runner import (
-    HITL_ANSWER_STATE_KEY_PREFIX,
+    HITL_REVIEW_ANSWER_STATE_KEY_PREFIX,
     _inject_answer_state,
 )
 
-_GATE_ID = "hitl_gate_src_tgt"
+_REVIEW_ID = "hitl_review_src_tgt"
 
 # A gate node that simulates what the real HITL gate does: returns a dict
 # that is the state update merged by the reducer.
@@ -35,11 +35,11 @@ def _make_gate_node(option_id: str | None = None, kind: str = "choice"):
     """Return a node fn that injects a choice/approval answer into state."""
 
     def _gate_node(state: dict[str, Any]) -> dict[str, Any]:
-        decision: dict[str, Any] = {"action": "approved", "gate_id": _GATE_ID}
+        decision: dict[str, Any] = {"action": "approved", "review_id": _REVIEW_ID}
         if option_id is not None:
             decision["answer"] = {"kind": kind, "option_id": option_id}
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
         return gate_result
 
     return _gate_node
@@ -56,9 +56,9 @@ def _build_graph(gate_option_id: str | None = None, gate_kind: str = "choice"):
     graph.add_node("branch_b", lambda s: {"visited": "b"})
     graph.add_node("default", lambda s: {"visited": "default"})
 
-    # Conditional edges from gate: if hitl_answer_<gate_id> == 'option_a' -> branch_a,
-    # else if hitl_answer_<gate_id> == 'option_b' -> branch_b.
-    state_key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+    # Conditional edges from gate: if hitl_answer_<review_id> == 'option_a' -> branch_a,
+    # else if hitl_answer_<review_id> == 'option_b' -> branch_b.
+    state_key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
     conditional_edges = [
         {
             "condition_expression": f"{state_key} == 'option_a'",
@@ -111,10 +111,14 @@ class TestE2ERoutingFromInjection:
         _inject_answer_state now rejects it (MAJOR-2) -> default branch."""
         # Simulate what would happen if _inject_answer_state did NOT check kind:
         # the option_id would be injected. But our fix prevents that.
-        decision = {"action": "approved", "gate_id": _GATE_ID, "answer": {"kind": "approval", "option_id": "attacker"}}
+        decision = {
+            "action": "approved",
+            "review_id": _REVIEW_ID,
+            "answer": {"kind": "approval", "option_id": "attacker"},
+        }
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
-        state_key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
+        state_key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert state_key not in gate_result, "approval answer must NOT inject option_id into state"
 
     def test_fails_without_injection(self):
@@ -132,7 +136,7 @@ class TestE2ERoutingFromInjection:
         graph.add_node("branch_a", lambda s: {"visited": "a"})
         graph.add_node("default", lambda s: {"visited": "default"})
 
-        state_key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        state_key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         conditional_edges = [
             {
                 "condition_expression": f"{state_key} == 'option_a'",
@@ -153,23 +157,23 @@ class TestE2ERoutingFromInjection:
 
     def test_state_reducer_merges_injection(self):
         """Prove the real state reducer merges the gate's return dict."""
-        decision = {"action": "approved", "gate_id": _GATE_ID, "answer": {"kind": "choice", "option_id": "x"}}
+        decision = {"action": "approved", "review_id": _REVIEW_ID, "answer": {"kind": "choice", "option_id": "x"}}
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
 
         state: dict[str, Any] = {"pre_existing": True}
         merged = _pipeline_state_reducer(state, gate_result)
-        state_key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        state_key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert merged[state_key] == "x"
         assert merged["pre_existing"] is True
 
     def test_jmespath_reads_injected_key(self):
         """Prove JMESPath evaluator reads the injected key from state."""
-        decision = {"action": "approved", "gate_id": _GATE_ID, "answer": {"kind": "choice", "option_id": "yes"}}
+        decision = {"action": "approved", "review_id": _REVIEW_ID, "answer": {"kind": "choice", "option_id": "yes"}}
         gate_result: dict[str, Any] = {"artifacts": []}
-        _inject_answer_state(_GATE_ID, decision, gate_result)
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
 
-        state_key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{_GATE_ID}"
+        state_key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         state: dict[str, Any] = {state_key: "yes"}
         assert evaluate_jmespath_condition(state, state_key) is True
         assert evaluate_jmespath_condition(state, f"{state_key} == 'yes'") is True

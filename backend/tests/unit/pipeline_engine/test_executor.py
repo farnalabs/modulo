@@ -1482,7 +1482,7 @@ async def test_execute_sets_awaiting_human_on_node_interrupt():
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "step-1"}),)))
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"review_id": "step-1"}),)))
     registry = _mock_registry()
 
     with (
@@ -1516,7 +1516,7 @@ async def test_execute_publishes_hitl_awaiting_event():
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "gate-1"}),)))
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"review_id": "gate-1"}),)))
     registry = _mock_registry()
 
     with (
@@ -1540,7 +1540,7 @@ async def test_execute_publishes_hitl_awaiting_event():
 
 async def test_execute_handles_streamed_interrupt_from_real_graph():
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
-        interrupt({"gate_id": "native-gate"})
+        interrupt({"review_id": "native-gate"})
         return {}
 
     graph = StateGraph(_InterruptState)
@@ -1585,12 +1585,12 @@ async def test_execute_handles_streamed_interrupt_from_real_graph():
 
 async def test_interrupt_persists_fire_time_context_on_the_gate_row():
     """FAR-613: the interrupt handler captures the decision briefing bundle
-    (build_hitl_gate_context) and persists it on the claim row via
+    (build_hitl_review_context) and persists it on the claim row via
     create_gate(context_json=...)."""
     from langgraph.types import interrupt as langgraph_interrupt
 
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
-        langgraph_interrupt({"gate_id": "native-gate"})
+        langgraph_interrupt({"review_id": "native-gate"})
         return {}
 
     graph = StateGraph(_InterruptState)
@@ -1662,7 +1662,7 @@ async def test_interrupt_threads_matched_condition_result_into_the_context():
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
         langgraph_interrupt(
             {
-                "gate_id": "native-gate",
+                "review_id": "native-gate",
                 "condition_result": {"expression": "output.review", "value": '{"score": 0.9}'},
             }
         )
@@ -1710,7 +1710,7 @@ async def test_interrupt_threads_matched_condition_result_into_the_context():
     hitl_manager.create_gate.assert_awaited_once()
     context = hitl_manager.create_gate.await_args.kwargs["context_json"]
     assert context is not None
-    # The synthetic gate id ("native-gate", not the hitl_gate_<src>_<tgt>
+    # The synthetic gate id ("native-gate", not the hitl_review_<src>_<tgt>
     # shape) parses no source node — evaluated_at_node is None there.
     assert context["condition_result"] == {
         "expression": "output.review",
@@ -1726,7 +1726,7 @@ async def test_interrupt_tolerates_a_malformed_condition_result_payload():
     from langgraph.types import interrupt as langgraph_interrupt
 
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
-        langgraph_interrupt({"gate_id": "native-gate", "condition_result": "garbage"})
+        langgraph_interrupt({"review_id": "native-gate", "condition_result": "garbage"})
         return {}
 
     graph = StateGraph(_InterruptState)
@@ -1777,7 +1777,7 @@ async def test_interrupt_capture_failure_still_persists_gate_with_null_context()
     from langgraph.types import interrupt as langgraph_interrupt
 
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
-        langgraph_interrupt({"gate_id": "native-gate"})
+        langgraph_interrupt({"review_id": "native-gate"})
         return {}
 
     graph = StateGraph(_InterruptState)
@@ -1835,7 +1835,7 @@ async def test_interrupt_capture_db_error_runs_inside_savepoint_and_never_blocks
     from sqlalchemy.exc import SQLAlchemyError
 
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
-        langgraph_interrupt({"gate_id": "native-gate"})
+        langgraph_interrupt({"review_id": "native-gate"})
         return {}
 
     graph = StateGraph(_InterruptState)
@@ -1905,13 +1905,13 @@ async def test_interrupt_capture_db_error_runs_inside_savepoint_and_never_blocks
 
 async def test_interrupt_stamps_resolved_gate_config_on_the_claim_row():
     """FAR-634: the interrupt handler resolves the fired gate's
-    ``hitl_gate_config`` and stamps it on the claim row via
+    ``hitl_review_config`` and stamps it on the claim row via
     ``create_gate(gate_config_json=...)`` so the human_only resolver reads it
     in one claim-row lookup at decision time."""
     from langgraph.types import interrupt as langgraph_interrupt
 
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
-        langgraph_interrupt({"gate_id": "native-gate"})
+        langgraph_interrupt({"review_id": "native-gate"})
         return {}
 
     graph = StateGraph(_InterruptState)
@@ -1937,7 +1937,9 @@ async def test_interrupt_stamps_resolved_gate_config_on_the_claim_row():
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
         patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
-        patch("modulo.core.pipeline_engine.executor.resolve_hitl_gate_config", AsyncMock(return_value=stamped_config)),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_hitl_review_config", AsyncMock(return_value=stamped_config)
+        ),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
@@ -1962,7 +1964,7 @@ async def test_interrupt_stamp_failure_still_persists_gate_with_null_config():
     from langgraph.types import interrupt as langgraph_interrupt
 
     async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
-        langgraph_interrupt({"gate_id": "native-gate"})
+        langgraph_interrupt({"review_id": "native-gate"})
         return {}
 
     graph = StateGraph(_InterruptState)
@@ -1988,7 +1990,7 @@ async def test_interrupt_stamp_failure_still_persists_gate_with_null_config():
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
         patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
         patch(
-            "modulo.core.pipeline_engine.executor.resolve_hitl_gate_config",
+            "modulo.core.pipeline_engine.executor.resolve_hitl_review_config",
             AsyncMock(side_effect=RuntimeError("resolver boom")),
         ),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
@@ -2019,7 +2021,7 @@ async def test_dispatch_hitl_awaiting_routes_through_notifier():
     await executor._dispatch_hitl_awaiting(
         org_id=org_id,
         run_id=run_id,
-        gate_id="gate-7",
+        review_id="gate-7",
         pipeline_name="My Pipeline",
         team_id=team_id,
     )
@@ -2031,7 +2033,7 @@ async def test_dispatch_hitl_awaiting_routes_through_notifier():
     assert kwargs["team_id"] == team_id
     assert kwargs["payload"] == {
         "run_id": str(run_id),
-        "gate_id": "gate-7",
+        "review_id": "gate-7",
         "team_id": str(team_id),
         "pipeline_name": "My Pipeline",
     }
@@ -2046,7 +2048,7 @@ async def test_dispatch_hitl_awaiting_without_pipeline_name_omits_key():
     await executor._dispatch_hitl_awaiting(
         org_id=uuid.uuid4(),
         run_id=run_id,
-        gate_id="gate-1",
+        review_id="gate-1",
         pipeline_name=None,
         team_id=None,
     )
@@ -2056,7 +2058,7 @@ async def test_dispatch_hitl_awaiting_without_pipeline_name_omits_key():
     assert kwargs["run_id"] == run_id
     assert kwargs["team_id"] is None
     assert "pipeline_name" not in kwargs["payload"]
-    assert kwargs["payload"]["gate_id"] == "gate-1"
+    assert kwargs["payload"]["review_id"] == "gate-1"
 
 
 async def test_dispatch_hitl_awaiting_skips_without_notifier():
@@ -2068,7 +2070,7 @@ async def test_dispatch_hitl_awaiting_skips_without_notifier():
     await executor._dispatch_hitl_awaiting(
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="gate-1",
+        review_id="gate-1",
         pipeline_name="P",
         team_id=None,
     )
@@ -2086,7 +2088,7 @@ async def test_dispatch_hitl_awaiting_failure_is_isolated():
         await executor._dispatch_hitl_awaiting(
             org_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
-            gate_id="gate-1",
+            review_id="gate-1",
             pipeline_name="P",
             team_id=None,
         )
@@ -2104,7 +2106,7 @@ async def test_execute_with_notifier_dispatches_hitl_awaiting():
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "gate-1"}),)))
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"review_id": "gate-1"}),)))
     registry = _mock_registry()
     notifier = MagicMock()
     notifier.dispatch_event = AsyncMock()
@@ -2127,7 +2129,7 @@ async def test_execute_with_notifier_dispatches_hitl_awaiting():
     kwargs = notifier.dispatch_event.await_args.kwargs
     assert kwargs["event_type"] == "hitl_awaiting"
     assert kwargs["payload"]["run_id"] == str(run.id)
-    assert kwargs["payload"]["gate_id"] == "gate-1"
+    assert kwargs["payload"]["review_id"] == "gate-1"
 
 
 # ---------------------------------------------------------------------------
@@ -2512,7 +2514,7 @@ async def test_execute_fails_on_checkpointer_connection_error():
                     "source": "node-a",
                     "target": "node-a",
                     "type": "normal",
-                    "hitl_gate_config": {"human_only": True},
+                    "hitl_review_config": {"human_only": True},
                 }
             ],
         }

@@ -365,7 +365,7 @@ class TestManagerWiring:
             await mgr.approve(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 actor_id=_USER,
@@ -391,7 +391,7 @@ class TestManagerWiring:
             await mgr.approve_with_modification(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 modified_output={"value": 42},
@@ -421,7 +421,7 @@ class TestManagerWiring:
             await mgr.deliver_manual(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 output={"value": 42},
@@ -452,7 +452,7 @@ class TestManagerWiring:
             result = await mgr.approve(
                 session,
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 org_id=_ORG,
                 claim_token="tok",
                 actor_id=_USER,

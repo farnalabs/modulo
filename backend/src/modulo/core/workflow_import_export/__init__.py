@@ -317,7 +317,7 @@ async def _fetch_and_project_edges(session: AsyncSession, pipeline_id: uuid.UUID
             "source_node_id": str(e.source_node_id),
             "target_node_id": str(e.target_node_id),
             "edge_type": e.edge_type,
-            "hitl_gate_config": e.hitl_gate_config,
+            "hitl_review_config": e.hitl_review_config,
         }
         for e in edges
     ]
@@ -888,7 +888,7 @@ async def _fetch_and_project_edges_v2(session: AsyncSession, pipeline_id: uuid.U
             "source": str(e.source_node_id),
             "target": str(e.target_node_id),
             "edge_type": e.edge_type,
-            "hitl_gate_config": e.hitl_gate_config,
+            "hitl_review_config": e.hitl_review_config,
         }
         for e in edges
     ]
@@ -2194,7 +2194,7 @@ async def _materialize_edges(
             target_node_id=target_id,
             edge_type=edge_type,
             condition_expression=ed.get("condition_expression"),
-            hitl_gate_config=ed.get("hitl_gate_config"),
+            hitl_review_config=ed.get("hitl_review_config"),
             source_port=ed.get("source_port", "out"),
             target_port=ed.get("target_port", "in"),
         )

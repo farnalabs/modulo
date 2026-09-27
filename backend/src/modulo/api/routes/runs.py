@@ -745,7 +745,7 @@ class RunResponse(BaseModel):
     error_code: str | None = None
     # FAR-1233 cancellation transparency: WHY this run was cancelled (one of
     # the closed cancel-reason vocabulary, e.g. ``user_requested`` /
-    # ``hitl_gate_expired``) and WHO cancelled it (account id, or ``system``).
+    # ``hitl_review_expired``) and WHO cancelled it (account id, or ``system``).
     # Both NULL for runs cancelled before the columns shipped — the UI renders
     # a neutral "reason not recorded" fallback. Additive/nullable: existing
     # consumers are unaffected.
@@ -2603,10 +2603,10 @@ async def recover_run_node(
     # unstamped/foreign decisions (the resume would bounce the run straight
     # back to awaiting_human). Reject gate targets up front with an explicit
     # pointer to the HITL decision endpoints.
-    if node_id.startswith("hitl_gate_"):
+    if node_id.startswith("hitl_review_"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Node is a HITL gate; use the HITL approve/reject endpoints for gate nodes.",
+            detail="Node is a HITL review; use the HITL approve/reject endpoints for gate nodes.",
         )
 
     # FAR-541 (iteration 3, FIX 3): the recovery payload is stamped with the
@@ -2614,7 +2614,7 @@ async def recover_run_node(
     # stamp checks accept it. Set inside the transaction; left None when the
     # run has NO undecided claim row (failed-run recovery — dispatch unstamped
     # exactly as before).
-    stamp_gate_id: str | None = None
+    stamp_review_id: str | None = None
 
     try:
         async with session.begin():
@@ -2622,10 +2622,10 @@ async def recover_run_node(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             # FAR-541 (iteration 3, FIX 3): the run's UNDECIDED claim row(s)
             # mark where the run is interrupted — regardless of the target
-            # node's name. A row keyed ``hitl_gate_*`` is a real HITL gate
+            # node's name. A row keyed ``hitl_review_*`` is a real HITL gate
             # whose decision must go through approve/reject -> explicit 422.
             # Manual-node rows (keyed by the node id — the interrupt payload
-            # stamps ``gate_id: node_id``) and conformance-block rows (keyed
+            # stamps ``review_id: node_id``) and conformance-block rows (keyed
             # by the guardrail gate id) are stamped into the recovery payload,
             # which the manual-node and conformance consumers accept. A legacy
             # ""-keyed row (pre-stamping interrupt) never wins the stamp.
@@ -2636,17 +2636,17 @@ async def recover_run_node(
             # (normal: recover_node never marks bypassed rows decided) can no
             # longer hijack the stamp pick with a foreign identity, and the
             # pick is stable when rows share a claim timestamp.
-            undecided_gate_ids: list[str] = list(
+            undecided_review_ids: list[str] = list(
                 (
                     await session.execute(
-                        select(HitlClaim.gate_id)
+                        select(HitlClaim.review_id)
                         .where(
                             HitlClaim.run_id == run_id,
                             HitlClaim.organisation_id == principal.organisation_id,
                             HitlClaim.decision.is_(None),
                         )
                         .order_by(
-                            (HitlClaim.gate_id == node_id).desc(),
+                            (HitlClaim.review_id == node_id).desc(),
                             HitlClaim.claimed_at.desc().nullslast(),
                             HitlClaim.id.desc(),
                         )
@@ -2655,7 +2655,7 @@ async def recover_run_node(
                 .scalars()
                 .all()
             )
-            if any(gate.startswith("hitl_gate_") for gate in undecided_gate_ids):
+            if any(gate.startswith("hitl_review_") for gate in undecided_review_ids):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Node is a pending HITL gate; use the HITL approve/reject endpoints for gate nodes.",
@@ -2663,9 +2663,9 @@ async def recover_run_node(
             # The matching-node row wins when present (the query orders it
             # first); the explicit Python-side preference keeps the pick
             # correct and auditable even if the SQL ordering drifts.
-            stamp_gate_id = next(
-                (gate for gate in undecided_gate_ids if gate == node_id),
-                next((gate for gate in undecided_gate_ids if gate), None),
+            stamp_review_id = next(
+                (gate for gate in undecided_review_ids if gate == node_id),
+                next((gate for gate in undecided_review_ids if gate), None),
             )
             try:
                 run = await recover_node(
@@ -2720,13 +2720,13 @@ async def recover_run_node(
     # to SAQ (the recover-node path); a resume failure surfaces here as 500
     # rather than fire-and-forget 200.
     resume_data: dict[str, Any] = {"action": action, "output": req.input_data}
-    if stamp_gate_id is not None:
+    if stamp_review_id is not None:
         # FAR-541 (iteration 3, FIX 3): stamped with the pending claim row's
         # gate id — the manual-node consumer (stamp == node id), the
         # conformance consumer (stamp == the block's guardrail gate id), and
         # the gate consumer (stamp == its own gate id) all verify this stamp;
         # a run parked at a real HITL gate was already 422'd above.
-        resume_data["gate_id"] = stamp_gate_id
+        resume_data["review_id"] = stamp_review_id
 
     try:
         outcome, _job_id = await dispatch_run(

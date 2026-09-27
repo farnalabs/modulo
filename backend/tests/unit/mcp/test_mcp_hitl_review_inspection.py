@@ -1,6 +1,6 @@
 """Unit tests for the read-only HITL gate-inspection MCP tools (FAR-641).
 
-Covers list_hitl_gates, get_hitl_gate, and get_pipeline_gates. All three are
+Covers list_hitl_reviews, get_hitl_review, and get_pipeline_reviews. All three are
 read-only: no state mutation anywhere (no claim/approve/reject capability).
 """
 
@@ -15,12 +15,12 @@ from modulo.api.mcp_server import (
     _TEAM_SCOPE_ERROR,
     MCPAuthorizationError,
     _ctx_team_id,
-    _get_hitl_gate_impl,
-    _get_pipeline_gates_impl,
-    _list_hitl_gates_impl,
-    get_hitl_gate,
-    get_pipeline_gates,
-    list_hitl_gates,
+    _get_hitl_review_impl,
+    _get_pipeline_reviews_impl,
+    _list_hitl_reviews_impl,
+    get_hitl_review,
+    get_pipeline_reviews,
+    list_hitl_reviews,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -37,7 +37,7 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 def _make_gate(*, decision: str | None = None, claimed: bool = False) -> MagicMock:
     gate = MagicMock()
     gate.run_id = uuid.uuid4()
-    gate.gate_id = "hitl_gate_a_b"
+    gate.review_id = "hitl_review_a_b"
     gate.pipeline_id = uuid.uuid4()
     gate.account_id = uuid.uuid4() if claimed else None
     gate.claimed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC) if claimed else None
@@ -80,11 +80,11 @@ class _AuthContext:
 
 
 # ---------------------------------------------------------------------------
-# list_hitl_gates
+# list_hitl_reviews
 # ---------------------------------------------------------------------------
 
 
-class TestListHitlGates(_AuthContext):
+class TestListHitlReviews(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     async def test_empty_pending_list(self, mock_session: AsyncMock, mock_validate_auth: AsyncMock) -> None:
@@ -94,14 +94,14 @@ class TestListHitlGates(_AuthContext):
         session.execute = AsyncMock(return_value=result)
         mock_session.return_value = _make_session_context(session)
 
-        out = await list_hitl_gates()
+        out = await list_hitl_reviews()
 
         assert not out["gates"]
         assert out["limit"] == 20
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        out = await list_hitl_gates()
+        out = await list_hitl_reviews()
         assert out["error"] == "auth_expired"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -116,10 +116,10 @@ class TestListHitlGates(_AuthContext):
         session.execute = AsyncMock(return_value=result)
         mock_session.return_value = _make_session_context(session)
 
-        out = await list_hitl_gates()
+        out = await list_hitl_reviews()
 
         fetched = out["gates"][0]
-        assert fetched["gate_id"] == "hitl_gate_a_b"
+        assert fetched["review_id"] == "hitl_review_a_b"
         assert fetched["pipeline_name"] == "PR Reviewer"
         assert fetched["pipeline_id"] == str(pipeline_id)
         assert fetched["run_number"] == run_number
@@ -136,19 +136,19 @@ class TestListHitlGates(_AuthContext):
         session.execute = AsyncMock(return_value=result)
         mock_session.return_value = _make_session_context(session)
 
-        out = await list_hitl_gates(limit=10_000)
+        out = await list_hitl_reviews(limit=10_000)
 
         assert out["limit"] == 100
         assert not out["gates"]
 
 
 # ---------------------------------------------------------------------------
-# get_hitl_gate
+# get_hitl_review
 # ---------------------------------------------------------------------------
 
 
-class TestGetHitlGate(_AuthContext):
-    @patch("modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config", new_callable=AsyncMock)
+class TestGetHitlReview(_AuthContext):
+    @patch("modulo.db.crud.hitl_review_config.resolve_hitl_review_config", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server.get_run")
     @patch("modulo.api.mcp_server._session")
@@ -179,7 +179,7 @@ class TestGetHitlGate(_AuthContext):
         session = AsyncMock()
         mock_session.return_value = _make_session_context(session)
 
-        out = await get_hitl_gate(run_id=str(run.id), gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id=str(run.id), review_id="hitl_review_a_b")
 
         assert out["run_status"] == "awaiting_human"
         assert out["gate_fired"] is True
@@ -190,7 +190,7 @@ class TestGetHitlGate(_AuthContext):
         assert config["required_team_id"] == str(required_team)
         assert out["claimed_by"] == str(gate.account_id)
 
-    @patch("modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config", new_callable=AsyncMock)
+    @patch("modulo.db.crud.hitl_review_config.resolve_hitl_review_config", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server.get_run")
     @patch("modulo.api.mcp_server._session")
@@ -210,9 +210,9 @@ class TestGetHitlGate(_AuthContext):
         mock_get_run.return_value = run
         mock_session.return_value = _make_session_context(AsyncMock())
 
-        out = await get_hitl_gate(run_id=str(run.id), gate_id="missing")
+        out = await get_hitl_review(run_id=str(run.id), review_id="missing")
 
-        assert out == {"error": "gate_not_found", "run_id": str(run.id), "gate_id": "missing"}
+        assert out == {"error": "gate_not_found", "run_id": str(run.id), "review_id": "missing"}
         mock_resolve_config.assert_not_awaited()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -228,7 +228,7 @@ class TestGetHitlGate(_AuthContext):
         mock_get_run.return_value = None
         mock_session.return_value = _make_session_context(AsyncMock())
 
-        out = await get_hitl_gate(run_id=run_id, gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id=run_id, review_id="hitl_review_a_b")
 
         assert out == {"error": "run_not_found", "run_id": run_id}
 
@@ -239,14 +239,14 @@ class TestGetHitlGate(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        out = await get_hitl_gate(run_id="not-a-uuid", gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id="not-a-uuid", review_id="hitl_review_a_b")
 
         assert out["error"] == "invalid_id"
         assert out["field"] == "run_id"
 
 
 # ---------------------------------------------------------------------------
-# get_pipeline_gates
+# get_pipeline_reviews
 # ---------------------------------------------------------------------------
 
 
@@ -267,12 +267,12 @@ class TestGetPipelineGates(_AuthContext):
         bare_edge.source_node_id = uuid.uuid4()
         bare_edge.target_node_id = uuid.uuid4()
         bare_edge.edge_type = "normal"
-        bare_edge.hitl_gate_config = None
+        bare_edge.hitl_review_config = None
         mock_owner_team.return_value = None
         mock_graph.return_value = ([], [bare_edge])
         mock_session.return_value = _make_session_context(AsyncMock())
 
-        out = await get_pipeline_gates(pipeline_id=str(pid))
+        out = await get_pipeline_reviews(pipeline_id=str(pid))
 
         assert out["pipeline_id"] == str(pid)
         assert not out["gates"]
@@ -296,18 +296,18 @@ class TestGetPipelineGates(_AuthContext):
         gated.source_node_id = uuid.uuid4()
         gated.target_node_id = uuid.uuid4()
         gated.edge_type = "normal"
-        gated.hitl_gate_config = config
+        gated.hitl_review_config = config
         mock_owner_team.return_value = None
         mock_graph.return_value = (["node-a"], [gated])
         mock_session.return_value = _make_session_context(AsyncMock())
 
-        out = await get_pipeline_gates(pipeline_id=str(pid))
+        out = await get_pipeline_reviews(pipeline_id=str(pid))
 
         edge_gate = out["gates"][0]
         assert edge_gate["source_node_id"] == str(gated.source_node_id)
         assert edge_gate["target_node_id"] == str(gated.target_node_id)
         assert edge_gate["edge_type"] == "normal"
-        assert edge_gate["hitl_gate_config"] == config
+        assert edge_gate["hitl_review_config"] == config
         assert out["gate_count"] == 1
 
     @patch("modulo.db.crud.pipeline.get_pipeline_graph", new_callable=AsyncMock)
@@ -326,7 +326,7 @@ class TestGetPipelineGates(_AuthContext):
         mock_graph.return_value = None
         mock_session.return_value = _make_session_context(AsyncMock())
 
-        out = await get_pipeline_gates(pipeline_id=pid)
+        out = await get_pipeline_reviews(pipeline_id=pid)
 
         assert out == {"error": "pipeline_not_found", "pipeline_id": pid}
 
@@ -337,7 +337,7 @@ class TestGetPipelineGates(_AuthContext):
 
 
 class TestReadOnlyGuarantee(_AuthContext):
-    @patch("modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config", new_callable=AsyncMock)
+    @patch("modulo.db.crud.hitl_review_config.resolve_hitl_review_config", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.db.crud.pipeline.get_pipeline_graph", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._pipeline_owner_team_id", new_callable=AsyncMock)
@@ -363,7 +363,7 @@ class TestReadOnlyGuarantee(_AuthContext):
         gated_edge.source_node_id = uuid.uuid4()
         gated_edge.target_node_id = uuid.uuid4()
         gated_edge.edge_type = "normal"
-        gated_edge.hitl_gate_config = {"label": "Gate", "human_only": False}
+        gated_edge.hitl_review_config = {"label": "Gate", "human_only": False}
         mock_graph.return_value = ([], [gated_edge])
 
         run = _make_run()
@@ -373,9 +373,9 @@ class TestReadOnlyGuarantee(_AuthContext):
         mock_hitl_manager.return_value = manager
         mock_resolve_config.return_value = {"label": "Gate", "human_only": False}
 
-        await list_hitl_gates()
-        await get_hitl_gate(run_id=str(run.id), gate_id="hitl_gate_a_b")
-        await get_pipeline_gates(pipeline_id=str(uuid.uuid4()))
+        await list_hitl_reviews()
+        await get_hitl_review(run_id=str(run.id), review_id="hitl_review_a_b")
+        await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
 
         session.add.assert_not_called()
         session.add_all.assert_not_called()
@@ -385,9 +385,9 @@ class TestReadOnlyGuarantee(_AuthContext):
 
     def test_tool_sources_contain_no_write_primitives(self) -> None:
         sources = [
-            inspect.getsource(_list_hitl_gates_impl),
-            inspect.getsource(_get_hitl_gate_impl),
-            inspect.getsource(_get_pipeline_gates_impl),
+            inspect.getsource(_list_hitl_reviews_impl),
+            inspect.getsource(_get_hitl_review_impl),
+            inspect.getsource(_get_pipeline_reviews_impl),
         ]
         joined = "\n".join(sources)
         forbidden = [
@@ -425,7 +425,7 @@ class TestHitlInspectionBranches(_AuthContext):
             session.execute = AsyncMock(return_value=result)
             mock_session.return_value = _make_session_context(session)
 
-            out = await list_hitl_gates()
+            out = await list_hitl_reviews()
 
             assert out["limit"] == 20
             # The team-scoped key must add a team boundary clause to the query.
@@ -439,7 +439,7 @@ class TestHitlInspectionBranches(_AuthContext):
     async def test_list_scope_error_returns_insufficient_scope(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await list_hitl_gates()
+        out = await list_hitl_reviews()
         assert out["error"] == "insufficient_scope"
         assert "no scope" in out["detail"]
 
@@ -451,7 +451,7 @@ class TestHitlInspectionBranches(_AuthContext):
     async def test_list_programming_error_returns_migration_required(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await list_hitl_gates()
+        out = await list_hitl_reviews()
         assert out["error"] == "migration_required"
 
     @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
@@ -459,7 +459,7 @@ class TestHitlInspectionBranches(_AuthContext):
     async def test_list_generic_error_returns_tool_error(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await list_hitl_gates()
+        out = await list_hitl_reviews()
         assert out["error"] == "internal_error"
 
     @patch("modulo.api.mcp_server._load_hitl_run", new_callable=AsyncMock)
@@ -474,10 +474,10 @@ class TestHitlInspectionBranches(_AuthContext):
         mock_load_run.return_value = _TEAM_SCOPE_ERROR
         mock_session.return_value = _make_session_context(AsyncMock())
         rid = str(uuid.uuid4())
-        out = await get_hitl_gate(run_id=rid, gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id=rid, review_id="hitl_review_a_b")
         assert out["error"] == "team_boundary_violation"
 
-    @patch("modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config", new_callable=AsyncMock, return_value=None)
+    @patch("modulo.db.crud.hitl_review_config.resolve_hitl_review_config", new_callable=AsyncMock, return_value=None)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server.get_run")
     @patch("modulo.api.mcp_server._session")
@@ -498,7 +498,7 @@ class TestHitlInspectionBranches(_AuthContext):
         mock_get_run.return_value = run
         mock_session.return_value = _make_session_context(AsyncMock())
 
-        out = await get_hitl_gate(run_id=str(run.id), gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id=str(run.id), review_id="hitl_review_a_b")
 
         assert out["gate_config"] is None
         assert out["gate_fired"] is True
@@ -508,7 +508,7 @@ class TestHitlInspectionBranches(_AuthContext):
     async def test_get_gate_scope_error_returns_insufficient_scope(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await get_hitl_gate(run_id=str(uuid.uuid4()), gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id=str(uuid.uuid4()), review_id="hitl_review_a_b")
         assert out["error"] == "insufficient_scope"
 
     @patch(
@@ -519,7 +519,7 @@ class TestHitlInspectionBranches(_AuthContext):
     async def test_get_gate_programming_error_returns_migration_required(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await get_hitl_gate(run_id=str(uuid.uuid4()), gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id=str(uuid.uuid4()), review_id="hitl_review_a_b")
         assert out["error"] == "migration_required"
 
     @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
@@ -527,13 +527,13 @@ class TestHitlInspectionBranches(_AuthContext):
     async def test_get_gate_generic_error_returns_tool_error(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await get_hitl_gate(run_id=str(uuid.uuid4()), gate_id="hitl_gate_a_b")
+        out = await get_hitl_review(run_id=str(uuid.uuid4()), review_id="hitl_review_a_b")
         assert out["error"] == "internal_error"
 
     @patch("modulo.api.mcp_server._pipeline_owner_team_id", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_gates_team_scope_mismatch(
+    async def test_get_pipeline_reviews_team_scope_mismatch(
         self,
         mock_validate_auth: AsyncMock,
         mock_session: AsyncMock,
@@ -548,7 +548,7 @@ class TestHitlInspectionBranches(_AuthContext):
             mock_owner_team.return_value = uuid.uuid4()
             mock_session.return_value = _make_session_context(AsyncMock())
 
-            out = await get_pipeline_gates(pipeline_id=str(pid))
+            out = await get_pipeline_reviews(pipeline_id=str(pid))
 
             assert out["error"] == "team_boundary_violation"
         finally:
@@ -557,10 +557,10 @@ class TestHitlInspectionBranches(_AuthContext):
 
     @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_gates_scope_error_returns_insufficient_scope(
+    async def test_get_pipeline_reviews_scope_error_returns_insufficient_scope(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await get_pipeline_gates(pipeline_id=str(uuid.uuid4()))
+        out = await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
         assert out["error"] == "insufficient_scope"
 
     @patch(
@@ -568,22 +568,22 @@ class TestHitlInspectionBranches(_AuthContext):
         side_effect=ProgrammingError("relation missing", "detail", None),
     )
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_gates_programming_error_returns_migration_required(
+    async def test_get_pipeline_reviews_programming_error_returns_migration_required(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await get_pipeline_gates(pipeline_id=str(uuid.uuid4()))
+        out = await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
         assert out["error"] == "migration_required"
 
     @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_gates_generic_error_returns_tool_error(
+    async def test_get_pipeline_reviews_generic_error_returns_tool_error(
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
-        out = await get_pipeline_gates(pipeline_id=str(uuid.uuid4()))
+        out = await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
         assert out["error"] == "internal_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_gates_invalid_uuid_returns_invalid_id(self, mock_validate_auth: AsyncMock) -> None:
-        out = await get_pipeline_gates(pipeline_id="not-a-uuid")
+    async def test_get_pipeline_reviews_invalid_uuid_returns_invalid_id(self, mock_validate_auth: AsyncMock) -> None:
+        out = await get_pipeline_reviews(pipeline_id="not-a-uuid")
         assert out["error"] == "invalid_id"
         assert out["field"] == "pipeline_id"

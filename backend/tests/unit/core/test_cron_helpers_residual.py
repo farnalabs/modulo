@@ -1679,8 +1679,8 @@ async def test_reconcile_org_read_failure_returns(caplog):
     summary: dict[str, Any] = {
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
-        "hitl_gate_expired_terminalized": 0,
-        "hitl_gate_missing_terminalized": 0,
+        "hitl_review_expired_terminalized": 0,
+        "hitl_review_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
@@ -1700,7 +1700,7 @@ async def test_reconcile_org_read_failure_returns(caplog):
                 claim_cap=3,
                 stale_window=600,
                 capacity_redispatch_seconds=120,
-                hitl_gate_cancel_grace_seconds=3600,
+                hitl_review_cancel_grace_seconds=3600,
             ),
             enqueue_failed_redispatched=0,
             summary=summary,
@@ -1715,15 +1715,15 @@ async def test_reconcile_org_processes_rows():
     summary: dict[str, Any] = {
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
-        "hitl_gate_expired_terminalized": 0,
-        "hitl_gate_missing_terminalized": 0,
+        "hitl_review_expired_terminalized": 0,
+        "hitl_review_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, return_value=[]),
         patch.object(ch, "_terminalize_claim_cap_exhausted", new_callable=AsyncMock, return_value=[uuid.uuid4()]),
-        patch.object(ch, "_terminalize_expired_hitl_gates", new_callable=AsyncMock, return_value=[]),
+        patch.object(ch, "_terminalize_expired_hitl_reviews", new_callable=AsyncMock, return_value=[]),
         patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, return_value=0) as one_row,
     ):
         got = await ch._reconcile_org(
@@ -1738,7 +1738,7 @@ async def test_reconcile_org_processes_rows():
                 claim_cap=3,
                 stale_window=600,
                 capacity_redispatch_seconds=120,
-                hitl_gate_cancel_grace_seconds=3600,
+                hitl_review_cancel_grace_seconds=3600,
             ),
             enqueue_failed_redispatched=0,
             summary=summary,
@@ -1831,8 +1831,8 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
         "claim_cap_terminalized": 2,
         "mid_graph_wedge_terminalized": 3,
         "dispatch_failed_terminalized": 4,
-        "hitl_gate_expired_terminalized": 5,
-        "hitl_gate_missing_terminalized": 6,
+        "hitl_review_expired_terminalized": 5,
+        "hitl_review_missing_terminalized": 6,
     }
     record = MagicMock()
     with (
@@ -1849,14 +1849,14 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
         "claim_cap_exhausted",
         "executor_superseded",
         "dispatch_failed",
-        "hitl_gate_expired",
-        "hitl_gate_missing",
+        "hitl_review_expired",
+        "hitl_review_missing",
     ]
 
 
 async def test_update_reconcile_telemetry_skips_zero_hitl_keys():
     """FAR-721: a tick that collected no zero-claim orphans must not emit a
-    ``hitl_gate_missing`` stall reason, and the guard must be reachable without
+    ``hitl_review_missing`` stall reason, and the guard must be reachable without
     a KeyError from a summary that carries the key as zero (the sibling
     telemetry tests above omit it entirely)."""
     summary: dict[str, Any] = {
@@ -1864,8 +1864,8 @@ async def test_update_reconcile_telemetry_skips_zero_hitl_keys():
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
         "dispatch_failed_terminalized": 0,
-        "hitl_gate_expired_terminalized": 0,
-        "hitl_gate_missing_terminalized": 0,
+        "hitl_review_expired_terminalized": 0,
+        "hitl_review_missing_terminalized": 0,
     }
     record = MagicMock()
     with (
@@ -2175,19 +2175,19 @@ async def test_re_enqueue_run_gates_on_dispatch_run():
 # ---------------------------------------------------------------------------
 
 
-def test_decision_gate_identity_prefers_stamped_gate_id():
-    payload = json.dumps({"gate_id": "stamped-gate"})
-    identity = ch._decision_gate_identity((None, payload, "row-gate"))
+def test_decision_review_identity_prefers_stamped_review_id():
+    payload = json.dumps({"review_id": "stamped-gate"})
+    identity = ch._decision_review_identity((None, payload, "row-gate"))
     assert identity == "stamped-gate"
 
 
-def test_decision_gate_identity_falls_back_to_row_gate_id():
-    identity = ch._decision_gate_identity((None, "not json", "row-gate"))
+def test_decision_review_identity_falls_back_to_row_review_id():
+    identity = ch._decision_review_identity((None, "not json", "row-gate"))
     assert identity == "row-gate"
 
 
-def test_decision_gate_identity_none_when_unstamped():
-    identity = ch._decision_gate_identity((None, json.dumps({"action": "approved"}), None))
+def test_decision_review_identity_none_when_unstamped():
+    identity = ch._decision_review_identity((None, json.dumps({"action": "approved"}), None))
     assert identity is None
 
 
@@ -2201,7 +2201,7 @@ async def test_awaiting_human_guard_corrupted_payload_skips():
             new_callable=AsyncMock,
             return_value=("approved", "not-json{", "gate-1"),
         ),
-        patch.object(ch, "_pending_claimed_gate_id", new_callable=AsyncMock, return_value=None),
+        patch.object(ch, "_pending_claimed_review_id", new_callable=AsyncMock, return_value=None),
         patch.object(ch, "_has_any_undecided_claim_row", new_callable=AsyncMock, return_value=False),
     ):
         has_decision = await ch._awaiting_human_has_committed_decision(_MockSession(), ORG, uuid.uuid4())
@@ -2215,7 +2215,7 @@ async def test_committed_decision_resume_data_corrupted_payload_recovers_action(
         ch, "_latest_committed_decision_row", new_callable=AsyncMock, return_value=("approved", "not-json{", "gate-1")
     ):
         resume = await ch._committed_decision_resume_data(_MockSession(), ORG, uuid.uuid4())
-    assert resume == {"action": "approved", "gate_id": "gate-1"}
+    assert resume == {"action": "approved", "review_id": "gate-1"}
 
 
 async def test_committed_decision_resume_data_no_decision_returns_none():
@@ -2230,7 +2230,7 @@ async def test_committed_decision_resume_data_unstamped_payload_gets_row_gate():
         ch, "_latest_committed_decision_row", new_callable=AsyncMock, return_value=("rejected", payload, "gate-2")
     ):
         resume = await ch._committed_decision_resume_data(_MockSession(), ORG, uuid.uuid4())
-    assert resume == {"action": "rejected", "gate_id": "gate-2"}
+    assert resume == {"action": "rejected", "review_id": "gate-2"}
 
 
 # ---------------------------------------------------------------------------
@@ -2243,8 +2243,8 @@ async def test_reconcile_org_reraises_cancellation():
     summary: dict[str, Any] = {
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
-        "hitl_gate_expired_terminalized": 0,
-        "hitl_gate_missing_terminalized": 0,
+        "hitl_review_expired_terminalized": 0,
+        "hitl_review_missing_terminalized": 0,
         "scanned": 0,
     }
     with (
@@ -2264,7 +2264,7 @@ async def test_reconcile_org_reraises_cancellation():
                 claim_cap=3,
                 stale_window=600,
                 capacity_redispatch_seconds=120,
-                hitl_gate_cancel_grace_seconds=3600,
+                hitl_review_cancel_grace_seconds=3600,
             ),
             enqueue_failed_redispatched=0,
             summary=summary,

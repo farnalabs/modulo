@@ -56,10 +56,10 @@ def browser_reviewer_signed_in(ctx: dict[str, Any]) -> None:
     ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
 
 
-@given(parsers.parse('a HITL gate "{gate_id}" is awaiting review'))
-def hitl_gate_awaiting_review(ctx: dict[str, Any], gate_id: str) -> None:
+@given(parsers.parse('a HITL gate "{review_id}" is awaiting review'))
+def hitl_review_awaiting_review(ctx: dict[str, Any], review_id: str) -> None:
     ctx["run_id"] = uuid.uuid4()
-    ctx["gate_id"] = gate_id
+    ctx["review_id"] = review_id
     ctx["claim_token"] = ctx.get("claim_token") or ("valid_token_" + uuid.uuid4().hex)
 
 
@@ -92,14 +92,14 @@ def reviewer_approves_with_modification(ctx: dict[str, Any], client, request) ->
         mgr.approve_with_modification = AsyncMock(side_effect=ClaimTokenExpiredError())
         with patch("modulo.api.routes.hitl.HITLManager", return_value=mgr):
             resp = client.post(
-                f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve-with-modification",
+                f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve-with-modification",
                 json={**body, "claim_token": ctx["claim_token"]},
             )
     else:
         body["claim_token"] = ctx["claim_token"]
         mock_gate = MagicMock()
         mock_gate.run_id = ctx["run_id"]
-        mock_gate.gate_id = ctx["gate_id"]
+        mock_gate.review_id = ctx["review_id"]
         mgr = MagicMock()
         mgr.approve_with_modification = AsyncMock(return_value=mock_gate)
         with (
@@ -108,7 +108,7 @@ def reviewer_approves_with_modification(ctx: dict[str, Any], client, request) ->
         ):
             exec_cls.return_value.resume = AsyncMock()
             resp = client.post(
-                f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve-with-modification",
+                f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve-with-modification",
                 json=body,
             )
         ctx["_resume"] = exec_cls.return_value.resume
@@ -120,7 +120,7 @@ def reviewer_approves_with_modification(ctx: dict[str, Any], client, request) ->
 def reviewer_approves_with_modification_no_claim_token(ctx: dict[str, Any], client, request) -> None:
     """Body validation rejects the missing required ``claim_token`` with a real 422."""
     resp = client.post(
-        f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve-with-modification",
+        f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve-with-modification",
         json={"modified_output": _MODIFIED_OUTPUT},
     )
     request.node._resp = resp
@@ -141,23 +141,23 @@ def resume_carries_modified_output(ctx: dict[str, Any]) -> None:
 def api_key_credential_approves(ctx: dict[str, Any], api_key_client, request) -> None:
     with (
         patch(
-            "modulo.api.routes.hitl.resolve_hitl_gate_config",
+            "modulo.api.routes.hitl.resolve_hitl_review_config",
             new=AsyncMock(return_value={"human_only": True}),
         ),
         patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=AsyncMock()),
     ):
         resp = api_key_client.post(
-            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve",
             json={"claim_token": ctx["claim_token"], "notes": None},
         )
     request.node._resp = resp
 
 
-def _claim_mock(age_hours: int, gate_id: str) -> MagicMock:
+def _claim_mock(age_hours: int, review_id: str) -> MagicMock:
     claim = MagicMock()
     claim.id = uuid.uuid4()
     claim.run_id = uuid.uuid4()
-    claim.gate_id = gate_id
+    claim.review_id = review_id
     claim.claimed_at = datetime.now(UTC) - timedelta(hours=age_hours)
     return claim
 
@@ -165,7 +165,7 @@ def _claim_mock(age_hours: int, gate_id: str) -> MagicMock:
 @given(parsers.parse("a claimed HITL gate has been held for {hours:d} hours"))
 def claimed_gate_held_for(ctx: dict[str, Any], hours: int) -> None:
     ctx["held_hours"] = hours
-    ctx["overdue_gate_id"] = "pre-deploy"
+    ctx["overdue_review_id"] = "pre-deploy"
 
 
 @when("the overdue claims are queried")
@@ -173,7 +173,7 @@ def overdue_claims_queried(ctx: dict[str, Any]) -> None:
     from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 
     result = MagicMock()
-    result.scalars.return_value.all.return_value = [_claim_mock(ctx["held_hours"], ctx["overdue_gate_id"])]
+    result.scalars.return_value.all.return_value = [_claim_mock(ctx["held_hours"], ctx["overdue_review_id"])]
     session = MagicMock()
     session.execute = AsyncMock(return_value=result)
 

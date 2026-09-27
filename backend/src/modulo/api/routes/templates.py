@@ -211,7 +211,7 @@ async def _persist_template_edges(
             target_node_id=uuid.UUID(target_id),
             edge_type=edge.get("edge_type", "normal"),
             condition_expression=edge.get("condition_expression"),
-            hitl_gate_config=edge.get("hitl_gate_config"),
+            hitl_review_config=edge.get("hitl_review_config"),
             source_port=edge.get("source_port", "out"),
             target_port=edge.get("target_port", "in"),
         )

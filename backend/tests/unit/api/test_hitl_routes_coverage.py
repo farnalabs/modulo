@@ -93,7 +93,7 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 def _gate_mock(*, claim_token: str | None = "tok-123") -> MagicMock:
     gate = MagicMock()
     gate.run_id = _RUN_ID
-    gate.gate_id = "gate-1"
+    gate.review_id = "gate-1"
     gate.claim_token = claim_token
     gate.expires_at = datetime.now(UTC) + timedelta(minutes=15)
     return gate
@@ -138,7 +138,7 @@ def test_claim_gate_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["run_id"] == str(_RUN_ID)
-    assert body["gate_id"] == "gate-1"
+    assert body["review_id"] == "gate-1"
     assert body["claim_token"] == "tok-123"
     transition.assert_awaited_once()
 
@@ -180,12 +180,12 @@ def test_claim_gate_missing_claim_data_returns_500(client: tuple[TestClient, Asy
     [
         (
             AlreadyClaimedError(_RUN_ID, "gate-1"),
-            ProblemType.HITL_GATE_ALREADY_CLAIMED,
+            ProblemType.HITL_REVIEW_ALREADY_CLAIMED,
             "is already claimed",
         ),
         (
             GateAlreadyDecidedError(_RUN_ID, "gate-1"),
-            ProblemType.HITL_GATE_ALREADY_DECIDED,
+            ProblemType.HITL_REVIEW_ALREADY_DECIDED,
             "already has a decision",
         ),
         (
@@ -401,7 +401,7 @@ def test_list_run_pending_gates_error_mapping(
 def _org_gate() -> MagicMock:
     gate = MagicMock()
     gate.run_id = _RUN_ID
-    gate.gate_id = "gate-1"
+    gate.review_id = "gate-1"
     gate.pipeline_id = uuid.uuid4()
     gate.account_id = _USER_ID
     gate.claimed_at = None
@@ -471,7 +471,7 @@ def test_list_org_pending_gates_resolves_gate_labels(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
     """FAR-686: the org endpoint batch-resolves each pending gate's human
-    label via run → snapshot → hitl_gate_config.label. A gate whose run has
+    label via run → snapshot → hitl_review_config.label. A gate whose run has
     no snapshot degrades to label=None while the rest of the list keeps its
     labels, and pipeline_name resolution keeps working."""
     http, session = client
@@ -482,11 +482,11 @@ def test_list_org_pending_gates_resolves_gate_labels(
 
     claimed = _org_gate()
     claimed.run_id = run_with_snapshot
-    claimed.gate_id = "hitl_gate_planner_deploy"
+    claimed.review_id = "hitl_review_planner_deploy"
     claimed.pipeline_id = pipeline_id
     unclaimed = _org_gate()
     unclaimed.run_id = run_without_snapshot
-    unclaimed.gate_id = "hitl_gate_review_ship"
+    unclaimed.review_id = "hitl_review_review_ship"
     unclaimed.pipeline_id = pipeline_id
     unclaimed.account_id = None
 
@@ -495,7 +495,7 @@ def test_list_org_pending_gates_resolves_gate_labels(
             {
                 "source": "planner",
                 "target": "deploy",
-                "hitl_gate_config": {"label": "Deploy gate"},
+                "hitl_review_config": {"label": "Deploy gate"},
             }
         ]
     }
@@ -526,9 +526,9 @@ def test_list_org_pending_gates_resolves_gate_labels(
     assert resp.status_code == 200, resp.text
     gates = resp.json()["gates"]
     assert len(gates) == 2
-    assert gates[0]["gate_id"] == "hitl_gate_planner_deploy"
+    assert gates[0]["review_id"] == "hitl_review_planner_deploy"
     assert gates[0]["label"] == "Deploy gate"
-    assert gates[1]["gate_id"] == "hitl_gate_review_ship"
+    assert gates[1]["review_id"] == "hitl_review_review_ship"
     assert gates[1]["label"] is None
     assert gates[0]["pipeline_name"] == "Reviewer Pipeline"
     assert gates[1]["pipeline_name"] == "Reviewer Pipeline"
@@ -549,11 +549,11 @@ def test_list_org_pending_gates_resolves_claimant_names(
     mine.account_id = _USER_ID
     theirs = _org_gate()
     theirs.run_id = uuid.uuid4()
-    theirs.gate_id = "gate-2"
+    theirs.review_id = "gate-2"
     theirs.account_id = other_id
     ghost = _org_gate()
     ghost.run_id = uuid.uuid4()
-    ghost.gate_id = "gate-3"
+    ghost.review_id = "gate-3"
     ghost.account_id = ghost_id
 
     def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
@@ -584,9 +584,9 @@ def test_list_org_pending_gates_resolves_claimant_names(
     assert resp.status_code == 200, resp.text
     gates = resp.json()["gates"]
     assert len(gates) == 3
-    own = next(g for g in gates if g["gate_id"] == "gate-1")
-    foreign = next(g for g in gates if g["gate_id"] == "gate-2")
-    ghost_gate = next(g for g in gates if g["gate_id"] == "gate-3")
+    own = next(g for g in gates if g["review_id"] == "gate-1")
+    foreign = next(g for g in gates if g["review_id"] == "gate-2")
+    ghost_gate = next(g for g in gates if g["review_id"] == "gate-3")
     assert own["claimed_by_me"] is True
     assert own["claimed_by_name"] == "Alice Reviewer"
     assert foreign["claimed_by_me"] is False
@@ -611,10 +611,10 @@ def test_list_org_pending_gates_error_mapping(
 # ---------------------------------------------------------------------------
 
 
-def _briefed_gate(graph_gate_id: str, *, context: dict | None) -> MagicMock:
+def _briefed_gate(graph_review_id: str, *, context: dict | None) -> MagicMock:
     gate = MagicMock()
     gate.run_id = _RUN_ID
-    gate.gate_id = graph_gate_id
+    gate.review_id = graph_review_id
     gate.pipeline_id = uuid.uuid4()
     gate.account_id = _USER_ID
     gate.claimed_at = None
@@ -625,24 +625,24 @@ def _briefed_gate(graph_gate_id: str, *, context: dict | None) -> MagicMock:
     return gate
 
 
-def _graph_with_gate(gate_id: str, description: str | None = "Why this gate needs a human decision.") -> dict:
-    from modulo.db.crud.hitl_gate_config import parse_hitl_gate_id
+def _graph_with_gate(review_id: str, description: str | None = "Why this gate needs a human decision.") -> dict:
+    from modulo.db.crud.hitl_review_config import parse_hitl_review_id
 
-    source, target = parse_hitl_gate_id(gate_id) or ("src-1", "tgt-2")
+    source, target = parse_hitl_review_id(review_id) or ("src-1", "tgt-2")
     config: dict = {"label": "Review gate"}
     if description is not None:
         config["description"] = description
     return {
         "nodes": [{"id": source, "label": "Generator"}],
-        "edges": [{"source": source, "target": target, "hitl_gate_config": config}],
+        "edges": [{"source": source, "target": target, "hitl_review_config": config}],
     }
 
 
 def test_list_run_pending_gates_carries_description_and_context(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
-    graph = _graph_with_gate("hitl_gate_src-1_tgt-2")
+    graph = _graph_with_gate("hitl_review_src-1_tgt-2")
     context = {"trigger": "condition", "condition": "output.severity == 'high'", "pipeline_name": "PR Reviewer"}
-    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+    gate = _briefed_gate("hitl_review_src-1_tgt-2", context=context)
 
     run = MagicMock()
     run.snapshot_id = _SNAPSHOT_ID
@@ -677,13 +677,13 @@ def test_list_run_pending_gates_prefers_the_captured_description(client: tuple[T
     fire-time captured description wins over the snapshot config's
     description (which may have been edited after the gate fired)."""
     http, session = client
-    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description="Stale snapshot briefing.")
+    graph = _graph_with_gate("hitl_review_src-1_tgt-2", description="Stale snapshot briefing.")
     context = {
         "trigger": "condition",
         "description": "Captured fire-time briefing.",
         "condition": "output.severity == 'high'",
     }
-    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+    gate = _briefed_gate("hitl_review_src-1_tgt-2", context=context)
 
     run = MagicMock()
     run.snapshot_id = _SNAPSHOT_ID
@@ -727,7 +727,7 @@ def test_list_run_pending_gates_resolves_context_description_without_a_snapshot(
         "description": "Captured fire-time briefing without a snapshot.",
         "condition": "output.severity == 'high'",
     }
-    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+    gate = _briefed_gate("hitl_review_src-1_tgt-2", context=context)
 
     run = MagicMock()
     run.snapshot_id = None
@@ -754,8 +754,8 @@ def test_list_run_pending_gates_resolves_context_description_without_a_snapshot(
 
 def test_list_org_pending_gates_carries_description_and_context(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
-    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context={"trigger": "node", "reason": "two failures"})
-    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description="Org-level briefing.")
+    gate = _briefed_gate("hitl_review_src-1_tgt-2", context={"trigger": "node", "reason": "two failures"})
+    graph = _graph_with_gate("hitl_review_src-1_tgt-2", description="Org-level briefing.")
 
     pipeline_rows = MagicMock()
     pipeline_rows.all.return_value = [(gate.pipeline_id, "Reviewer Pipeline")]
@@ -795,8 +795,8 @@ def test_list_org_pending_gates_prefers_the_captured_description(client: tuple[T
         "reason": "two failures",
         "description": "Captured org briefing.",
     }
-    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
-    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description="Stale snapshot briefing.")
+    gate = _briefed_gate("hitl_review_src-1_tgt-2", context=context)
+    graph = _graph_with_gate("hitl_review_src-1_tgt-2", description="Stale snapshot briefing.")
 
     pipeline_rows = MagicMock()
     pipeline_rows.all.return_value = [(gate.pipeline_id, "Reviewer Pipeline")]
@@ -831,9 +831,9 @@ def test_list_run_pending_gates_resolves_claimant_names(
     same contract as the org endpoint."""
     http, session = client
     other_id = uuid.uuid4()
-    mine = _briefed_gate("hitl_gate_src-1_tgt-2", context=None)
+    mine = _briefed_gate("hitl_review_src-1_tgt-2", context=None)
     mine.account_id = _USER_ID
-    theirs = _briefed_gate("hitl_gate_src-3_tgt-4", context=None)
+    theirs = _briefed_gate("hitl_review_src-3_tgt-4", context=None)
     theirs.account_id = other_id
     run = MagicMock()
     run.snapshot_id = _SNAPSHOT_ID
@@ -865,8 +865,8 @@ def test_list_run_pending_gates_resolves_claimant_names(
     assert resp.status_code == 200, resp.text
     gates = resp.json()["gates"]
     assert len(gates) == 2
-    own = next(g for g in gates if g["gate_id"] == "hitl_gate_src-1_tgt-2")
-    foreign = next(g for g in gates if g["gate_id"] == "hitl_gate_src-3_tgt-4")
+    own = next(g for g in gates if g["review_id"] == "hitl_review_src-1_tgt-2")
+    foreign = next(g for g in gates if g["review_id"] == "hitl_review_src-3_tgt-4")
     assert own["claimed_by_me"] is True
     assert own["claimed_by_name"] == "Alice Reviewer"
     assert foreign["claimed_by_me"] is False
@@ -875,8 +875,8 @@ def test_list_run_pending_gates_resolves_claimant_names(
 
 def test_pending_gate_without_context_or_description_renders_null_fields(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
-    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description=None)
-    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=None)
+    graph = _graph_with_gate("hitl_review_src-1_tgt-2", description=None)
+    gate = _briefed_gate("hitl_review_src-1_tgt-2", context=None)
 
     run = MagicMock()
     run.snapshot_id = _SNAPSHOT_ID
@@ -1155,13 +1155,13 @@ def test_list_org_gates_decided_gates_carry_label_claimant_and_me(client: tuple[
     http, session = client
     snap_id = uuid.uuid4()
     decided = _decided_gate()
-    decided.gate_id = "hitl_gate_planner_deploy"  # matches the graph edge's derived gate id
+    decided.review_id = "hitl_review_planner_deploy"  # matches the graph edge's derived gate id
     graph_json = {
         "edges": [
             {
                 "source": "planner",
                 "target": "deploy",
-                "hitl_gate_config": {"label": "Deploy gate"},
+                "hitl_review_config": {"label": "Deploy gate"},
             }
         ]
     }
@@ -1232,7 +1232,7 @@ def _modify_patches(side_effect: object) -> list:
     return [
         *_decision_patches("approve_with_modification", side_effect),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1274,7 +1274,7 @@ def test_modify_approve_choice_gate_valid_answer_reaches_manager_and_resume(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
     """A valid choice answer is validated, forwarded to the manager and riding
-    in the resume decision payload (so ``hitl_answer_<gate_id>`` lands in
+    in the resume decision payload (so ``hitl_answer_<review_id>`` lands in
     state exactly as on the plain approve path)."""
     http, _session = client
     mgr_call = AsyncMock(_gate_mock)
@@ -1286,7 +1286,7 @@ def test_modify_approve_choice_gate_valid_answer_reaches_manager_and_resume(
         patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1324,7 +1324,7 @@ def test_modify_approve_non_choice_gate_without_answer_unchanged(client: tuple[T
         patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
         ),
     ]
@@ -1352,7 +1352,7 @@ def _approve_choice_patches(side_effect: object) -> list:
     return [
         *_decision_patches("approve", side_effect),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1394,7 +1394,7 @@ def test_approve_choice_gate_valid_answer_reaches_manager_and_resume(
         patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value=_CHOICE_CONFIG),
         ),
     ]
@@ -1427,7 +1427,7 @@ def test_approve_non_choice_gate_without_answer_unchanged(client: tuple[TestClie
         patch("modulo.api.routes.hitl.HITLManager.approve", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
         patch(
-            "modulo.api.hitl_answer_validation.resolve_hitl_gate_config",
+            "modulo.api.hitl_answer_validation.resolve_hitl_review_config",
             new=AsyncMock(return_value={"response_contract": {"kind": "approval"}}),
         ),
     ]
@@ -1458,7 +1458,7 @@ def test_modify_approve_unresolvable_config_fails_open_without_answer(client: tu
         patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.hitl.HITLManager.approve_with_modification", new=mgr_call),
         patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
-        patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
+        patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
     ]
     for p in patches:
         p.start()

@@ -3055,7 +3055,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{run_id}/hitl/{gate_id}/claim": {
+    "/api/v1/runs/{run_id}/hitl/{review_id}/claim": {
         parameters: {
             query?: never;
             header?: never;
@@ -3081,14 +3081,14 @@ export interface paths {
          *     pending list on the next refresh, and the claim token simply expires
          *     unused.
          */
-        post: operations["claim_gate_api_v1_runs__run_id__hitl__gate_id__claim_post"];
+        post: operations["claim_gate_api_v1_runs__run_id__hitl__review_id__claim_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{run_id}/hitl/{gate_id}/approve": {
+    "/api/v1/runs/{run_id}/hitl/{review_id}/approve": {
         parameters: {
             query?: never;
             header?: never;
@@ -3101,14 +3101,14 @@ export interface paths {
          * Approve Gate
          * @description Approve an interrupted HITL gate and resume the run.
          */
-        post: operations["approve_gate_api_v1_runs__run_id__hitl__gate_id__approve_post"];
+        post: operations["approve_gate_api_v1_runs__run_id__hitl__review_id__approve_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification": {
+    "/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification": {
         parameters: {
             query?: never;
             header?: never;
@@ -3125,14 +3125,14 @@ export interface paths {
          *     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
          *     documenting the change.
          */
-        post: operations["approve_gate_with_modification_api_v1_runs__run_id__hitl__gate_id__approve_with_modification_post"];
+        post: operations["approve_gate_with_modification_api_v1_runs__run_id__hitl__review_id__approve_with_modification_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{run_id}/hitl/{gate_id}/reject": {
+    "/api/v1/runs/{run_id}/hitl/{review_id}/reject": {
         parameters: {
             query?: never;
             header?: never;
@@ -3145,14 +3145,14 @@ export interface paths {
          * Reject Gate
          * @description Reject an interrupted HITL gate and route to reject_target or fail.
          */
-        post: operations["reject_gate_api_v1_runs__run_id__hitl__gate_id__reject_post"];
+        post: operations["reject_gate_api_v1_runs__run_id__hitl__review_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{run_id}/hitl/{gate_id}/deliver-manual": {
+    "/api/v1/runs/{run_id}/hitl/{review_id}/deliver-manual": {
         parameters: {
             query?: never;
             header?: never;
@@ -3169,14 +3169,14 @@ export interface paths {
          *     correction run or back to the agent. The output is validated and the
          *     run continues past the gate with the manually-supplied value.
          */
-        post: operations["deliver_manual_output_api_v1_runs__run_id__hitl__gate_id__deliver_manual_post"];
+        post: operations["deliver_manual_output_api_v1_runs__run_id__hitl__review_id__deliver_manual_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{run_id}/manual/{gate_id}/submit": {
+    "/api/v1/runs/{run_id}/manual/{review_id}/submit": {
         parameters: {
             query?: never;
             header?: never;
@@ -3189,7 +3189,7 @@ export interface paths {
          * Submit Manual Output
          * @description Submit output for a manual-input node and resume the run.
          */
-        post: operations["submit_manual_output_api_v1_runs__run_id__manual__gate_id__submit_post"];
+        post: operations["submit_manual_output_api_v1_runs__run_id__manual__review_id__submit_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3225,7 +3225,7 @@ export interface paths {
         };
         /**
          * List Org Pending Gates
-         * @description List pending HITL gates across the organisation.
+         * @description List pending HITL reviews across the organisation.
          *
          *     Gates on terminal runs are excluded (they are data rot, not pending work):
          *     the manager joins ``runs`` and keeps only undecided gates whose run is in
@@ -3278,7 +3278,7 @@ export interface paths {
          *     mirrors the repo's standard list convention (items/total/page/page_size,
          *     as the runs list uses) with the existing ``GateResponse`` items.
          */
-        get: operations["list_org_gates_api_v1_hitl_gates_get"];
+        get: operations["list_org_reviews_api_v1_hitl_reviews_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10563,7 +10563,7 @@ export interface components {
              */
             run_id: string;
             /** Gate Id */
-            gate_id: string;
+            review_id: string;
             /** Claim Token */
             claim_token: string;
             /** Expires At */
@@ -11542,7 +11542,7 @@ export interface components {
         /** CreateFeedbackRequest */
         CreateFeedbackRequest: {
             /** Gate Id */
-            gate_id: string;
+            review_id: string;
             /** Rejection Reason */
             rejection_reason: string;
             /** Producing Node Id */
@@ -11914,7 +11914,7 @@ export interface components {
              * Hitl Gate
              * @default false
              */
-            hitl_gate: boolean;
+            hitl_review: boolean;
         };
         /** DraftNodeResponse */
         DraftNodeResponse: {
@@ -12688,7 +12688,7 @@ export interface components {
              */
             run_id: string;
             /** Gate Id */
-            gate_id: string;
+            review_id: string;
             /**
              * Pipeline Id
              * Format: uuid
@@ -13072,8 +13072,8 @@ export interface components {
                 [key: string]: boolean;
             };
         };
-        /** HitlGateConfig */
-        HitlGateConfig: {
+        /** HitlReviewConfig */
+        HitlReviewConfig: {
             /** Label */
             label: string;
             /** Description */
@@ -13106,7 +13106,7 @@ export interface components {
              * @description JMESPath expression naming the field under review in the run state.  Resolved against the same root the gate condition evaluates against (the merged state dict).  The resolved value is bounded and redacted identically to artifacts before persistence.
              */
             subject_path?: string | null;
-            /** @description FAR-860: typed response contract. Absent/None = today's approve/reject behaviour (backward-compatible). kind='choice' declares agent-defined options; the human's answer is injected into run state as hitl_answer_<gate_id> for downstream conditional edges. */
+            /** @description FAR-860: typed response contract. Absent/None = today's approve/reject behaviour (backward-compatible). kind='choice' declares agent-defined options; the human's answer is injected into run state as hitl_answer_<review_id> for downstream conditional edges. */
             response_contract?: components["schemas"]["HitlResponseContract"] | null;
         };
         /**
@@ -15049,8 +15049,8 @@ export interface components {
             /** Gates */
             gates: components["schemas"]["GateResponse"][];
         };
-        /** PendingHitlGate */
-        PendingHitlGate: {
+        /** PendingHitlReview */
+        PendingHitlReview: {
             /**
              * Id
              * Format: uuid
@@ -15067,7 +15067,7 @@ export interface components {
              */
             pipeline_id: string;
             /** Gate Id */
-            gate_id: string;
+            review_id: string;
             /** Claimed By */
             claimed_by: string | null;
             /** Expires At */
@@ -15248,7 +15248,7 @@ export interface components {
             target_node_id: string;
             /** Edge Type */
             edge_type: string;
-            hitl_gate_config?: components["schemas"]["HitlGateConfig"] | null;
+            hitl_review_config?: components["schemas"]["HitlReviewConfig"] | null;
             /**
              * Condition Expression
              * @description JMESPath expression for conditional edge routing. Evaluated against pipeline state; if truthy, routes to target.
@@ -18890,7 +18890,7 @@ export interface components {
             /** Runs Total */
             runs_total: number;
             /** Pending Hitl Gates */
-            pending_hitl_gates: components["schemas"]["PendingHitlGate"][];
+            pending_hitl_reviews: components["schemas"]["PendingHitlReview"][];
             /** Views */
             views?: components["schemas"]["ViewInfo"][] | null;
             current_view?: components["schemas"]["ViewInfo"] | null;
@@ -26497,7 +26497,7 @@ export interface operations {
             };
         };
     };
-    claim_gate_api_v1_runs__run_id__hitl__gate_id__claim_post: {
+    claim_gate_api_v1_runs__run_id__hitl__review_id__claim_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26505,7 +26505,7 @@ export interface operations {
             header?: never;
             path: {
                 run_id: string;
-                gate_id: string;
+                review_id: string;
             };
             cookie?: never;
         };
@@ -26535,7 +26535,7 @@ export interface operations {
             };
         };
     };
-    approve_gate_api_v1_runs__run_id__hitl__gate_id__approve_post: {
+    approve_gate_api_v1_runs__run_id__hitl__review_id__approve_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26543,7 +26543,7 @@ export interface operations {
             header?: never;
             path: {
                 run_id: string;
-                gate_id: string;
+                review_id: string;
             };
             cookie?: never;
         };
@@ -26575,7 +26575,7 @@ export interface operations {
             };
         };
     };
-    approve_gate_with_modification_api_v1_runs__run_id__hitl__gate_id__approve_with_modification_post: {
+    approve_gate_with_modification_api_v1_runs__run_id__hitl__review_id__approve_with_modification_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26583,7 +26583,7 @@ export interface operations {
             header?: never;
             path: {
                 run_id: string;
-                gate_id: string;
+                review_id: string;
             };
             cookie?: never;
         };
@@ -26615,7 +26615,7 @@ export interface operations {
             };
         };
     };
-    reject_gate_api_v1_runs__run_id__hitl__gate_id__reject_post: {
+    reject_gate_api_v1_runs__run_id__hitl__review_id__reject_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26623,7 +26623,7 @@ export interface operations {
             header?: never;
             path: {
                 run_id: string;
-                gate_id: string;
+                review_id: string;
             };
             cookie?: never;
         };
@@ -26655,7 +26655,7 @@ export interface operations {
             };
         };
     };
-    deliver_manual_output_api_v1_runs__run_id__hitl__gate_id__deliver_manual_post: {
+    deliver_manual_output_api_v1_runs__run_id__hitl__review_id__deliver_manual_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26663,7 +26663,7 @@ export interface operations {
             header?: never;
             path: {
                 run_id: string;
-                gate_id: string;
+                review_id: string;
             };
             cookie?: never;
         };
@@ -26695,7 +26695,7 @@ export interface operations {
             };
         };
     };
-    submit_manual_output_api_v1_runs__run_id__manual__gate_id__submit_post: {
+    submit_manual_output_api_v1_runs__run_id__manual__review_id__submit_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -26703,7 +26703,7 @@ export interface operations {
             header?: never;
             path: {
                 run_id: string;
-                gate_id: string;
+                review_id: string;
             };
             cookie?: never;
         };
@@ -26799,7 +26799,7 @@ export interface operations {
             };
         };
     };
-    list_org_gates_api_v1_hitl_gates_get: {
+    list_org_reviews_api_v1_hitl_reviews_get: {
         parameters: {
             query?: {
                 status?: "undecided" | "pending" | "claimed" | "approved" | "rejected" | "all";

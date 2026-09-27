@@ -248,7 +248,7 @@ def test_split_gate_approved() -> None:
     decision = {"action": "approved"}
     envelope = {
         "artifacts": [
-            {"node_id": "hitl_gate_a_b", "status": "interrupted", "result": "approved", "human_data": decision}
+            {"node_id": "hitl_review_a_b", "status": "interrupted", "result": "approved", "human_data": decision}
         ]
     }
     value, telemetry = split_node_output(envelope, NODE_TYPE_GATE, None)
@@ -264,7 +264,7 @@ def test_split_gate_deliver_manual_pinned() -> None:
     envelope = {
         "artifacts": [
             {
-                "node_id": "hitl_gate_a_b",
+                "node_id": "hitl_review_a_b",
                 "status": "interrupted",
                 "result": "delivered_manual",
                 "human_data": decision,
@@ -286,7 +286,7 @@ def test_split_gate_detected_by_shape_without_type() -> None:
     decision = {"action": "rejected"}
     envelope = {
         "artifacts": [
-            {"node_id": "hitl_gate_x_y", "status": "interrupted", "result": "rejected", "human_data": decision}
+            {"node_id": "hitl_review_x_y", "status": "interrupted", "result": "rejected", "human_data": decision}
         ]
     }
     value, telemetry = split_node_output(envelope, None, None)
@@ -295,7 +295,9 @@ def test_split_gate_detected_by_shape_without_type() -> None:
 
 
 def test_split_gate_no_human_data_returns_none() -> None:
-    envelope = {"artifacts": [{"node_id": "hitl_gate_a_b", "status": "auto_approved", "autonomy": "fully_autonomous"}]}
+    envelope = {
+        "artifacts": [{"node_id": "hitl_review_a_b", "status": "auto_approved", "autonomy": "fully_autonomous"}]
+    }
     value, telemetry = split_node_output(envelope, NODE_TYPE_GATE, None)
     assert value is None
     assert telemetry["status"] == "auto_approved"
@@ -305,7 +307,7 @@ def test_split_gate_no_human_data_returns_none() -> None:
 def test_split_gate_detected_by_interrupted_status_only() -> None:
     # No human_data/autonomy/result on the artifact: the gate is still detected
     # from the interrupted status alone.
-    envelope = {"artifacts": [{"node_id": "hitl_gate_a_b", "status": "interrupted"}]}
+    envelope = {"artifacts": [{"node_id": "hitl_review_a_b", "status": "interrupted"}]}
     value, telemetry = split_node_output(envelope, None, None)
     assert value is None
     assert telemetry["status"] == "interrupted"
@@ -661,25 +663,25 @@ def test_extend_type_map_stamps_gates_from_edges() -> None:
     graph = {
         "nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],
         "edges": [
-            {"source": "a", "target": "b", "hitl_gate_config": {"gate_id": "hitl_gate_a_b"}},
-            {"source": "b", "target": "a", "hitl_gate_config": {"gate_id": "hitl_gate_b_a"}, "type": "reject"},
+            {"source": "a", "target": "b", "hitl_review_config": {"review_id": "hitl_review_a_b"}},
+            {"source": "b", "target": "a", "hitl_review_config": {"review_id": "hitl_review_b_a"}, "type": "reject"},
             {"source": "a", "target": "c", "type": "normal"},
         ],
     }
     input_map = {"a": "agent", "b": "agent"}
     result = extend_node_type_map_from_edges(input_map, graph)
     assert result["a"] == "agent"
-    assert result["hitl_gate_a_b"] == NODE_TYPE_GATE
-    assert result["hitl_gate_b_a"] == NODE_TYPE_GATE
+    assert result["hitl_review_a_b"] == NODE_TYPE_GATE
+    assert result["hitl_review_b_a"] == NODE_TYPE_GATE
     assert "c" not in result
     # Input map is never mutated.
-    assert "hitl_gate_a_b" not in input_map
+    assert "hitl_review_a_b" not in input_map
 
 
 def test_extend_type_map_source_node_id_fallback() -> None:
-    graph = {"edges": [{"source_node_id": "x", "target_node_id": "y", "hitl_gate_config": {}}]}
+    graph = {"edges": [{"source_node_id": "x", "target_node_id": "y", "hitl_review_config": {}}]}
     result = extend_node_type_map_from_edges(None, graph)
-    assert result["hitl_gate_x_y"] == NODE_TYPE_GATE
+    assert result["hitl_review_x_y"] == NODE_TYPE_GATE
 
 
 def test_extend_type_map_safe_on_malformed_graph() -> None:
@@ -691,9 +693,9 @@ def test_extend_type_map_safe_on_malformed_graph() -> None:
 def test_extend_type_map_skips_edges_without_source_or_target() -> None:
     graph = {
         "edges": [
-            {"hitl_gate_config": {"gate_id": "g1"}, "source": "a"},
-            {"hitl_gate_config": {"gate_id": "g2"}, "target": "b"},
-            {"hitl_gate_config": {"gate_id": "g3"}},
+            {"hitl_review_config": {"review_id": "g1"}, "source": "a"},
+            {"hitl_review_config": {"review_id": "g2"}, "target": "b"},
+            {"hitl_review_config": {"review_id": "g3"}},
         ]
     }
     assert not extend_node_type_map_from_edges(None, graph)

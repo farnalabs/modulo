@@ -335,9 +335,9 @@ def test_mapped_route_elements_cover_owning_view_testids():
     testids too, so they are listed alongside the page view — e.g. the run
     detail page (``/runs/:id``, ``RunDetailView.vue``) surfaces
     ``shared/JsonViewer.vue``, ``shared/ErrorAlert.vue`` and
-    ``hitl/HitlGateCard.vue``, whose shipped testids are part of its surface.
+    ``hitl/HitlReviewCard.vue``, whose shipped testids are part of its surface.
     Components that render children own those children's testids as well —
-    ``hitl/HitlGateCard.vue`` embeds ``HitlBriefing.vue``, so its briefing
+    ``hitl/HitlReviewCard.vue`` embeds ``HitlBriefing.vue``, so its briefing
     surface is part of every route that renders the gate card.
 
     Every whole-page view that gates its content behind the plan entitlement
@@ -550,7 +550,7 @@ OWNED_PAGES = {
         "frontend/src/views/RunDetailView.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
-        "frontend/src/components/hitl/HitlGateCard.vue",
+        "frontend/src/components/hitl/HitlReviewCard.vue",
         "frontend/src/components/HitlBriefing.vue",
     ),
     "/settings/email": (
@@ -573,7 +573,7 @@ OWNED_PAGES = {
         "frontend/src/views/SettingsHitlReviewView.vue",
         "frontend/src/components/shared/FilterBar.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
-        "frontend/src/components/hitl/HitlGateCard.vue",
+        "frontend/src/components/hitl/HitlReviewCard.vue",
         "frontend/src/components/HitlBriefing.vue",
     ),
     "/settings/guardrails": "frontend/src/views/SettingsGuardrailsView.vue",

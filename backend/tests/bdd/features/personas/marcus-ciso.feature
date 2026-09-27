@@ -28,7 +28,7 @@ Feature: Marcus — CISO at a Regulated Organisation
 
   @goal-marcus-human-only-gates
   Scenario: Marcus enforces human-only decisions on critical gates
-    Given pipeline "deploy-to-prod" has HITL gate "production-deploy"
+    Given pipeline "deploy-to-prod" has HITL review "production-deploy"
     When the gate has human_only set to true
     Then only a human user can approve or reject
     And the MCP review_hitl tool returns a "human_only" error

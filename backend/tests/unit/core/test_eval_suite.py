@@ -150,13 +150,13 @@ def _interrupt_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
 
 
-class TestHitlGateConditionFalsy:
+class TestHitlReviewConditionFalsy:
     def test_condition_false_literal_skips_gate(self) -> None:
         """JMESPath condition evaluating to the ``False`` literal → falsy → skip."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> dict[str, Any]:
-            node_fn = make_hitl_gate_fn({"gate_id": "g", "condition": "ready == `false`"})
+            node_fn = make_hitl_review_fn({"review_id": "g", "condition": "ready == `false`"})
             return await node_fn({"ready": True, "artifacts": []})
 
         result = asyncio.run(_run())
@@ -164,10 +164,10 @@ class TestHitlGateConditionFalsy:
 
     def test_condition_empty_list_skips_gate(self) -> None:
         """JMESPath condition returning an empty list → falsy → gate skipped."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> dict[str, Any]:
-            node_fn = make_hitl_gate_fn({"gate_id": "g", "condition": "items"})
+            node_fn = make_hitl_review_fn({"review_id": "g", "condition": "items"})
             return await node_fn({"items": [], "artifacts": []})
 
         result = asyncio.run(_run())
@@ -175,10 +175,10 @@ class TestHitlGateConditionFalsy:
 
     def test_condition_empty_dict_skips_gate(self) -> None:
         """JMESPath condition returning an empty dict → falsy → gate skipped."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> dict[str, Any]:
-            node_fn = make_hitl_gate_fn({"gate_id": "g", "condition": "obj"})
+            node_fn = make_hitl_review_fn({"review_id": "g", "condition": "obj"})
             return await node_fn({"obj": {}, "artifacts": []})
 
         result = asyncio.run(_run())
@@ -188,11 +188,11 @@ class TestHitlGateConditionFalsy:
         """A non-empty list is truthy — the gate proceeds to the interrupt."""
         from langgraph.errors import GraphInterrupt
 
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
-            node_fn = make_hitl_gate_fn({"gate_id": "g", "condition": "items"})
-            await node_fn({"items": [1], "artifacts": [], "_hitl_gates": []})
+            node_fn = make_hitl_review_fn({"review_id": "g", "condition": "items"})
+            await node_fn({"items": [1], "artifacts": [], "_hitl_reviews": []})
 
         with pytest.raises(GraphInterrupt):
             asyncio.run(_run())
@@ -200,10 +200,10 @@ class TestHitlGateConditionFalsy:
     def test_condition_invalid_expression_raises_value_error(self) -> None:
         """An unparseable JMESPath expression raises ValueError (percolates as
         a node error instead of silently treating the gate as pass-through)."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
-            node_fn = make_hitl_gate_fn({"gate_id": "g", "condition": "items[0"})
+            node_fn = make_hitl_review_fn({"review_id": "g", "condition": "items[0"})
             await node_fn({"artifacts": []})
 
         with pytest.raises(ValueError, match="Invalid HITL gate condition expression"):
@@ -214,10 +214,10 @@ class TestHitlGateConditionFalsy:
         propagates as a JMESPathError node error rather than being swallowed."""
         import jmespath
 
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
-            node_fn = make_hitl_gate_fn({"gate_id": "g", "condition": "abs(score)"})
+            node_fn = make_hitl_review_fn({"review_id": "g", "condition": "abs(score)"})
             await node_fn({"score": "not-a-number", "artifacts": []})
 
         with pytest.raises(jmespath.exceptions.JMESPathError):
@@ -230,7 +230,7 @@ class TestEvalBlockShortCircuitsRemainingEvals:
         listed AFTER the failing one are never evaluated. This is the
         eval_block.feature "remaining evals are not evaluated" expectation."""
         from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         async def _run() -> None:
             eval_blocking = EvalDefinition(
@@ -249,11 +249,11 @@ class TestEvalBlockShortCircuitsRemainingEvals:
                 config={"pattern": "ALWAYS-PASS", "field": "level"},
                 failure_behaviour="block",
             )
-            node_fn = make_hitl_gate_fn(
-                {"gate_id": "g"},
+            node_fn = make_hitl_review_fn(
+                {"review_id": "g"},
                 eval_definitions=[eval_blocking, eval_after],
             )
-            await node_fn({"level": "fail", "artifacts": [], "_hitl_gates": []})
+            await node_fn({"level": "fail", "artifacts": [], "_hitl_reviews": []})
 
         with pytest.raises(EvalBlockedError, match="blocking-eval"):
             asyncio.run(_run())

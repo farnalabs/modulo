@@ -22,7 +22,7 @@ bdd:
   - backend/tests/bdd/features/teams/team_membership.feature
   - backend/tests/bdd/features/teams/team_deletion.feature
   - backend/tests/bdd/features/teams/team_deletion_blocked.feature
-  - backend/tests/bdd/features/teams/team_hitl_gate.feature
+  - backend/tests/bdd/features/teams/team_hitl_review.feature
   - backend/tests/bdd/features/teams/cross_team_isolation.feature
   - backend/tests/bdd/features/teams/team_pipeline_visibility.feature
   - backend/tests/bdd/features/teams/view_as_team.feature
@@ -31,7 +31,7 @@ bdd:
   - backend/tests/bdd/steps/test_team_membership.py
   - backend/tests/bdd/steps/test_team_deletion.py
   - backend/tests/bdd/steps/test_team_deletion_blocked.py
-  - backend/tests/bdd/steps/test_team_hitl_gate.py
+  - backend/tests/bdd/steps/test_team_hitl_review.py
   - backend/tests/bdd/steps/test_cross_team_isolation.py
   - backend/tests/bdd/steps/test_team_pipeline_visibility.py
   - backend/tests/bdd/steps/test_view_as_team.py
@@ -74,7 +74,7 @@ org profile, and is the product-map home for user roles.
 
 ## Known Gaps
 
-- **HITL gate ownership (`team_hitl_gate.feature`) is cited under the hitl feature graph
+- **HITL review ownership (`team_hitl_review.feature`) is cited under the hitl feature graph
   edge, not deeply here** — this entry cites the BDD coverage; gate-claim semantics live in
   `feat-hitl`.
 - **`stale_jwt_revocation.feature` and `admin_override.feature`** exercise JWT/override

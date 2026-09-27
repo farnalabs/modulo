@@ -131,7 +131,7 @@ def _call_review_hitl(request, action: str) -> dict:
             result = asyncio.run(
                 review_hitl(
                     run_id=str(uuid.uuid4()),
-                    gate_id=str(uuid.uuid4()),
+                    review_id=str(uuid.uuid4()),
                     action=action,
                     claim_token="claim_token_123",
                 )
@@ -160,7 +160,7 @@ def _call_review_hitl_tool(
     from modulo.api.mcp_server import review_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
-    gate_id = getattr(request.node, "_gate_id", "pre-deploy")
+    review_id = getattr(request.node, "_review_id", "pre-deploy")
     claim_token = getattr(request.node, "_claim_token", None)
     mock_run = MagicMock(id=run_id, status="awaiting_human", owner_team_id=None, pipeline_id=uuid.uuid4())
     session = _make_session_context(AsyncMock())
@@ -180,7 +180,7 @@ def _call_review_hitl_tool(
             result = asyncio.run(
                 review_hitl(
                     run_id=str(run_id),
-                    gate_id=gate_id,
+                    review_id=review_id,
                     action=action,
                     claim_token=claim_token,
                     reason=reason,
@@ -192,7 +192,7 @@ def _call_review_hitl_tool(
     return result
 
 
-def _call_list_pending_hitl(request, *, gate_config: dict | None = None, gate_id: str | None = None) -> dict:
+def _call_list_pending_hitl(request, *, gate_config: dict | None = None, review_id: str | None = None) -> dict:
     """Drive the REAL ``list_pending_hitl`` tool with the DB query seams patched.
 
     The ``_list_pending_hitl_impl`` scope gate (``hitl.list`` @ runner), the
@@ -205,12 +205,15 @@ def _call_list_pending_hitl(request, *, gate_config: dict | None = None, gate_id
     from modulo.api.mcp_server import list_pending_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
-    gate_id = (
-        gate_id or getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "pre-deploy"
+    review_id = (
+        review_id
+        or getattr(request.node, "_review_id", None)
+        or getattr(request.node, "_human_node", None)
+        or "pre-deploy"
     )
     claim = MagicMock()
     claim.run_id = run_id
-    claim.gate_id = gate_id
+    claim.review_id = review_id
     claim.pipeline_id = uuid.uuid4()
     claim.account_id = None
     claim.expires_at = None
@@ -223,17 +226,17 @@ def _call_list_pending_hitl(request, *, gate_config: dict | None = None, gate_id
         patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
         patch("modulo.api.mcp_server._session", return_value=session),
         patch(
-            "modulo.api.mcp_server._load_pending_hitl_gates",
+            "modulo.api.mcp_server._load_pending_hitl_reviews",
             new_callable=AsyncMock,
             return_value=([claim], 1),
         ),
         patch(
-            "modulo.db.crud.hitl_gate_config.resolve_gate_descriptions",
+            "modulo.db.crud.hitl_review_config.resolve_gate_descriptions",
             new_callable=AsyncMock,
-            return_value={(run_id, gate_id): "Approve the pre-deploy gate"},
+            return_value={(run_id, review_id): "Approve the pre-deploy gate"},
         ),
         patch(
-            "modulo.db.crud.hitl_gate_config._batch_load_snapshot_graphs",
+            "modulo.db.crud.hitl_review_config._batch_load_snapshot_graphs",
             new_callable=AsyncMock,
             return_value=({}, {}),
         ),
@@ -263,7 +266,9 @@ def _call_review_hitl_on_human_only_gate(request, action: str) -> dict:
     from modulo.api.mcp_server import review_hitl
 
     run_id = getattr(request.node, "_run_id", uuid.uuid4())
-    gate_id = getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
+    review_id = (
+        getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
+    )
     mock_run = MagicMock(id=run_id, status="awaiting_human", owner_team_id=None, pipeline_id=uuid.uuid4())
     session = _make_session_context(AsyncMock())
 
@@ -273,7 +278,7 @@ def _call_review_hitl_on_human_only_gate(request, action: str) -> dict:
         patch("modulo.api.mcp_server._run_owner_team_id", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.mcp_server._session", return_value=session),
         patch(
-            "modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config",
+            "modulo.db.crud.hitl_review_config.resolve_hitl_review_config",
             new_callable=AsyncMock,
             return_value={"human_only": True},
         ),
@@ -287,7 +292,7 @@ def _call_review_hitl_on_human_only_gate(request, action: str) -> dict:
             result = asyncio.run(
                 review_hitl(
                     run_id=str(run_id),
-                    gate_id=gate_id,
+                    review_id=review_id,
                     action=action,
                     claim_token="claim_token_123",
                 )
@@ -500,7 +505,7 @@ def mcp_tool_call_generic(tool: str, client, request):
 @given(parsers.parse('a run is waiting at gate "{gate}"'))
 def run_waiting_at_gate(gate: str, request):
     request.node._run_id = uuid.uuid4()
-    request.node._gate_id = gate
+    request.node._review_id = gate
 
 
 @when("the MCP client lists pending HITL gates")
@@ -535,23 +540,23 @@ def response_contains_gate(request):
     data = _mcp_response_payload(request)
     assert isinstance(data.get("gates"), list), data
     run_id_str = str(getattr(request.node, "_run_id", uuid.uuid4()))
-    gate_id = getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "pre-deploy"
-    matches = [g for g in data["gates"] if g.get("run_id") == run_id_str and g.get("gate_id") == gate_id]
-    assert matches, f"pending gate {gate_id!r} on run {run_id_str!r} not in response: {data}"
+    review_id = getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "pre-deploy"
+    matches = [g for g in data["gates"] if g.get("run_id") == run_id_str and g.get("review_id") == review_id]
+    assert matches, f"pending gate {review_id!r} on run {run_id_str!r} not in response: {data}"
 
 
-@then("the response includes run_id and gate_id")
+@then("the response includes run_id and review_id")
 def response_includes_ids(request):
     gate = _mcp_response_payload(request)["gates"][0]
     assert gate.get("run_id")
-    assert gate.get("gate_id")
+    assert gate.get("review_id")
 
 
 @then(parsers.parse('the tool reports HITL decision "{decision}" for the gate'))
 def tool_reports_hitl_decision(decision: str, request):
     data = _mcp_response_payload(request)
     assert data.get("status") == decision, f"Expected HITL decision {decision!r}, got {data!r}"
-    assert data.get("gate_id") == getattr(request.node, "_gate_id", "pre-deploy")
+    assert data.get("review_id") == getattr(request.node, "_review_id", "pre-deploy")
 
 
 @given("I have claimed the gate")
@@ -575,13 +580,15 @@ def run_waiting_human(node: str, request):
 def pending_gate_requires_human(request):
     data = _mcp_response_payload(request)
     run_id_str = str(getattr(request.node, "_run_id", uuid.uuid4()))
-    gate_id = getattr(request.node, "_gate_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
+    review_id = (
+        getattr(request.node, "_review_id", None) or getattr(request.node, "_human_node", None) or "final-signoff"
+    )
     gates = data.get("gates", [])
     gate = next(
-        (g for g in gates if g.get("run_id") == run_id_str and g.get("gate_id") == gate_id),
+        (g for g in gates if g.get("run_id") == run_id_str and g.get("review_id") == review_id),
         None,
     )
-    assert gate is not None, f"pending gate {gate_id!r} not in response: {data}"
+    assert gate is not None, f"pending gate {review_id!r} not in response: {data}"
     assert gate.get("human_only") is True, f"expected human_only=true on {gate!r}, got: {data}"
 
 
@@ -592,7 +599,7 @@ def mcp_approve_human_only_gate(request):
 
 @then(parsers.parse('the denial appends a "hitl.human_only_denied" audit event'))
 def denial_audit_appended(request):
-    from modulo.db.crud.hitl_gate_config import MSG_HUMAN_ONLY_DENY
+    from modulo.db.crud.hitl_review_config import MSG_HUMAN_ONLY_DENY
 
     mock_denial_audit = getattr(request.node, "_denial_audit", None)
     assert mock_denial_audit is not None, "denial audit seam was not captured"

@@ -25,7 +25,7 @@ const mockFlagsFree = {
   license: { tier: 'community', has_license_key: false, is_valid: true },
   flags: [
     { name: 'parallel_branches', description: 'Run parallel branches', tier: 'team', currently_active: false, depends_on: null },
-    { name: 'hitl_gates', description: 'Human-in-the-loop gates', tier: 'community', currently_active: true, depends_on: null },
+    { name: 'hitl_reviews', description: 'Human-in-the-loop gates', tier: 'community', currently_active: true, depends_on: null },
   ],
   would_activate: [
     { name: 'parallel_branches', description: 'Run parallel branches', tier: 'team', currently_active: false, depends_on: null },
@@ -36,7 +36,7 @@ const mockFlagsTeam = {
   license: { tier: 'team', has_license_key: true, is_valid: true },
   flags: [
     { name: 'parallel_branches', description: 'Run parallel branches', tier: 'team', currently_active: true, depends_on: null },
-    { name: 'hitl_gates', description: 'Human-in-the-loop gates', tier: 'community', currently_active: true, depends_on: null },
+    { name: 'hitl_reviews', description: 'Human-in-the-loop gates', tier: 'community', currently_active: true, depends_on: null },
   ],
   would_activate: [],
 }

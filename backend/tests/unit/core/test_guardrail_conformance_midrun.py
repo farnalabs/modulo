@@ -87,7 +87,7 @@ def test_evaluate_block_fail_closed_absent():
     result = evaluate_conformance([gr], {"github.write": False})
     assert result.blocked is True
     assert result.state == "absent"
-    assert result.gate_id == "guardrail_conformance_g_block"
+    assert result.review_id == "guardrail_conformance_g_block"
     assert "github.write" in result.detail
 
 
@@ -671,7 +671,7 @@ async def test_check_node_start_claims_load_failed_fails_closed(monkeypatch: pyt
     )
     assert result.blocked is True
     assert result.state == "unknown"
-    assert result.gate_id == "guardrail_conformance_check_failed"
+    assert result.review_id == "guardrail_conformance_check_failed"
     assert result.claimed is True
 
 

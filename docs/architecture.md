@@ -113,16 +113,16 @@ Features:
 - `manual` node type – same as HITL but human provides full output
 - `hitl` node type (FAR-402 P1) – a draggable human-in-the-loop gate; compiles to the same synthetic-gate path as a legacy edge-level HITL gate. `manual` remains the non-gating human-output step.
 
-**Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "gate_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `gate_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honoured ONLY by the gate/node its stamp names: every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
+**Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "review_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `review_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honoured ONLY by the gate/node its stamp names: every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
 
-| Writer | Stamp (`gate_id`) | Consumer | Recognized actions |
+| Writer | Stamp (`review_id`) | Consumer | Recognized actions |
 |---|---|---|---|
-| `POST /runs/{id}/hitl/{gate}/approve`, `/approve-with-modification`, `/reject`, `/deliver-manual`; MCP `review_hitl` | the gate id from the URL | `_hitl_gate_resume_result` | `approved` (incl. `modified_output`), `rejected`, `deliver_manual` |
+| `POST /runs/{id}/hitl/{gate}/approve`, `/approve-with-modification`, `/reject`, `/deliver-manual`; MCP `review_hitl` | the gate id from the URL | `_hitl_review_resume_result` | `approved` (incl. `modified_output`), `rejected`, `deliver_manual` |
 | `POST /runs/{id}/manual/{node}/submit` | the manual node's id | `_manual_node` | any dict payload stamped with this node's id completes the node (the documented writer is `manual_output` (+ `output`)) |
 | `POST /runs/{id}/nodes/{node}/recover` (operator break-glass) | the run's pending claim row's gate id (node id for manual nodes; the guardrail gate id for conformance blocks); unstamped when no undecided row exists | `_manual_node` / `_handle_conformance_resume` | `skip`, `replay` |
 | Conformance override via HITL API | the blocked node id or the block's guardrail gate id | `_handle_conformance_resume` | `approved`, `deliver_manual` (override); `rejected` fails closed |
 
-Interrupt payloads carry the same identity: the gate node interrupts with its `gate_id`, a manual node with `gate_id: <node_id>`, a conformance block with the block's guardrail gate id. The executor keys the pending `hitl_claims` row on that `gate_id` verbatim. The dispatcher reconcile resumes an `awaiting_human`/`claimed` run ONLY per this scoping matrix: claimed-undecided, skip (under the `uq_hitl_claims_run_gate` `UNIQUE (run_id, gate_id)` constraint a claimed-undecided row and a committed decision for the same gate cannot coexist; crash recovery for claimed runs routes through the no-undecided-rows branch once the decision commits); unclaimed undecided row, conservative skip; no undecided rows, crash-recovery resume when the decision's stamp routes it to a consumer that accepts it. `hitl_gate_*`/guardrail identities accept only the verdict actions; MANUAL-node identities also accept a committed `manual_output` with its `output` (legacy pre-stamping rows are stranded by design, at most the 2026-09-02 incident cohort; ops remedy is a manual DB stamp or ticket, no backfill migration). Recover-node refuses HITL gate targets (422), gate decisions must go through approve/reject; user node ids squatting the reserved `hitl_gate_` prefix are rejected at graph-validation time.
+Interrupt payloads carry the same identity: the gate node interrupts with its `review_id`, a manual node with `review_id: <node_id>`, a conformance block with the block's guardrail gate id. The executor keys the pending `hitl_claims` row on that `review_id` verbatim. The dispatcher reconcile resumes an `awaiting_human`/`claimed` run ONLY per this scoping matrix: claimed-undecided, skip (under the `uq_hitl_claims_run_gate` `UNIQUE (run_id, review_id)` constraint a claimed-undecided row and a committed decision for the same gate cannot coexist; crash recovery for claimed runs routes through the no-undecided-rows branch once the decision commits); unclaimed undecided row, conservative skip; no undecided rows, crash-recovery resume when the decision's stamp routes it to a consumer that accepts it. `hitl_review_*`/guardrail identities accept only the verdict actions; MANUAL-node identities also accept a committed `manual_output` with its `output` (legacy pre-stamping rows are stranded by design, at most the 2026-09-02 incident cohort; ops remedy is a manual DB stamp or ticket, no backfill migration). Recover-node refuses HITL gate targets (422), gate decisions must go through approve/reject; user node ids squatting the reserved `hitl_review_` prefix are rejected at graph-validation time.
 
 **Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery terminalises it through the normal reject path, while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
 
@@ -514,9 +514,9 @@ Organisation
   ├── Pipeline (org-scoped, optional owner_team_id, visibility)
   │   ├── PipelineSnapshot (immutable, run-start freeze)
   │   ├── Trigger (pipeline_id, trigger_type, config_json)
-  │   ├── PipelineEdge (pipeline_id, source, target, edge_type, hitl_gate_config)
+  │   ├── PipelineEdge (pipeline_id, source, target, edge_type, hitl_review_config)
   │   └── Run (pipeline_id, snapshot_id, status, state machine)
-  │       ├── hitl_claims (run_id, gate_id, claimed_by, claim_token, expires_at)
+  │       ├── hitl_claims (run_id, review_id, claimed_by, claim_token, expires_at)
   │       └── TriggerEvent (trigger_id, validation_result, run_id)
   ├── Stage (org-scoped, optional owner_team_id, visibility)
   ├── Schema (org-scoped)
@@ -540,7 +540,7 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 ### Key constraints
 
 - `(trigger_id, payload_hash)` unique on `webhook_dedup_hashes` – deduplication window
-- `(run_id, gate_id)` unique on `hitl_claims` – one claim per gate per run
+- `(run_id, review_id)` unique on `hitl_claims` – one claim per gate per run
 - SchemaVersion deletion protected by active agent/pipeline references
 - ModelBackend deletion protected by active references (soft-delete via `status: deprecated`) – agent_runner_bindings carries RESTRICT FKs, so a bound backend cannot be deleted while any agent binding references it (the CRUD pre-delete inventory reports "in use by N agents"; the FK is the race-proof backstop)
 
@@ -661,13 +661,13 @@ Hardcoded sliding-window rules enforced by `RateLimitMiddleware` (see `backend/s
 | `/api/v1/runs` | 60 | 60s |
 | `/api/v1/triggers` | 100 | 60s |
 | `/api/v1/errors/ingest` | 10 | 60s |
-| HITL review actions (`/api/v1/runs/{run_id}/hitl/{gate_id}/{action}` and `/api/v1/runs/{run_id}/manual/{gate_id}/submit`, POST) | 20 per user (aggregate) | 60s |
+| HITL review actions (`/api/v1/runs/{run_id}/hitl/{review_id}/{action}` and `/api/v1/runs/{run_id}/manual/{review_id}/submit`, POST) | 20 per user (aggregate) | 60s |
 | `/mcp` | 200 | 60s |
 | Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS`) |
 
 Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op when Redis is unavailable. Auth rate limiter requires Redis and is disabled without it.
 
-The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces; the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{gate_id}/submit`, an approve-capability HITL surface whose path has no `/hitl/` segment, shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule; they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
+The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces; the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{review_id}/submit`, an approve-capability HITL surface whose path has no `/hitl/` segment, shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule; they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
 
 ## Deployment Architecture
 

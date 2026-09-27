@@ -90,7 +90,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       (`claim_token_required` otherwise), the `_check_agent_tool_scope`
       role-hierarchy chokepoint denies a `runner` `hitl:review` actions with the
       pinned `insufficient_scope` error shape, and a successful decision reports
-      `{"status": "approved"|"rejected", "gate_id": ...}` through the real
+      `{"status": "approved"|"rejected", "review_id": ...}` through the real
       HITLManager; `list_pending_hitl` returns the org's undecided gates with the
       shared description resolver. Five `mcp/review_hitl.feature` scenarios
       execute in CI against these real handler seams (auth re-validation + DB /
@@ -106,7 +106,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       an escape hatch because `claim` is itself denied, so an agent can neither
       claim nor decide such a gate. `list_pending_hitl` additionally surfaces a
       per-gate `human_only` flag via the shared batched flag resolver
-      (`db/crud/hitl_gate_config.resolve_gate_human_only_map` — claim-stamped
+      (`db/crud/hitl_review_config.resolve_gate_human_only_map` — claim-stamped
       fire-time config preferred, snapshot-config fallback, fail-safe
       `DEFAULT_HUMAN_ONLY` default) so an MCP client can SEE which pending gates
       require a browser human before attempting an action. The three
@@ -191,7 +191,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   role-hierarchy scope gate (a `runner` is denied `hitl:review` →
   `insufficient_scope`), the real `_check_human_only_gate` policy hook and the
   real HITLManager approve/reject decision dispatch (`approved` / `rejected` +
-  `gate_id`), plus the real pending-gate serialisation with the shared gate
+  `review_id`), plus the real pending-gate serialisation with the shared gate
   description resolver — network-free and DB-free with only the auth
   re-validation and DB/HITLManager seams patched. Removed the five scenarios
   from `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
@@ -211,7 +211,7 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   (`browser` via the REST `hitl._client_type` for a browser principal, `mcp`
   stamped by the MCP `_dispatch_hitl_action`). Added the per-gate `human_only`
   flag to the `list_pending_hitl` wire via the new shared batched resolver
-  `db/crud/hitl_gate_config.resolve_gate_human_only_map` (claim-stamped config
+  `db/crud/hitl_review_config.resolve_gate_human_only_map` (claim-stamped config
   preferred, snapshot fallback, fail-safe `DEFAULT_HUMAN_ONLY`), so an MCP
   client can SEE which pending gates require a browser human before acting.
   Removed the three scenarios from `PINNED_AWAITING_IMPLEMENTATION`;

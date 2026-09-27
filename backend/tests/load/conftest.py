@@ -172,7 +172,7 @@ def _hitl_action(
     client: Any,
     token: str,
     run_id: str,
-    gate_id: str,
+    review_id: str,
     claim_token: str,
     action: str,
     base_url: str = DEFAULT_BASE_URL,
@@ -184,7 +184,7 @@ def _hitl_action(
     if extra_payload:
         payload.update(extra_payload)
     resp = client.post(
-        f"{base_url}/runs/{run_id}/hitl/{gate_id}/{action}",
+        f"{base_url}/runs/{run_id}/hitl/{review_id}/{action}",
         json=payload,
         headers=headers,
         timeout=DEFAULT_TIMEOUT,
@@ -197,13 +197,13 @@ def claim_hitl(
     client: Any,
     token: str,
     run_id: str,
-    gate_id: str,
+    review_id: str,
     base_url: str = DEFAULT_BASE_URL,
 ) -> str:
     """Claim a HITL gate and return the claim token."""
     headers = _auth_headers(token)
     resp = client.post(
-        f"{base_url}/runs/{run_id}/hitl/{gate_id}/claim",
+        f"{base_url}/runs/{run_id}/hitl/{review_id}/claim",
         json={"expiry_minutes": _HITL_CLAIM_EXPIRY_MINUTES},
         headers=headers,
         timeout=DEFAULT_TIMEOUT,
@@ -216,19 +216,19 @@ def approve_hitl(
     client: Any,
     token: str,
     run_id: str,
-    gate_id: str,
+    review_id: str,
     claim_token: str,
     base_url: str = DEFAULT_BASE_URL,
 ) -> None:
     """Approve an interrupted HITL gate and resume the run."""
-    _hitl_action(client, token, run_id, gate_id, claim_token, "approve", base_url=base_url)
+    _hitl_action(client, token, run_id, review_id, claim_token, "approve", base_url=base_url)
 
 
 def reject_hitl(
     client: Any,
     token: str,
     run_id: str,
-    gate_id: str,
+    review_id: str,
     claim_token: str,
     base_url: str = DEFAULT_BASE_URL,
 ) -> None:
@@ -237,7 +237,7 @@ def reject_hitl(
         client,
         token,
         run_id,
-        gate_id,
+        review_id,
         claim_token,
         "reject",
         base_url=base_url,

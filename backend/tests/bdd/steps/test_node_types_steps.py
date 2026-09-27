@@ -34,7 +34,7 @@ def pipeline_with_manual_node(node_id: str, ctx):
 
 
 @given(parsers.parse('a pipeline with a HITL gate node "{node_id}"'))
-def pipeline_with_hitl_gate_node(node_id: str, ctx):
+def pipeline_with_hitl_review_node(node_id: str, ctx):
     ctx["pipeline"] = make_mock_pipeline(name="hitl-pipeline")
     ctx["node_id"] = node_id
     ctx["node_type"] = "hitl"

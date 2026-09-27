@@ -18,8 +18,8 @@ from modulo.core.pipeline_impact import (
     diff_node_ports,
     normalise_edge_port_delta,
 )
-from modulo.db.crud.hitl_gate_guard import (
-    HitlGateWeakeningDenied,
+from modulo.db.crud.hitl_review_guard import (
+    HitlReviewWeakeningDenied,
     apply_gated_edge_diff,
     build_gate_diff_payload,
     denial_detail,
@@ -238,7 +238,7 @@ async def rollback_to_snapshot(
             "source_node_id": str(e.source_node_id),
             "target_node_id": str(e.target_node_id),
             "edge_type": e.edge_type,
-            "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+            "hitl_review_config": copy.deepcopy(e.hitl_review_config),
         }
         for e in old_rows
     ]
@@ -266,8 +266,8 @@ async def rollback_to_snapshot(
             "target_node_id": edge_data.get("target") or edge_data.get("target_node_id", ""),
             "edge_type": edge_data.get("edge_type", edge_data.get("type", "normal")),
             "condition_expression": edge_data.get("condition_expression"),
-            "hitl_gate_config": edge_data.get("hitl_gate_config"),
-            "hitl_gate_config_present": True,
+            "hitl_review_config": edge_data.get("hitl_review_config"),
+            "hitl_review_config_present": True,
         }
         for edge_data in target.graph_json.get("edges", [])
     ]
@@ -287,7 +287,7 @@ async def rollback_to_snapshot(
     )
     all_weakened = (*diff.weakened_edges, *diff.weakened_nodes)
     if diff.denied:
-        raise HitlGateWeakeningDenied(
+        raise HitlReviewWeakeningDenied(
             reason_code=diff.reason_code or "legacy-snapshot-ambiguous",
             correlation_keys=[w.correlation_key for w in all_weakened],
             weakening_types=sorted({t for w in all_weakened for t in w.weakening_types}),
@@ -298,7 +298,7 @@ async def rollback_to_snapshot(
         await append_audit_event(
             session,
             org_id=pipeline.organisation_id,
-            event_type="hitl_gate_removed",
+            event_type="hitl_review_removed",
             actor_user_id=account_id,
             resource_type="pipeline",
             resource_id=pipeline_id,
@@ -319,7 +319,7 @@ async def rollback_to_snapshot(
             target_node_id=edge_data["target_node_id"],
             edge_type=edge_data["edge_type"],
             condition_expression=edge_data.get("condition_expression"),
-            hitl_gate_config=edge_data["hitl_gate_config"],
+            hitl_review_config=edge_data["hitl_review_config"],
             source_port=edge_data.get("source_port", "out"),
             target_port=edge_data.get("target_port", "in"),
         )
@@ -422,10 +422,10 @@ async def diff_snapshots(
         for ekey in ("edge_type", "type"):
             if ea.get(ekey) != eb.get(ekey):
                 edge_changes["edge_type"] = {"old": ea.get(ekey), "new": eb.get(ekey)}
-        if ea.get("hitl_gate_config") != eb.get("hitl_gate_config"):
-            edge_changes["hitl_gate_config"] = {
-                "old": ea.get("hitl_gate_config"),
-                "new": eb.get("hitl_gate_config"),
+        if ea.get("hitl_review_config") != eb.get("hitl_review_config"):
+            edge_changes["hitl_review_config"] = {
+                "old": ea.get("hitl_review_config"),
+                "new": eb.get("hitl_review_config"),
             }
         # FAR-402 P6: surface source_port/target_port deltas.
         edge_ports = diff_edge_ports(ea, eb)
@@ -465,7 +465,7 @@ async def diff_snapshots(
                     "source_node_id": e.get("source") or e.get("source_node_id", ""),
                     "target_node_id": e.get("target") or e.get("target_node_id", ""),
                     "edge_type": e.get("edge_type", e.get("type", "normal")),
-                    "hitl_gate_config": e.get("hitl_gate_config"),
+                    "hitl_review_config": e.get("hitl_review_config"),
                     "source_port": e.get("source_port"),
                     "target_port": e.get("target_port"),
                 }

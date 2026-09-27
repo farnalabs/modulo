@@ -537,7 +537,7 @@ async def create_starter_pipeline(
                         "target_node_id": str(node_id),
                         "edge_type": "normal",
                         "condition_expression": None,
-                        "hitl_gate_config": None,
+                        "hitl_review_config": None,
                     }
                 )
             prev_id = node_id

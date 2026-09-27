@@ -1,17 +1,17 @@
 Feature: HITL Webhook Notification
   As a pipeline operator
-  I want to receive webhook notifications when a run reaches a HITL gate
+  I want to receive webhook notifications when a run reaches a HITL review
   So that approvers are notified immediately
 
   Background:
     Given I am authenticated as an admin in org "acme"
 
-  Scenario: Webhook is sent when HITL gate is reached
+  Scenario: Webhook is sent when HITL review is reached
     Given pipeline "deploy-service" has an approval gate at node "pre-deploy"
     And the pipeline has HITL webhook configured at "https://hooks.example.com/hitl"
     When the run reaches the "pre-deploy" node
     Then a webhook POST is sent to "https://hooks.example.com/hitl"
-    And the webhook body contains the run_id and gate_id
+    And the webhook body contains the run_id and review_id
 
   Scenario: Webhook payload includes gate context
     Given pipeline "deploy-service" has an approval gate at node "pre-deploy"

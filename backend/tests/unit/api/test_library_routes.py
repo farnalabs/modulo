@@ -1436,13 +1436,13 @@ def test_node_label_and_edge_helpers() -> None:
     node_map = {"a": str(uuid.uuid4()), "b": str(uuid.uuid4())}
     edges = _convert_template_edges(
         [
-            {"source": "a", "target": "b", "edge_type": "normal", "hitl_gate_config": {"timeout": 1}},
+            {"source": "a", "target": "b", "edge_type": "normal", "hitl_review_config": {"timeout": 1}},
             {"source_node_id": "missing", "target_node_id": "b"},
         ],
         node_map,
     )
     assert edges[0]["source_node_id"] == node_map["a"]
-    assert edges[0]["hitl_gate_config"] == {"timeout": 1}
+    assert edges[0]["hitl_review_config"] == {"timeout": 1}
     assert edges[1]["edge_type"] == "normal"
     assert edges[1]["source_node_id"] == "missing"
 

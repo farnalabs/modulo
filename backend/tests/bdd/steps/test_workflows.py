@@ -314,7 +314,7 @@ def _make_v2_yaml(signed: bool = False) -> str:
                 "source": "prd-reader",
                 "target": "ticket-writer",
                 "edge_type": "normal",
-                "hitl_gate_config": {"mode": "manual"},
+                "hitl_review_config": {"mode": "manual"},
             }
         ],
         "schemas": [
@@ -493,11 +493,11 @@ def _agents_schema_abstracts_yaml(ctx: dict[str, Any]) -> None:
         assert agent.get("output_schema"), "Missing output_schema"
 
 
-@then("the edges section contains source, target, edge_type and hitl_gate_config")
+@then("the edges section contains source, target, edge_type and hitl_review_config")
 def _edges_fields_yaml(ctx: dict[str, Any]) -> None:
     wf = ctx.get("exported_bundle") or yaml.safe_load(ctx["response"].content)["modulo_workflow"]
     for edge in wf.get("edges", []):
-        for key in ("source", "target", "edge_type", "hitl_gate_config"):
+        for key in ("source", "target", "edge_type", "hitl_review_config"):
             assert key in edge, f"Missing edge field '{key}'"
 
 

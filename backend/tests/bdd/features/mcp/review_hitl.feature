@@ -1,6 +1,6 @@
 Feature: MCP Review HITL
   As an MCP client
-  I want to review and approve HITL gates via MCP
+  I want to review and approve HITL reviews via MCP
   So that AI assistants can handle HITL reviews
 
   The MCP server speaks JSON-RPC over the StreamableHTTP transport at POST /mcp —
@@ -18,9 +18,9 @@ Feature: MCP Review HITL
 
   Scenario: MCP lists pending gates
     Given a run is waiting at gate "pre-deploy"
-    When the MCP client lists pending HITL gates
+    When the MCP client lists pending HITL reviews
     Then the response contains the pending gate
-    And the response includes run_id and gate_id
+    And the response includes run_id and review_id
 
   Scenario: MCP approves a gate
     Given a run is waiting at gate "pre-deploy"

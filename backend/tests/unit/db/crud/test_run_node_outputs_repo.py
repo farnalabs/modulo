@@ -288,7 +288,7 @@ class TestRoundTripMatrix:
 
     async def test_colon_and_unicode_node_ids(self, session: AsyncSession) -> None:
         run = await _seed_run(session)
-        outputs = {"my:node:x": {"v": 1}, "ünïcode": {"v": 2}, "hitl_gate_child": {"v": 3}}
+        outputs = {"my:node:x": {"v": 1}, "ünïcode": {"v": 2}, "hitl_review_child": {"v": 3}}
         await _replace(session, run, outputs=outputs, telemetry=None)
         blobs = await _read_blobs(session, run)
         _assert_bytes_round_trip(blobs.outputs, _canonical(outputs))

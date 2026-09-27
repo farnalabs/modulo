@@ -1147,7 +1147,7 @@ def test_literal_comparison_lens_flags_constant_outcomes():
         "def test_foo():\n    assert 0.5 >= 0.25\n",
         "def test_foo():\n    assert [] == []\n",
         "def test_foo():\n    assert 'x' in {'x': 1}\n",
-        "def test_foo():\n    assert 'hitl_gate_a_b' not in {'a': 'agent'}\n",
+        "def test_foo():\n    assert 'hitl_review_a_b' not in {'a': 'agent'}\n",
         "def test_foo():\n    assert 1 == 1 and x == 2\n",
     ]
     for source in positive_sources:

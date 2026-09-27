@@ -37,9 +37,9 @@ Feature: Pipeline Snapshot Versioning
     And the pipeline graph matches "snap-1"
     And the new snapshot version is 3
 
-  Scenario: Rollback that would weaken a HITL gate is denied
+  Scenario: Rollback that would weaken a HITL review is denied
     Given org "acme" has pipeline "my-pipeline" with snapshots "snap-1" and "snap-2"
-    And the rollback would weaken a HITL gate for a non-privileged caller
+    And the rollback would weaken a HITL review for a non-privileged caller
     When I POST /api/pipelines/my-pipeline/rollback to snapshot "snap-1"
     Then the response status is 403
     And the error says "Gate weakening denied"

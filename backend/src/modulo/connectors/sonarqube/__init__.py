@@ -262,10 +262,10 @@ class SonarQubeConnector(ConnectorBase):
         )
 
     async def _get_quality_gate(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        gate_id = q.filters.get("id")
-        if not gate_id:
+        review_id = q.filters.get("id")
+        if not review_id:
             raise ValueError("SonarQube quality_gate query requires 'id' filter")
-        params: dict[str, Any] = {"id": str(gate_id)}
+        params: dict[str, Any] = {"id": str(review_id)}
         resp = await c.get("/qualitygates/show", params=params)
         resp.raise_for_status()
         body = resp.json()

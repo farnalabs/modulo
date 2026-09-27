@@ -22,7 +22,7 @@ from modulo.core.rate_limiter import TokenBucketRegistry
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _PLACEHOLDER_KEY_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
-_GATE_ID = "gate-1"
+_REVIEW_ID = "gate-1"
 
 
 class _AuthContext:
@@ -144,7 +144,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
                 AsyncMock(),
                 "approve",
                 uuid.uuid4(),
-                _GATE_ID,
+                _REVIEW_ID,
                 _PLACEHOLDER_ORG_ID,
                 _PLACEHOLDER_USER_ID,
                 "tok",
@@ -168,7 +168,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
                 AsyncMock(),
                 "deliver_manual",
                 uuid.uuid4(),
-                _GATE_ID,
+                _REVIEW_ID,
                 _PLACEHOLDER_ORG_ID,
                 _PLACEHOLDER_USER_ID,
                 "tok",
@@ -183,7 +183,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
         lets no run continue, so it is gated by the human_only guard rather
         than the budget."""
         mgr = MagicMock()
-        gate_id = _GATE_ID
+        review_id = _REVIEW_ID
         gate = MagicMock()
         gate.claim_token = "tok-value"
         gate.expires_at = None
@@ -199,7 +199,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
                 AsyncMock(),
                 "claim",
                 uuid.uuid4(),
-                gate_id,
+                review_id,
                 _PLACEHOLDER_ORG_ID,
                 _PLACEHOLDER_USER_ID,
                 None,
@@ -211,7 +211,7 @@ class TestDispatchHitlActionBudget(_AuthContext):
                 AsyncMock(),
                 "reject",
                 uuid.uuid4(),
-                gate_id,
+                review_id,
                 _PLACEHOLDER_ORG_ID,
                 _PLACEHOLDER_USER_ID,
                 "tok-value",

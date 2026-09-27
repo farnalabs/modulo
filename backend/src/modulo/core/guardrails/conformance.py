@@ -55,13 +55,13 @@ class ConformanceRecheckResult:
     """Outcome of a mid-run capability re-check at node start.
 
     ``blocked`` is True when a block-action guardrail is absent/unknown and the
-    node must be blocked + routed to HITL. ``gate_id`` is the HITL gate to open.
+    node must be blocked + routed to HITL. ``review_id`` is the HITL gate to open.
     ``detail`` is a machine-readable reason. ``warned`` records that at least
     one advisory (warn/observe) guardrail flagged a conformance gap.
     """
 
     blocked: bool
-    gate_id: str | None
+    review_id: str | None
     detail: str
     state: ConformanceState
     warned: bool
@@ -378,12 +378,12 @@ def evaluate_conformance(
             )
 
     if not claimed:
-        return ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False)
+        return ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False)
 
     if blocking_guardrails:
         return ConformanceRecheckResult(
             blocked=True,
-            gate_id=f"guardrail_conformance_{blocking_guardrails[0]}",
+            review_id=f"guardrail_conformance_{blocking_guardrails[0]}",
             detail=("; ".join(blocked_detail_parts))[:5000],
             state=worst_state(claimed),
             warned=advisory_warned,
@@ -391,7 +391,7 @@ def evaluate_conformance(
         )
     return ConformanceRecheckResult(
         blocked=False,
-        gate_id=None,
+        review_id=None,
         detail="; ".join(blocked_detail_parts)[:5000],
         state=worst_state(claimed),
         warned=advisory_warned,
@@ -538,7 +538,7 @@ async def check_node_start(
         # unknown (never fail open).
         return ConformanceRecheckResult(
             blocked=True,
-            gate_id="guardrail_conformance_check_failed",
+            review_id="guardrail_conformance_check_failed",
             detail="mid-run capability re-check could not load bound guardrails; failing closed",
             state="unknown",
             warned=False,
@@ -565,7 +565,7 @@ async def check_node_start(
                 # the node is blocked with state unknown (never fail open).
                 return ConformanceRecheckResult(
                     blocked=True,
-                    gate_id="guardrail_conformance_check_failed",
+                    review_id="guardrail_conformance_check_failed",
                     detail="mid-run capability re-check could not load bound guardrails; failing closed",
                     state="unknown",
                     warned=False,
@@ -575,7 +575,7 @@ async def check_node_start(
 
     if not claimed:
         # Zero-claim fast path — no manifest round-trip needed.
-        return ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False)
+        return ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False)
 
     async with session_factory() as session, session.begin():
         await _set_rls(session, org_id)

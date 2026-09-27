@@ -291,9 +291,9 @@ def extend_node_type_map_from_edges(
     """Return *node_type_map* plus ``"gate"`` entries for edge-synthesized gates.
 
     HITL gate nodes are inserted at graph-compile time
-    (``hitl_gate_<source>_<target>``) and are NOT present in
+    (``hitl_review_<source>_<target>``) and are NOT present in
     ``graph_json.nodes``. They ARE encoded on the edges via
-    ``hitl_gate_config``, so this walks ``graph_json.edges`` and stamps each
+    ``hitl_review_config``, so this walks ``graph_json.edges`` and stamps each
     gate id with ``NODE_TYPE_GATE``. Never mutates the input map.
     """
     result = dict(node_type_map or {})
@@ -303,12 +303,12 @@ def extend_node_type_map_from_edges(
     if not isinstance(edges, list):
         return result
     for edge in edges:
-        if not isinstance(edge, dict) or "hitl_gate_config" not in edge:
+        if not isinstance(edge, dict) or "hitl_review_config" not in edge:
             continue
         source = edge.get("source") or edge.get("source_node_id")
         target = edge.get("target") or edge.get("target_node_id")
         if source and target:
-            result[f"hitl_gate_{source}_{target}"] = NODE_TYPE_GATE
+            result[f"hitl_review_{source}_{target}"] = NODE_TYPE_GATE
     return result
 
 

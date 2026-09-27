@@ -76,22 +76,22 @@ async def _insert_eval(engine, org_id, pipe_id, acc_id, node_id, eval_type="rege
 
 
 async def _insert_gate(engine, org_id, eval_id, node_id, action="warn"):
-    gate_id = uuid.uuid4()
+    review_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
                 "action, version) VALUES (:id, :oid, :eid, :nid, :a, 1)"
             ),
-            {"id": str(gate_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "a": action},
+            {"id": str(review_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "a": action},
         )
-    return gate_id
+    return review_id
 
 
 async def _insert_decision_full(
     engine,
     org_id,
-    gate_id,
+    review_id,
     eval_id,
     *,
     resolved_action: str | None = "warn",
@@ -112,7 +112,7 @@ async def _insert_decision_full(
             {
                 "id": str(decision_id),
                 "oid": str(org_id),
-                "pgid": str(gate_id),
+                "pgid": str(review_id),
                 "eid": str(eval_id),
                 "ra": resolved_action,
                 "ed": error_detail,
@@ -126,11 +126,11 @@ async def _insert_decision_full(
 
 
 async def _setup_eval_and_gate(engine, org_id, acc_id, pipe_id):
-    """Create a valid eval + policy_gate pair; returns (node_id, eval_id, gate_id)."""
+    """Create a valid eval + policy_gate pair; returns (node_id, eval_id, review_id)."""
     node_id = uuid.uuid4()
     eval_id = await _insert_eval(engine, org_id, pipe_id, acc_id, node_id)
-    gate_id = await _insert_gate(engine, org_id, eval_id, node_id)
-    return node_id, eval_id, gate_id
+    review_id = await _insert_gate(engine, org_id, eval_id, node_id)
+    return node_id, eval_id, review_id
 
 
 # ---------------------------------------------------------------------------
@@ -158,12 +158,12 @@ class TestC8PayloadColumns:
     @pytest.mark.asyncio
     async def test_payload_row_round_trips(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        node_id, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        node_id, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         node_id = uuid.uuid4()
         did = await _insert_decision_full(
             db_engine,
             org_id,
-            gate_id,
+            review_id,
             eval_id,
             resolved_action="continue",
             error_detail="no_eval_result",
@@ -194,7 +194,7 @@ class TestC8PayloadColumns:
     @pytest.mark.asyncio
     async def test_defaults_apply_on_insert(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         decision_id = uuid.uuid4()
         async with db_engine.begin() as conn:
             await conn.execute(
@@ -202,7 +202,7 @@ class TestC8PayloadColumns:
                     "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
                     "VALUES (:id, :oid, :pgid, :eid)"
                 ),
-                {"id": str(decision_id), "oid": str(org_id), "pgid": str(gate_id), "eid": str(eval_id)},
+                {"id": str(decision_id), "oid": str(org_id), "pgid": str(review_id), "eid": str(eval_id)},
             )
             row = (
                 (
@@ -231,16 +231,16 @@ class TestC9ResolvedActionCheck:
     @pytest.mark.asyncio
     async def test_invalid_action_rejected(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         with pytest.raises(IntegrityError):
-            await _insert_decision_full(db_engine, org_id, gate_id, eval_id, resolved_action="explode")
+            await _insert_decision_full(db_engine, org_id, review_id, eval_id, resolved_action="explode")
 
     @pytest.mark.asyncio
     async def test_all_vocabulary_values_accepted(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         for action in ("continue", "warn", "block"):
-            did = await _insert_decision_full(db_engine, org_id, gate_id, eval_id, resolved_action=action)
+            did = await _insert_decision_full(db_engine, org_id, review_id, eval_id, resolved_action=action)
             assert did is not None
 
     @pytest.mark.asyncio
@@ -272,13 +272,13 @@ class TestC10TemporaryUniquenessIndex:
     @pytest.mark.asyncio
     async def test_identical_run_gate_result_rejected(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         run_id = uuid.uuid4()
         er_id = uuid.uuid4()
         await _insert_decision_full(
             db_engine,
             org_id,
-            gate_id,
+            review_id,
             eval_id,
             run_id=run_id,
             eval_result_id=er_id,
@@ -287,7 +287,7 @@ class TestC10TemporaryUniquenessIndex:
             await _insert_decision_full(
                 db_engine,
                 org_id,
-                gate_id,
+                review_id,
                 eval_id,
                 run_id=run_id,
                 eval_result_id=er_id,
@@ -297,20 +297,20 @@ class TestC10TemporaryUniquenessIndex:
     async def test_null_eval_result_id_rows_unbounded(self, db_engine: AsyncEngine) -> None:
         """NULLs compare distinct: unlimited custodial rows for the same (run, gate)."""
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         run_id = uuid.uuid4()
-        ids = [await _insert_decision_full(db_engine, org_id, gate_id, eval_id, run_id=run_id) for _ in range(3)]
+        ids = [await _insert_decision_full(db_engine, org_id, review_id, eval_id, run_id=run_id) for _ in range(3)]
         assert len(set(ids)) == 3
 
     @pytest.mark.asyncio
     async def test_distinct_eval_result_allowed(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         run_id = uuid.uuid4()
         er_id1 = uuid.uuid4()
         er_id2 = uuid.uuid4()
-        did1 = await _insert_decision_full(db_engine, org_id, gate_id, eval_id, run_id=run_id, eval_result_id=er_id1)
-        did2 = await _insert_decision_full(db_engine, org_id, gate_id, eval_id, run_id=run_id, eval_result_id=er_id2)
+        did1 = await _insert_decision_full(db_engine, org_id, review_id, eval_id, run_id=run_id, eval_result_id=er_id1)
+        did2 = await _insert_decision_full(db_engine, org_id, review_id, eval_id, run_id=run_id, eval_result_id=er_id2)
         # Verify both inserts actually created rows (not just "no exception")
         assert did1 is not None
         assert did2 is not None
@@ -318,7 +318,7 @@ class TestC10TemporaryUniquenessIndex:
             rows = (
                 await conn.execute(
                     text("SELECT id FROM policy_gate_decisions WHERE run_id = :rid AND policy_gate_id = :pgid"),
-                    {"rid": str(run_id), "pgid": str(gate_id)},
+                    {"rid": str(run_id), "pgid": str(review_id)},
                 )
             ).fetchall()
         assert len(rows) == 2
@@ -337,12 +337,12 @@ class TestC16RealIntegrityErrorMetadata:
         from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        _, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
-        await _insert_decision_full(db_engine, org_id, gate_id, eval_id)
+        _, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        await _insert_decision_full(db_engine, org_id, review_id, eval_id)
         exc = None
         try:
             async with db_engine.begin() as conn:
-                await conn.execute(text("DELETE FROM policy_gates WHERE id = :id"), {"id": str(gate_id)})
+                await conn.execute(text("DELETE FROM policy_gates WHERE id = :id"), {"id": str(review_id)})
         except IntegrityError as e:
             exc = e
         assert exc is not None
@@ -379,12 +379,12 @@ class TestC1F1RowExistenceProof:
     @pytest.mark.asyncio
     async def test_decision_row_persists_after_commit(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        node_id, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        node_id, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         run_id = uuid.uuid4()
         decision_id = await _insert_decision_full(
             db_engine,
             org_id,
-            gate_id,
+            review_id,
             eval_id,
             resolved_action="block",
             error_detail="test_persistence",
@@ -427,7 +427,7 @@ class TestC1F1OuterTransactionCommits:
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        node_id, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        node_id, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         run_id = uuid.uuid4()
 
         session_factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
@@ -442,7 +442,7 @@ class TestC1F1OuterTransactionCommits:
                 {
                     "id": str(uuid.uuid4()),
                     "oid": str(org_id),
-                    "pgid": str(gate_id),
+                    "pgid": str(review_id),
                     "eid": str(eval_id),
                     "ra": "warn",
                     "ed": "outer_txn_test",
@@ -486,13 +486,13 @@ class TestC16F5DecisionStateUnchangedAfterPersistenceFailure:
         )
 
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
-        node_id, eval_id, gate_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
+        node_id, eval_id, review_id = await _setup_eval_and_gate(db_engine, org_id, acc_id, pipe_id)
         run_id = uuid.uuid4()
         er_id = uuid.uuid4()
 
         snapshot = EvalPolicySnapshot(
             policy_gate=PolicyGateView(
-                id=gate_id,
+                id=review_id,
                 organisation_id=org_id,
                 version=1,
                 node_id=node_id,

@@ -158,7 +158,7 @@ async def _seed_feedback_record(
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO feedback_records (id, organisation_id, run_id, gate_id, "
+                "INSERT INTO feedback_records (id, organisation_id, run_id, review_id, "
                 "account_id, rejection_reason, rejected_output, producing_node_id, "
                 "feedback_status, eval_gap) "
                 "VALUES (:id, :oid, :rid, 'gate', :aid, 'not right', '{}'::json, :nid, 'pending', true)"

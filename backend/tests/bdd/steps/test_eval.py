@@ -547,7 +547,7 @@ def step_feedback_human_provides(ctx, request):
         record = loop.run_until_complete(
             mgr.create_feedback_record(
                 run_id=ctx.get("run_id", uuid.uuid4()),
-                gate_id="gate-output-review",
+                review_id="gate-output-review",
                 account_id=USER_ID,
                 rejection_reason="Output contained hallucination",
                 rejected_output={"text": "Incorrect data"},

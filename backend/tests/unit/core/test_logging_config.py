@@ -214,7 +214,7 @@ def test_safe_fields_preserved() -> None:
         "pipeline_id": "p-456",
         "org_id": "o-789",
         "user_id": "u-abc",
-        "gate_id": "g-xyz",
+        "review_id": "g-xyz",
         "duration_ms": 1500,
     }
     redacted = redact_sensitive(extra)

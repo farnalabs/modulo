@@ -96,16 +96,16 @@
       <!-- HITL Gate -->
       <!-- qa F4: a parked run still shows its open (claimable) gate — the status changed, the review did not. -->
       <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
-        <h2 class="text-base font-semibold tracking-tight mb-4">{{ $t('views.RunDetailView.hitl_gate') }}</h2>
+        <h2 class="text-base font-semibold tracking-tight mb-4">{{ $t('views.RunDetailView.hitl_review') }}</h2>
         <!-- Shared card (FAR-686): the component owns claim token, notes and
              approve/reject actions. The FAR-631 invariant is preserved by
              re-emitting decision messages to the hoisted hitlMessage below —
              the card (and its internal banner) may unmount when the run
              status flips, so the hoisted message is what survives. The card
              renders the FAR-613 decision briefing (description + context). -->
-        <HitlGateCard
+        <HitlReviewCard
           v-for="gate in pendingGates"
-          :key="gate.gate_id"
+          :key="gate.review_id"
           :gate="gate"
           @claimed="onHitlClaimed"
           @decided="onHitlDecided"
@@ -847,7 +847,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
-import HitlGateCard from '../components/hitl/HitlGateCard.vue'
+import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
 import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
 import AnalyzeRunButton from '../components/runs/AnalyzeRunButton.vue'
 import { isAnalyzableFailure, type AnalyzeRunInfo } from '../components/runs/analyzeRun'
@@ -2125,7 +2125,7 @@ function childRunBadgeClass(status: string | undefined): string {
   return statusBadgeClassFor(status)
 }
 
-async function fetchHitlGates(runId: string) {
+async function fetchHitlReviews(runId: string) {
   if (hitlLoading.value) return
   hitlLoading.value = true
   try {
@@ -2150,7 +2150,7 @@ async function fetchRunData(runId: string) {
     if (runData) {
       run.value = runData as unknown as RunResponse
       if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
-        fetchHitlGates(runId)
+        fetchHitlReviews(runId)
       }
     }
     const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
@@ -2247,7 +2247,7 @@ const { loading, error } = useDataFetch<RunFetchResult>(
       if (runData) {
         run.value = runData as unknown as RunResponse
         if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
-          fetchHitlGates(runId)
+          fetchHitlReviews(runId)
         }
       }
       if (ioData) runIO.value = ioData as unknown as RunIOResponse

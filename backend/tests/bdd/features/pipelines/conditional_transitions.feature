@@ -38,17 +38,17 @@ Feature: Conditional Transitions
     Then the run routes to "catchall"
 
   Scenario: Kick-back edge on HITL rejection
-    Given pipeline "review-pipeline" has a HITL gate at the edge from "author" to "publish"
+    Given pipeline "review-pipeline" has a HITL review at the edge from "author" to "publish"
     And a reject edge exists from "author" back to "fixup"
     When a human rejects the gate
     Then the run routes back to "fixup"
     And the run does not proceed to "publish"
 
   Scenario: Conditional gate with eval-before-interrupt
-    Given pipeline "eval-gate-pipeline" has a HITL gate at the edge from "generator" to "review"
+    Given pipeline "eval-gate-pipeline" has a HITL review at the edge from "generator" to "review"
     And the gate has eval definition "quality-check" with threshold 0.7
     When the node "generator" completes with score 0.45
-    Then the eval triggers the HITL gate
+    Then the eval triggers the HITL review
     And the run transitions to "awaiting_human"
 
   Scenario: Parallel branches
@@ -58,9 +58,9 @@ Feature: Conditional Transitions
     Then both "branch-a" and "branch-b" execute
     And the run completes only after both branches finish
 
-  Scenario: Conditional HITL gate with eval threshold
-    Given pipeline "threshold-pipeline" has a HITL gate at the edge from "codegen" to "deploy"
+  Scenario: Conditional HITL review with eval threshold
+    Given pipeline "threshold-pipeline" has a HITL review at the edge from "codegen" to "deploy"
     And the gate has eval definition "security-check" with threshold 0.9 operator "lt"
     When the node "codegen" completes with score 0.95
-    Then the eval does not trigger the HITL gate
+    Then the eval does not trigger the HITL review
     And execution continues without interrupting

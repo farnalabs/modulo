@@ -52,9 +52,9 @@ def node_has_llm_judge_eval(node_name: str, eval_name: str, ctx):
 
 
 @given(parsers.parse('the edge after "{node_name}" has a HITL gate'))
-def edge_has_hitl_gate(node_name: str, ctx):
+def edge_has_hitl_review(node_name: str, ctx):
     ctx["gate_config"] = {
-        "gate_id": f"gate-{node_name}",
+        "review_id": f"gate-{node_name}",
         "label": "Review Gate",
         "description": "Conditional HITL gate",
         "human_only": False,
@@ -85,18 +85,18 @@ def eval_has_block_behaviour(ctx):
 
 
 @given(
-    parsers.parse('a run is waiting at gate "{gate_id}" due to low eval score'),
+    parsers.parse('a run is waiting at gate "{review_id}" due to low eval score'),
 )
-def run_waiting_at_gate(gate_id: str, ctx):
+def run_waiting_at_gate(review_id: str, ctx):
     ctx["gate_config"] = {
-        "gate_id": gate_id,
+        "review_id": review_id,
         "label": "Review Gate",
         "description": "Gate reached due to condition",
         "human_only": False,
     }
     ctx["state"] = {
         "artifacts": [],
-        "_hitl_gates": [ctx["gate_config"]],
+        "_hitl_reviews": [ctx["gate_config"]],
     }
 
 
@@ -136,7 +136,7 @@ def node_outputs(output_json: str, ctx):
     ctx["node_output"] = output
     ctx["state"] = {
         "artifacts": [],
-        "_hitl_gates": [],
+        "_hitl_reviews": [],
         **output,
     }
 
@@ -155,14 +155,14 @@ def run_context_draft_mode(value: str, ctx):
     bool_val = value.lower() == "true"
     ctx["state"] = {
         "artifacts": [],
-        "_hitl_gates": [],
+        "_hitl_reviews": [],
         "run_context": {"draft_mode": bool_val},
     }
 
 
 @when(parsers.parse("the run reaches the gate"))
 def run_reaches_gate(ctx):
-    pass  # Handled in then steps via make_hitl_gate_fn call
+    pass  # Handled in then steps via make_hitl_review_fn call
 
 
 @when(
@@ -179,22 +179,22 @@ def eval_scores(eval_name: str, score: float, ctx):
 @when("a human rejects the gate")
 def human_rejects_gate(ctx):
     if "state" not in ctx:
-        ctx["state"] = {"artifacts": [], "_hitl_gates": []}
+        ctx["state"] = {"artifacts": [], "_hitl_reviews": []}
     # FAR-541: the decision is stamped with the gate it resolves.
     ctx["state"]["_hitl_decision"] = {
         "action": "rejected",
-        "gate_id": ctx.get("gate_config", {}).get("gate_id", "gate"),
+        "review_id": ctx.get("gate_config", {}).get("review_id", "gate"),
     }
 
 
 @when("a human approves the gate")
 def human_approves_gate(ctx):
     if "state" not in ctx:
-        ctx["state"] = {"artifacts": [], "_hitl_gates": []}
+        ctx["state"] = {"artifacts": [], "_hitl_reviews": []}
     # FAR-541: the decision is stamped with the gate it resolves.
     ctx["state"]["_hitl_decision"] = {
         "action": "approved",
-        "gate_id": ctx.get("gate_config", {}).get("gate_id", "gate"),
+        "review_id": ctx.get("gate_config", {}).get("review_id", "gate"),
     }
 
 
@@ -329,8 +329,8 @@ def run_routes_to(target: str, ctx):
     gate_config = ctx.get("gate_config", {})
     reject_target = gate_config.get("reject_target", "?")
     normal_target = "next-node"
-    gate_id = gate_config.get("gate_id", "gate")
-    router = _make_gate_kickback_router(normal_target, reject_target, gate_id=gate_id)
+    review_id = gate_config.get("review_id", "gate")
+    router = _make_gate_kickback_router(normal_target, reject_target, review_id=review_id)
     decision = ctx.get("state", {}).get("_hitl_decision", {})
     result = router({"_hitl_decision": decision})
     assert result == target, f"Expected route to {target!r}, got {result!r}"
@@ -350,14 +350,14 @@ def gate_artifact_shows_rejected(ctx):
 
 
 def _evaluate_conditional_gate(ctx: dict[str, Any]) -> None:
-    """Build a make_hitl_gate_fn from context and invoke it.
+    """Build a make_hitl_review_fn from context and invoke it.
 
-    The node function is async (make_hitl_gate_fn returns ``async def _hitl_gate``),
+    The node function is async (make_hitl_review_fn returns ``async def _hitl_review``),
     so we wrap it in ``asyncio.run()`` to execute synchronously in tests.
     """
 
     gate_config = ctx.get("gate_config", {}).copy()
-    state = ctx.get("state", {"artifacts": [], "_hitl_gates": []})
+    state = ctx.get("state", {"artifacts": [], "_hitl_reviews": []})
 
     # Build eval definitions if present.
     eval_defs = _build_eval_defs(ctx)
@@ -462,9 +462,9 @@ def _run_gate_fn(
     eval_defs: list[Any] | None,
 ) -> None:
     """Execute the gate node function synchronously and capture results."""
-    from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=eval_defs)
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=eval_defs)
 
     async def _run() -> Any:
         return await node_fn(state)

@@ -64,7 +64,7 @@ class EvalDefDTO:
     the engine and helpers only read attributes by name.
 
     PolicyGate metadata (FAR-1102 chunk 4): when a PolicyGate is present for
-    this eval, ``policy_gate_id``, ``policy_gate_version``, and
+    this eval, ``policy_review_id``, ``policy_gate_version``, and
     ``policy_gate_node_id`` carry the gate's own identity for decision-record
     construction.  These are ``None`` when no gate exists (guardrail-typed
     Evals, backfill-rejected bindings).
@@ -83,7 +83,7 @@ class EvalDefDTO:
     version: int = 1
 
     # PolicyGate metadata (FAR-1102 chunk 4) — None when no gate exists.
-    policy_gate_id: uuid.UUID | None = None
+    policy_review_id: uuid.UUID | None = None
     policy_gate_version: int | None = None
     policy_gate_node_id: uuid.UUID | None = None
 
@@ -223,7 +223,7 @@ async def _persist_decision_row(
             _log.error(
                 "policy_gate_decision.persist_failed_referential",
                 extra={
-                    "policy_gate_id": str(snapshot.policy_gate.id),
+                    "policy_review_id": str(snapshot.policy_gate.id),
                     "eval_id": str(snapshot.eval.id),
                     "run_id": str(run_id),
                     "resolved_action": outcome.action,
@@ -237,7 +237,7 @@ async def _persist_decision_row(
             _log.warning(
                 "policy_gate_decision.persist_failed",
                 extra={
-                    "policy_gate_id": str(snapshot.policy_gate.id),
+                    "policy_review_id": str(snapshot.policy_gate.id),
                     "run_id": str(run_id),
                     "resolved_action": outcome.action,
                     "failure_class": "transient",
@@ -416,20 +416,20 @@ async def run_evals_persist_before_decide(
         # resolved by resolve_policy_gate(); the row is an audit trace
         # persisted with a fail-OPEN wrapper (opposite of EvalResult's
         # fail-CLOSED for block gates).
-        if can_persist and eval_def.policy_gate_id is not None:
+        if can_persist and eval_def.policy_review_id is not None:
             assert session_factory is not None and org_id is not None and run_id is not None
             if eval_def.policy_gate_node_id is None:
                 _log.warning(
                     "eval_persist_order.policy_gate_node_id_missing",
                     extra={
                         "eval_id": str(eval_def.id),
-                        "policy_gate_id": str(eval_def.policy_gate_id),
+                        "policy_review_id": str(eval_def.policy_review_id),
                         "eval_name": eval_def.name,
                     },
                 )
             snapshot = EvalPolicySnapshot(
                 policy_gate=PolicyGateView(
-                    id=eval_def.policy_gate_id,
+                    id=eval_def.policy_review_id,
                     organisation_id=eval_def.org_id,
                     version=eval_def.policy_gate_version or 1,
                     node_id=eval_def.policy_gate_node_id or uuid.uuid4(),

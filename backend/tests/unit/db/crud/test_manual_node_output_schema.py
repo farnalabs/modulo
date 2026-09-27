@@ -24,7 +24,7 @@ import pytest
 from fastapi import HTTPException
 
 from modulo.api.routes.pipelines import _graph_response
-from modulo.db.crud.hitl_gate_guard import DiffResult
+from modulo.db.crud.hitl_review_guard import DiffResult
 from modulo.db.crud.pipeline import (
     ManualNodeOutputSchemaError,
     enforce_manual_node_output_schemas,

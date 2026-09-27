@@ -1,10 +1,10 @@
 """Notifier — dispatch webhook notifications with HMAC signing, retry, and dead-letter tracking.
 
 Event types dispatched:
-  - hitl_awaiting     (run_id, gate_id, pipeline_name, threshold)
+  - hitl_awaiting     (run_id, review_id, pipeline_name, threshold)
   - run_failed        (run_id, error_code, pipeline_name)
-  - claim_expired     (run_id, gate_id, claimed_by)
-  - hitl_overdue      (run_id, gate_id, minutes_overdue)
+  - claim_expired     (run_id, review_id, claimed_by)
+  - hitl_overdue      (run_id, review_id, minutes_overdue)
 
 For each event, the notifier:
   1. Queries all active NotificationEndpoints subscribed to the event type.
@@ -194,7 +194,7 @@ EVENT_BUDGET_EXCEEDED = "budget_exceeded"
 EVENT_CIRCUIT_BREAKER_TRIPPED = "circuit_breaker_tripped"
 EVENT_CLAIM_EXPIRED = "claim_expired"
 EVENT_HITL_OVERDUE = "hitl_overdue"
-# FAR-611 — one actor approved HITL gates across multiple pipelines within the
+# FAR-611 — one actor approved HITL reviews across multiple pipelines within the
 # sweep window (bulk-approve anomaly, e.g. the 2026-09-05 22-gate/80-second
 # sweep). Emitted at most once per actor per hour by the sweep alarm.
 EVENT_HITL_APPROVE_SWEEP = "hitl_approve_sweep_suspected"

@@ -23,7 +23,7 @@ pytestmark = pytest.mark.integration
 async def test_emit_autonomy_telemetry_persists_row(app_engine: object, test_org: uuid.UUID) -> None:
     org_id = test_org
     run_id = uuid.uuid4()
-    gate_id = "g-persist"
+    review_id = "g-persist"
     pipeline_id = uuid.uuid4()
 
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
@@ -34,7 +34,7 @@ async def test_emit_autonomy_telemetry_persists_row(app_engine: object, test_org
         session_factory,
         org_id=org_id,
         run_id=run_id,
-        gate_id=gate_id,
+        review_id=review_id,
         autonomy_level="fully_autonomous",
         gate_outcome="skipped",
         pipeline_id=pipeline_id,
@@ -60,7 +60,7 @@ async def test_emit_autonomy_telemetry_persists_row(app_engine: object, test_org
     event_type, resource_id, payload = rows[0]
     assert event_type == at.AUTONOMY_LEVEL_APPLIED
     assert str(resource_id) == str(run_id)
-    assert payload["gate_id"] == gate_id
+    assert payload["review_id"] == review_id
     assert payload["gate_outcome"] == "skipped"
     assert payload["autonomy_level"] == "fully_autonomous"
     assert str(payload["pipeline_id"]) == str(pipeline_id)
@@ -80,7 +80,7 @@ async def test_emit_autonomy_telemetry_is_fail_open(app_engine: object, test_org
         session_factory,
         org_id=org_id,
         run_id="not-a-uuid",
-        gate_id="g-failopen",
+        review_id="g-failopen",
         autonomy_level="manual_approval",
         gate_outcome="fired",
     )
@@ -90,7 +90,7 @@ async def test_emit_autonomy_telemetry_is_fail_open(app_engine: object, test_org
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         result = await session.execute(
-            text("SELECT COUNT(*) FROM audit_events WHERE event_type = :et AND payload_json->>'gate_id' = :gid"),
+            text("SELECT COUNT(*) FROM audit_events WHERE event_type = :et AND payload_json->>'review_id' = :gid"),
             {"et": at.AUTONOMY_LEVEL_APPLIED, "gid": "g-failopen"},
         )
         count = result.scalar()

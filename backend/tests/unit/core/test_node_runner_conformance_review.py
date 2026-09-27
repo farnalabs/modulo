@@ -136,7 +136,7 @@ async def test_gate_resume_approved_clears_marker_and_continues(monkeypatch: pyt
     state = {
         "_conformance_blocked_node": _NODE_ID,
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
-        "_hitl_decision": {"action": "approved", "gate_id": "guardrail_conformance_g_block"},
+        "_hitl_decision": {"action": "approved", "review_id": "guardrail_conformance_g_block"},
     }
 
     blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
@@ -159,7 +159,7 @@ async def test_gate_resume_approved_stamped_with_node_id_clears_marker(monkeypat
     state = {
         "_conformance_blocked_node": _NODE_ID,
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
-        "_hitl_decision": {"action": "approved", "gate_id": _NODE_ID},
+        "_hitl_decision": {"action": "approved", "review_id": _NODE_ID},
     }
 
     blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
@@ -185,7 +185,7 @@ async def test_gate_resume_rejected_fails_closed(monkeypatch: pytest.MonkeyPatch
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
         "_hitl_decision": {
             "action": "rejected",
-            "gate_id": "guardrail_conformance_g_block",
+            "review_id": "guardrail_conformance_g_block",
             "reason": "capability genuinely revoked",
         },
     }
@@ -217,7 +217,7 @@ async def test_gate_resume_operator_break_glass_clears_marker(monkeypatch: pytes
     state = {
         "_conformance_blocked_node": _NODE_ID,
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
-        "_hitl_decision": {"action": action, "gate_id": "guardrail_conformance_g_block"},
+        "_hitl_decision": {"action": action, "review_id": "guardrail_conformance_g_block"},
     }
 
     blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
@@ -244,7 +244,7 @@ async def test_gate_resume_unknown_override_action_fails_closed(monkeypatch: pyt
     state = {
         "_conformance_blocked_node": _NODE_ID,
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
-        "_hitl_decision": {"action": action, "gate_id": "guardrail_conformance_g_block", "output": {"a": 1}},
+        "_hitl_decision": {"action": action, "review_id": "guardrail_conformance_g_block", "output": {"a": 1}},
     }
 
     blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
@@ -269,7 +269,7 @@ async def test_gate_resume_foreign_decision_marker_block_not_cleared(monkeypatch
     state = {
         "_conformance_blocked_node": _NODE_ID,
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
-        "_hitl_decision": {"action": "approved", "gate_id": "some_other_gate"},
+        "_hitl_decision": {"action": "approved", "review_id": "some_other_gate"},
     }
 
     blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
@@ -292,11 +292,11 @@ async def test_gate_resume_replayed_decision_is_rechecked_and_clears_block(monke
     check = _patch_check_node_start(monkeypatch, None)
     _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
-    interrupt.return_value = {"action": "approved", "gate_id": "guardrail_conformance_g_block"}
+    interrupt.return_value = {"action": "approved", "review_id": "guardrail_conformance_g_block"}
     state = {
         "_conformance_blocked_node": _NODE_ID,
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
-        "_hitl_decision": {"action": "approved", "gate_id": "some_other_gate"},
+        "_hitl_decision": {"action": "approved", "review_id": "some_other_gate"},
     }
 
     blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
@@ -322,7 +322,7 @@ async def test_gate_resume_second_foreign_replay_reinterrupts_keeps_waiting(monk
     _patch_audit(monkeypatch)
     interrupt = MagicMock(
         side_effect=[
-            {"action": "approved", "gate_id": "some_other_gate"},  # 1st replay: still foreign
+            {"action": "approved", "review_id": "some_other_gate"},  # 1st replay: still foreign
             _GraphInterruptError(),  # 2nd interrupt: the graph pauses again
         ]
     )
@@ -330,7 +330,7 @@ async def test_gate_resume_second_foreign_replay_reinterrupts_keeps_waiting(monk
     state = {
         "_conformance_blocked_node": _NODE_ID,
         "_conformance_blocked_gate": "guardrail_conformance_g_block",
-        "_hitl_decision": {"action": "approved", "gate_id": "yet_another_gate"},
+        "_hitl_decision": {"action": "approved", "review_id": "yet_another_gate"},
     }
 
     with pytest.raises(_GraphInterruptError):
@@ -370,13 +370,13 @@ async def test_gate_resume_foreign_decision_runs_real_check(monkeypatch: pytest.
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=True),
+        ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False, claimed=True),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
 
     blocked = await nr._run_conformance_gate(
-        {"_hitl_decision": {"action": "approved", "gate_id": "some_other_gate"}},
+        {"_hitl_decision": {"action": "approved", "review_id": "some_other_gate"}},
         node_id=_NODE_ID,
     )
 
@@ -395,7 +395,7 @@ async def test_gate_resume_foreign_decision_block_still_blocks(monkeypatch: pyte
         monkeypatch,
         ConformanceRecheckResult(
             blocked=True,
-            gate_id="guardrail_conformance_g_block",
+            review_id="guardrail_conformance_g_block",
             detail="capability missing",
             state="absent",
             warned=False,
@@ -404,7 +404,7 @@ async def test_gate_resume_foreign_decision_block_still_blocks(monkeypatch: pyte
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
-    state = {"_hitl_decision": {"action": "approved", "gate_id": "some_other_gate"}}
+    state = {"_hitl_decision": {"action": "approved", "review_id": "some_other_gate"}}
 
     blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
 
@@ -424,7 +424,7 @@ async def test_gate_resume_foreign_decision_block_still_blocks(monkeypatch: pyte
     [
         ConformanceRecheckResult(
             blocked=True,
-            gate_id="guardrail_conformance_g_block",
+            review_id="guardrail_conformance_g_block",
             detail=(
                 "guardrail 'g_block' requires capabilities ['sandbox.e2b'] which are no longer present (state=absent)"
             ),
@@ -434,7 +434,7 @@ async def test_gate_resume_foreign_decision_block_still_blocks(monkeypatch: pyte
         ),
         ConformanceRecheckResult(
             blocked=True,
-            gate_id="guardrail_conformance_g_block",
+            review_id="guardrail_conformance_g_block",
             detail="capability source could not be read (state=unknown)",
             state="unknown",
             warned=False,
@@ -457,7 +457,7 @@ async def test_gate_blocked_interrupts(monkeypatch: pytest.MonkeyPatch, result: 
     assert state["_conformance_blocked_node"] == _NODE_ID
     interrupt.assert_called_once_with(
         {
-            "gate_id": result.gate_id,
+            "review_id": result.review_id,
             "reason": result.detail,
             "node_id": _NODE_ID,
             "conformance_state": result.state,
@@ -484,7 +484,7 @@ async def test_gate_warned_advisory_audits_and_continues(monkeypatch: pytest.Mon
         monkeypatch,
         ConformanceRecheckResult(
             blocked=False,
-            gate_id=None,
+            review_id=None,
             detail=(
                 "guardrail 'g_warn' requires capabilities ['sandbox.e2b'] which are no longer present (state=absent)"
             ),
@@ -508,7 +508,7 @@ async def test_gate_present_continues_no_audit(monkeypatch: pytest.MonkeyPatch):
     _set_ctx(monkeypatch)
     _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=True),
+        ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False, claimed=True),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
@@ -525,7 +525,9 @@ async def test_gate_zero_claim_result_continues(monkeypatch: pytest.MonkeyPatch)
     _set_ctx(monkeypatch)
     _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=False),
+        ConformanceRecheckResult(
+            blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False
+        ),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
@@ -565,7 +567,7 @@ async def test_gate_forwards_hoisted_claimed_guardrails(monkeypatch: pytest.Monk
     _set_ctx(monkeypatch, claimed_guardrails=["claim-a", "claim-b"], claims_load_failed=False)
     check = _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=True),
+        ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False, claimed=True),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
@@ -589,7 +591,7 @@ async def test_gate_forwards_claims_load_failed_marker(monkeypatch: pytest.Monke
         monkeypatch,
         ConformanceRecheckResult(
             blocked=True,
-            gate_id="guardrail_conformance_check_failed",
+            review_id="guardrail_conformance_check_failed",
             detail="could not load bound guardrails; failing closed",
             state="unknown",
             warned=False,
@@ -621,7 +623,9 @@ async def test_gate_forwards_node_def_to_check_node_start(monkeypatch: pytest.Mo
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=False),
+        ConformanceRecheckResult(
+            blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False
+        ),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
@@ -643,7 +647,9 @@ async def test_gate_absent_node_def_forwards_none(monkeypatch: pytest.MonkeyPatc
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=False),
+        ConformanceRecheckResult(
+            blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False
+        ),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)

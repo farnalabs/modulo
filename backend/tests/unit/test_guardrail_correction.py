@@ -817,7 +817,7 @@ async def test_dispatch_reject_correction_resolves_and_dispatches():
             node_id="node_a",
             node_input=node_input,
             rejection_reason="secret detected",
-            gate_id="hitl_gate_a_b",
+            review_id="hitl_review_a_b",
         )
 
     assert outcome == {"verdict": "resolved"}
@@ -860,7 +860,7 @@ async def test_dispatch_reject_correction_no_correction_guardrail_returns_none()
             node_id="node_a",
             node_input={"body": "x"},
             rejection_reason="nope",
-            gate_id="hitl_gate_a_b",
+            review_id="hitl_review_a_b",
         )
 
     assert outcome is None

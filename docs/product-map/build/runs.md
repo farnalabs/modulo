@@ -164,7 +164,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 - 2026-09-11: **product-map review pass** — closed the
   `/runs/:id` element-inventory drift for the HitlBriefing surface embedded in
-  `hitl/HitlGateCard.vue`: the gate card renders `HitlBriefing.vue` (the
+  `hitl/HitlReviewCard.vue`: the gate card renders `HitlBriefing.vue` (the
   gate reason/context briefing with its collapse toggle and condition-result
   detail), so its shipped static testids (`hitl-briefing*`) are part of the Run
   Detail page surface. They are now registered on `/runs/:id`, and
@@ -176,7 +176,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   `/runs/:id` element-inventory drift for the shared components the Run Detail
   page renders: `shared/JsonViewer.vue` (the collapsible JSON explorer used for
   IO/output/telemetry inspection), `shared/ErrorAlert.vue` (its dismiss
-  affordance) and `hitl/HitlGateCard.vue` (the run-link and foreign-claim
+  affordance) and `hitl/HitlReviewCard.vue` (the run-link and foreign-claim
   surfaces for a run gate). Their shipped testids (`json-viewer*`,
   `error-alert-dismiss`, `hitl-gate-run-link`, `hitl-gate-foreign-claim`) are
   now registered on `/runs/:id`, and

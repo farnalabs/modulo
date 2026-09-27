@@ -33,7 +33,7 @@ curl -X POST "http://admin:admin@localhost:3000/api/dashboards/db" \
 | File | Description | Key Metrics |
 |---|---|---|
 | `pipeline-performance.json` | Pipeline run durations, volumes, error rates, and slowest nodes | p50/p95/p99 latency, runs/hour, error %, active runs, node-level timing |
-| `hitl-review.json` | HITL gate activity, review speed, approval rates, and claim token expiry | Gates/day, avg review time, approval %, pending gates, claimed vs expired tokens |
+| `hitl-review.json` | HITL review activity, review speed, approval rates, and claim token expiry | Gates/day, avg review time, approval %, pending gates, claimed vs expired tokens |
 | `cost-tracking.json` | LLM spend by org/model/pipeline, token volume, and cost forecasting | USD spend, token rates, monthly projections |
 
 ## Required OTel Attributes
@@ -61,16 +61,16 @@ Expected metrics:
 
 | Attribute / Label | Appears On | Used In |
 |---|---|---|
-| `hitl.gate_id` | HITL spans | Gate identification |
-| `hitl_status` (`"reached"`, `"approved"`, `"rejected"`, `"expired"`) | `modulo_hitl_gates_total` | Gate state filtering |
+| `hitl.review_id` | HITL spans | Gate identification |
+| `hitl_status` (`"reached"`, `"approved"`, `"rejected"`, `"expired"`) | `modulo_hitl_reviews_total` | Gate state filtering |
 | `hitl.claimed_by` | Claim spans | Reviewer attribution |
 | `pipeline_name` | All HITL metrics | Variable filter, grouping |
 | `status` | Claim token metrics | Claimed vs expired |
 
 Expected metrics:
-- `modulo_hitl_gates_total` – counter (labels: `pipeline_name`, `hitl_status`)
+- `modulo_hitl_reviews_total` – counter (labels: `pipeline_name`, `hitl_status`)
 - `modulo_hitl_review_time_seconds_{sum,count}` – histogram
-- `modulo_hitl_gates_active` – gauge
+- `modulo_hitl_reviews_active` – gauge
 - `modulo_hitl_claim_tokens_total` – counter (labels: `pipeline_name`, `status`)
 
 ### Cost Tracking

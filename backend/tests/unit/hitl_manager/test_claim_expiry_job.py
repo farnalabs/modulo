@@ -46,8 +46,8 @@ def _org_list_session() -> AsyncMock:
 def _stale_rows_2() -> list[object]:
     """Two stale claims as attribute-accessible objects (like SQLAlchemy Row)."""
     return [
-        type("Row", (), {"id": _CLAIM_ID_1, "run_id": _RUN_1, "gate_id": _GATE_A, "account_id": _USER_1})(),
-        type("Row", (), {"id": _CLAIM_ID_2, "run_id": _RUN_2, "gate_id": _GATE_B, "account_id": _USER_2})(),
+        type("Row", (), {"id": _CLAIM_ID_1, "run_id": _RUN_1, "review_id": _GATE_A, "account_id": _USER_1})(),
+        type("Row", (), {"id": _CLAIM_ID_2, "run_id": _RUN_2, "review_id": _GATE_B, "account_id": _USER_2})(),
     ]
 
 
@@ -156,10 +156,10 @@ async def test_expire_once_resets_stale_claims() -> None:
 
     assert len(expired) == 2
     assert expired[0]["run_id"] == _RUN_1
-    assert expired[0]["gate_id"] == _GATE_A
+    assert expired[0]["review_id"] == _GATE_A
     assert expired[0]["claimed_by"] == _USER_1
     assert expired[1]["run_id"] == _RUN_2
-    assert expired[1]["gate_id"] == _GATE_B
+    assert expired[1]["review_id"] == _GATE_B
     assert expired[1]["claimed_by"] == _USER_2
 
     # Verify audit events were logged for each expired claim
@@ -195,11 +195,11 @@ async def test_expire_once_dispatches_notifications() -> None:
     call_1 = notifier.dispatch_event.call_args_list[0]
     assert call_1.kwargs["event_type"] == "claim_expired"
     assert call_1.kwargs["org_id"] == _ORG
-    assert call_1.kwargs["payload"]["gate_id"] == _GATE_A
+    assert call_1.kwargs["payload"]["review_id"] == _GATE_A
 
     # Second notification
     call_2 = notifier.dispatch_event.call_args_list[1]
-    assert call_2.kwargs["payload"]["gate_id"] == _GATE_B
+    assert call_2.kwargs["payload"]["review_id"] == _GATE_B
 
 
 async def test_expire_once_no_notifier_skips_dispatch() -> None:
@@ -565,13 +565,13 @@ def _expire_sql_claim_row(
     *,
     claim_id: uuid.UUID | None = None,
     run_id: uuid.UUID | None = None,
-    gate_id: str = "review",
+    review_id: str = "review",
     account_id: uuid.UUID | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=claim_id or uuid.uuid4(),
         run_id=run_id or uuid.uuid4(),
-        gate_id=gate_id,
+        review_id=review_id,
         account_id=account_id or uuid.uuid4(),
     )
 
@@ -605,8 +605,8 @@ async def test_expire_stale_claims_resets_claim_and_run_sql() -> None:
 async def test_expire_stale_claims_processes_multiple_orgs_independently() -> None:
     """Each org's stale claims are swept in its own transaction; results are merged."""
     org_a, org_b = uuid.uuid4(), uuid.uuid4()
-    claim_a = _expire_sql_claim_row(gate_id="gate-a")
-    claim_b = _expire_sql_claim_row(gate_id="gate-b")
+    claim_a = _expire_sql_claim_row(review_id="gate-a")
+    claim_b = _expire_sql_claim_row(review_id="gate-b")
     session = _expire_sql_session(
         _expire_sql_org_result(org_a, org_b),
         _expire_sql_lock_result(True),
@@ -623,5 +623,5 @@ async def test_expire_stale_claims_processes_multiple_orgs_independently() -> No
         expired = await expire_stale_claims(_expire_sql_factory(session))
 
     assert {entry["organisation_id"] for entry in expired} == {org_a, org_b}
-    assert {entry["gate_id"] for entry in expired} == {"gate-a", "gate-b"}
+    assert {entry["review_id"] for entry in expired} == {"gate-a", "gate-b"}
     assert mock_audit.await_count == 2
