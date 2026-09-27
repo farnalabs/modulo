@@ -21,7 +21,13 @@ import {
  * graph, and proves the binding persisted on re-read — the persisted state
  * that changes if the binding path is deleted.
  *
- * Cleanup: pipeline (with its bound node) first, then the connector.
+ * The binding rides on an `agent` node: the backend refuses a connector
+ * binding on a `manual` node ("Manual nodes cannot have connector
+ * bindings"), so the journey mints the model backend + agent the node
+ * references through the real API before saving the graph.
+ *
+ * Cleanup: agent, then the model backend it pinned, then the pipeline (with
+ * its bound node) and its schema, then the connector.
  */
 
 interface ConnectorListItem {
@@ -52,6 +58,8 @@ test.describe('Real-stack journeys: connector binding', { tag: '@regression' }, 
     const connectorName = uniqueName('e2e-journey-connector')
     const cleanup: JourneyCleanup = { pipelineIds: [], schemaIds: [], token, apiBase }
     let connectorId: string | null = null
+    let backendId: string | null = null
+    let agentId: string | null = null
     const created = await createManualNodePipeline(
       apiBase,
       token,
@@ -90,16 +98,46 @@ test.describe('Real-stack journeys: connector binding', { tag: '@regression' }, 
       connectorId = createdConnector?.id ?? null
       if (!connectorId) throw new Error('[realstack] created connector id could not be resolved')
 
-      // Bind the connector into the pipeline's graph node. The save-time
-      // validator resolves the bound instance — a dangling or inactive
-      // binding would be reported in the response's validation issues.
+      // A connector binding attaches to an `agent` node — the backend refuses
+      // it on a `manual` node. Mint the model backend + agent the node
+      // references through the real API so the graph can carry the binding.
+      const backendRes = await apiFetch<{ id: string }>(apiBase, token, 'POST', '/api/v1/model-backends', {
+        name: uniqueName('e2e-journey-connector-backend'),
+        display_name: 'E2E Connector Journey Backend',
+        provider: 'ollama',
+        model_id: 'e2e-journey-model',
+        api_key: 'sk-e2e-journey-not-a-real-key',
+      })
+      if (backendRes.status !== 201 || !backendRes.body?.id) {
+        throw new Error(`[realstack] model backend create failed: ${backendRes.status} ${backendRes.text.slice(0, 300)}`)
+      }
+      backendId = backendRes.body.id
+
+      const agentRes = await apiFetch<{ id: string }>(apiBase, token, 'POST', '/api/v1/agents', {
+        name: uniqueName('E2E Connector Agent'),
+        description: 'Created by the FAR-1242 connector-binding journey (never executed)',
+        input_schema_id: created.schemaId,
+        output_schema_id: created.schemaId,
+        prompt_template: 'e2e connector-binding journey — never executed',
+        model_backend_id: backendId,
+        required_environment_capabilities: [],
+        template_id: null,
+      })
+      if (agentRes.status !== 201 || !agentRes.body?.id) {
+        throw new Error(`[realstack] agent create failed: ${agentRes.status} ${agentRes.text.slice(0, 300)}`)
+      }
+      agentId = agentRes.body.id
+
+      // Bind the connector into the agent node. The save-time validator
+      // resolves the bound instance — a dangling or inactive binding would be
+      // reported in the response's validation issues.
       await setPipelineGraph(apiBase, token, created.pipeline.id, [
         {
           id: created.nodeId,
-          node_type: 'manual',
-          label: 'E2E Human Input',
+          node_type: 'agent',
+          label: 'E2E Connector Agent',
           position: { x: 120, y: 120 },
-          output_schema_id: created.schemaId,
+          agent_id: agentId,
           connector_binding: { type: 'filesystem', instance_id: connectorId },
         },
       ])
@@ -117,6 +155,24 @@ test.describe('Real-stack journeys: connector binding', { tag: '@regression' }, 
       expect(goneRes.status).toBe(404)
       connectorId = null
     } finally {
+      // The agent pins the schema and backend, so delete it before
+      // cleanupJourneyEntities removes the schema. The pipeline graph
+      // references the agent, but a graph is JSON — deleting the pipeline
+      // after does not re-validate its references.
+      if (agentId) {
+        try {
+          await apiFetch(apiBase, token, 'DELETE', `/api/v1/agents/${agentId}`)
+        } catch (err) {
+          console.warn('[realstack] cleanup: agent delete failed:', err instanceof Error ? err.message : String(err))
+        }
+      }
+      if (backendId) {
+        try {
+          await apiFetch(apiBase, token, 'DELETE', `/api/v1/model-backends/${backendId}`)
+        } catch (err) {
+          console.warn('[realstack] cleanup: model backend delete failed:', err instanceof Error ? err.message : String(err))
+        }
+      }
       await cleanupJourneyEntities(cleanup)
       if (connectorId) await deleteConnectorBestEffort(apiBase, token, connectorId)
     }
