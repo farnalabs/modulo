@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { h, nextTick } from 'vue'
 
 const useApiFns = vi.hoisted(() => ({
   get: vi.fn(),
@@ -1732,6 +1732,85 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     await flushPromises()
     expect(vm.edgeSaveError).toBeTruthy()
     expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('renders the edge-default slot with and without a HITL gate config', async () => {
+    // The default mount stub renders only the unnamed slot, so the edge
+    // template (and its v-if on edgeProps.data.hitl_review_config) never ran.
+    // Invoke the scoped slot twice — once with a gate config, once without —
+    // to exercise both arms of the badge conditional.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['edge-default']
+              return h('div', [
+                slot?.({ data: { hitl_review_config: { label: 'Gate' }, edge_type: 'normal' } }),
+                slot?.({ data: { hitl_review_config: null, edge_type: 'normal' } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Exactly one edge rendered the gate badge (the config-bearing one).
+    expect(wrapper.text().match(/HITL/g)?.length ?? 0).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('saveEdgeConfig preserves hitl_review_config on non-selected edges', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    vm.rawEdges = [
+      { id: 'edge-1', source_node_id: 'n1', target_node_id: 'n2', edge_type: 'normal', hitl_review_config: null, condition_expression: null },
+      { id: 'edge-2', source_node_id: 'n2', target_node_id: 'n3', edge_type: 'normal', hitl_review_config: { label: 'Gate', description: 'A long enough description here' }, condition_expression: null },
+      { id: 'edge-3', source_node_id: 'n3', target_node_id: 'n4', edge_type: 'normal', hitl_review_config: null, condition_expression: null },
+    ]
+    vm.selectedEdgeData = vm.rawEdges[0]
+    vm.edgeForm.edge_type = 'normal'
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockResolvedValue({ data: {}, error: undefined })
+
+    await vm.saveEdgeConfig()
+    await flushPromises()
+
+    // The map ran over the two non-selected edges: one with a gate config
+    // (truthy arm) and one without (|| null arm).
+    expect(vm.savingEdge).toBe(false)
+    const patched = vi.mocked(api.PATCH).mock.calls.at(-1)?.[1] as { body?: { edges?: unknown[] } } | undefined
+    expect(patched?.body?.edges?.length).toBe(3)
     wrapper.unmount()
   })
 })

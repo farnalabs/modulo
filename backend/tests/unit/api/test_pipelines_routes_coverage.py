@@ -1934,6 +1934,25 @@ async def test_finalize_locked_graph_save_reraises_unrecognised_error() -> None:
             await _finalize_locked_graph_save(caught, AsyncMock(), principal=principal, pipeline_id=_PIPELINE_ID)
 
 
+async def test_finalize_locked_graph_save_denies_weakening() -> None:
+    """The shared mapping routes a HITL-review-weakening denial to the audit +
+    HTTP translation helper (``_deny_hitl_review``) rather than raising raw.
+
+    ``_deny_hitl_review`` is patched here so the helper's own translation
+    (tested separately) does not mask this branch; the assertion pins that the
+    denial path is taken and the helper returns to its caller.
+    """
+    principal = MagicMock()
+    principal.organisation_id = _ORG_ID
+    principal.account_id = _USER_ID
+    exc = HitlReviewWeakeningDenied(reason_code="gate-removal")
+    with patch(f"{_PREFIX}_deny_hitl_review", new_callable=AsyncMock) as deny:
+        await _finalize_locked_graph_save(exc, AsyncMock(), principal=principal, pipeline_id=_PIPELINE_ID)
+
+    deny.assert_awaited_once()
+    assert deny.await_args.kwargs["exc"] is exc
+
+
 # ---------------------------------------------------------------------------
 # Node conversion — revert-to-manual
 # ---------------------------------------------------------------------------

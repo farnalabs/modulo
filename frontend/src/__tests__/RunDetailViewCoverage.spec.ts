@@ -899,4 +899,29 @@ describe('RunDetailView coverage — script logic branches', () => {
     expect(wrapper.text()).toContain('No node-level data recorded')
     expect(wrapper.text()).toContain('failed')
   })
+
+  // ── fetchRunData → pending HITL review load ────────────────────
+  it('fetchRunData loads pending reviews for an awaiting_human run and tolerates a response without reviews', async () => {
+    let pendingPayload: Record<string, unknown> = { reviews: [{ review_id: 'g1', label: 'Review' }] }
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: baseRun({ status: 'awaiting_human' }), error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: pendingPayload, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const vm = wrapper.vm as any
+
+    // A response whose payload omits `reviews` must fall back to [].
+    pendingPayload = {}
+    await vm.fetchRunData('test-run-id')
+    expect(vm.pendingReviews).toEqual([])
+
+    // And a populated payload must populate the list.
+    pendingPayload = { reviews: [{ review_id: 'g1', label: 'Review' }] }
+    await vm.fetchRunData('test-run-id')
+    expect(vm.pendingReviews).toHaveLength(1)
+  })
 })

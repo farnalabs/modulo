@@ -594,6 +594,31 @@ class TestBuildBundleFromPins:
         assert node["position"] == {"x": 1, "y": 2}
         assert bundle["edges"][0]["hitl_review_config"] == {"k": "v"}
 
+    def test_pipeline_template_pin_edge_without_hitl_review_config(self) -> None:
+        """An edge carrying no gate config must be cloned without the key.
+
+        The clone only copies ``hitl_review_config`` when it is truthy, so the
+        gate-less edge keeps its existing shape (no ``null`` injected).
+        """
+        pid = uuid.uuid4()
+        pin = _prim(
+            pid,
+            primitive_type="pipeline_template",
+            name="Tpl",
+            slug="tpl",
+            content_json={
+                "agents": [],
+                "graph_nodes": [
+                    {"id": "n0", "node_type": "agent", "position": {"x": 0, "y": 0}},
+                    {"id": "n1", "node_type": "agent", "position": {"x": 1, "y": 0}},
+                ],
+                "edges": [{"source_node_id": "n0", "target_node_id": "n1", "edge_type": "normal"}],
+            },
+        )
+        bundle = _build_bundle_from_pins([pin])
+        assert len(bundle["edges"]) == 1
+        assert "hitl_review_config" not in bundle["edges"][0]
+
     def test_workflow_pin_merges_bundle(self) -> None:
         pid = uuid.uuid4()
         pin = _make_workflow_pin(pid)

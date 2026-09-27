@@ -459,6 +459,24 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     wrapper.unmount()
   })
 
+  it('findLegacyHitlDescriptionIssues falls back to a source->target key when an edge has no id', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const nodes = [{ id: 'n1', node_type: 'agent' }]
+    const edges = [
+      { source_node_id: 'n1', target_node_id: 'n2', hitl_review_config: { label: 'Gate', description: 'Short' } },
+    ]
+
+    const issues = vm.findLegacyHitlDescriptionIssues(nodes, edges)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].key).toBe('edge:#n1->#n2')
+    wrapper.unmount()
+  })
+
   // -- syncRetryPolicyFromPipeline: schedule with out-of-range values --
   it('syncRetryPolicyFromPipeline clamps out-of-range schedule values', async () => {
     router.push('/pipelines/test-pipeline-id/editor')

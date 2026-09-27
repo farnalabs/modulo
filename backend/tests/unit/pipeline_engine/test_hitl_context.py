@@ -22,6 +22,7 @@ from modulo.core.pipeline_engine.hitl_context import (
     ARTIFACTS_BUDGET_CHARS,
     REASON_ABSENT,
     TRUNCATION_MARKER,
+    _resolve_consequences,
     build_hitl_review_context,
     extract_condition_node_ids,
     serialize_value,
@@ -659,6 +660,16 @@ class TestConsequences:
         context = await _build(None)
         assert context is not None
         assert context.get("consequences") is None
+
+    def test_edge_not_matching_review_id_yields_no_approve_target(self):
+        """An edge present in the graph but not the gate's own edge must not be
+        mistaken for the approve target: the topology-derived review_id gate
+        skips non-matching edges and falls through with no consequences."""
+        graph = {
+            "nodes": [{"id": _UUID_SRC}, {"id": _UUID_TGT}],
+            "edges": [{"source": _UUID_OTHER, "target": _UUID_TGT, "type": "normal"}],
+        }
+        assert _resolve_consequences(graph, _REVIEW_ID, None, None) is None
 
     async def test_no_consequences_when_gate_not_on_edge(self):
         """HITL node gates have no edge with hitl_review_config → no approve target."""
