@@ -72,8 +72,8 @@ const isParked = (status: string) => status === 'awaiting_human' || status === '
  * /api/v1/runs returns `run_id`, so the UI lands on /runs/undefined. The
  * trigger itself still works (a real run is created); pinning the parked
  * state to a direct /runs/{id} navigation keeps the journey deterministic.
- * Once the product bug is fixed, this can pin waitForURL('/runs/{id}')
- * instead.
+ * Upstream bug tracked in farnalabs/modulo#1014 — once it is fixed this can
+ * pin waitForURL('/runs/{id}') instead and the workaround be removed.
  */
 async function resolveLatestRunId(apiBase: string, token: string, pipelineId: string): Promise<string> {
   const deadline = Date.now() + 30_000

@@ -9,7 +9,7 @@
   >
     <div class="flex items-center justify-between gap-2">
       <div class="flex items-center gap-1.5">
-        <span class="text-[10px] font-semibold uppercase tracking-wider" :class="labelClass">
+        <span class="font-brand-mono text-[11px] font-medium lowercase tracking-wide" :class="labelClass">
           {{ stageTypeLabel }}
         </span>
         <span

@@ -10,8 +10,24 @@ const { getMock, postMock, getAccessTokenMock, routerPush } = vi.hoisted(() => (
   routerPush: vi.fn(),
 }))
 
+// Heavy third-party widget: stub the real flow renderer but render each node's
+// named slot (keyed by its node `type`) so the node-kind templates in
+// CompositeEditorView are actually exercised. Without this the manual/agent/
+// composite `<template #node-*>` divs never execute and the changed-lines
+// coverage gate fails on them (FAR-1249).
 vi.mock('@vue-flow/core', () => ({
-  VueFlow: { name: 'VueFlow', props: ['nodes', 'edges'], template: '<div class="vue-flow-stub" />' },
+  VueFlow: {
+    name: 'VueFlow',
+    props: ['nodes', 'edges'],
+    template: `
+      <div class="vue-flow-stub">
+        <template v-for="n in (nodes || [])" :key="n.id">
+          <slot v-if="n.type === 'manual'" name="node-manual" :id="n.id" :data="n.data" />
+          <slot v-else-if="n.type === 'agent'" name="node-agent" :id="n.id" :data="n.data" />
+          <slot v-else-if="n.type === 'composite'" name="node-composite" :id="n.id" :data="n.data" />
+        </template>
+      </div>`,
+  },
 }))
 vi.mock('@vue-flow/background', () => ({ Background: { template: '<div />' } }))
 vi.mock('@vue-flow/controls', () => ({ Controls: { template: '<div />' } }))
@@ -152,6 +168,52 @@ describe('CompositeEditorView', () => {
     expect(wrapper.find('.vue-flow-stub').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('data is undefined')
     expect(wrapper.text()).toContain('Save as composite')
+    wrapper.unmount()
+  })
+
+  it('renders the node-kind templates for manual, agent and composite nodes with the brand-mono flavour (FAR-1249)', async () => {
+    // FAR-1249 restyled the canvas node "kind" labels (manual / agent /
+    // composite) to the lowercase brand monospace flavour from the product
+    // video. The VueFlow stub renders each node's named slot by type, so all
+    // three `<template #node-*>` blocks execute and their labels render.
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/composite-templates/{template_id}') {
+        return Promise.resolve({ data: templatePayload(), error: undefined })
+      }
+      if (url === '/api/v1/composite-templates/{template_id}/editor') {
+        return Promise.resolve({
+          data: {
+            nodes: [
+              { id: 'n1', node_type: 'manual', label: 'Manual Step', position: { x: 0, y: 0 } },
+              { id: 'n2', node_type: 'agent', label: 'Writer Agent', position: { x: 0, y: 0 } },
+              { id: 'n3', node_type: 'composite', label: 'Composite Step', position: { x: 0, y: 0 } },
+            ],
+            edges: [],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mountView()
+    await flush()
+
+    const text = wrapper.text()
+    expect(text).toContain('MANUAL')
+    expect(text).toContain('AGENT')
+    expect(text).toContain('COMPOSITE')
+    expect(text).toContain('Manual Step')
+    expect(text).toContain('Writer Agent')
+    expect(text).toContain('Composite Step')
+
+    // the kind labels carry the FAR-1249 brand-mono styling; the raw label
+    // text stays uppercase in the DOM (lowercasing is CSS-only)
+    const kindLabels = wrapper.findAll('.font-brand-mono')
+    expect(kindLabels).toHaveLength(3)
+    for (const label of kindLabels) {
+      expect(label.classes()).toContain('lowercase')
+      expect(label.classes()).toContain('tracking-wide')
+    }
     wrapper.unmount()
   })
 

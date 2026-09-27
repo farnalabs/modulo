@@ -4,6 +4,11 @@ module.exports = {
   content: ['./index.html', './src/**/*.{vue,js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      fontFamily: {
+        // Brand monospace stack (matches json-viewer.css and the agent theme).
+        // Used for canvas node kind labels (FAR-1249).
+        'brand-mono': ['"JetBrains Mono"', '"SF Mono"', '"Cascadia Code"', 'Consolas', 'ui-monospace', 'monospace'],
+      },
       colors: {
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',

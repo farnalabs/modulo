@@ -660,7 +660,10 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     vm.rawNodes = [{ id: 'node-1', node_type: 'agent', label: 'Agent', description: '', position: { x: 0, y: 0 } }]
     await nextTick()
 
-    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ data: { id: 'run-123' }, error: undefined })
+    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { run_id: 'run-123', status: 'queued', pipeline_id: 'test-pipeline-id' },
+      error: undefined,
+    })
     await wrapper.find('[data-testid="pipeline-editor-run"]').trigger('click')
     await nextTick()
     await wrapper.find('[data-testid="pipeline-editor-run-prompt"]').setValue('test')
@@ -670,7 +673,10 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
 
     const pushSpy = vi.spyOn(router, 'push')
     // Re-run to get the navigation
-    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ data: { id: 'run-456' }, error: undefined })
+    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { run_id: 'run-456', status: 'queued', pipeline_id: 'test-pipeline-id' },
+      error: undefined,
+    })
     await wrapper.find('[data-testid="pipeline-editor-run"]').trigger('click')
     await nextTick()
     await wrapper.find('[data-testid="pipeline-editor-run-prompt"]').setValue('test2')

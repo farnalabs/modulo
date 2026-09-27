@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="flex h-[calc(100vh-3.5rem)]">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -495,7 +495,7 @@
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
           :node-types="nodeTypes"
-          :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
+          :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: CANVAS_EDGE_STROKE } }"
           :fit-view-on-init="false"
           :source-position="Position.Right"
           :target-position="Position.Left"
@@ -506,20 +506,20 @@
           <Background :gap="20" :size="1" />
           <Controls :showInteractive="false" />
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="text-xs font-medium text-warning">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                   </div></template>
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="text-xs font-medium text-primary">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary">{{ $t('views.PipelineEditorView.node_agent_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                     <div v-if="nodeProps.data.hasCapabilityScope" class="mt-1 inline-flex rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300" data-testid="pipeline-node-scope-badge">{{ $t('views.PipelineEditorView.capability_scope_scoped_badge') }}</div>
                   </div></template>
           <template #node-router="nodeProps"><div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="text-xs font-medium text-indigo-600 dark:text-indigo-300">{{ $t('views.PipelineEditorView.node_router_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-600 dark:text-indigo-300">{{ $t('views.PipelineEditorView.node_router_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_router_label') }}</div>
                   </div></template>
           <template #node-hitl="nodeProps"><div class="rounded-lg border-2 border-rose-500/60 bg-rose-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="text-xs font-medium text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
                   </div></template>
           <template #edge-default="edgeProps">
@@ -1349,6 +1349,7 @@ import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTim
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
+import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
@@ -2110,7 +2111,7 @@ function convertBackendEdge(e: any, i: number): any {
   } else if (isLlm) {
     style = { stroke: '#8b5cf6' }
   } else {
-    style = { stroke: '#888' }
+    style = { stroke: CANVAS_EDGE_STROKE }
   }
   return {
     id: e.id || `edge-${i}`,
@@ -2809,7 +2810,10 @@ async function triggerRun() {
       signal,
     }))
     showRunDialog.value = false
-    if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
+    // RunResponse's id field is run_id (POST /api/v1/runs) — reading `.id`
+    // navigated to /runs/undefined (FAR-1246). Typed off the generated schema
+    // so a field rename fails vue-tsc instead of silently breaking the nav.
+    if (data) router.push({ name: 'run-detail', params: { id: data.run_id } })
   } catch (e: unknown) {
     runError.value = formatApiError(e)
   } finally {
