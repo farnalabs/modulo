@@ -285,24 +285,30 @@ async def test_llm_mode_takes_no_fencing_lease():
 
 
 async def test_script_mode_mid_execution_termination_raises_side_effect_unknown():
-    """A timeout/stall AFTER the process started raises ScriptSideEffectUnknownError.
+    """A stall AFTER the process started raises ScriptSideEffectUnknownError.
 
-    The side effect may or may not have happened — never retried.
+    The side effect may or may not have happened \u2014 never retried.
+
+    The command starts but never produces a terminal outcome (the wait keeps
+    returning ``None``) and the sandbox log probe fails, so the heartbeat
+    channel goes stale and the idle window fires. The intervals are tightened
+    so the stall lands in milliseconds rather than the 300s default.
     """
     node_def = _script_node_def()
-    # commands.run succeeds but wait() returns None => cmd_result is None (timeout).
     handle = MagicMock()
     handle.wait = AsyncMock(return_value=None)
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
     sandbox.files.read = AsyncMock(side_effect=_read_router('{"x": 1}'))
-    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.files.get_info = AsyncMock(side_effect=OSError("sandbox log probe failed"))
     sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.kill = AsyncMock()
 
     fn = make_sandbox_agent_fn(node_def)
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.01),
         pytest.raises(ScriptSideEffectUnknownError),
     ):
         await fn(_run_state())

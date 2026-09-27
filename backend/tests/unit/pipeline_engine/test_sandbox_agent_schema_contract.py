@@ -129,13 +129,16 @@ async def test_script_mode_uploads_contract_files_and_sets_env() -> None:
     sandbox = _sandbox_mock()
 
     with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
     ):
         result = await fn(_run_state())
 
     assert result["output"]["status"] == "completed"
-    assert create_mock.call_args.kwargs["envs"]["MODULO_SCHEMA_DIR"] == "/home/user/schemas"
+    # FAR-1050 R4/R6: MODULO_SCHEMA_DIR rides the agent command's environment
+    # (the ABC create has no sandbox-lifetime env carrier), never the SDK
+    # create kwargs.
+    assert sandbox.commands.run.call_args.kwargs["envs"]["MODULO_SCHEMA_DIR"] == "/home/user/schemas"
 
     paths = _written_paths(sandbox)
     assert f"/home/user/schemas/{node_id}/input.canonical.json" in paths
