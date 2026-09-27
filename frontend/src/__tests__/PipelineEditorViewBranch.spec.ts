@@ -397,7 +397,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     expect(llmEdge.data.routing_label).toBe('go')
 
     const normalEdge = vm.convertBackendEdge({ id: 'e3', edge_type: 'normal', source_node_id: 'n1', target_node_id: 'n2' }, 2)
-    expect(normalEdge.style.stroke).toBe('#888')
+    expect(normalEdge.style.stroke).toBe('hsl(var(--muted-foreground)/0.6)')
     expect(normalEdge.animated).toBe(false)
 
     wrapper.unmount()

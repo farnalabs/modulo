@@ -75,6 +75,8 @@ _ACTIVATION_EMAIL_TRIES = 5
 
 
 class BreakGlassError(Exception):
+    """Base error for the break-glass CLI; ``exit_code`` becomes the process exit status."""
+
     exit_code: int = EXIT_UNEXPECTED
 
 

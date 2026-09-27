@@ -57,7 +57,7 @@
               :nodes="subGraphNodes"
               :edges="subGraphEdges"
               :node-types="subNodeTypes"
-              :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
+              :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: CANVAS_EDGE_STROKE } }"
               fit-view-on-init
               :nodes-draggable="false"
               :nodes-connectable="false"
@@ -66,7 +66,7 @@
               <Background :gap="20" :size="1" />
               <template #node-agent="nodeProps">
                 <div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-3 shadow-sm">
-                  <div class="text-xs font-medium text-indigo-400">{{ $t('views.LibraryPipelineWizard.agent') }}</div>
+                  <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-400">{{ $t('views.LibraryPipelineWizard.agent') }}</div>
                   <div class="text-sm font-semibold text-foreground">{{ nodeProps.data.label }}</div>
                 </div>
               </template>
@@ -189,6 +189,7 @@ import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { layoutNodes } from '../utils/graph-layout'
+import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 
 interface LibraryPrimitive {
