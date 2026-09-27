@@ -1067,6 +1067,21 @@ async def _seed_demo_pipeline_and_runs(
     return pipeline_lookup
 
 
+def _values_match(stored: Any, desired: Any) -> bool:
+    """Compare a stored column value with its desired replacement, tz-insensitively.
+
+    SQLite strips the UTC offset on a DATETIME round-trip (Postgres timestamptz
+    keeps it), so an aware ``_run_window`` datetime would otherwise compare
+    unequal on every boot on SQLite and rewrite an identical timestamp — no-op
+    UPDATE churn against the "no churn on every boot" convergence contract.
+    """
+    if isinstance(stored, datetime) and isinstance(desired, datetime):
+        stored_utc = stored if stored.tzinfo is None else stored.astimezone(UTC).replace(tzinfo=None)
+        desired_utc = desired if desired.tzinfo is None else desired.astimezone(UTC).replace(tzinfo=None)
+        return stored_utc == desired_utc
+    return bool(stored == desired)
+
+
 async def _seed_demo_run(
     session: AsyncSession,
     org: Organisation,
@@ -1115,13 +1130,13 @@ async def _seed_demo_run(
 
     if run is not None:
         # Converge display fields on existing runs (never touch identity).
-        changed = False
+        drifted: list[str] = []
         for attr, val in desired.items():
-            if getattr(run, attr) != val:
+            if not _values_match(getattr(run, attr), val):
                 setattr(run, attr, val)
-                changed = True
-        if changed:
-            _log.info("demo_seed.run_converged", extra={"run_number": run_number})
+                drifted.append(attr)
+        if drifted:
+            _log.info("demo_seed.run_converged", extra={"run_number": run_number, "fields": drifted})
     else:
         thread_id = f"demo-seed-{org.id}-{run_number}"
         run = Run(
