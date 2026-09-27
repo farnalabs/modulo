@@ -38,10 +38,10 @@ function claimedGate(overrides: Record<string, unknown> = {}) {
   }
 }
 
-const GATES_URL = '/api/v1/hitl/gates'
+const GATES_URL = '/api/v1/hitl/reviews'
 const PAGE_SIZE = 25
 
-/** The /hitl/gates envelope (FAR-692): items/total/page/page_size. */
+/** The /hitl/reviews envelope (FAR-692): items/total/page/page_size. */
 function gatesResponse(gates: unknown[], overrides: Record<string, unknown> = {}) {
   return {
     data: { items: gates, total: gates.length, page: 1, page_size: PAGE_SIZE, ...overrides },
@@ -318,7 +318,7 @@ describe('SettingsHitlReviewView', () => {
   })
 
   it('serves the status filter from the server-side status param (FAR-692)', async () => {
-    // The status filter maps to GET /hitl/gates' `status` query param — the
+    // The status filter maps to GET /hitl/reviews' `status` query param — the
     // server does the filtering, so the mock honours the requested param:
     // undecided (default) serves both gates, 'claimed' only the claimed one.
     const { api } = await import('../lib/api/client')

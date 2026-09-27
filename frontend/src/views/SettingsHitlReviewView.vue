@@ -308,7 +308,7 @@
       </div>
       </div>
       </div>
-      <!-- FAR-692: server-side pagination over /hitl/gates. Only rendered when
+      <!-- FAR-692: server-side pagination over /hitl/reviews. Only rendered when
            there is more than one page; the page indicator uses role="status" so
            a page change is announced. No shared pagination component exists in
            components/shared/, so this minimal inline pager is view-local. -->
@@ -401,7 +401,7 @@ interface PipelineItem {
   name: string
 }
 
-// FAR-692: the review page lists gates in EVERY state via GET /api/v1/hitl/gates
+// FAR-692: the review page lists gates in EVERY state via GET /api/v1/hitl/reviews
 // (server-side status filter + pagination). The FilterBar's empty selection maps
 // to the server's `undecided` default, preserving today's queue view.
 type ServerGateStatus = 'undecided' | 'pending' | 'claimed' | 'approved' | 'rejected' | 'all'
@@ -414,7 +414,7 @@ function serverStatusFor(filter: string): ServerGateStatus {
 }
 
 // FAR-692: server-side pagination state. totalGates is stamped from each
-// /hitl/gates response; the pager renders only when it exceeds PAGE_SIZE.
+// /hitl/reviews response; the pager renders only when it exceeds PAGE_SIZE.
 // NB: every ref the fetch closure reads (statusFilter/page/totalGates) must be
 // declared BEFORE useDataFetch — vue-query invokes the fetcher during setup.
 const page = ref(1)
@@ -431,7 +431,7 @@ const { loading, error, data: gates, fetched, load: loadGates } = useDataFetch<G
   async () => {
     // Reads the CURRENT status/page refs on every load: filter and page
     // changes re-invoke loadGates(), so each fetch reflects the latest state.
-    const res = await api.GET('/api/v1/hitl/gates', {
+    const res = await api.GET('/api/v1/hitl/reviews', {
       params: { query: { status: serverStatusFor(statusFilter.value), page: page.value, page_size: PAGE_SIZE } },
     })
     // FAR-768 regression: a missing envelope is a FAILURE, not an empty queue.
@@ -598,7 +598,7 @@ function matchesDate(gate: GateItem): boolean {
 
 const filteredGates = computed(() => {
   // Status is filtered SERVER-side now (FAR-692): the statusFilter param selects
-  // the gate subset on /hitl/gates. Search/pipeline/date remain client-side
+  // the gate subset on /hitl/reviews. Search/pipeline/date remain client-side
   // over the loaded page (documented limitation: search matches within the
   // current page only).
   return gates.value.filter(gate =>
