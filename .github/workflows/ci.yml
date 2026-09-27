@@ -1056,10 +1056,16 @@ jobs:
           # associated PR — never on event, because the queue deliberately
           # avoids workflow_dispatch (HTTP 422 caching bug) and its real triggers
           # are pull_request_review / check_suite / schedule /
-          # repository_dispatch. status must include `queued` as well as
-          # `in_progress`: the queue's concurrency group is FIFO
-          # (cancel-in-progress: false), so a fixer racing a still-queued run is
-          # exactly the race this guard must lose.
+          # repository_dispatch. A run that has not finished is reported by the
+          # Actions API as `queued`, `in_progress`, `pending`, `requested` or
+          # `waiting` — observed live: the in-flight Merge: Queue run for this
+          # very PR reports status "pending", NOT "queued"/"in_progress", so
+          # keying on those two alone silently misses it. The only terminal run
+          # status is `completed` (cancelled/skipped/failed runs are all
+          # status "completed" with a distinct conclusion), so we treat ANY
+          # non-completed status as in flight. The queue's concurrency group is
+          # FIFO (cancel-in-progress: false), so a fixer racing a still-queued
+          # run is exactly the race this guard must lose.
           #
           # Fail CLOSED on any query/parse failure: the old `|| echo 0`
           # converted an API/jq blip into "no queue run in flight" and re-
@@ -1077,7 +1083,7 @@ jobs:
             --arg sha "${HEAD_SHA}" \
             --argjson pr "${PR_NUM:-0}" \
             '[ .workflow_runs[]
-               | select(.status == "queued" or .status == "in_progress")
+               | select(.status != "completed")
                | select(
                    .head_branch == $branch
                    or .head_sha == $sha
