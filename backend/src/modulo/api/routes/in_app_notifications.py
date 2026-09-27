@@ -116,6 +116,14 @@ SCOPE_LABELS: dict[str, str] = {
 _DASHBOARD_LEVELS: frozenset[str] = frozenset({"debug", "info", "warning", "error"})
 _DASHBOARD_LEVEL_KEY = "notification_dashboard_level"
 
+# The ``status`` query vocabulary — exactly the values ``_apply_status_filter``
+# (db/crud/notifications.py) branches on. Anything else used to fall through
+# every branch and return an UNFILTERED page (expired + dismissed rows) with
+# HTTP 200; it is now a 422. ``None`` (param omitted) stays valid: it is the
+# inbox default, a live view. Matches the UI filter set on /notifications
+# (``active`` / ``dismissed_self`` / ``dismissed_scope``).
+_NOTIFICATION_STATUS_VALUES: frozenset[str] = frozenset({"active", "dismissed_self", "dismissed_scope"})
+
 
 async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) -> str:
     account = await get_account_by_id(session, account_id)
@@ -256,6 +264,16 @@ async def list_notifications(
     category: str | None = Query(None),
     status_filter: str | None = Query(None, alias="status"),
 ) -> PaginatedNotificationsResponse:
+    # Validate BEFORE touching the DB: an unvalidated ``status`` used to fall
+    # through every branch of ``_apply_status_filter`` and return an
+    # UNFILTERED page (expired + dismissed rows) with HTTP 200. The empty
+    # string (``?status=``) is not "unset" — it is not in the vocabulary
+    # either — so it is a 422, not a silent bypass.
+    if status_filter is not None and status_filter not in _NOTIFICATION_STATUS_VALUES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid status filter; expected one of: {', '.join(sorted(_NOTIFICATION_STATUS_VALUES))}.",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
