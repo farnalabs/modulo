@@ -488,8 +488,30 @@ async def test_watchdog_drain_probe_flag_on_routes_through_the_provider(
 # ---------------------------------------------------------------------------
 
 
-def test_flag_defaults_off() -> None:
-    assert Settings(_env_file=None).modulo_e2b_via_provider is False
+def test_flag_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1050 R5: the dispatch flip - ON is the shipped default.
+
+    ``tests/conftest.py`` pins the suite baseline to the revert value, so
+    clear the override to read the PRODUCT default.
+    """
+    monkeypatch.delenv("MODULO_E2B_VIA_PROVIDER", raising=False)
+    assert Settings(_env_file=None).modulo_e2b_via_provider is True
+
+
+def test_flag_explicit_false_reverts_to_the_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R5 revert: ``MODULO_E2B_VIA_PROVIDER=false`` selects the legacy arm.
+
+    The env-derived settings resolve False, and with that instance wired in
+    ``_file_io_via_provider_enabled`` (the gate every T4 site branches on)
+    takes the legacy ``sandbox.files`` path - the revert still works after
+    the default flipped to ON. The seam reads ``get_settings()`` per call,
+    so the env-derived instance is substituted for the cached one here.
+    """
+    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "false")
+    settings = Settings(_env_file=None)
+    assert settings.modulo_e2b_via_provider is False
+    monkeypatch.setattr(nr, "get_settings", lambda *a, **k: settings)
+    assert _file_io_via_provider_enabled() is False
 
 
 def test_flag_read_failure_fails_open_to_the_legacy_arm(monkeypatch: pytest.MonkeyPatch) -> None:

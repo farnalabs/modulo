@@ -3,16 +3,19 @@
 Drives the T6 call sites inside ``_sandbox_agent_impl`` through the real
 dispatch (sandbox mock, no network) and proves:
 
-1. Flag OFF (default): callers still hit urllib — the legacy
+1. Flag OFF (explicit ``MODULO_E2B_VIA_PROVIDER=false``; no longer the
+   default since R5): callers still hit urllib — the legacy
    ``_fetch_sandbox_log_tail`` runs, the provider builder never does.
-2. Flag ON: callers hit the provider — ``FakeRuntimeProvider.read_log_tail``
+2. Flag ON (the default since R5): callers hit the provider —
+   ``FakeRuntimeProvider.read_log_tail``
    returns a fixed tail that lands in the failure message, the legacy
    helper and ``urllib`` are never touched (hostname absence at runtime),
    and the fetch still precedes the kill (pre-kill ordering preserved).
 3. ``_read_log_tail_via_provider`` itself: empty on no key (provider never
    built), empty on provider build failure, empty on provider exception,
    decode of the provider's bytes on success.
-4. The settings flag: default False, env-var enable True.
+4. The settings flag: default True (R5 flip), env-var enable, and the
+   explicit-false revert back to the legacy path.
 """
 
 import uuid
@@ -152,13 +155,31 @@ def _disable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_flag_defaults_off() -> None:
-    assert Settings(_env_file=None).modulo_e2b_via_provider is False
+def test_flag_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1050 R5: the dispatch flip - ON is the shipped default.
+
+    The suite pins ``MODULO_E2B_VIA_PROVIDER=false`` as its baseline (see
+    ``tests/conftest.py``), so the override is cleared first to read the
+    PRODUCT default the settings field ships with.
+    """
+    monkeypatch.delenv("MODULO_E2B_VIA_PROVIDER", raising=False)
+    assert Settings(_env_file=None).modulo_e2b_via_provider is True
 
 
 def test_flag_enabled_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "true")
     assert Settings(_env_file=None).modulo_e2b_via_provider is True
+
+
+def test_flag_disabled_by_env_reverts_to_the_legacy_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R5 revert: an explicit ``MODULO_E2B_VIA_PROVIDER=false`` yields OFF.
+
+    The settings value is what every gated call site reads, so an explicit
+    false flips the whole rewire back to the legacy direct path in one
+    restart - no legacy code was deleted at the flip.
+    """
+    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "false")
+    assert Settings(_env_file=None).modulo_e2b_via_provider is False
 
 
 # ---------------------------------------------------------------------------
