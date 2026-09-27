@@ -8,8 +8,8 @@ Row Level Security follows the mandatory four-step pattern (ownership
 transfer to modulo_migrate, ENABLE, FORCE, rls_org_isolation policy)
 mirrored from migration 0250_eval_policy_gate.
 
-Revision ID: 0262_evidence_layer
-Revises: 0261_decision_record_payload
+Revision ID: 0263_evidence_layer
+Revises: 0262_hitl_gate_to_review_vocabulary
 Create Date: 2026-09-27
 """
 
@@ -18,8 +18,8 @@ from alembic import op
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision = "0262_evidence_layer"
-down_revision = "0261_decision_record_payload"
+revision = "0263_evidence_layer"
+down_revision = "0262_hitl_gate_to_review_vocabulary"
 branch_labels = None
 depends_on = None
 

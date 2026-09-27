@@ -11,7 +11,7 @@ Pure-unit portion of the Evidence-entity criteria:
   ``unverifiable`` → ``node_has_work`` / ``None`` (JSONB null), subject shape
   ``{type: 'node_execution', id: '<run_id>:<node_id>'}``, unknown state raises.
 
-Also asserts schema parity between the model and migration 0262: revision
+Also asserts schema parity between the model and migration 0263: revision
 linkage, CHECK-vocabulary agreement, and the table name.
 """
 
@@ -27,7 +27,7 @@ from modulo.db.models.evidence import PRODUCER_TYPES, Evidence
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _BACKEND_ROOT / "src" / "modulo"
-_MIGRATION_FILE = _BACKEND_ROOT / "src" / "modulo" / "db" / "migrations" / "versions" / "0262_evidence_layer.py"
+_MIGRATION_FILE = _BACKEND_ROOT / "src" / "modulo" / "db" / "migrations" / "versions" / "0263_evidence_layer.py"
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
@@ -103,28 +103,28 @@ def test_e2_fold_in_unknown_state_raises_value_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Schema parity — model ↔ migration 0262
+# Schema parity — model ↔ migration 0263
 # ---------------------------------------------------------------------------
 
 
 def _load_migration_module() -> object:
-    """Load migration 0262 by file path so revision/linkage is asserted, not inferred."""
-    spec = importlib.util.spec_from_file_location("_mig_spec_0262_evidence_layer", str(_MIGRATION_FILE))
+    """Load migration 0263 by file path so revision/linkage is asserted, not inferred."""
+    spec = importlib.util.spec_from_file_location("_mig_spec_0263_evidence_layer", str(_MIGRATION_FILE))
     spec_module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(spec_module)  # type: ignore[union-attr]
     return spec_module
 
 
 def test_migration_revision_chain_links_to_decision_record_payload() -> None:
-    """Migration 0262 revises the decision-record-payload head and carries its
+    """Migration 0263 revises the HITL-gate-vocabulary head and carries its
     own revision id (chain integrity, not a dangling branch)."""
     migration = _load_migration_module()
-    assert migration.revision == "0262_evidence_layer"  # type: ignore[attr-defined]
-    assert migration.down_revision == "0261_decision_record_payload"  # type: ignore[attr-defined]
+    assert migration.revision == "0263_evidence_layer"  # type: ignore[attr-defined]
+    assert migration.down_revision == "0262_hitl_gate_to_review_vocabulary"  # type: ignore[attr-defined]
 
 
 def test_migration_producer_vocabulary_matches_model() -> None:
-    """Migration 0262's producer-type tuple equals the model's PRODUCER_TYPES;
+    """Migration 0263's producer-type tuple equals the model's PRODUCER_TYPES;
     the same five values drive both the CHECK constraint and the app map."""
     migration = _load_migration_module()
     migration_values = frozenset(migration._PRODUCER_TYPE_VALUES)  # type: ignore[attr-defined]
@@ -132,7 +132,7 @@ def test_migration_producer_vocabulary_matches_model() -> None:
 
 
 def test_migration_table_name_matches_model() -> None:
-    """Migration 0262 creates exactly the table the ``Evidence`` model maps."""
+    """Migration 0263 creates exactly the table the ``Evidence`` model maps."""
     migration = _load_migration_module()
     assert Evidence.__tablename__ == migration._TABLE
 

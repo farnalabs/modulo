@@ -9,7 +9,7 @@ The ``value`` column is JSONB and carries boolean, number, or null
 to the five-value vocabulary (``eval``, ``policy_gate``, ``run``,
 ``system_state``, ``derived``).
 
-RLS org-isolation is enforced by migration 0262_evidence_layer.
+RLS org-isolation is enforced by migration 0263_evidence_layer.
 """
 
 from __future__ import annotations
