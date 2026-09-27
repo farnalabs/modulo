@@ -153,17 +153,27 @@ test.describe('Real-stack journeys: RBAC/tenancy boundary', { tag: '@regression'
 
   test('an unauthenticated request to a tenant endpoint is rejected with 401', { tag: '@regression' }, async ({ env }) => {
     const apiBase = apiBaseFor(env)
-    // No Authorization header at all: the tenant gate must 401 (authentication
-    // boundary), never fold to a permission-denied 403 or a silent success.
+    // Safe-method (GET) tenant endpoint guarded by the optional-bearer auth
+    // dependency. With no Authorization header at all the tenant gate must 401
+    // (authentication boundary), never fold to a permission-denied 403 or a
+    // silent success.
+    const listRes = await fetch(`${apiBase}/api/v1/pipelines`, { signal: AbortSignal.timeout(10_000) })
+    expect(listRes.status).toBe(401)
+
+    // A state-changing request with NO credentials is refused by the CSRF
+    // middleware (403) before authentication runs — deliberate protection for
+    // cookie-authenticated POSTs, so that 403 is the CSRF layer, not the auth
+    // boundary. Send a Bearer-shaped but invalid credential to bypass CSRF and
+    // exercise the auth boundary itself: the tenant gate must still 401.
     const createRes = await fetch(`${apiBase}/api/v1/pipelines`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer not-a-valid-jwt',
+      },
       body: JSON.stringify({ name: uniqueName('E2E Unauth') }),
       signal: AbortSignal.timeout(10_000),
     })
     expect(createRes.status).toBe(401)
-
-    const meRes = await fetch(`${apiBase}/api/v1/me`, { signal: AbortSignal.timeout(10_000) })
-    expect(meRes.status).toBe(401)
   })
 })

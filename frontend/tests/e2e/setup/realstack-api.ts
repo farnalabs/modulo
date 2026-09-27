@@ -111,6 +111,8 @@ export interface GraphNode {
   label?: string | null
   position: { x: number; y: number }
   output_schema_id?: string | null
+  /** Agent reference for `agent` / `sandbox_agent` nodes (batch 2). */
+  agent_id?: string | null
   /** Node-level connector binding (batch 2): { type, instance_id }. */
   connector_binding?: { type: string; instance_id: string } | null
 }
