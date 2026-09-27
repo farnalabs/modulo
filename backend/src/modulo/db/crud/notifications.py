@@ -128,7 +128,7 @@ def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
     )
 
 
-def _not_expired_clause(now: datetime | None = None) -> ColumnElement[bool]:
+def _not_expired_clause() -> ColumnElement[bool]:
     """TTL clause: a notification past its ``expires_at`` is no longer live.
 
     Read-path enforcement of ``expires_at`` (the column was previously
@@ -141,10 +141,11 @@ def _not_expired_clause(now: datetime | None = None) -> ColumnElement[bool]:
     ``status=active``. It is NOT deleted: an explicit historical filter
     (``dismissed_self`` / ``dismissed_scope``) and the by-id detail read still
     retrieve it, so nothing is lost — it simply stops presenting as
-    active/actionable. A NULL ``expires_at`` (legacy rows) never expires.
+    active/actionable. ``expires_at`` is ``NOT NULL``
+    (``db/models/notification.py``), so every row carries a real TTL and no
+    NULL-means-never fallback is needed.
     """
-    moment = now if now is not None else datetime.now(UTC)
-    return or_(Notification.expires_at.is_(None), Notification.expires_at > moment)
+    return Notification.expires_at > datetime.now(UTC)
 
 
 def _hidden_from_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:

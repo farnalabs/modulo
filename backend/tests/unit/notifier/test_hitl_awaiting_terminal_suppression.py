@@ -20,6 +20,7 @@ dispatch both happen.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -37,6 +38,7 @@ from modulo.core.notifier import (
     EVENT_RUN_FAILED,
     DispatchResult,
     Notifier,
+    _payload_run_id,
 )
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
@@ -216,3 +218,53 @@ async def test_other_event_types_are_unaffected(harness: _Harness) -> None:
 
     assert len(results) == 1
     assert await harness.notification_count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Run-id extraction branches (``_payload_run_id``)
+# ---------------------------------------------------------------------------
+
+
+def test_payload_run_id_accepts_a_uuid_instance() -> None:
+    """An emitter that hands over a real ``uuid.UUID`` is used verbatim."""
+    run_id = uuid.uuid4()
+    assert _payload_run_id({"run_id": run_id}) == run_id
+
+
+def test_payload_run_id_ignores_an_unparseable_string() -> None:
+    """A non-UUID string means "no linked run" and never raises."""
+    assert _payload_run_id({"run_id": "not-a-uuid"}) is None
+
+
+def test_payload_run_id_ignores_absent_and_non_string_values() -> None:
+    """An absent key or a non-string value falls through to ``None``."""
+    assert _payload_run_id({}) is None
+    assert _payload_run_id({"run_id": 12345}) is None
+
+
+# ---------------------------------------------------------------------------
+# Read-failure arms of ``_run_is_terminal``
+# ---------------------------------------------------------------------------
+
+
+async def test_run_state_db_error_fails_open(harness: _Harness) -> None:
+    """An unreadable run row must dispatch as before — fail OPEN.
+
+    The ``except Exception`` arm is the safety net that keeps a DB blip from
+    silently swallowing a live review request.
+    """
+    with patch("modulo.core.notifier.set_rls_org", side_effect=RuntimeError("db blip")):
+        assert await harness.notifier._run_is_terminal(_ORG, _TERMINAL_RUN) is False
+
+
+async def test_run_state_cancellation_propagates(harness: _Harness) -> None:
+    """A cancelled read is re-raised, not swallowed into a fail-open dispatch.
+
+    ``CancelledError`` is a ``BaseException``; the guard re-raises it explicitly
+    so the caller's cancellation is honoured.
+    """
+    with (
+        patch("modulo.core.notifier.set_rls_org", side_effect=asyncio.CancelledError),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await harness.notifier._run_is_terminal(_ORG, _TERMINAL_RUN)

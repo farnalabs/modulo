@@ -71,8 +71,9 @@ events into typed notification payloads; and in-app notifications stream over SS
 
 - [x] **`expires_at` is enforced on every live read (TTL is not decorative).** A
       notification past its `expires_at` (72h for `hitl.awaiting`, 168h for
-      `run.failed`/`run.stalled`, 24h for `hitl.claim_expired`, 90d default,
-      `NULL` = never) drops out of the dashboard panel, the unread badge
+      `run.failed`/`run.stalled`, 24h for `hitl.claim_expired`, 90d default;
+      `expires_at` is `NOT NULL`, so every row has a real TTL) drops out of the
+      dashboard panel, the unread badge
       (`GET /unread-count` and the dashboard's `total_unread`), the inbox
       default (no `status`) and `status=active` — enforced in
       `db/crud/notifications.py` (`_not_expired_clause`), applied to BOTH the
