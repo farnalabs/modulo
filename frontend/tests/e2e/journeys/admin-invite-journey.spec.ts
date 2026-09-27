@@ -49,6 +49,13 @@ test.describe('Real-stack journeys: user invitation lifecycle', { tag: '@regress
 
       // Observable effect: the one-time invite link is issued...
       await expect(page.getByTestId('admin-users-credential-value')).toBeVisible({ timeout: 30_000 })
+
+      // The invite-link dialog is modal; dismiss it before touching the rest
+      // of the page. Its overlay mask covers the invitations table, so the
+      // revoke click below is intercepted until the dialog is closed.
+      await page.getByTestId('admin-users-invite-done').click()
+      await expect(page.getByTestId('admin-users-credential-value')).toBeHidden()
+
       // ...and the pending invitations section lists the new invitation.
       const invitationRow = page.locator('[data-testid="admin-invitations-row"]').filter({ hasText: email })
       await expect(invitationRow).toBeVisible({ timeout: 30_000 })
