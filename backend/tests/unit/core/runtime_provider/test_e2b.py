@@ -119,10 +119,13 @@ async def test_create_workspace_creates_sandbox(
     assert ref == "sbx-e2b-test-001"
     # egress_policy unset -> internet allowed (FAR-1050 R5 passes the
     # permissive boolean explicitly rather than leaving it to the SDK default).
+    # ``timeout`` is the forwarded sandbox lifetime (spec default 3600) —
+    # see test_e2b_sandbox_lifetime.py for the FAR-487/FAR-489 coverage.
     mock_sandbox_cls.create.assert_called_once_with(
         template="ubuntu-22.04",
         api_key="sk-test",
         allow_internet_access=True,
+        timeout=3600,
     )
 
 
@@ -139,6 +142,7 @@ async def test_create_workspace_default_template(mock_sandbox_cls: MagicMock) ->
         template="base",
         api_key="sk-test",
         allow_internet_access=True,
+        timeout=3600,
     )
 
 

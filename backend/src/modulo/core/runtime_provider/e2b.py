@@ -195,16 +195,86 @@ class E2BRuntimeProvider(RuntimeProvider):
         boolean (FAR-1050 R5): a restrictive policy must never silently
         grant unrestricted internet (ADR 040). See
         :func:`_egress_allows_internet` for the exact mapping.
+
+        ``spec.timeout_seconds`` is the SANDBOX LIFETIME and is forwarded to
+        the SDK as ``timeout=`` (FAR-487/FAR-489 — see the inline note on
+        ``lifetime_s`` below). It is a DIFFERENT concern from the
+        provisioning wait bound on the ``asyncio.wait_for`` around
+        ``AsyncSandbox.create``.
         """
         from e2b import AsyncSandbox
 
         template_id = spec.image_ref.strip() if spec.image_ref else _DEFAULT_TEMPLATE_ID
-        timeout = spec.timeout_seconds or _MAX_PROVISION_TIMEOUT
+
+        # ------------------------------------------------------------------
+        # 1. SANDBOX LIFETIME -> forwarded to the SDK as ``timeout=``.
+        # ------------------------------------------------------------------
+        # FAR-487/FAR-489: the dispatch (node_runner) stamps
+        # ``spec.timeout_seconds`` as ``sandbox_timeout +
+        # _SANDBOX_LIFETIME_GRACE_S`` so the platform endAt kill can never
+        # preempt the runner's own timeout path. Before this fix the value
+        # was read ONLY as the provisioning wait bound below and never
+        # reached ``AsyncSandbox.create`` — so the SDK silently fell back to
+        # its own ``SandboxBase.default_sandbox_timeout = 300``
+        # (``e2b/sandbox/main.py:31``) and a node configured for a 1200s
+        # lifetime got a sandbox that died at 300s.
+        #
+        # ``int()`` is MANDATORY (FAR-489): the SDK's attrs model does NOT
+        # coerce a float, and E2B's Go server rejects ``"1320.0"`` with a 400
+        # (int32 unmarshal), instantly failing every sandbox create.
+        #
+        # Range: the SDK documents a maximum keep-alive of 86_400s (Pro) /
+        # 3_600s (Hobby). Both GraphValidator (``SANDBOX_TIMEOUT_EXCEEDS_E2B_
+        # CAP`` at 3300, FAR-511) and the dispatch-time cap in
+        # ``bundled_runner.runner_dispatch`` reject a sandbox lifetime above
+        # 3300 BEFORE this code runs, so the forwarded value is always in
+        # range. Deliberately NOT clamped here: clamping would silently
+        # shorten the lifetime below the command timeout and resurrect the
+        # FAR-487 defect this fix exists to prevent — an out-of-range value
+        # must fail loudly at create time instead.
+        lifetime_s = int(spec.timeout_seconds) if spec.timeout_seconds and spec.timeout_seconds > 0 else None
+
+        # ------------------------------------------------------------------
+        # 2. PROVISIONING WAIT BOUND -> bounds the create CALL, not the sandbox.
+        # ------------------------------------------------------------------
+        # Deliberately kept at the pre-forwarding expression
+        # (``spec.timeout_seconds or _MAX_PROVISION_TIMEOUT``) rather than
+        # capped at ``_MAX_PROVISION_TIMEOUT``: the dispatch wraps this very
+        # call in its own authoritative bound
+        # ``min(sandbox_timeout, SANDBOX_PROVISIONING_TIMEOUT_SECONDS)``
+        # (node_runner's ``asyncio.wait_for(...create_workspace...)``), and
+        # the lifetime is STRICTLY GREATER than ``sandbox_timeout`` — so this
+        # inner bound can never preempt the dispatch's settings-driven
+        # watchdog, which raises ``SandboxQueueTimeoutError`` and logs
+        # ``sandbox_agent.provisioning_watchdog_fired``. Capping the inner
+        # bound at ``_MAX_PROVISION_TIMEOUT`` (120) would preempt that
+        # watchdog whenever an operator raises
+        # ``SANDBOX_PROVISIONING_TIMEOUT_SECONDS`` above 120 (the field allows
+        # up to 600), silently swapping the error class for a plain
+        # ``RuntimeError``. For the direct callers that have no outer bound
+        # (the environment-profile SSE test path, ``runner_dispatch``) the
+        # bound is unchanged from before this fix: still finite, still
+        # ``_MAX_PROVISION_TIMEOUT`` when no lifetime is supplied.
+        provision_wait_s = spec.timeout_seconds or _MAX_PROVISION_TIMEOUT
 
         # FAR-1171: pass the resolved key explicitly — the SDK's ConnectionConfig
         # only falls back to the E2B_API_KEY env var when api_key is falsy, and
         # ``__init__`` guarantees ``self._api_key`` is non-empty (fail-closed).
         create_kwargs: dict[str, Any] = {"template": template_id, "api_key": self._api_key}
+        if lifetime_s is None:
+            # Defensive only: every production caller stamps a positive
+            # lifetime (node_runner, runner_dispatch, environment_profiles).
+            # Falling back to the SDK's 300s default is the exact defect this
+            # fix removes, so make it loud instead of silent.
+            _log.warning(
+                "E2B create_workspace: spec.timeout_seconds=%r is not a positive lifetime — "
+                "not forwarding it; the SDK's 300s default_sandbox_timeout applies "
+                "(no FAR-487 strictly-greater-than-the-command guarantee)",
+                spec.timeout_seconds,
+            )
+        else:
+            create_kwargs["timeout"] = lifetime_s
+
         # FAR-1050 R5: carry spec.egress_policy into the create call. The
         # permissive side is passed explicitly too (never left to the SDK
         # default) so the posture of every create is visible at the call site.
@@ -217,13 +287,13 @@ class E2BRuntimeProvider(RuntimeProvider):
         try:
             sandbox = await asyncio.wait_for(
                 AsyncSandbox.create(**create_kwargs),
-                timeout=timeout,
+                timeout=provision_wait_s,
             )
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             raise RuntimeError(
-                f"Timed out after {timeout}s provisioning E2B sandbox with template {template_id!r}"
+                f"Timed out after {provision_wait_s}s provisioning E2B sandbox with template {template_id!r}"
             ) from None
         except Exception as exc:
             _log.exception("Failed to create E2B sandbox with template %s", template_id)
