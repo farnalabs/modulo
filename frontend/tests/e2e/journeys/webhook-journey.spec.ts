@@ -140,8 +140,9 @@ test.describe('Real-stack journeys: webhook trigger delivery', { tag: '@regressi
       if (runId) {
         try {
           await cancelRun(apiBase, token, runId)
-        } catch {
+        } catch (err) {
           // Already cancelled/terminal — cleanup continues below.
+          console.warn('[realstack] cleanup: run cancel failed:', err instanceof Error ? err.message : String(err))
         }
       }
       await cleanupJourneyEntities(cleanup)
