@@ -236,12 +236,13 @@
         :key="gate.review_id + gate.run_id"
         class="rounded-lg border bg-card shadow-sm"
       >
-        <button
-          type="button"
-          data-testid="hitl-review-toggle-expand"
+        <!-- The select checkbox is a sibling of the expand button, never a
+             descendant: a focusable control nested inside a <button> is an axe
+             nested-interactive violation, and the tight wrap also fails WCAG
+             2.2 target-size (16px target / 16px safe space). -->
+        <div
           class="flex w-full items-center gap-4 p-4 text-left"
           :class="{ 'border-b': expandedKey === expandKey(gate) }"
-          @click="toggleExpand(gate)"
         >
           <label class="h-4 w-4 flex-shrink-0">
             <input
@@ -250,46 +251,52 @@
               :aria-label="$t('views.SettingsHitlReviewView.bulk_select_gate', { id: shortId(gate.review_id) })"
               data-testid="hitl-review-row-checkbox"
               class="h-4 w-4 rounded border-input accent-primary"
-              @click.stop
               @change="toggleSelect(gate)"
             />
           </label>
-          <svg
-            class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
-            :class="{ 'rotate-90': expandedKey === expandKey(gate) }"
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
+          <button
+            type="button"
+            data-testid="hitl-review-toggle-expand"
+            class="flex flex-1 items-center gap-4 text-left"
+            @click="toggleExpand(gate)"
           >
-            <path d="m9 18 6-6-6-6" />
-          </svg>
-          <div class="w-24 flex-shrink-0">
-            <span :class="statusBadgeClass(gateStatus(gate))">
-              {{ gateStatus(gate) }}
+            <svg
+              class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
+              :class="{ 'rotate-90': expandedKey === expandKey(gate) }"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+            <div class="w-24 flex-shrink-0">
+              <span :class="statusBadgeClass(gateStatus(gate))">
+                {{ gateStatus(gate) }}
+              </span>
+            </div>
+            <div class="min-w-0 flex-[2]">
+              <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
+            </div>
+            <div class="min-w-0 flex-[2]">
+              <p class="truncate text-sm font-medium text-foreground" data-testid="hitl-review-node-name">
+                {{ gate.label || shortId(gate.review_id) }}
+              </p>
+              <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 truncate text-xs text-muted-foreground" data-testid="hitl-review-snippet">
+                {{ gateDescriptionSnippet(gate) }}
+              </p>
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-xs text-muted-foreground">
+                {{ gate.claimed_by ? (gate.claimed_by_name || gate.claimed_by) : $t('views.SettingsHitlReviewView.unassigned') }}
+              </p>
+            </div>
+            <span class="w-40 flex-shrink-0 text-right text-xs text-muted-foreground">
+              {{ formatDate(gate.claimed_at || gate.created_at || '') }}
             </span>
-          </div>
-          <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
-          </div>
-          <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm font-medium text-foreground" data-testid="hitl-review-node-name">
-              {{ gate.label || shortId(gate.review_id) }}
-            </p>
-            <p v-if="gateDescriptionSnippet(gate)" class="mt-0.5 truncate text-xs text-muted-foreground" data-testid="hitl-review-snippet">
-              {{ gateDescriptionSnippet(gate) }}
-            </p>
-          </div>
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-xs text-muted-foreground">
-              {{ gate.claimed_by ? (gate.claimed_by_name || gate.claimed_by) : $t('views.SettingsHitlReviewView.unassigned') }}
-            </p>
-          </div>
-          <span class="w-40 flex-shrink-0 text-right text-xs text-muted-foreground">
-            {{ formatDate(gate.claimed_at || gate.created_at || '') }}
-          </span>
-        </button>
+          </button>
+        </div>
         <div v-if="expandedKey === expandKey(gate)" class="border-t p-4">
           <!-- No @claimed handler (FAR-686): a loadGates() refetch flips the
                page-level `loading` flag, unmounting this list branch and with
