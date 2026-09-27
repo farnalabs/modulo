@@ -107,6 +107,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapTransition } from '../../stores/lifecycleMaps'
 import type { JourneySummary } from '../../types/lifecycleMap'
 import { computeLifecycleMapLayout } from '../../stores/lifecycleMaps'
+import { CANVAS_EDGE_STROKE } from '../../constants/canvas'
 import JourneyCard from './JourneyCard.vue'
 
 const props = defineProps<{
@@ -173,12 +174,12 @@ function emitPositions(): void {
 const defaultEdgeOptions: DefaultEdgeOptions = {
   type: 'smoothstep',
   animated: false,
-  style: { stroke: '#888', strokeWidth: 2 },
+  style: { stroke: CANVAS_EDGE_STROKE, strokeWidth: 2 },
   markerEnd: {
     type: MarkerType.ArrowClosed,
     width: 16,
     height: 16,
-    color: '#888',
+    color: CANVAS_EDGE_STROKE,
   },
 }
 
@@ -249,8 +250,8 @@ const flowEdges = computed<Edge[]>(() => {
     source: t.source_stage_id,
     target: t.target_stage_id,
     label: t.trigger_type ?? '',
-    style: { stroke: '#888', strokeWidth: 2 },
-    labelStyle: { fontSize: 10, fill: '#888' },
+    style: { stroke: CANVAS_EDGE_STROKE, strokeWidth: 2 },
+    labelStyle: { fontSize: 10, fill: 'hsl(var(--muted-foreground))' },
     labelBgStyle: { fill: 'transparent' },
     title: t.description ?? t.trigger_type ?? undefined,
   }))

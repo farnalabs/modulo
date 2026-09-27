@@ -39,7 +39,7 @@
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
           :node-types="nodeTypes"
-          :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: '#888' } }"
+          :default-edge-options="{ type: 'smoothstep', animated: false, style: { stroke: CANVAS_EDGE_STROKE } }"
           fit-view-on-init
           @node-click="onNodeClick"
           @edge-click="onEdgeClick"
@@ -66,19 +66,19 @@
           </Controls>
           <template #node-manual="nodeProps">
             <div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm">
-              <div class="text-xs font-medium text-warning">MANUAL</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning">MANUAL</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
           <template #node-agent="nodeProps">
             <div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm">
-              <div class="text-xs font-medium text-primary">AGENT</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary">AGENT</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
           <template #node-composite="nodeProps">
             <div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm">
-              <div class="text-xs font-medium text-indigo-400">COMPOSITE</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-400">COMPOSITE</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
@@ -162,6 +162,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import BackLink from '../../components/BackLink.vue'
 import { useDataFetch } from '../../composables/useDataFetch'
 import { shortId } from '../../utils/format'
+import { CANVAS_EDGE_STROKE } from '../../constants/canvas'
 import PortDefinitionPanel from '../../components/pipeline/composite/PortDefinitionPanel.vue'
 import PublishCompositeFlow from '../../components/pipeline/composite/PublishCompositeFlow.vue'
 import type { ParameterPort } from '../../types/pipeline'
