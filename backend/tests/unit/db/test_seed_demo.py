@@ -19,9 +19,11 @@ parameters (which embed the demo account's bcrypt password hash).
 """
 
 import logging
+import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select
@@ -29,14 +31,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import modulo.db.seed_demo as seed_demo_module
+from modulo.api.routes.pipelines import PipelineGraphNode, PipelineGraphUpdate, _graph_response
 from modulo.auth.passwords import hash_password, verify_password
 from modulo.core.demo import DEMO_ORG_SLUG
+from modulo.core.graph_validator import GraphValidator
+from modulo.core.lifecycle_map.validation import normalize_content
+from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_run_node_outputs
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
+from modulo.db.models.lifecycle_map import LifecycleMap
+from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import RunDailyFact
@@ -44,6 +53,7 @@ from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.rls import set_rls_org
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings
@@ -68,6 +78,11 @@ _SEED_TABLES = {
     "agents",
     "triggers",
     "run_daily_facts",
+    # FAR-1248: first-class graph edges, per-node run traces, lifecycle map.
+    "pipeline_edges",
+    "run_node_outputs",
+    "lifecycle_maps",
+    "lifecycle_map_stages",
 }
 
 
@@ -154,10 +169,11 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     # FAR-977: team + membership.
     assert await _count(session, Team) == 1
     assert await _count(session, TeamMembership) == 1
-    # FAR-977: 2 agents.
-    assert await _count(session, Agent) == 2
-    # FAR-977: 2 triggers (webhook + cron).
-    assert await _count(session, Trigger) == 2
+    # FAR-977: 2 agents; FAR-1248: + Implementer, PR Risk Scorer, PR Opener,
+    # Docs Maintainer (every seeded agent node binds an agent).
+    assert await _count(session, Agent) == 6
+    # FAR-977: 2 triggers (webhook + cron); FAR-1248: + "Ticket ready".
+    assert await _count(session, Trigger) == 3
 
     org = (await _orgs(session))[0]
     assert org.slug == DEMO_ORG_SLUG
@@ -819,9 +835,9 @@ async def test_seed_cron_trigger_recovers_after_conflict(
         flaky.uninstall()
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
-    # The webhook trigger already exists, so only the deleted cron hits the
-    # insert -> conflict -> recovery-log branch.
-    assert await _count(session, Trigger) == 1
+    # The webhook + "Ticket ready" triggers already exist, so only the deleted
+    # cron hits the insert -> conflict -> recovery-log branch.
+    assert await _count(session, Trigger) == 2
     assert any(record.getMessage() == "demo_seed.cron_trigger_recovered" for record in caplog.records)
 
 
@@ -975,7 +991,7 @@ async def test_seed_converges_pipeline_description_and_graph(
     converged = (
         await session.execute(select(Pipeline).where(Pipeline.name == "Demo Governance Pipeline"))
     ).scalar_one()
-    assert converged.description == "Demo sample pipeline — read-only demo data (FAR-535)."
+    assert converged.description == seed_demo_module._GOVERNANCE_PIPELINE.description
     # graph_nodes_json is the 4-node demo pipeline graph.
     assert len(converged.graph_nodes_json) == 4  # type: ignore[arg-type]
 
@@ -1070,13 +1086,14 @@ async def test_seed_converges_trigger_config_json(session: AsyncSession, monkeyp
     """Trigger config_json is converged to the current spec."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    webhook_trigger = (await session.execute(select(Trigger).where(Trigger.trigger_type == "webhook"))).scalar_one()
+    pr_webhook = select(Trigger).where(Trigger.trigger_type == "webhook", Trigger.name.is_(None))
+    webhook_trigger = (await session.execute(pr_webhook)).scalar_one()
     webhook_trigger.config_json = {"stale": True}
     await session.commit()
 
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    converged = (await session.execute(select(Trigger).where(Trigger.trigger_type == "webhook"))).scalar_one()
+    converged = (await session.execute(pr_webhook)).scalar_one()
     assert converged.config_json == {
         "events": ["pull_request"],
         "payload_mapping": {},
@@ -1136,8 +1153,8 @@ async def test_seed_converges_run_display_fields(session: AsyncSession, monkeypa
 
     converged = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
     assert converged.status == "complete"
-    assert converged.total_tokens == 1840
-    assert converged.total_cost_usd == Decimal("0.0042")
+    assert converged.total_tokens == 41200
+    assert converged.total_cost_usd == Decimal("0.0900")
 
 
 async def test_seed_logs_convergence(
@@ -1428,3 +1445,319 @@ async def test_seed_team_membership_integrity_error_is_swallowed(
 
     recovered = [r for r in caplog.records if "team_membership_recovered_after_conflict" in r.getMessage()]
     assert recovered, "Expected team_membership_recovered_after_conflict log"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1248: the /demo org rendered empty — every seeded node carried a string
+# id (``demo-intake``) that the graph read's PipelineGraphNode.id (uuid.UUID)
+# rejected, so GET /pipelines/{id}/graph returned ``nodes: []``; the live
+# graph had no pipeline_edges rows; and the runs carried no node-level data.
+# ---------------------------------------------------------------------------
+
+
+async def _pipeline_by_name(session: AsyncSession, name: str) -> Pipeline:
+    return (await session.execute(select(Pipeline).where(Pipeline.name == name))).scalar_one()
+
+
+async def _live_edges(session: AsyncSession, pipeline: Pipeline) -> list[PipelineEdge]:
+    return list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline.id))).scalars())
+
+
+async def _snapshot_for(session: AsyncSession, pipeline: Pipeline) -> PipelineSnapshot:
+    return (
+        await session.execute(
+            select(PipelineSnapshot).where(
+                PipelineSnapshot.pipeline_id == pipeline.id,
+                PipelineSnapshot.snapshot_version == 1,
+            )
+        )
+    ).scalar_one()
+
+
+@pytest.mark.parametrize("spec", seed_demo_module._DEMO_PIPELINES, ids=lambda spec: spec.name)
+async def test_seeded_graph_passes_the_graph_read_validation(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, spec: seed_demo_module._PipelineSpec
+) -> None:
+    """Regression guard: every seeded graph survives GET /pipelines/{id}/graph intact.
+
+    Runs the stored live graph (graph_nodes_json + pipeline_edges rows)
+    through ``_graph_response`` — the exact serializer the graph endpoint
+    uses — and requires zero validation issues and no dropped node/edge. Each
+    node must also pass STRICT (write-path) validation, and the whole graph
+    the PATCH /graph body model, so the editor can re-save it unchanged.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    pipeline = await _pipeline_by_name(session, spec.name)
+    edges = await _live_edges(session, pipeline)
+
+    response = _graph_response(list(pipeline.graph_nodes_json), edges)
+
+    issue_messages = [issue.message for issue in response.validation_issues]
+    assert not issue_messages, f"{spec.name}: graph read reported {issue_messages}"
+    assert len(response.nodes) == len(spec.nodes)
+    assert len(response.edges) == len(spec.edges)
+    strict_nodes = [PipelineGraphNode.model_validate(node) for node in pipeline.graph_nodes_json]
+    PipelineGraphUpdate(nodes=strict_nodes, edges=list(response.edges))
+
+
+@pytest.mark.parametrize("spec", seed_demo_module._DEMO_PIPELINES, ids=lambda spec: spec.name)
+async def test_seeded_snapshot_graph_passes_the_graph_validator(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, spec: seed_demo_module._PipelineSpec
+) -> None:
+    """The v1 snapshot graph passes the save/run-time GraphValidator with no errors.
+
+    Covers the checks the Pydantic models skip: HITL gate description minimum,
+    conditional-edge JMESPath syntax, topology, UUID node-id format, and the
+    idempotent flag on the side-effecting Open PR node.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    pipeline = await _pipeline_by_name(session, spec.name)
+    snapshot = await _snapshot_for(session, pipeline)
+
+    result = await GraphValidator().validate_definition(snapshot.graph_json, AsyncMock())
+
+    problems = [f"{issue.code}: {issue.message}" for issue in result.issues if issue.severity != "info"]
+    assert not problems, f"{spec.name}: {problems}"
+    assert result.is_valid
+
+
+async def test_governance_pipeline_mirrors_the_intro_video_flow(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Implement -> PR risk level -> (risk > 0.50) Human review -> Open PR, plus the direct low-risk edge."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    pipeline = await _pipeline_by_name(session, "Demo Governance Pipeline")
+    nodes = {node["label"]: node for node in pipeline.graph_nodes_json}
+
+    assert list(nodes) == ["Implement", "PR risk level", "Human review", "Open PR"]
+    assert nodes["Human review"]["node_type"] == "hitl"
+    assert nodes["Open PR"]["idempotent"] is False
+    agents = {agent.id: agent.name for agent in (await session.execute(select(Agent))).scalars()}
+    assert agents[uuid.UUID(nodes["Implement"]["agent_id"])] == "Implementer"
+    assert agents[uuid.UUID(nodes["PR risk level"]["agent_id"])] == "PR Risk Scorer"
+    assert agents[uuid.UUID(nodes["Open PR"]["agent_id"])] == "PR Opener"
+    xs = [nodes[label]["position"]["x"] for label in ("Implement", "PR risk level", "Human review", "Open PR")]
+    assert xs == sorted(xs), "nodes must lay out left to right"
+
+    label_by_id = {uuid.UUID(node["id"]): label for label, node in nodes.items()}
+    routes = {
+        (label_by_id[edge.source_node_id], label_by_id[edge.target_node_id]): (
+            edge.edge_type,
+            edge.condition_expression,
+        )
+        for edge in await _live_edges(session, pipeline)
+    }
+    assert routes == {
+        ("Implement", "PR risk level"): ("normal", None),
+        ("PR risk level", "Open PR"): ("conditional", "risk_score <= `0.5`"),
+        ("PR risk level", "Human review"): ("conditional", "risk_score > `0.5`"),
+        ("Human review", "Open PR"): ("normal", None),
+    }
+
+    ticket_ready = (await session.execute(select(Trigger).where(Trigger.name == "Ticket ready"))).scalar_one()
+    assert ticket_ready.pipeline_id == pipeline.id
+    assert ticket_ready.trigger_type == "webhook"
+
+
+def test_demo_node_ids_are_deterministic_uuids() -> None:
+    """Node ids are stable UUIDs, so run-level rows keyed on them stay consistent across boots."""
+    first = seed_demo_module.demo_node_id("Demo Governance Pipeline", "implement")
+    again = seed_demo_module.demo_node_id("Demo Governance Pipeline", "implement")
+    other = seed_demo_module.demo_node_id("Demo Governance Pipeline", "open_pr")
+
+    assert first == again
+    assert first != other
+    assert str(uuid.UUID(first)) == first
+
+
+async def test_seed_converges_legacy_string_node_id_graph(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-FAR-1248 demo (string node ids, no edges, 'demo'-keyed run output) is repaired on re-seed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    pipeline = await _pipeline_by_name(session, "Demo Governance Pipeline")
+    snapshot = await _snapshot_for(session, pipeline)
+    legacy_nodes = [
+        {"id": "demo-intake", "node_type": "agent", "label": "Demo: Intake", "position": {"x": 100, "y": 100}},
+        {"id": "demo-report", "node_type": "agent", "label": "Demo: Report", "position": {"x": 300, "y": 100}},
+    ]
+    pipeline.graph_nodes_json = legacy_nodes
+    snapshot.graph_json = {
+        "nodes": legacy_nodes,
+        "edges": [{"id": "demo-edge-1", "source": "demo-intake", "target": "demo-report"}],
+    }
+    for edge in await _live_edges(session, pipeline):
+        await session.delete(edge)
+    run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+    run.node_token_usage = None
+    await set_rls_org(session, run.organisation_id)
+    await replace_run_node_outputs(
+        session,
+        run_id=run.id,
+        organisation_id=run.organisation_id,
+        outputs={"demo": "Sample demo output — synthetic, no agent execution."},
+        telemetry=None,
+    )
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = await _pipeline_by_name(session, "Demo Governance Pipeline")
+    node_ids = {node["id"] for node in converged.graph_nodes_json}
+    assert node_ids == {
+        seed_demo_module.demo_node_id("Demo Governance Pipeline", key)
+        for key in ("implement", "risk", "review", "open_pr")
+    }
+    assert len(await _live_edges(session, converged)) == 4
+    converged_snapshot = await _snapshot_for(session, converged)
+    assert {node["id"] for node in converged_snapshot.graph_json["nodes"]} == node_ids
+    run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+    blobs = await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=run.organisation_id)
+    assert set(blobs.outputs or {}) <= node_ids, "the legacy 'demo' output key must be dropped"
+    assert set(run.node_token_usage or {}) <= node_ids
+
+
+async def test_every_seeded_run_carries_a_node_level_trace(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run detail's Execution Trace + per-node cost render for every seeded run.
+
+    Per-node usage/outputs/telemetry are keyed by the run's snapshot node ids
+    (so node labels resolve) and the per-node tokens and costs sum exactly to
+    the run totals.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    snapshots = {snap.id: snap for snap in (await session.execute(select(PipelineSnapshot))).scalars()}
+    runs = list((await session.execute(select(Run))).scalars())
+    assert len(runs) == 20
+
+    for run in runs:
+        snapshot_node_ids = {node["id"] for node in snapshots[run.snapshot_id].graph_json["nodes"]}
+        usage = run.node_token_usage or {}
+        blobs = await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=run.organisation_id)
+        telemetry = blobs.telemetry or {}
+        assert usage, f"run {run.run_number} has no node_token_usage"
+        assert telemetry, f"run {run.run_number} has no node telemetry"
+        assert set(usage) <= snapshot_node_ids
+        assert set(telemetry) <= snapshot_node_ids
+        assert set(blobs.outputs or {}) <= snapshot_node_ids
+        assert sum(entry["total_tokens"] for entry in usage.values()) == run.total_tokens
+        node_cost = sum((Decimal(str(entry["cost_usd"])) for entry in usage.values()), Decimal(0))
+        assert node_cost == run.total_cost_usd, f"run {run.run_number}: {node_cost} != {run.total_cost_usd}"
+
+
+@pytest.mark.parametrize(
+    ("run_number", "risk_score", "expected_labels", "expected_cost"),
+    [
+        pytest.param(1, 0.18, ["Implement", "PR risk level", "Open PR"], Decimal("0.0900"), id="auto-path"),
+        pytest.param(
+            9,
+            0.74,
+            ["Implement", "PR risk level", "Human review", "Open PR"],
+            Decimal("0.1400"),
+            id="human-review-path",
+        ),
+    ],
+)
+async def test_governance_runs_follow_their_risk_route(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    run_number: int,
+    risk_score: float,
+    expected_labels: list[str],
+    expected_cost: Decimal,
+) -> None:
+    """Run 1 took the risk <= 0.50 edge straight to Open PR; run 9 went through an approved Human review."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    run = (await session.execute(select(Run).where(Run.run_number == run_number))).scalar_one()
+    snapshot_query = select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
+    snapshot = (await session.execute(snapshot_query)).scalar_one()
+    labels = {node["id"]: node["label"] for node in snapshot.graph_json["nodes"]}
+    blobs = await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=run.organisation_id)
+    outputs_by_label = {labels[node_id]: output for node_id, output in (blobs.outputs or {}).items()}
+
+    assert run.status == "complete"
+    assert run.total_cost_usd == expected_cost
+    assert sorted(outputs_by_label) == sorted(expected_labels)
+    assert outputs_by_label["PR risk level"]["risk_score"] == risk_score
+    assert outputs_by_label["Open PR"]["pr_url"].startswith("https://github.com/")
+
+
+async def test_human_review_run_records_the_approval(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The high-risk run's HITL node output records the human decision and no model spend."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    run = (await session.execute(select(Run).where(Run.run_number == 9))).scalar_one()
+    review_id = seed_demo_module.demo_node_id("Demo Governance Pipeline", "review")
+    blobs = await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=run.organisation_id)
+
+    assert (blobs.outputs or {})[review_id]["decision"] == "approved"
+    assert review_id not in (run.node_token_usage or {})
+
+
+async def test_second_seed_rewrites_no_run_trace(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The node-level trace is deterministic: an unchanged re-seed writes no run_node_outputs."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        await _run_seed(session, monkeypatch, _demo_settings())
+
+    rewrites = [r.getMessage() for r in caplog.records if r.getMessage() == "demo_seed.run_trace_written"]
+    edge_rewrites = [r.getMessage() for r in caplog.records if "pipeline_edges" in r.getMessage()]
+    assert not rewrites
+    assert not edge_rewrites
+
+
+async def test_seed_creates_the_delivery_lifecycle_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A canonical lifecycle map links the governance + PR review pipelines, once."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    lifecycle_map = (await session.execute(select(LifecycleMap))).scalar_one()
+    assert lifecycle_map.name == "Delivery lifecycle"
+    assert lifecycle_map.visibility == "org"
+    assert normalize_content(lifecycle_map.content_json) == lifecycle_map.content_json
+    stage_names = [stage["name"] for stage in lifecycle_map.content_json["stages"]]
+    assert stage_names == ["Ticket", "Implement", "Review", "Deploy staging", "Deploy prod"]
+
+    governance = await _pipeline_by_name(session, "Demo Governance Pipeline")
+    review = await _pipeline_by_name(session, "PR Review & Triage")
+    stage_rows = list((await session.execute(select(LifecycleMapStage).order_by(LifecycleMapStage.position))).scalars())
+    assert [row.stage_name for row in stage_rows] == stage_names
+    linked = {row.stage_name: row.pipeline_id for row in stage_rows if row.pipeline_id is not None}
+    assert linked == {"Implement": governance.id, "Review": review.id}
+
+
+async def test_seed_converges_lifecycle_map_content(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A drifted or archived demo lifecycle map is restored to the spec."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    lifecycle_map = (await session.execute(select(LifecycleMap))).scalar_one()
+    lifecycle_map.content_json = {"stages": [], "edges": []}
+    lifecycle_map.archived_at = datetime.now(UTC)
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (await session.execute(select(LifecycleMap))).scalar_one()
+    assert converged.archived_at is None
+    assert len(converged.content_json["stages"]) == 5
+    assert await _count(session, LifecycleMapStage) == 5
+
+
+async def test_lifecycle_map_failure_is_swallowed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A lifecycle-map write failure is logged, never fatal to the demo seed."""
+    exploding = _ExplodingFlush(session, LifecycleMap)
+    exploding.install()
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        exploding.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert await _count(session, LifecycleMap) == 0
+    assert any(r.getMessage().startswith("demo_seed.lifecycle_map_write_failed") for r in caplog.records)
