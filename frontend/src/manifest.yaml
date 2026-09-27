@@ -696,6 +696,17 @@ routes:
         <<: *team
         deprecated: false
 
+    /admin/trigger-events:
+        name: admin-trigger-events
+        breadcrumb: Trigger Event Log
+        parent: /
+        product_map: [feat-triggers]
+        sidebar_group: admin
+        sidebar_order: 9
+        type: list_page
+        <<: *team
+        deprecated: false
+
     /admin/product-analytics:
         name: admin-product-analytics
         breadcrumb: Product Analytics
@@ -1701,6 +1712,25 @@ elements:
         dynamic_testid: false
       - testid: lock-icon
         type: element
+        dynamic_testid: false
+    /admin/trigger-events:
+      - testid: settings-trigger-event-log-trigger-type
+        type: select
+        dynamic_testid: false
+      - testid: settings-trigger-event-log-result
+        type: select
+        dynamic_testid: false
+      - testid: settings-trigger-event-log-apply
+        type: button
+        dynamic_testid: false
+      - testid: settings-trigger-event-log-reset
+        type: button
+        dynamic_testid: false
+      - testid: settings-trigger-event-log-previous
+        type: button
+        dynamic_testid: false
+      - testid: settings-trigger-event-log-next
+        type: button
         dynamic_testid: false
     /admin/org:
       - testid: feature-gate
@@ -5378,7 +5408,7 @@ features:
 
             # Trigger event log
             - "[x] Per-trigger event logs (GET /triggers/{id}/events) are cursor-paginated, filterable by validation_result, and 404 on a missing trigger; an admin org-wide log surface (GET /api/v1/admin/trigger-events) is cursor-paginated by trigger_type / validation_result"
-            - "[x] The frontend SettingsTriggersView covers create for every trigger type (incl. webhook URL/method/headers, cron expression/timezone/input, polling connector/query/condition, agent-signal source, ongoing target/interval/spend) plus the pause-all kill-switch, streak/outcomes UI, and the trigger event-log view"
+            - "[x] The frontend SettingsTriggersView covers create for every trigger type (incl. webhook URL/method/headers, cron expression/timezone/input, polling connector/query/condition, agent-signal source, ongoing target/interval/spend) plus the pause-all kill-switch and streak/outcomes UI; the org-wide trigger event-log view ships as its own routed surface (SettingsTriggerEventLogView at /admin/trigger-events in the ADMIN sidebar group, reading GET /api/v1/admin/trigger-events with trigger-type / result filters and cursor pagination)"
         deferrals:
             - Slack app-mention triggers register as a trigger type and are endpoint-tested, but are an alpha/community surface without a BDD feature file
             - Route-level webhook validation failures (HMAC/timestamp) roll back with the request and do not persist a TriggerEvent for those typed errors in that path (documented pre-existing limitation)

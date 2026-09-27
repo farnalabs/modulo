@@ -109,7 +109,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-guardrails** - Guardrail policies - routes: `/settings/guardrails`
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`
 - **feat-environments** - Environment profiles and run environments (canonical UI is the Runners page; the `/environment-profiles*` and `/admin/environments` deep links redirect there — FAR-591 D5) - routes: `/admin/runners/profiles`, `/admin/runners/profiles/new`, `/admin/runners/profiles/:id/edit`, `/admin/runners/concurrency`
-- **feat-triggers** - Manual, webhook, and scheduled triggers - routes: `/settings/triggers`
+- **feat-triggers** - Manual, webhook, and scheduled triggers - routes: `/settings/triggers`, `/admin/trigger-events`
 - **feat-apply** - `modulo apply` declarative configuration CLI (FAR-681) - routes: `/schemas`, `/admin/model-backends`, `/pipelines`, `/settings/triggers`
 
 ### Admin
