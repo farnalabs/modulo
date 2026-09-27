@@ -4,7 +4,7 @@ import {
   apiLogin,
   createPipeline,
   createTrigger,
-  deletePipeline,
+  deletePipelineBestEffort,
   deleteTrigger,
   listTriggers,
   uniqueName,
@@ -94,7 +94,7 @@ test.describe('Real-stack journeys: trigger lifecycle', { tag: '@regression' }, 
           console.warn('[realstack] cleanup: trigger delete failed:', err instanceof Error ? err.message : String(err))
         }
       }
-      await deletePipeline(apiBase, token, pipeline.id)
+      await deletePipelineBestEffort(apiBase, token, pipeline.id)
     }
   })
 })

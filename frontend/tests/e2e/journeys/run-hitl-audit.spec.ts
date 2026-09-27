@@ -4,10 +4,8 @@ import {
   apiFetch,
   apiLogin,
   cleanupJourneyEntities,
-  createPipeline,
-  createSchemaWithVersion,
+  createManualNodePipeline,
   pollRunStatus,
-  setPipelineGraph,
   triggerRun,
   uniqueName,
   type JourneyCleanup,
@@ -28,52 +26,16 @@ import {
  * the run-detail/HITL surface that no other e2e spec exercises for real.
  */
 
-interface ManualNodePipeline {
-  pipeline: { id: string; name: string }
-  schemaId: string
-  nodeId: string
-}
-
-/**
- * Create a pipeline whose graph is a single manual-input node bound to a
- * fresh output schema (the backend requires manual nodes to declare an
- * output schema and a label). A manual node never calls an LLM: it interrupts
- * the run until a human supplies a decision.
- */
-async function createManualNodePipeline(
-  apiBase: string,
-  token: string,
-  pipelineName: string,
-  schemaName: string,
-): Promise<ManualNodePipeline> {
-  const schemaId = await createSchemaWithVersion(apiBase, token, schemaName)
-  const pipeline = await createPipeline(apiBase, token, pipelineName)
-  const nodeId = crypto.randomUUID()
-  await setPipelineGraph(apiBase, token, pipeline.id, [
-    {
-      id: nodeId,
-      node_type: 'manual',
-      label: 'E2E Human Input',
-      position: { x: 120, y: 120 },
-      output_schema_id: schemaId,
-    },
-  ])
-  return { pipeline, schemaId, nodeId }
-}
-
 const isParked = (status: string) => status === 'awaiting_human' || status === 'hitl_parked'
 
 /**
- * Resolve a run id through the REAL API (never through the UI-triggered
- * page URL): list the pipeline's newest run (the endpoint orders by
- * created_at desc by default). Used by the editor-triggered journey because
- * the editor's own post-run navigation is broken upstream —
- * PipelineEditorView.triggerRun reads `(data as any).id` while POST
- * /api/v1/runs returns `run_id`, so the UI lands on /runs/undefined. The
- * trigger itself still works (a real run is created); pinning the parked
- * state to a direct /runs/{id} navigation keeps the journey deterministic.
- * Upstream bug tracked in farnalabs/modulo#1014 — once it is fixed this can
- * pin waitForURL('/runs/{id}') instead and the workaround be removed.
+ * Resolve a run id through the REAL API (never through the UI-triggered page
+ * URL): list the pipeline's newest run (the endpoint orders by created_at
+ * desc by default). This keeps the parked-state pin independent of the
+ * editor's post-trigger client-side navigation timing. The editor now routes
+ * to the run it created (PipelineEditorView reads `run_id`, fixed by #1013),
+ * so the UI path works too; resolving out-of-band avoids racing the SPA route
+ * change and lets the journey assert the parked state deterministically.
  */
 async function resolveLatestRunId(apiBase: string, token: string, pipelineId: string): Promise<string> {
   const deadline = Date.now() + 30_000
@@ -126,10 +88,9 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await page.getByTestId('pipeline-editor-run-prompt').fill('E2E journey run prompt')
       await page.getByTestId('pipeline-editor-run-submit').click()
 
-      // The run id comes from the REAL API (the newest run for the pipeline),
-      // not from the UI — the editor's post-trigger navigation is broken
-      // upstream (see resolveLatestRunId doc comment) and a UI-URL pin would
-      // follow a /runs/undefined dead end instead of the run.
+      // The run id comes from the REAL API (the newest run for the pipeline):
+      // resolving it out-of-band keeps the parked-state pin deterministic and
+      // independent of the editor's post-trigger client-side navigation.
       const runId = await resolveLatestRunId(apiBase, token, created.pipeline.id)
 
       // Observable effect: the run parks and its detail page renders the open
