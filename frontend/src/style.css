@@ -534,7 +534,7 @@
   --ring: 169 100% 55%;
   --dot-color: rgba(255, 255, 255, 0.06);
   --focus-ring: 169 100% 55%;
-  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
 }
 
 [data-theme="agent"] *:focus-visible {
@@ -547,7 +547,7 @@ body {
   background-image: radial-gradient(circle at 1px 1px, var(--dot-color) 1px, transparent 0);
   background-size: 32px 32px;
   color: hsl(var(--foreground));
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
 }
 
 ::selection {

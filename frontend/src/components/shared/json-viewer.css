@@ -1,7 +1,7 @@
 /* json-viewer overrides — pinned by JsonViewer.override.spec.ts and tests/e2e/json-viewer.spec.ts */
 
 .json-viewer .vjs-tree {
-  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
   font-size: 12px;
   color: hsl(var(--foreground));
   scrollbar-width: thin;
@@ -161,7 +161,7 @@
   display: block;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;
 }

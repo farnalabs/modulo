@@ -1,13 +1,21 @@
+const defaultTheme = require('tailwindcss/defaultTheme')
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   darkMode: 'class',
   content: ['./index.html', './src/**/*.{vue,js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      // Bundled via @fontsource-variable/inter and
+      // @fontsource-variable/jetbrains-mono (FAR-1253) — keeps Tailwind's
+      // preflight (html, code/kbd/samp/pre) and `font-sans`/`font-mono`
+      // stacks in line with the body/agent-theme stacks in style.css.
       fontFamily: {
+        sans: ['"Inter Variable"', 'Inter', ...defaultTheme.fontFamily.sans],
+        mono: ['"JetBrains Mono Variable"', '"JetBrains Mono"', ...defaultTheme.fontFamily.mono],
         // Brand monospace stack (matches json-viewer.css and the agent theme).
         // Used for canvas node kind labels (FAR-1249).
-        'brand-mono': ['"JetBrains Mono"', '"SF Mono"', '"Cascadia Code"', 'Consolas', 'ui-monospace', 'monospace'],
+        'brand-mono': ['"JetBrains Mono Variable"', '"JetBrains Mono"', '"SF Mono"', '"Cascadia Code"', 'Consolas', 'ui-monospace', 'monospace'],
       },
       colors: {
         background: 'hsl(var(--background))',
