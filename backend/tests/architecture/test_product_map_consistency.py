@@ -534,6 +534,7 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
+    "/admin/trigger-events": "frontend/src/views/SettingsTriggerEventLogView.vue",
     "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
     "/library/:id/create-pipeline": "frontend/src/views/LibraryPipelineWizard.vue",
     "/composites/:id/editor": "frontend/src/views/pipeline/CompositeEditorView.vue",

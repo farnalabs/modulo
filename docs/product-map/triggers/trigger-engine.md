@@ -99,6 +99,16 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-09-27: **Improve Architecture product-map walk** — closed the
+  reverse-coverage guard gap for the org-wide trigger event log page
+  (`/admin/trigger-events`, FAR-1255): the route's whole-page view
+  `SettingsTriggerEventLogView.vue` was the last manifest route not mapped in
+  `OWNED_PAGES` of `test_product_map_consistency.py`, so its six documented
+  elements (`settings-trigger-event-log-*`) were invisible to the
+  manifest→frontend and reverse testid drift guards. The route now maps to its
+  owning view, making the reverse-coverage guard complete across every manifest
+  route (a newly shipped testid on the page can no longer silently stay
+  invisible to Assistant's docs indexer / `/api/v1/manifest`).
 - 2026-09-23: **product-map review pass** — absorbed the last two
   `@awaiting-implementation` trigger drafts that lived under the pipelines
   directory. `pipelines/webhook_trigger.feature` (deleted) duplicated this

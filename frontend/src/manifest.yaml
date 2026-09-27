@@ -5160,6 +5160,9 @@ features:
             - "[x] Organization settings are configurable with team management and member roles"
             - "[x] Feature flags can be toggled per organisation"
             - "[x] Org-level feature-flag override governance is auditable end to end: every set/clear/toggle of an org feature_overrides entry (PUT /api/v1/admin/feature-flags/{flag}, PUT/DELETE /{flag}/org-override) appends a tamper-evident audit event to the org chain (feature_flag_override_set / feature_flag_override_cleared, resource_type org, payload {flag_name, enabled}) — fail-open, so a broken audit append never rolls back the already-committed override (backend/src/modulo/api/routes/admin_feature_flags.py, backend/tests/unit/api/test_admin_feature_flags.py)"
+            - "[x] The org-settings UI ships at /admin/org: org delete requires a typed confirmation (org-delete-confirm-input), product-analytics (product-analytics-toggle) and community-objects (community-objects-toggle) toggles render, and the product-analytics error strip dismisses via shared ErrorAlert — surface documented in the manifest elements inventory; backend admin-org endpoints drive it (docs/product-map/admin/org.md)"
+        deferrals:
+            - "The org-settings UI-journey BDD scenarios (backend/tests/bdd/features/ui/org_settings.feature) stay @awaiting-implementation: they describe frontend flows that are covered by component (vitest) and E2E suites, not backend BDD (docs/product-map/admin/org.md)"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories
         status: covered
