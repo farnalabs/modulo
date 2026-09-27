@@ -137,6 +137,24 @@ def endpoint_events_to_list(raw_events: object) -> list[str]:
     return []
 
 
+def _payload_run_id(payload: dict[str, Any]) -> uuid.UUID | None:
+    """Extract the linked run id from an event payload, or ``None``.
+
+    Event payloads carry ``run_id`` as a string (built with ``str(...)`` by
+    every emitter); a non-string / unparseable value simply means "no linked
+    run" and the caller falls back to dispatching as before.
+    """
+    raw = payload.get("run_id")
+    if isinstance(raw, uuid.UUID):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return uuid.UUID(raw)
+        except ValueError:
+            return None
+    return None
+
+
 # Lazy OTel counter — records the fail-closed owner-read drop so a DB blip that
 # suppresses ALL webhook dispatch for an event is observable (review #657 obs 1).
 _owner_read_failures_total: Any = None
@@ -446,6 +464,40 @@ class Notifier:
             return []
         return self._filter_break_glass_endpoints(endpoints, owners)
 
+    async def _run_is_terminal(self, org_id: uuid.UUID, run_id: uuid.UUID) -> bool:
+        """Whether the linked run row exists AND is in a terminal status.
+
+        Used by the ``hitl_awaiting`` post-terminal emission guard. Reads are
+        org-scoped (explicit WHERE + RLS context) so a run from another tenant
+        can never be consulted.
+
+        **Fails OPEN**: a missing run row, an unreadable run row or any DB
+        error returns ``False`` (dispatch proceeds exactly as before). An
+        observability blip must never silently swallow a live review request —
+        suppression happens only on a positively-read terminal status.
+        """
+        from modulo.db.models.run import TERMINAL_STATUSES, Run
+
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                result = await session.execute(
+                    select(Run.status).where(
+                        Run.organisation_id == org_id,
+                        Run.id == run_id,
+                    )
+                )
+                status = result.scalar_one_or_none()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "notifier.run_state_read_failed",
+                extra={"event_type": EVENT_HITL_AWAITING, "org_id": str(org_id), "run_id": str(run_id)},
+            )
+            return False
+        return status is not None and str(status) in TERMINAL_STATUSES
+
     async def _dispatch_inline(
         self,
         org_id: uuid.UUID,
@@ -455,6 +507,24 @@ class Notifier:
         retain_payload: bool,
         team_id: uuid.UUID | None = None,
     ) -> list[DispatchResult]:
+        # Post-terminal emission guard (hitl.awaiting). ``hitl_awaiting`` is
+        # dispatched from the run lifecycle (executor._dispatch_hitl_awaiting)
+        # — the sole EVENT_HITL_AWAITING call site — and re-enters it on every
+        # resume/re-dispatch, so a run that is ALREADY terminal (operator
+        # cancelled, FAR-648 gate-expiry terminalised, failed, …) could still
+        # produce a fresh "waiting for human review" webhook + in-app row. This
+        # is the single choke point every emission funnels through, so the
+        # guard covers the primary emission and any re-emission without
+        # touching the read-time enrichment (FAR-1234).
+        if event_type == EVENT_HITL_AWAITING:
+            linked_run = run_id if run_id is not None else _payload_run_id(payload)
+            if linked_run is not None and await self._run_is_terminal(org_id, linked_run):
+                _log.info(
+                    "notifier.hitl_awaiting_suppressed_terminal_run",
+                    extra={"org_id": str(org_id), "run_id": str(linked_run)},
+                )
+                return []
+
         # hitl-gate-removal-guard-plan.md v19 §5: the early `if not endpoints:
         # return []` was a silent-loss bug — it made in-app Notification
         # creation unreachable whenever an org had zero webhook subscribers.

@@ -12,10 +12,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import ColumnElement, Select, delete, func, select
+from sqlalchemy import ColumnElement, Select, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -129,6 +128,44 @@ def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
     )
 
 
+def _not_expired_clause() -> ColumnElement[bool]:
+    """TTL clause: a notification past its ``expires_at`` is no longer live.
+
+    Read-path enforcement of ``expires_at`` (the column was previously
+    decorative — rows were written with a 72h/168h TTL but never filtered, so a
+    week-old ``hitl.awaiting`` still counted as active).
+
+    **Semantics (documented in docs/product-map/notifications/notifications.md):**
+    an expired notification drops out of every *live* view — the dashboard
+    panel, the unread badge/count, the inbox default (no ``status``) and
+    ``status=active``. It is NOT deleted: an explicit historical filter
+    (``dismissed_self`` / ``dismissed_scope``) and the by-id detail read still
+    retrieve it, so nothing is lost — it simply stops presenting as
+    active/actionable. ``expires_at`` is ``NOT NULL``
+    (``db/models/notification.py``), so every row carries a real TTL and no
+    NULL-means-never fallback is needed.
+    """
+    return Notification.expires_at > datetime.now(UTC)
+
+
+def _hidden_from_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Clause excluding notifications dismissed out of ``user_id``'s active view.
+
+    ``dismiss_scope='self'`` hides the row for the dismissing user only.
+    ``dismiss_scope='scope'`` hides it for EVERY user in the org — the active
+    filter previously keyed on ``dismissed_by_user_id`` alone, so a scope-level
+    dismissal only ever hid the row for the user who performed it (defect 4).
+
+    Correlated on ``organisation_id`` so a dismissal in one org can never hide
+    a row in another on a backend without RLS.
+    """
+    hidden = select(Dismissal.notification_id).where(
+        Dismissal.organisation_id == Notification.organisation_id,
+        or_(Dismissal.dismissed_by_user_id == user_id, Dismissal.dismiss_scope == "scope"),
+    )
+    return Notification.id.notin_(hidden)
+
+
 def apply_prefs_filter(query: Select[Any], account_id: uuid.UUID) -> Select[Any]:
     """Restrict a notifications query to categories the user has NOT opted out of.
 
@@ -224,15 +261,11 @@ async def get_dashboard_notifications(
     min_rank = LEVEL_RANK.get(min_level, 1)
     allowed_levels = [lvl for lvl, rnk in LEVEL_RANK.items() if rnk >= min_rank]
 
-    dismissal_alias = aliased(Dismissal)
-    dismissed_subq = (
-        select(dismissal_alias.notification_id).where(dismissal_alias.dismissed_by_user_id == user_id).subquery()
-    )
-
     q = select(Notification).where(
         Notification.organisation_id == org_id,
         Notification.level.in_(allowed_levels),
-        Notification.id.notin_(select(dismissed_subq.c.notification_id)),
+        _hidden_from_user_clause(user_id),
+        _not_expired_clause(),
         _visible_to_user_clause(user_id),
     )
     q = apply_prefs_filter(q, account_id=user_id)
@@ -269,17 +302,36 @@ async def get_notifications_for_user(
     if category is not None:
         q = q.where(Notification.category == category)
 
+    q = _apply_status_filter(q, user_id=user_id, status_filter=status_filter)
+
+    q = q.order_by(Notification.created_at.desc()).offset(offset).limit(limit)
+    try:
+        result = await session.execute(q)
+        return list(result.scalars().all())
+    except ProgrammingError:
+        return []
+
+
+def _apply_status_filter(query: Select[Any], *, user_id: uuid.UUID, status_filter: str | None) -> Select[Any]:
+    """Apply the ``status`` filter (with its TTL companion) to a query.
+
+    Shared by :func:`get_notifications_for_user` and
+    :func:`count_notifications_for_user` so a page's ``items`` and ``total``
+    can never disagree.
+
+    * ``None`` (inbox default) and ``"active"`` are LIVE views: a row past its
+      ``expires_at`` is excluded, and ``"active"`` additionally excludes
+      anything dismissed out of this user's active view (per-user ``self``
+      dismissals AND org-wide ``scope`` dismissals).
+    * ``dismissed_self`` / ``dismissed_scope`` are explicit historical filters:
+      they still retrieve a dismissed row even if it has since expired.
+    """
+    if status_filter in (None, "active"):
+        query = query.where(_not_expired_clause())
     if status_filter == "active":
-        dismissed_subq = (
-            select(Dismissal.notification_id)
-            .where(
-                Dismissal.dismissed_by_user_id == user_id,
-            )
-            .subquery()
-        )
-        q = q.where(Notification.id.notin_(select(dismissed_subq.c.notification_id)))
+        query = query.where(_hidden_from_user_clause(user_id))
     elif status_filter == "dismissed_self":
-        q = q.where(
+        query = query.where(
             Notification.id.in_(
                 select(Dismissal.notification_id).where(
                     Dismissal.dismissed_by_user_id == user_id,
@@ -288,7 +340,7 @@ async def get_notifications_for_user(
             )
         )
     elif status_filter == "dismissed_scope":
-        q = q.where(
+        query = query.where(
             Notification.id.in_(
                 select(Dismissal.notification_id).where(
                     Dismissal.dismissed_by_user_id == user_id,
@@ -296,13 +348,7 @@ async def get_notifications_for_user(
                 )
             )
         )
-
-    q = q.order_by(Notification.created_at.desc()).offset(offset).limit(limit)
-    try:
-        result = await session.execute(q)
-        return list(result.scalars().all())
-    except ProgrammingError:
-        return []
+    return query
 
 
 async def count_notifications_for_user(
@@ -328,27 +374,7 @@ async def count_notifications_for_user(
     if category is not None:
         q = q.where(Notification.category == category)
 
-    if status_filter == "active":
-        dismissed_subq = select(Dismissal.notification_id).where(Dismissal.dismissed_by_user_id == user_id).subquery()
-        q = q.where(Notification.id.notin_(select(dismissed_subq.c.notification_id)))
-    elif status_filter == "dismissed_self":
-        q = q.where(
-            Notification.id.in_(
-                select(Dismissal.notification_id).where(
-                    Dismissal.dismissed_by_user_id == user_id,
-                    Dismissal.dismiss_scope == "self",
-                )
-            )
-        )
-    elif status_filter == "dismissed_scope":
-        q = q.where(
-            Notification.id.in_(
-                select(Dismissal.notification_id).where(
-                    Dismissal.dismissed_by_user_id == user_id,
-                    Dismissal.dismiss_scope == "scope",
-                )
-            )
-        )
+    q = _apply_status_filter(q, user_id=user_id, status_filter=status_filter)
 
     try:
         result = await session.execute(q)
@@ -432,12 +458,11 @@ async def get_unread_count(
     min_rank = LEVEL_RANK.get(min_level, 1)
     allowed_levels = [lvl for lvl, rnk in LEVEL_RANK.items() if rnk >= min_rank]
 
-    dismissed_subq = select(Dismissal.notification_id).where(Dismissal.dismissed_by_user_id == user_id).subquery()
-
     q = select(func.count(Notification.id)).where(
         Notification.organisation_id == org_id,
         Notification.level.in_(allowed_levels),
-        Notification.id.notin_(select(dismissed_subq.c.notification_id)),
+        _hidden_from_user_clause(user_id),
+        _not_expired_clause(),
         _visible_to_user_clause(user_id),
     )
     q = apply_prefs_filter(q, account_id=user_id)
