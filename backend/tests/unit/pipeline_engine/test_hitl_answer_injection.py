@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from modulo.core.pipeline_engine import node_runner
 from modulo.core.pipeline_engine.hitl_context import (
     build_hitl_review_context,
 )
@@ -30,6 +31,17 @@ class TestInjectAnswerState:
         _inject_answer_state(_REVIEW_ID, decision, gate_result)
         key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{_REVIEW_ID}"
         assert gate_result[key] == "yes"
+
+    def test_transition_shim_skips_duplicate_write_when_prefixes_coincide(self, monkeypatch):
+        """FAR-1104 transition shim: the legacy key is written only when it
+        differs from the current key. When the two prefixes coincide (a future
+        rename reusing the old spelling) the guard must skip the duplicate
+        write rather than overwrite the same key twice."""
+        monkeypatch.setattr(node_runner, "HITL_REVIEW_ANSWER_STATE_KEY_PREFIX", "hitl_answer_")
+        decision = {"action": "approved", "review_id": _REVIEW_ID, "answer": {"kind": "choice", "option_id": "yes"}}
+        gate_result: dict[str, Any] = {}
+        _inject_answer_state(_REVIEW_ID, decision, gate_result)
+        assert gate_result == {f"hitl_answer_{_REVIEW_ID}": "yes"}
 
     def test_no_answer_no_injection(self):
         decision = {"action": "approved", "review_id": _REVIEW_ID}
