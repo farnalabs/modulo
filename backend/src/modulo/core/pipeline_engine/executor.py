@@ -970,6 +970,30 @@ def _graph_is_interactive(graph_json: dict[str, Any] | None) -> bool:
     return any_interactive_node or any_hitl_gate_edge
 
 
+def _resolved_node_timeouts(graph_json: dict[str, Any] | None, default_seconds: int) -> dict[str, int]:
+    """Resolve each graph node's effective ``timeout_seconds`` (FAR-369).
+
+    The absolute node-deadline watchdog holds every node to its own hard
+    deadline, falling back to the pipeline-level default when a node does not
+    configure one.
+
+    Absent and explicitly-``null`` are the SAME state here: the API
+    ``PipelineGraphNode`` model defaults ``timeout_seconds`` to ``None`` and
+    serialises the key, so graphs authored through the API carry an explicit
+    ``"timeout_seconds": null``. Resolving that with ``dict.get(key, default)``
+    would return the persisted ``None`` (the key IS present) rather than the
+    default, and ``int(None)`` raises a TypeError that fails the run before any
+    node starts. Guard ``None`` explicitly so the default is always applied.
+    """
+    resolved: dict[str, int] = {}
+    for node in (graph_json or {}).get("nodes", []) or []:
+        if not isinstance(node, dict) or "id" not in node:
+            continue
+        configured = node.get("timeout_seconds")
+        resolved[str(node["id"])] = int(configured if configured is not None else default_seconds)
+    return resolved
+
+
 async def _script_lease_probe_ok(
     session_factory: Callable[..., Any] | None,
     run_id: str,
@@ -4627,13 +4651,12 @@ class PipelineExecutor:
         # node timeout when a node omits it. Mutate in place (NOT reassign) so
         # the dict object passed to the watchdog stays the live reference that
         # the watchdog reads once populated.
+        #
+        # A node whose timeout is absent AND a node persisted with an explicit
+        # ``"timeout_seconds": null`` are the same state: both fall back to the
+        # pipeline-level default (see ``_resolved_node_timeouts``).
         self._node_timeouts.clear()
-        self._node_timeouts.update(
-            {
-                str(n["id"]): int(n.get("timeout_seconds", pipeline_node_timeout_seconds))
-                for n in graph_json.get("nodes", [])
-            }
-        )
+        self._node_timeouts.update(_resolved_node_timeouts(graph_json, pipeline_node_timeout_seconds))
         node_token_budgets: dict[str, int] = {
             str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
         }
