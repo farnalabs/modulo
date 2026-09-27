@@ -39,8 +39,8 @@ def test_mixed_nodes_resolve_independently():
 
 
 def test_empty_and_none_graphs_resolve_to_empty():
-    assert _resolved_node_timeouts({"nodes": []}, 300) == {}
-    assert _resolved_node_timeouts(None, 300) == {}
+    assert not _resolved_node_timeouts({"nodes": []}, 300)
+    assert not _resolved_node_timeouts(None, 300)
 
 
 def test_nodes_without_id_are_skipped():
