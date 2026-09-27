@@ -761,6 +761,29 @@ async def test_seed_run_spec_unknown_pipeline_is_skipped(
     assert any(record.getMessage() == "demo_seed.run_spec_unknown_pipeline" for record in caplog.records)
 
 
+async def test_seed_run_spec_unknown_pipeline_with_existing_run_skips_silently(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unknown pipeline whose run_number already has a Run row skips without warning.
+
+    Complements :func:`test_seed_run_spec_unknown_pipeline_is_skipped`: there
+    the run is absent, so the missing-pipeline warning fires. Here the run
+    exists (an older release seeded it before the pipeline was renamed away),
+    so the seed must return quietly rather than warn on every boot.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    extra_spec = (1, "complete", "manual", "Nonexistent Pipeline", 100, 0.001, 0, 1)
+    monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", [*seed_demo_module._DEMO_RUN_SPECS, extra_spec])
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        caplog.clear()
+        summary = await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, Run) == 20
+    assert not any(record.getMessage() == "demo_seed.run_spec_unknown_pipeline" for record in caplog.records)
+
+
 async def test_seed_run_node_output_failure_is_swallowed(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -840,6 +863,36 @@ async def test_seed_cron_trigger_recovers_after_conflict(
     # cron hits the insert -> conflict -> recovery-log branch.
     assert await _count(session, Trigger) == 2
     assert any(record.getMessage() == "demo_seed.cron_trigger_recovered" for record in caplog.records)
+
+
+async def test_seed_ticket_ready_trigger_recovers_after_conflict(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The "Ticket ready" webhook's savepoint recovery path is exercised on conflict.
+
+    Mirrors :func:`test_seed_cron_trigger_recovers_after_conflict`, but for the
+    ticket-ready insert: its own pre-existing row is deleted first, then the
+    insert is flushed into a simulated unique violation so the seed must adopt
+    the winner (and log recovery) instead of aborting the demo boot.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    ticket_ready = (await session.execute(select(Trigger).where(Trigger.name == "Ticket ready"))).scalar_one()
+    await session.delete(ticket_ready)
+    await session.commit()
+
+    flaky = _FlakyFlush(session, Trigger)
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            caplog.clear()
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    # The losing insert rolled back, so only the webhook + cron rows remain.
+    assert await _count(session, Trigger) == 2
+    assert any(record.getMessage() == "demo_seed.ticket_ready_trigger_recovered" for record in caplog.records)
 
 
 async def test_seed_stray_membership_warning_ignores_soft_deleted_orgs(
@@ -1113,6 +1166,58 @@ async def test_seed_converges_cron_trigger_config_json(session: AsyncSession, mo
 
     converged = (await session.execute(select(Trigger).where(Trigger.trigger_type == "cron"))).scalar_one()
     assert converged.config_json == {"description": "Weekly release notes generation"}
+
+
+async def test_seed_converges_ticket_ready_trigger(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A drifted "Ticket ready" trigger is restored to the spec on re-seed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    trigger = (await session.execute(select(Trigger).where(Trigger.name == "Ticket ready"))).scalar_one()
+    trigger.config_json = {"stale": True}
+    trigger.trigger_type = "manual"
+    trigger.active = False
+    await session.commit()
+
+    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        caplog.clear()
+        await _run_seed(session, monkeypatch, _demo_settings())
+
+    converged = (await session.execute(select(Trigger).where(Trigger.name == "Ticket ready"))).scalar_one()
+    assert converged.config_json == seed_demo_module._TICKET_READY_CONFIG
+    assert converged.trigger_type == "webhook"
+    assert converged.active is True
+    assert any(record.getMessage() == "demo_seed.ticket_ready_trigger_converged" for record in caplog.records)
+
+
+async def test_seed_converges_daily_fact(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A drifted RunDailyFact is converged back to its Run row on re-seed.
+
+    The analytics surfaces sum the fact's cost/tokens/status, so a stale fact
+    left by an older release must be reconciled rather than left to drift.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+    fact = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run.id))).scalar_one()
+    fact.status = "failed"
+    fact.trigger_type = "manual"
+    fact.total_tokens = 0
+    fact.total_cost_usd = Decimal(0)
+    await session.commit()
+
+    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        caplog.clear()
+        await _run_seed(session, monkeypatch, _demo_settings())
+
+    run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
+    converged = (await session.execute(select(RunDailyFact).where(RunDailyFact.run_id == run.id))).scalar_one()
+    assert converged.status == run.status
+    assert converged.trigger_type == run.trigger_type
+    assert converged.total_tokens == run.total_tokens
+    assert converged.total_cost_usd == run.total_cost_usd
+    assert any(record.getMessage() == "demo_seed.daily_fact_converged" for record in caplog.records)
 
 
 async def test_seed_backfills_missing_daily_fact_for_existing_run(
@@ -1770,3 +1875,17 @@ async def test_lifecycle_map_failure_is_swallowed(
     assert await _count(session, Run) == 20
     assert await _count(session, LifecycleMap) == 0
     assert any(r.getMessage().startswith("demo_seed.lifecycle_map_write_failed") for r in caplog.records)
+
+
+def test_split_int_zero_weights_returns_zeros() -> None:
+    """A zero weight sum yields all-zero shares, not a ZeroDivisionError.
+
+    Unreachable through seeded run data (every seeded run has at least one
+    weighted node), so the guard is covered directly on the pure helper.
+    """
+    assert seed_demo_module._split_int(41200, [0, 0, 0]) == [0, 0, 0]
+
+
+def test_split_cost_zero_weights_returns_zeros() -> None:
+    """A zero weight sum yields all-zero costs and never divides by zero."""
+    assert seed_demo_module._split_cost(Decimal("0.0900"), [0, 0]) == [Decimal(0), Decimal(0)]
