@@ -6,10 +6,13 @@ module.exports = {
   content: ['./index.html', './src/**/*.{vue,js,ts,jsx,tsx}'],
   theme: {
     extend: {
-      // Bundled via @fontsource-variable/inter (FAR-1253) — keeps Tailwind's
-      // preflight/`font-sans` stack in line with the body stack in style.css.
+      // Bundled via @fontsource-variable/inter and
+      // @fontsource-variable/jetbrains-mono (FAR-1253) — keeps Tailwind's
+      // preflight (html, code/kbd/samp/pre) and `font-sans`/`font-mono`
+      // stacks in line with the body/agent-theme stacks in style.css.
       fontFamily: {
         sans: ['"Inter Variable"', 'Inter', ...defaultTheme.fontFamily.sans],
+        mono: ['"JetBrains Mono Variable"', '"JetBrains Mono"', ...defaultTheme.fontFamily.mono],
       },
       colors: {
         background: 'hsl(var(--background))',
