@@ -30,7 +30,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from modulo.core.notifier import (
@@ -137,6 +137,18 @@ class _Harness:
             result = await session.execute(select(func.count(Notification.id)))
             return int(result.scalar_one())
 
+    async def break_run_state_read(self) -> None:
+        """Make the run-status read RAISE (F4).
+
+        ``_run_is_terminal`` reads ``runs.status``; dropping the table turns
+        that read into an ``OperationalError`` — the transient-DB-error shape
+        the fail-open arm exists for. Nothing else on the dispatch path touches
+        ``runs`` (endpoints, accounts, notifications), so only the guard is
+        affected.
+        """
+        async with self.engine.begin() as conn:
+            await conn.execute(text("DROP TABLE runs"))
+
     async def dispatch(self, *, run_id: uuid.UUID | None, event_type: str = EVENT_HITL_AWAITING) -> list[Any]:
         payload: dict[str, Any] = {
             "run_id": str(run_id) if run_id is not None else str(_LIVE_RUN),
@@ -210,6 +222,26 @@ async def test_missing_run_row_dispatches_as_before(harness: _Harness) -> None:
 
     assert len(results) == 1
     assert await harness.notification_count() == 1
+
+
+async def test_run_state_read_error_fails_open(harness: _Harness) -> None:
+    """PROVE-THE-FIX (F4): the fail-open arm of ``_run_is_terminal``.
+
+    ``_run_is_terminal`` wraps its run-status read in ``try/except Exception ->
+    return False``. Only the "run row missing" case was tested; deleting that
+    try/except kept the suite green while a transient DB error would then
+    PROPAGATE and drop a live HITL alert entirely.
+
+    Here the read itself raises (the ``runs`` table is gone) — the dispatch
+    must still proceed and write the in-app row.
+    """
+    await harness.break_run_state_read()
+
+    results = await harness.dispatch(run_id=_LIVE_RUN)
+
+    assert len(results) == 1
+    assert await harness.notification_count() == 1
+    harness.endpoint_dispatch.assert_awaited_once()
 
 
 async def test_other_event_types_are_unaffected(harness: _Harness) -> None:

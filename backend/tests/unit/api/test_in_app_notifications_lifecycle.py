@@ -1,7 +1,10 @@
-"""Notification lifecycle read-path defects — TTL (3) and scope dismissal (4).
+"""Notification lifecycle read-path defects — TTL (3), scope dismissal (4),
+default-view dismissal (F2), the never-expires arm (F3), status validation (F1)
+and self -> scope escalation (F6).
 
-Both defects live in the WHERE clause of the read path, so both are reproduced
-against the REAL endpoints on a real SQLite session (no CRUD mocking):
+These defects live in the WHERE clause and the dismiss write path, so they are
+reproduced against the REAL endpoints on a real SQLite session (no CRUD
+mocking):
 
 3. **``expires_at`` was decorative.** Rows are written with a 72h/168h TTL but
    no read path filtered on it, so a notification days past its expiry still
@@ -11,9 +14,27 @@ against the REAL endpoints on a real SQLite session (no CRUD mocking):
    active filter keyed on ``dismissed_by_user_id`` alone and ignored
    ``dismiss_scope``, so an org-wide dismissal never applied to anyone else.
 
+F1. **An unknown ``status`` returned an unfiltered page.** ``?status=nope``
+   (or ``?status=``) matched no branch of ``_apply_status_filter`` and served
+   every row, expired and dismissed, with HTTP 200.
+
+F2. **The default (no ``status``) live view ignored dismissals.** The
+   dismissal clause only ran for ``status=active``, so the DEFAULT inbox list
+   served a scope-dismissed row to everyone and a self-dismissed row to its
+   actor.
+
+F3. **The ``expires_at IS NULL`` (never-expires) arm was untested** and could
+   be deleted with the whole suite still green — legacy/NULL-TTL rows would
+   then vanish from every live view.
+
+F6. **A self-dismissal could not be escalated to scope.** The second call was
+   refused as a "concurrent" duplicate, making "Dismiss for everyone"
+   unreachable by the actor who had used "Review later" first.
+
 PROVE-THE-FIX: every assertion below is an assertion the pre-fix code fails —
-the expired row IS served, and the other user DOES still see a scope-dismissed
-row, until the clauses are added.
+the expired row IS served, the other user DOES still see a scope-dismissed
+row, the default view DOES serve a dismissed row, the NULL-TTL row is missing
+once its arm is deleted, and the escalation raises.
 """
 
 from __future__ import annotations
@@ -48,6 +69,7 @@ _USER_B = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _BASE = "/api/v1/notifications/in-app"
 _DASHBOARD_PATH = f"{_BASE}/dashboard"
 _ACTIVE = f"{_BASE}?page=1&page_size=20&status=active"
+_DEFAULT_INBOX = f"{_BASE}?page=1&page_size=20"
 _UNREAD = f"{_BASE}/unread-count"
 
 _TABLES = [
@@ -59,6 +81,8 @@ _TABLES = [
 
 _TTL_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _LIVE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a2")
+#: F3 — a legacy row with NO expiry: must never drop out of a live view.
+_NEVER_EXPIRES_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a3")
 
 
 def _make_settings() -> Settings:
@@ -89,7 +113,7 @@ def _account(account_id: uuid.UUID, *, email: str) -> Account:
 def _notification(
     *,
     notification_id: uuid.UUID,
-    expires_at: datetime,
+    expires_at: datetime | None,
     title: str,
     dismiss_strategy: str = "any_scope",
     category: str = "hitl.awaiting",
@@ -117,15 +141,27 @@ def _notification_client(
     tmp_path: Path,
     *,
     notifications: Sequence[Notification],
+    nullable_expiry: bool = False,
 ) -> Generator[tuple[TestClient, SimpleNamespace], None, None]:
     """Real-SQLite TestClient over the in-app notification routes.
 
     Yields ``(client, actor)``; mutate ``actor.account_id`` / ``actor.org_role``
     to switch which user is acting (defect 4 needs two users in one test).
+
+    ``nullable_expiry`` creates the ``notifications`` table with a NULLABLE
+    ``expires_at`` — the model declares NOT NULL, but migration 0003 created the
+    column nullable and 0110 only tightened it to NOT NULL when no NULL rows
+    existed, so legacy deployments can still hold NULL-TTL rows (the F3 arm).
+    The column metadata is restored on exit so no other test sees the flip.
     """
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'notif_lifecycle.db'}", echo=False)
     seeded = False
     rows = list(notifications)
+
+    column = Notification.__table__.c.expires_at
+    original_nullable = column.nullable
+    if nullable_expiry:
+        column.nullable = True
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
         nonlocal seeded
@@ -176,6 +212,7 @@ def _notification_client(
         ):
             yield TestClient(app), actor
     finally:
+        column.nullable = original_nullable
         app.dependency_overrides.clear()
 
 
@@ -331,3 +368,259 @@ def test_self_dismissal_stays_per_user(tmp_path: Path) -> None:
         assert _ids(client.get(_ACTIVE)) == [str(_LIVE_ID)]
         assert _ids(client.get(_DASHBOARD_PATH)) == [str(_LIVE_ID)]
         assert client.get(_UNREAD).json()["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# F2 — the DEFAULT (no ``status``) live view must hide dismissals too
+# ---------------------------------------------------------------------------
+
+
+def test_default_inbox_hides_a_self_dismissal_for_its_actor(tmp_path: Path) -> None:
+    """PROVE-THE-FIX (F2): ``_hidden_from_user_clause`` was applied only for
+    ``status=active``, so the DEFAULT inbox list (status omitted) still served
+    a self-dismissed row to the very user who dismissed it."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="self row"),
+        ],
+    ) as (client, actor):
+        assert _ids(client.get(_DEFAULT_INBOX)) == [str(_LIVE_ID)]
+
+        dismiss = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "self"})
+        assert dismiss.status_code == 200, dismiss.text
+
+        # The default view now hides it — and the page total agrees with items.
+        default_resp = client.get(_DEFAULT_INBOX)
+        assert not _ids(default_resp)
+        assert default_resp.json()["total"] == 0
+
+        # The OTHER user's default view still shows it (self is per-user).
+        actor.account_id = _USER_B
+        actor.username = "user-b"
+        actor.org_role = "runner"
+
+        other_resp = client.get(_DEFAULT_INBOX)
+        assert _ids(other_resp) == [str(_LIVE_ID)]
+        assert other_resp.json()["total"] == 1
+
+
+def test_default_inbox_hides_a_scope_dismissal_for_everyone(tmp_path: Path) -> None:
+    """PROVE-THE-FIX (F2): a scope dismissal must hide on EVERY live view —
+    dashboard, unread count, default inbox and ``active`` — not just
+    ``status=active``."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="scope row"),
+        ],
+    ) as (client, actor):
+        dismiss = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "scope"})
+        assert dismiss.status_code == 200, dismiss.text
+
+        # Dismissing user: hidden on every live view.
+        for path, label in (
+            (_DEFAULT_INBOX, "default inbox"),
+            (_ACTIVE, "active inbox"),
+            (_DASHBOARD_PATH, "dashboard"),
+        ):
+            resp = client.get(path)
+            assert not _ids(resp), f"{label} still serves a scope-dismissed row"
+            if "notifications" in resp.json():
+                assert resp.json()["total_unread"] == 0
+            elif "total" in resp.json():
+                assert resp.json()["total"] == 0
+        assert client.get(_UNREAD).json()["count"] == 0
+
+        # Other user: also hidden, on every live view.
+        actor.account_id = _USER_B
+        actor.username = "user-b"
+        actor.org_role = "runner"
+
+        assert not _ids(client.get(_DEFAULT_INBOX))
+        assert client.get(_DEFAULT_INBOX).json()["total"] == 0
+        assert not _ids(client.get(_ACTIVE))
+        assert not _ids(client.get(_DASHBOARD_PATH))
+        assert client.get(_UNREAD).json()["count"] == 0
+
+        # The historical filters still record WHO dismissed it, unchanged.
+        assert not _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_self"))
+        assert not _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_scope"))
+
+        # Back to the dismissing user: the scope dismissal is still on record.
+        actor.account_id = _USER_A
+        actor.username = "user-a"
+        actor.org_role = "admin"
+        assert not _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_self"))
+        assert _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_scope")) == [str(_LIVE_ID)]
+
+
+def test_by_id_detail_read_is_unchanged_by_dismissal(tmp_path: Path) -> None:
+    """Documented exception: the by-id detail read does NOT apply the TTL or
+    the dismissal clause — a dismissed row stays fetchable by its id."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="detail row"),
+        ],
+    ) as (client, _actor):
+        dismiss = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "self"})
+        assert dismiss.status_code == 200, dismiss.text
+
+        detail = client.get(f"{_BASE}/{_LIVE_ID}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["id"] == str(_LIVE_ID)
+
+
+# ---------------------------------------------------------------------------
+# F3 — the ``expires_at IS NULL`` (never-expires) arm must stay covered
+# ---------------------------------------------------------------------------
+
+
+def test_never_expiring_row_is_present_on_every_live_view(tmp_path: Path) -> None:
+    """PROVE-THE-FIX (F3): the TTL predicate is
+    ``expires_at IS NULL OR expires_at > now``. The NULL arm had zero
+    coverage — deleting it kept the whole suite green while silently making
+    every legacy/NULL-TTL notification vanish from the dashboard, both inbox
+    views and the unread badge."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        nullable_expiry=True,
+        notifications=[
+            _notification(notification_id=_NEVER_EXPIRES_ID, expires_at=None, title="legacy (no expiry)"),
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="live (72h)"),
+        ],
+    ) as (client, _actor):
+        expected = {str(_NEVER_EXPIRES_ID), str(_LIVE_ID)}
+
+        assert set(_ids(client.get(_DASHBOARD_PATH))) == expected
+        assert client.get(_DASHBOARD_PATH).json()["total_unread"] == 2
+
+        active = client.get(_ACTIVE)
+        assert set(_ids(active)) == expected
+        assert active.json()["total"] == 2
+
+        default = client.get(_DEFAULT_INBOX)
+        assert set(_ids(default)) == expected
+        assert default.json()["total"] == 2
+
+        assert client.get(_UNREAD).json()["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# F6 — a self dismissal can be escalated to scope
+# ---------------------------------------------------------------------------
+
+
+def test_self_dismissal_can_be_escalated_to_scope(tmp_path: Path) -> None:
+    """PROVE-THE-FIX (F6): "Review later" (self) then "Dismiss for everyone"
+    (scope) used to be refused as a "concurrent" duplicate, which made the
+    org-wide hide unreachable by that actor."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="escalate me"),
+        ],
+    ) as (client, actor):
+        first = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "self"})
+        assert first.status_code == 200, first.text
+        assert first.json() == {"status": "dismissed_for_self"}
+
+        # The other user still sees it at this point (self is per-user).
+        actor.account_id = _USER_B
+        actor.username = "user-b"
+        actor.org_role = "runner"
+        assert _ids(client.get(_ACTIVE)) == [str(_LIVE_ID)]
+
+        # Back to the original actor: escalate to scope.
+        actor.account_id = _USER_A
+        actor.username = "user-a"
+        actor.org_role = "admin"
+
+        second = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "scope"})
+        assert second.status_code == 200, second.text
+        assert second.json() == {"status": "dismissed_for_everyone"}
+
+        # Now hidden for EVERYONE on every live view.
+        assert not _ids(client.get(_DEFAULT_INBOX))
+        assert client.get(_DEFAULT_INBOX).json()["total"] == 0
+        assert not _ids(client.get(_ACTIVE))
+        assert client.get(_UNREAD).json()["count"] == 0
+
+        actor.account_id = _USER_B
+        actor.username = "user-b"
+        actor.org_role = "runner"
+
+        assert not _ids(client.get(_DEFAULT_INBOX))
+        assert client.get(_DEFAULT_INBOX).json()["total"] == 0
+        assert not _ids(client.get(_ACTIVE))
+        assert client.get(_UNREAD).json()["count"] == 0
+
+        # Exactly ONE dismissal row exists for the escalating user — it was
+        # mutated self -> scope, never duplicated (unique on
+        # (notification_id, dismissed_by_user_id)).
+        actor.account_id = _USER_A
+        actor.username = "user-a"
+        actor.org_role = "admin"
+        assert not _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_self"))
+        assert _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_scope")) == [str(_LIVE_ID)]
+
+        # The other user never dismissed it, so BOTH history filters are empty
+        # for them — a scope dismissal is not attributed to bystanders.
+        actor.account_id = _USER_B
+        actor.username = "user-b"
+        actor.org_role = "runner"
+        assert not _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_self"))
+        assert not _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_scope"))
+
+
+def test_escalation_still_respects_the_privilege_gate(tmp_path: Path) -> None:
+    """Escalation passes through the SAME gate as a fresh scope dismissal: for
+    an ``org_admin`` notification a non-admin's escalation is refused."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(
+                notification_id=_LIVE_ID,
+                expires_at=now + timedelta(hours=72),
+                title="org_admin row",
+                dismiss_strategy="org_admin",
+            ),
+        ],
+    ) as (client, actor):
+        actor.org_role = "runner"
+
+        first = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "self"})
+        assert first.status_code == 200, first.text
+
+        second = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "scope"})
+        assert second.status_code == 400, second.text
+        assert "Only admins" in second.json()["detail"]
+
+        # The dismissal is still a self dismissal — the gate did not escalate.
+        assert _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_self")) == [str(_LIVE_ID)]
+        assert not _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_scope"))
+
+
+def test_identical_scope_duplicate_is_still_refused(tmp_path: Path) -> None:
+    """Escalation is self -> scope ONLY; an identical-scope repeat keeps the
+    pre-existing refusal (it is a no-op re-dismiss, not an escalation)."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="dup row"),
+        ],
+    ) as (client, _actor):
+        first = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "self"})
+        assert first.status_code == 200, first.text
+
+        again = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "self"})
+        assert again.status_code == 400, again.text
+        assert "already dismissed" in again.json()["detail"]

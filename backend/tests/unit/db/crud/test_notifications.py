@@ -179,6 +179,43 @@ class TestNotificationsForUser:
             )
             assert result == []
 
+    async def test_unknown_status_filter_raises_instead_of_returning_all_rows(self, mock_session: AsyncMock) -> None:
+        """PROVE-THE-FIX (F1, defence in depth).
+
+        The route now 422s an unknown ``status``. This is the CRUD-level backstop:
+        before the ``else`` branch existed an unknown value matched no branch and
+        the query was returned UNFILTERED — expired and dismissed rows served as
+        if live.
+        """
+        mock_session.execute = AsyncMock(return_value=_listing_result([]))
+        from modulo.db.crud.notifications import get_notifications_for_user
+
+        for bogus in ("nope", "", "unread", "all", "expired"):
+            with pytest.raises(ValueError, match="Unknown notification status filter"):
+                await get_notifications_for_user(
+                    mock_session,
+                    org_id=_ORG_ID,
+                    user_id=_USER_ID,
+                    status_filter=bogus,
+                )
+        # Nothing was ever read: the guard fires before the query executes.
+        mock_session.execute.assert_not_awaited()
+
+    async def test_unknown_status_filter_raises_on_the_count_path_too(self, mock_session: AsyncMock) -> None:
+        """The count shares the filter, so list and total can never disagree —
+        including on the error path."""
+        mock_session.execute = AsyncMock(return_value=_count_result(0))
+        from modulo.db.crud.notifications import count_notifications_for_user
+
+        with pytest.raises(ValueError, match="Unknown notification status filter"):
+            await count_notifications_for_user(
+                mock_session,
+                org_id=_ORG_ID,
+                user_id=_USER_ID,
+                status_filter="nope",
+            )
+        mock_session.execute.assert_not_awaited()
+
     async def test_programming_error_returns_empty_list(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
         from modulo.db.crud.notifications import get_notifications_for_user
@@ -305,6 +342,84 @@ class TestDismissNotification:
                 user_id=_USER_ID,
                 org_id=_ORG_ID,
             )
+
+    async def test_self_dismissal_escalates_to_scope(self, mock_session: AsyncMock) -> None:
+        """PROVE-THE-FIX (F6): "Review later" (self) then "Dismiss for everyone"
+        (scope) must ESCALATE the existing row, not raise "already dismissed
+        ... (concurrent)" — the old refusal made the org-wide hide unreachable
+        by the very actor who had self-dismissed first."""
+        existing = MagicMock()
+        existing.dismiss_scope = "self"
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=_make_notification(dismiss_strategy="any_scope"))),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=existing)),
+            ]
+        )
+        from modulo.db.crud.notifications import dismiss_notification
+
+        result = await dismiss_notification(
+            mock_session,
+            notification_id=_NOTIF_ID,
+            user_id=_USER_ID,
+            org_id=_ORG_ID,
+            dismiss_scope="scope",
+        )
+
+        assert result.dismiss_scope == "scope"
+        # The existing row was MUTATED, not duplicated (unique constraint is
+        # (notification_id, dismissed_by_user_id)).
+        mock_session.add.assert_not_called()
+
+    async def test_escalation_is_refused_when_the_privilege_gate_refuses_a_fresh_scope_dismiss(
+        self, mock_session: AsyncMock
+    ) -> None:
+        """The privilege gate runs BEFORE the escalation branch, so escalating
+        through a gate the actor cannot pass is impossible."""
+        from modulo.db.crud.notifications import dismiss_notification
+
+        # org_admin strategy + non-admin actor -> refused even with an existing
+        # self dismissal that would otherwise escalate.
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=_make_notification(dismiss_strategy="org_admin"))),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="Only admins"):
+            await dismiss_notification(
+                mock_session,
+                notification_id=_NOTIF_ID,
+                user_id=_USER_ID,
+                org_id=_ORG_ID,
+                dismiss_scope="scope",
+                is_admin=False,
+            )
+        mock_session.add.assert_not_called()
+
+    async def test_identical_scope_duplicate_still_raises(self, mock_session: AsyncMock) -> None:
+        """Escalation is self -> scope ONLY. Re-dismissing at the SAME scope
+        keeps the pre-existing refusal (idempotent no-op, not an escalation)."""
+        from modulo.db.crud.notifications import dismiss_notification
+
+        existing = MagicMock()
+        existing.dismiss_scope = "scope"
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=_make_notification(dismiss_strategy="any_scope"))),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=existing)),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="already dismissed by this user"):
+            await dismiss_notification(
+                mock_session,
+                notification_id=_NOTIF_ID,
+                user_id=_USER_ID,
+                org_id=_ORG_ID,
+                dismiss_scope="scope",
+            )
+        mock_session.add.assert_not_called()
 
     async def test_integrity_error_wrapped_as_value_error(self, mock_session: AsyncMock) -> None:
         self._patch_notification_lookup(mock_session)

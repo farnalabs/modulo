@@ -251,7 +251,7 @@ def test_list_notifications_returns_page(client: tuple[TestClient, _TestHarness]
     harness.stub("get_notifications_for_user", AsyncMock(return_value=[_notification_row()]))
     harness.stub("count_notifications_for_user", AsyncMock(return_value=11))
 
-    resp = http.get(_BASE, params={"page": 2, "page_size": 1, "level": "warning", "status": "unread"})
+    resp = http.get(_BASE, params={"page": 2, "page_size": 1, "level": "warning", "status": "active"})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -259,6 +259,51 @@ def test_list_notifications_returns_page(client: tuple[TestClient, _TestHarness]
     assert body["page"] == 2
     assert body["page_size"] == 1
     assert len(body["items"]) == 1
+
+
+def test_list_notifications_rejects_unknown_status(client: tuple[TestClient, _TestHarness]) -> None:
+    """PROVE-THE-FIX (F1): an unvalidated ``status`` used to bypass every
+    branch of ``_apply_status_filter`` and return an UNFILTERED page — expired
+    and dismissed rows included — with HTTP 200.
+
+    It must now be a 422 from the route, before any DB read happens.
+    """
+    http, harness = client
+    list_stub = AsyncMock(return_value=[])
+    count_stub = AsyncMock(return_value=0)
+    harness.stub("get_notifications_for_user", list_stub)
+    harness.stub("count_notifications_for_user", count_stub)
+
+    resp = http.get(_BASE, params={"status": "nope"})
+
+    assert resp.status_code == 422, resp.text
+    # The unfiltered read must never have been attempted.
+    list_stub.assert_not_awaited()
+    count_stub.assert_not_awaited()
+
+
+def test_list_notifications_rejects_empty_status(client: tuple[TestClient, _TestHarness]) -> None:
+    """``?status=`` is NOT "unset" — it is not in the vocabulary either, so it
+    must not fall through to the unfiltered default read."""
+    http, _harness = client
+
+    resp = http.get(_BASE, params={"status": ""})
+
+    assert resp.status_code == 422, resp.text
+
+
+def test_list_notifications_accepts_the_whole_status_vocabulary(
+    client: tuple[TestClient, _TestHarness],
+) -> None:
+    """Control: every legitimate value (and the omitted default) still works."""
+    http, harness = client
+    harness.stub("get_notifications_for_user", AsyncMock(return_value=[]))
+    harness.stub("count_notifications_for_user", AsyncMock(return_value=0))
+
+    for value in (None, "active", "dismissed_self", "dismissed_scope"):
+        params = {} if value is None else {"status": value}
+        resp = http.get(_BASE, params=params)
+        assert resp.status_code == 200, f"status={value!r} -> {resp.status_code}: {resp.text}"
 
 
 def test_list_notifications_rejects_page_zero(client: tuple[TestClient, _TestHarness]) -> None:
