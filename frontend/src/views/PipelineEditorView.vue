@@ -357,7 +357,7 @@
           </div>
         </div>
         <!-- FAR-688: legacy HITL gates whose descriptions predate the
-             minimum (reads never hard-fail on them) — surface WHICH gates
+             minimum (reads never hard-fail on them) â€” surface WHICH gates
              need descriptions so the user can find and fix them. -->
         <div
           v-if="showLegacyHitlBanner && legacyHitlIssues.length > 0"
@@ -707,7 +707,7 @@
                     <option :value="undefined"></option>
                     <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.name || shortId(s.id) }}</option>
                   </select>
-                  <span v-else class="text-xs text-muted-foreground">—</span>
+                  <span v-else class="text-xs text-muted-foreground">â€”</span>
                 </div>
                 <button
                   type="button"
@@ -877,7 +877,7 @@
             </div>
           </template>
           <!-- Non-sandbox nodes: commands are read-only. The authoring editor is
-               sandbox-only — a command typed on an agent node would flow into the
+               sandbox-only â€” a command typed on an agent node would flow into the
                graph save and FAR-488a would then overwrite the bound Agent's row
                command. What the graph already carries (the bound Agent's
                agent_commands list) is displayed, never edited. The scalar
@@ -1222,7 +1222,7 @@
   :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
   data-testid="pipeline-editor-snapshot-select"
   class="w-full"
-  :options="[{ value: '__all__', label: $t('common.none') }, ...snapshots.map(s => ({ value: s.id, label: 'v' + s.snapshot_version + (s.tag ? ` — ${s.tag}` : '') }))]"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...snapshots.map(s => ({ value: s.id, label: 'v' + s.snapshot_version + (s.tag ? ` â€” ${s.tag}` : '') }))]"
   option-label="label"
   option-value="value"
 >
@@ -1430,7 +1430,7 @@ async function runInitialFitView() {
     if (ok) initialFitDone = true
   } catch (error) {
     // fitView signals an unmeasured pane via its resolved value, so a
-    // rejection here is a genuine error — surface it instead of swallowing.
+    // rejection here is a genuine error â€” surface it instead of swallowing.
     console.warn('[PipelineEditorView] initial fitView failed; retry paths remain armed', error)
   }
 }
@@ -1538,7 +1538,7 @@ type PipelineRetryPolicySource = {
 
 const retryPolicyNoRetriesWarning = computed(() => {
   const max = Number(retryPolicyMaxRetries.value) || 0
-  // FAR-649: granular with ZERO events selected = retry effectively off —
+  // FAR-649: granular with ZERO events selected = retry effectively off â€”
   // the zero-selected warning (save is blocked too, no silent inert policy).
   if (retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0) {
     return t('views.PipelineEditorView.retry_policy_warning_no_events')
@@ -1561,7 +1561,7 @@ function syncRetryPolicyFromPipeline() {
   retryPolicyScheduleWarning.value = null
   if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
     // FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
-    // missing or null) renders as All-errors — the runtime resolves it to all
+    // missing or null) renders as All-errors â€” the runtime resolves it to all
     // retryable events. An explicit `on` list renders as granular (a stored
     // empty list is retry-effectively-off, surfaced by the zero-selected
     // warning). A malformed non-list `on` fail-closes at runtime (no retry),
@@ -1589,7 +1589,7 @@ function syncRetryPolicyFromPipeline() {
       typeof legacyBackoff === 'number' && Number.isFinite(legacyBackoff) ? legacyBackoff : undefined
 
     // FAR-525: load the run-level backoff schedule into the panel. Out-of-range
-    // stored values are clamped here for editing ONLY — the runtime resolver
+    // stored values are clamped here for editing ONLY â€” the runtime resolver
     // fails open to the default 45s x 2.0 schedule, which the warning surfaces.
     let scheduleClamped = false
     const schedule = (rp as Record<string, unknown>).backoff_schedule
@@ -1676,7 +1676,7 @@ async function saveRetryPolicy() {
   const granular = retryPolicyMode.value === 'specific'
   const on = [...retryPolicyEvents.value]
   if (granular && on.length === 0) {
-    // FAR-649: no silent inert policy — granular with zero events selected is
+    // FAR-649: no silent inert policy â€” granular with zero events selected is
     // blocked (the save button is disabled; this guard also blocks direct
     // invocation). Switch to All-errors or select at least one event.
     retryPolicyError.value = t('views.PipelineEditorView.retry_policy_warning_no_events')
@@ -1757,10 +1757,10 @@ const defaultEdgeForm = {
 const edgeForm = reactive({ ...defaultEdgeForm })
 
 // FAR-613/FAR-688: a HITL gate must carry a human description of at least
-// this many trimmed characters — ONE constant for the template's
+// this many trimmed characters â€” ONE constant for the template's
 // aria-invalid hint and the save guard (previously the literal 20 in two
 // places). Counted as CODE POINTS ([...str].length) to match the backend's
-// Python len() — a description padded with astral-plane characters (emoji)
+// Python len() â€” a description padded with astral-plane characters (emoji)
 // must not be miscounted by UTF-16 units.
 const HITL_DESCRIPTION_MIN_LENGTH = 20
 
@@ -1776,7 +1776,7 @@ const hitlDescriptionTooShort = computed(
 // FAR-688: legacy HITL description violations.
 //
 // Graph READS never hard-fail on gate descriptions below the minimum (the
-// forcing function applies to the next SAVE — legacy pipelines stay
+// forcing function applies to the next SAVE â€” legacy pipelines stay
 // readable/editable), and the read response's ``validation_issues`` is
 // always empty for reads. So the editor scans the loaded graph CLIENT-SIDE
 // for gates whose description would fail the save-time check and surfaces
@@ -1821,7 +1821,7 @@ function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitl
     if (!config || typeof config !== 'object') continue
     // A node-level gate's config is injected onto its outgoing edges at
     // compile time; the persisted definition carries it on the NODE, and
-    // the node pass already reported it — never double-list one gate.
+    // the node pass already reported it â€” never double-list one gate.
     if (edge.source_node_id != null && hitlNodeIds.has(String(edge.source_node_id))) continue
     if (!hitlConfigDescriptionTooShort(config)) continue
     const source = shortId(String(edge.source_node_id ?? edge.source ?? '?'))
@@ -1832,12 +1832,12 @@ function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitl
   return issues
 }
 
-// Reactive over the loaded graph — a save that fixed the last violation
+// Reactive over the loaded graph â€” a save that fixed the last violation
 // clears the banner; a reverted graph brings it back.
 const legacyHitlIssues = computed(() => findLegacyHitlDescriptionIssues(rawNodes.value, rawEdges.value))
 const showLegacyHitlBanner = ref(true)
 
-// FAR-688: which KINDS of violations are present drives the per-kind hints —
+// FAR-688: which KINDS of violations are present drives the per-kind hints â€”
 // edge gates keep the "open the edge and add one" hint; node-level gates get
 // the API/MCP hint because the editor cannot edit their hitl_config yet.
 const hasLegacyEdgeIssues = computed(() => legacyHitlIssues.value.some(issue => issue.kind === 'edge'))
@@ -2233,7 +2233,7 @@ function populateEdgeForm(edge: any) {
     edgeForm.label = hc.label || ''
     edgeForm.description = hc.description || ''
     edgeForm.claim_expiry_minutes = hc.claim_expiry_minutes || 15
-    // FAR-609: an existing config without the key is human-only now —
+    // FAR-609: an existing config without the key is human-only now â€”
     // only an explicit `false` loads the checkbox unticked.
     edgeForm.human_only = hc.human_only !== false
     if (hc.condition) {
@@ -2283,7 +2283,7 @@ function buildHitlReviewConfig(): any {
 
 async function saveEdgeConfig() {
   if (!selectedEdgeData.value) return
-  // FAR-613: a HITL gate must explain WHY it exists — the backend rejects
+  // FAR-613: a HITL gate must explain WHY it exists â€” the backend rejects
   // saves whose gate config carries no usable description (min 20 trimmed
   // chars, counted as code points to match Python's len()), so block
   // client-side first with a clear, localised message (FAR-688 single const).
@@ -2622,7 +2622,7 @@ async function updateMaxAutonomyLevel(event: Event) {
       saveGraphError.value = response?.status === 422
         ? t('views.PipelineEditorView.max_autonomy_below_default', { error: formatApiError(error) })
         : t('views.PipelineEditorView.failed_to_update_max_autonomy', { error: formatApiError(error) })
-      // The optimistic set above must not outlive a failed PATCH — restore the
+      // The optimistic set above must not outlive a failed PATCH â€” restore the
       // control to the persisted value (pipeline.value was never updated).
       maxAutonomyInput.value = pipeline.value?.max_autonomy_level ?? null
       return
@@ -2631,7 +2631,7 @@ async function updateMaxAutonomyLevel(event: Event) {
     saveGraphError.value = null
   } catch (e: unknown) {
     saveGraphError.value = t('views.PipelineEditorView.failed_to_update_max_autonomy', { error: formatApiError(e) })
-    // Timeout / network failure: same revert — never display a value the
+    // Timeout / network failure: same revert â€” never display a value the
     // server rejected.
     maxAutonomyInput.value = pipeline.value?.max_autonomy_level ?? null
   }
@@ -2676,14 +2676,14 @@ onBeforeUnmount(() => {
 // graph_nodes_json wholesale, so every command field must be serialised here
 // or it is wiped. Mirrors the backend contract (routes/pipelines.py +
 // sandbox_mode): sandbox_agent nodes carry ONLY the agent_commands list
-// (the scalar agent_command field was removed in FAR-820 — the backend
+// (the scalar agent_command field was removed in FAR-820 â€” the backend
 // PipelineGraphNode no longer declares it, so any scalar save is silently
 // dropped and the runtime join would crash on a missing list). The joiner is
-// persisted as a non-empty string — a null joiner would crash the runtime
+// persisted as a non-empty string â€” a null joiner would crash the runtime
 // join (None.join), so an unset joiner saves the " && " default. Non-sandbox
 // nodes never gain command mutations here: the commands editor is
 // sandbox-gated and the spread round-trips whatever the graph already
-// carried (FAR-488a syncs a bound Agent's row from a node-level command —
+// carried (FAR-488a syncs a bound Agent's row from a node-level command â€”
 // the editor must not fabricate one).
 function nodeCommandFields(n: any): {
   agent_commands?: string[] | null
@@ -2706,7 +2706,7 @@ function nodeCommandFields(n: any): {
 
 // View-only / UI-only keys that must never leak into a graph-save payload.
 // rawNodes come from the GET /graph response (every key is a PipelineGraphNode
-// field) or addNode, so none occur in practice today — this block is durable
+// field) or addNode, so none occur in practice today â€” this block is durable
 // insurance against UI-state markers (VueFlow node fields like type/data/
 // selected/dragging/dimensions, editor conveniences like hasCapabilityScope)
 // ever being merged into rawNodes and silently persisted. model_backend_id is
@@ -2725,13 +2725,13 @@ const VIEW_ONLY_NODE_KEYS = new Set([
   'agent_command',
 ])
 
-// Build one node's save payload by spreading the raw node data — the GET
+// Build one node's save payload by spreading the raw node data â€” the GET
 // response is typed by PipelineGraphNode, so every model-accepted field
 // (template_id, composite_*, schema pins, ports, egress/resource/sandbox
 // config, autonomy_recommendation, command/prompt fields, ...) survives the
-// save — then layering the command normalisation on top. Position flows
+// save â€” then layering the command normalisation on top. Position flows
 // through the spread exactly as the previous hand-maintained map sent it
-// (n.position, the graph's {x, y} — VueFlow drag state is not synced).
+// (n.position, the graph's {x, y} â€” VueFlow drag state is not synced).
 // Return is `any` because the payload is dynamically spread from the (any)
 // raw node data; the generated client's node body type cannot express that.
 function buildNodePayload(n: any): any {
@@ -2824,7 +2824,7 @@ async function triggerRun() {
 async function loadFolders() {
   try {
     const response = await get<any[] | { items?: any[] }>('/api/v1/pipeline-folders')
-    // Accept both the raw-array and { items: [...] } response shapes — the
+    // Accept both the raw-array and { items: [...] } response shapes â€” the
     // folderPath computed iterates folders.value unconditionally, so a
     // non-array payload would throw on every render (see loadLifecycleMaps
     // for the same tolerance pattern).
@@ -2855,7 +2855,7 @@ async function loadLifecycleMaps() {
 
 // Declared before useDataFetch: vue-query invokes the fetcher synchronously
 // during setup, and the fetcher + the loaders it calls (loadPipeline,
-// loadGraph, loadLifecycleMaps) read/write pageError — the binding must be
+// loadGraph, loadLifecycleMaps) read/write pageError â€” the binding must be
 // initialised before the fetcher can run.
 const pageError = ref<string | null>(null)
 

@@ -107,7 +107,7 @@ vi.mock('../lib/api/client', () => {
           })
         }
         if (url === '/api/v1/runs/{run_id}/hitl/pending') {
-          return Promise.resolve({ data: { gates: mockPendingGates }, error: undefined })
+          return Promise.resolve({ data: { reviews: mockPendingGates }, error: undefined })
         }
         if (url === '/api/v1/runs/{run_id}/workspace-lease') {
           return Promise.resolve({ data: mockWorkspaceLease, error: undefined })
@@ -1952,7 +1952,7 @@ describe('RunDetailView HITL gates', () => {
         return Promise.resolve({ data: { outputs_json: null }, error: undefined })
       }
       if (url === '/api/v1/runs/{run_id}/hitl/pending') {
-        return Promise.resolve({ data: { gates: mockPendingGates }, error: undefined })
+        return Promise.resolve({ data: { reviews: mockPendingGates }, error: undefined })
       }
       return Promise.resolve({ data: null, error: undefined })
     })
@@ -2477,7 +2477,7 @@ describe('RunDetailView FAR-582 artifact listing', () => {
     ;(api.GET as any).mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data, error: undefined })
       if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: io, error: undefined })
-      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { reviews: [] }, error: undefined })
       if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
       if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/artifacts') {
         return Promise.resolve({ data: { artifacts: mockArtifactArtifacts }, error: undefined })
@@ -2578,7 +2578,7 @@ describe('RunDetailView FAR-582 artifact listing', () => {
       if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: baseDetail(), error: undefined })
       if (url === '/api/v1/runs/{run_id}/io')
         return Promise.resolve({ data: { outputs_json: { 'node-a': { input: {}, output: {} } }, node_telemetry: { 'node-a': { agent_stdout: 'hello' } } }, error: undefined })
-      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { reviews: [] }, error: undefined })
       if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
       if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/artifacts')
         return Promise.resolve({ data: null, error: { status: 404, detail: 'Not Found' } })
@@ -2611,7 +2611,7 @@ describe('RunDetailView FAR-582 artifact listing', () => {
       if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: baseDetail(), error: undefined })
       if (url === '/api/v1/runs/{run_id}/io')
         return Promise.resolve({ data: { outputs_json: { 'node-a': { input: {}, output: {} } }, node_telemetry: { 'node-a': { agent_stdout: 'hello' } } }, error: undefined })
-      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { reviews: [] }, error: undefined })
       if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
       if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/artifacts') {
         calls += 1
@@ -2676,7 +2676,7 @@ describe('RunDetailView Analyze action (FAR-1235)', () => {
       if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: runDetail(status), error: undefined })
       if (url === '/api/v1/runs/{run_id}/io')
         return Promise.resolve({ data: { outputs_json: null, input_payload: null, node_telemetry: {} }, error: undefined })
-      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { reviews: [] }, error: undefined })
       if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
       if (url === '/api/v1/model-backends') return Promise.resolve({ data: mockModelBackends, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
@@ -2773,7 +2773,7 @@ describe('RunDetailView cancellation reason (FAR-1233)', () => {
       if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data, error: undefined })
       if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: { outputs_json: null }, error: undefined })
       if (url === '/api/v1/runs/{run_id}/hitl/pending') {
-        return Promise.resolve({ data: { gates: [] }, error: undefined })
+        return Promise.resolve({ data: { reviews: [] }, error: undefined })
       }
       if (url === '/api/v1/runs/{run_id}/work-items/enrichment') {
         return Promise.resolve({ data: null, error: undefined })

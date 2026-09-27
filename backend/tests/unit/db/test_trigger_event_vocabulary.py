@@ -125,11 +125,12 @@ _MIGRATION_PATH = (
 # 0259_pipeline_snapshot_max_autonomy_check
 # (FAR-1223) chained onto 0258_pipeline_accountability_owners, and
 # 0260_run_cancel_reason (FAR-1233) chained onto 0259, and
-# 0261_decision_record_payload (FAR-1102) chained onto 0260 as the chain
-# head. (_MIGRATION_NAME above
+# 0261_decision_record_payload (FAR-1102) chained onto 0260, and
+# 0262_hitl_gate_to_review_vocabulary (FAR-1104) chained onto 0261 as the
+# chain head. (_MIGRATION_NAME above
 # stays pinned to 0255 — that is the constraint-owning migration under test,
 # not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0261_decision_record_payload"
+_CHAIN_HEAD_MIGRATION_NAME = "0262_hitl_gate_to_review_vocabulary"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

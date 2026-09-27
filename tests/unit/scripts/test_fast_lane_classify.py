@@ -243,6 +243,54 @@ class TestMainExitCode:
         )
         assert rc == 1, "class-B must exit 1 (check run = neutral, not a failure)"
 
+    @patch("fast_lane_classify.subprocess.run")
+    def test_diff_too_large_exits_nonzero(self, mock_run: MagicMock) -> None:
+        """A PR whose diff exceeds GitHub's 20000-line cap is ineligible (rc=1).
+
+        ``gh pr diff`` fetches the whole diff, so GitHub's HTTP 406 must be
+        reported as class-B/neutral — not a classifier error (rc=2), which
+        would paint a red ``fast-lane-eligible`` check on a healthy large PR.
+        """
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "could not find pull request diff: HTTP 406: Sorry, the diff "
+                "exceeded the maximum number of lines (20000)"
+            ),
+        )
+        rc = classify_main(
+            [
+                "--pr-number",
+                "1025",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+            ]
+        )
+        assert rc == 1, "diff-too-large must exit 1 (neutral), not 2 (failure)"
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_unexpected_fetch_error_still_fails_closed(self, mock_run: MagicMock) -> None:
+        """A genuine fetch error (not the diff-size cap) still returns rc=2."""
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+        rc = classify_main(
+            [
+                "--pr-number",
+                "42",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+            ]
+        )
+        assert rc == 2, "a genuine fetch error must fail closed (rc=2)"
+
     @patch("fast_lane_classify.check_sha_pinning", return_value=(True, "SHA-pinned"))
     @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
     @patch("fast_lane_classify.check_suspension", return_value=(True, "no suspension"))

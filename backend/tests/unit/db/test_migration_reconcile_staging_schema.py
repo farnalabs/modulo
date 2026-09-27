@@ -92,8 +92,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0259_pipeline_snapshot_max_autonomy_check
 # (FAR-1223) chains off 0258_pipeline_accountability_owners, and
 # 0260_run_cancel_reason (FAR-1233) chains off 0259, and
-# 0261_decision_record_payload (FAR-1102) chains off 0260 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0261_decision_record_payload"
+# 0261_decision_record_payload (FAR-1102) chains off 0260, and
+# 0262_hitl_gate_to_review_vocabulary (FAR-1104) chains off 0261 as the chain
+# head.
+_CHAIN_HEAD_MIGRATION = "0262_hitl_gate_to_review_vocabulary"
 
 
 def _source(name: str) -> str:

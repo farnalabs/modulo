@@ -113,7 +113,7 @@ async function mountWith(run: Record<string, unknown>, io: Record<string, unknow
   getMock.mockImplementation((url: string) => {
     if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: run, error: undefined })
     if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: io, error: undefined })
-    if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+    if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { reviews: [] }, error: undefined })
     if (url === '/api/v1/pipelines/{pipeline_id}/graph') return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
     return Promise.resolve({ data: null, error: undefined })
   })
@@ -803,7 +803,7 @@ describe('RunDetailView coverage — script logic branches', () => {
     getMock.mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: baseRun({ status: 'hitl_parked' }), error: undefined })
       if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: { outputs_json: null }, error: undefined })
-      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [{ review_id: 'g1', label: 'Review' }] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { reviews: [{ review_id: 'g1', label: 'Review' }] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mountView()
