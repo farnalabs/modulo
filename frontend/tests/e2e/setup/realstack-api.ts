@@ -289,6 +289,8 @@ interface TriggerResponse {
   trigger_type: string
   active: boolean
   next_fire_at: string | null
+  /** Void after a real delivery: when the trigger last created a run. */
+  last_fired_at?: string | null
 }
 
 export type TriggerRef = TriggerResponse
@@ -466,4 +468,215 @@ export async function deleteConnectorBestEffort(apiBase: string, token: string, 
   } catch (err) {
     console.warn('[realstack] cleanup: connector delete failed:', err instanceof Error ? err.message : String(err))
   }
+}
+
+// ---------------------------------------------------------------------------
+// Batch 3 additions (FAR-1242): teams, lifecycle maps, webhooks, evals,
+// parameter schemas — plus a real API cancel for webhook-run cleanup.
+// ---------------------------------------------------------------------------
+
+export interface AdminTeam {
+  id: string
+  name: string
+  description: string | null
+  member_count?: number
+  owned_resource_count?: number | null
+}
+
+interface AdminTeamListResponse {
+  items: AdminTeam[]
+}
+
+/** List the org's teams (admin). */
+export async function listTeams(apiBase: string, token: string): Promise<AdminTeamListResponse> {
+  const res = await apiFetch<AdminTeamListResponse>(apiBase, token, 'GET', '/api/v1/admin/teams')
+  if (res.status !== 200) {
+    throw new Error(`[realstack] team list failed: ${res.status} ${res.text.slice(0, 300)}`)
+  }
+  return res.body ?? { items: [] }
+}
+
+interface TeamResponse {
+  id: string
+  name: string
+}
+
+/** Create a team (admin). Returns the persisted row. */
+export async function createTeam(apiBase: string, token: string, name: string, description?: string): Promise<TeamResponse> {
+  const res = await apiFetch<TeamResponse>(apiBase, token, 'POST', '/api/v1/admin/teams', {
+    name,
+    description: description ?? null,
+  })
+  if (res.status !== 201 || !res.body?.id) {
+    throw new Error(`[realstack] team create failed: ${res.status} ${res.text.slice(0, 300)}`)
+  }
+  return res.body
+}
+
+/** Best-effort team deletion (404-tolerant). Never throws over the caller. */
+export async function deleteTeamBestEffort(apiBase: string, token: string, teamId: string): Promise<void> {
+  try {
+    const res = await apiFetch(apiBase, token, 'DELETE', `/api/v1/admin/teams/${teamId}`)
+    if (res.status !== 204 && res.status !== 404) {
+      console.warn(`[realstack] cleanup: team ${teamId} delete returned ${res.status}`)
+    }
+  } catch (err) {
+    console.warn('[realstack] cleanup: team delete failed:', err instanceof Error ? err.message : String(err))
+  }
+}
+
+export interface LifecycleMapDetail {
+  id: string
+  name: string
+  current_version: number
+  stages: Array<Record<string, unknown>>
+  archived_at: string | null
+}
+
+/** Create a lifecycle map (admin); content_json carries the stage graph. */
+export async function createLifecycleMap(
+  apiBase: string,
+  token: string,
+  name: string,
+  contentJson: Record<string, unknown> = {},
+): Promise<LifecycleMapDetail> {
+  const res = await apiFetch<LifecycleMapDetail>(apiBase, token, 'POST', '/api/v1/lifecycle-maps', {
+    name,
+    description: 'Created by the FAR-1242 real-stack e2e journeys',
+    content_json: contentJson,
+  })
+  if (res.status !== 201 || !res.body?.id) {
+    throw new Error(`[realstack] lifecycle map create failed: ${res.status} ${res.text.slice(0, 300)}`)
+  }
+  return res.body
+}
+
+/** Fetch a lifecycle map's persisted detail. */
+export async function getLifecycleMap(apiBase: string, token: string, mapId: string): Promise<ApiResult<LifecycleMapDetail>> {
+  return apiFetch<LifecycleMapDetail>(apiBase, token, 'GET', `/api/v1/lifecycle-maps/${mapId}`)
+}
+
+/** Best-effort lifecycle map deletion (404-tolerant). Never throws over the caller. */
+export async function deleteLifecycleMapBestEffort(apiBase: string, token: string, mapId: string): Promise<void> {
+  try {
+    const res = await apiFetch(apiBase, token, 'DELETE', `/api/v1/lifecycle-maps/${mapId}`)
+    if (res.status !== 204 && res.status !== 404) {
+      console.warn(`[realstack] cleanup: lifecycle map ${mapId} delete returned ${res.status}`)
+    }
+  } catch (err) {
+    console.warn('[realstack] cleanup: lifecycle map delete failed:', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/**
+ * Fire a webhook trigger with a raw HTTP delivery from OUTSIDE the app —
+ * the exact boundary an external sender crosses. Deliberately no auth
+ * headers: HMAC-less triggers accept unauthenticated deliveries by design.
+ */
+export async function fireWebhook(apiBase: string, triggerId: string, payload: Record<string, unknown>): Promise<ApiResult<{ run_id: string | null; status: string }>> {
+  const res = await fetch(`${apiBase}/api/v1/triggers/${triggerId}/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20_000),
+  })
+  const text = await res.text()
+  let parsed: { run_id: string | null; status: string } | null = null
+  try {
+    parsed = JSON.parse(text) as { run_id: string | null; status: string }
+  } catch {
+    parsed = null
+  }
+  return { status: res.status, body: parsed, text }
+}
+
+/** Request cancellation through the real API (202 — terminalised async). */
+export async function cancelRun(apiBase: string, token: string, runId: string): Promise<void> {
+  const res = await apiFetch(apiBase, token, 'POST', `/api/v1/runs/${runId}/cancel`, {})
+  if (res.status !== 202) {
+    throw new Error(`[realstack] run cancel failed: ${res.status} ${res.text.slice(0, 300)}`)
+  }
+}
+
+export interface EvalDefinitionItem {
+  id: string
+  pipeline_id: string
+  name: string
+  eval_type: string
+}
+
+interface EvalListResponse {
+  items: EvalDefinitionItem[]
+}
+
+/** List eval definitions scoped to one pipeline. */
+export async function listEvals(apiBase: string, token: string, pipelineId: string): Promise<EvalListResponse> {
+  const res = await apiFetch<EvalListResponse>(apiBase, token, 'GET', `/api/v1/evals?pipeline_id=${pipelineId}`)
+  if (res.status !== 200) {
+    throw new Error(`[realstack] eval list failed: ${res.status} ${res.text.slice(0, 300)}`)
+  }
+  return res.body ?? { items: [] }
+}
+
+/** Best-effort eval definition deletion (404-tolerant). Never throws. */
+export async function deleteEvalBestEffort(apiBase: string, token: string, evalId: string): Promise<void> {
+  try {
+    const res = await apiFetch(apiBase, token, 'DELETE', `/api/v1/evals/${evalId}`)
+    if (res.status !== 200 && res.status !== 204 && res.status !== 404) {
+      console.warn(`[realstack] cleanup: eval ${evalId} delete returned ${res.status}`)
+    }
+  } catch (err) {
+    console.warn('[realstack] cleanup: eval delete failed:', err instanceof Error ? err.message : String(err))
+  }
+}
+
+export interface AdminRecordResult {
+  items: Array<Record<string, unknown>>
+  itemsPlus200: boolean
+}
+
+/**
+ * Admin precondition: the target exposes the parameter-schema surface
+ * (team-tier feature). Journeys that need it must skip cleanly when the
+ * licence does not include it, instead of failing.
+ */
+export async function hasParameterSchemaAccess(apiBase: string, token: string): Promise<boolean> {
+  const res = await apiFetch(apiBase, token, 'GET', '/api/v1/parameter-schemas?page=1&page_size=1')
+  return res.status === 200
+}
+
+export interface ParameterSetItem {
+  id: string
+  name: string
+  values: Record<string, unknown>
+}
+
+interface ParameterSetListResponse {
+  items: ParameterSetItem[]
+}
+
+/** List a parameter schema's sets (admin). */
+export async function listParameterSets(apiBase: string, token: string, schemaId: string): Promise<ParameterSetListResponse> {
+  const res = await apiFetch<ParameterSetListResponse>(apiBase, token, 'GET', `/api/v1/parameter-schemas/${schemaId}/sets`)
+  if (res.status !== 200) {
+    throw new Error(`[realstack] parameter set list failed: ${res.status} ${res.text.slice(0, 300)}`)
+  }
+  return res.body ?? { items: [] }
+}
+
+/** Best-effort parameter schema deletion (page 1 lists + clean 200/404). */
+export async function deleteParameterSchemaBestEffort(apiBase: string, token: string, schemaId: string): Promise<void> {
+  try {
+    const res = await apiFetch(apiBase, token, 'DELETE', `/api/v1/parameter-schemas/${schemaId}`)
+    if (res.status !== 200 && res.status !== 204 && res.status !== 404) {
+      console.warn(`[realstack] cleanup: parameter schema ${schemaId} delete returned ${res.status}`)
+    }
+  } catch (err) {
+    console.warn('[realstack] cleanup: parameter schema delete failed:', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** #8-char prefix, mirroring the app's shortId used for run ids in tables. */
+export function shortId(id: string): string {
+  return '#' + id.slice(0, 8)
 }
