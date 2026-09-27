@@ -1,11 +1,10 @@
-"""E2B log-entry parsing for the provider log-tail primitive.
+"""E2B log-entry parsing for the runtime provider's log-tail primitive.
 
-FAR-1050 R1: ``E2BRuntimeProvider.read_log_tail`` is the single log-tail
-path; it must produce a bounded, preferred-level-first tail over the same E2B
-``logEntries`` payload. The parsing helpers live here, once, so the primitive
-cannot drift from a second copy. (R6 retired the legacy
-``node_runner._fetch_sandbox_log_tail`` probe that originally shared these
-helpers — the helper is gone, this module now has a single caller.)
+FAR-1050 R6: ``E2BRuntimeProvider.read_log_tail`` is now the sole E2B log
+probe. The legacy ``node_runner._fetch_sandbox_log_tail`` helper this module
+once shared its parsing with was deleted when the direct E2B path was retired,
+so there is no second producer left to drift from; the R1 content-parity suite
+still pins the payload expectations the two paths used to share.
 """
 
 from __future__ import annotations
