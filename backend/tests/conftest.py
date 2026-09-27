@@ -24,7 +24,17 @@ import modulo.core.ssrf as _ssrf
 # The flag-ON (default) path is covered by the ``tests/unit/pipeline_engine/
 # test_e2b_*`` files, and the shipped default itself is asserted against a
 # ``Settings`` built with this override cleared.
-os.environ["MODULO_E2B_VIA_PROVIDER"] = "false"
+#
+# Deliberately an import-time pin with a semgrep waiver, NOT an autouse
+# ``monkeypatch.setenv`` fixture: ``get_settings()`` is ``lru_cache``d and every
+# gated site reads the flag through it, so the value must be in the environment
+# before the FIRST ``get_settings()`` call. Conftest import precedes test-module
+# collection, which guarantees that; a per-test fixture runs only after
+# collection-time imports could already have populated the cache, which would
+# leave the baseline stuck on the new ON product default. The set is
+# intentionally not auto-restored — per-test overrides still go through
+# ``monkeypatch`` and revert themselves.
+os.environ["MODULO_E2B_VIA_PROVIDER"] = "false"  # nosemgrep: environ-mutation-without-monkeypatch
 
 
 @pytest.fixture(autouse=True)
