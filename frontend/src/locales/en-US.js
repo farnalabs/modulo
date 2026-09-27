@@ -3811,6 +3811,7 @@ export default {
       "item_saved_views": "Saved Views",
       "item_error_dashboard": "Error Dashboard",
       "item_notification_log": "Webhook Notifications",
+      "item_trigger_event_log": "Trigger Event Log",
       "item_plugins": "Plugins",
       "item_feedback_inbox": "Feedback Inbox",
       "item_organisations": "Organisations",

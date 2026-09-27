@@ -88,3 +88,14 @@ test.describe('Admin Triggers', { tag: "@regression" }, () => {
     await expect(page.getByTestId('settings-triggers-create')).toBeVisible()
   })
 })
+
+test.describe('Admin Trigger Event Log', { tag: "@regression" }, () => {
+  test('renders the org-wide Trigger Event Log page', { tag: "@regression" }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    await page.goto('/admin/trigger-events')
+    await expect(page).toHaveURL(/\/admin\/trigger-events$/)
+    await expect(page.locator('h1')).toContainText('Trigger Event Log')
+    await expect(page.getByTestId('settings-trigger-event-log-trigger-type')).toBeVisible()
+    await expect(page.getByTestId('settings-trigger-event-log-result')).toBeVisible()
+  })
+})

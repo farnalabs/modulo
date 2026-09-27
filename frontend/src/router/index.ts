@@ -95,6 +95,7 @@ const MyProfileView = () => import('../views/MyProfileView.vue')
 const SettingsLicenseView = () => import('../views/SettingsLicenseView.vue')
 const SettingsMcpView = () => import('../views/SettingsMcpView.vue')
 const SettingsTriggersView = () => import('../views/SettingsTriggersView.vue')
+const SettingsTriggerEventLogView = () => import('../views/SettingsTriggerEventLogView.vue')
 const SettingsGuardrailsView = () => import('../views/SettingsGuardrailsView.vue')
 const SettingsHitlReviewView = () => import('../views/SettingsHitlReviewView.vue')
 const AdminNotificationDeliveryLogView = () => import('../views/AdminNotificationDeliveryLogView.vue')
@@ -457,6 +458,15 @@ const router = createRouter({
       path: '/admin/notification-delivery',
       name: 'admin-notification-delivery',
       component: AdminNotificationDeliveryLogView,
+    },
+    {
+      // FAR-1255: the org-wide trigger event log (admin-gated
+      // GET /api/v1/admin/trigger-events). Meta (breadcrumb, roles, tier)
+      // hydrates from the manifest entry like the sibling admin log routes
+      // (/admin/audit, /admin/notification-delivery) — no inline meta here.
+      path: '/admin/trigger-events',
+      name: 'admin-trigger-events',
+      component: SettingsTriggerEventLogView,
     },
     {
       path: '/admin/housekeeping',
