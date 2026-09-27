@@ -743,15 +743,17 @@ async def test_streak_sql_uses_the_reshaped_index(
     # newest-first (``ORDER BY completed_at DESC, id DESC``), which is exactly
     # the keyset ``ix_runs_streak_engine`` (trigger_id, completed_at DESC) is
     # shaped for. With ``enable_seqscan = off`` the planner must use an index.
-    # The query is now served by one of two purpose-built ``runs`` indexes:
-    #   * ix_runs_streak_engine (trigger_id, completed_at DESC) — the dedicated
-    #     streak keyset, which serves the ORDER BY without a Sort node, or
-    #   * ix_runs_org_completed_at_terminal_sweep — the partial (terminal-only)
-    #     sweep index added in migration 0193, which the planner may prefer on a
-    #     tiny seeded table because it is smaller and already covers the
-    #     ``status IN (terminal)`` predicate. Either way the streak query must
-    #     NOT fall back to a Seq Scan of ``runs``. RESET runs in ``finally`` so a
-    #     failed EXPLAIN never leaves the connection with seqscan disabled.
+    # Several generic ``runs`` indexes also lead with ``trigger_id``
+    # (ix_runs_trigger_id, ix_runs_trigger_id_created_at,
+    # ix_runs_trigger_id_status); on the 5-row seeded table their cost estimates
+    # are near-identical to the purpose-built streak keyset, so the planner can
+    # pick any of them and the plan-based assertion becomes non-deterministic
+    # (observed after migration 0215 dropped the old partial sweep index
+    # ix_runs_org_completed_at_terminal_sweep: the generic ix_runs_trigger_id
+    # won). The competing trigger_id-leading indexes are therefore dropped for
+    # the span of the EXPLAIN so ix_runs_streak_engine is deterministically the
+    # only index that can serve the query. RESET runs in ``finally`` so a failed
+    # EXPLAIN never leaves the connection with seqscan disabled.
     explain_sql = (
         "EXPLAIN SELECT id FROM runs WHERE trigger_id = :tid "
         "AND status IN (__STATUSES__) AND completed_at IS NOT NULL "
@@ -761,15 +763,18 @@ async def test_streak_sql_uses_the_reshaped_index(
     async with db_engine.connect() as conn:
         await conn.execute(text("SET enable_seqscan = off"))
         try:
-            # Migration 0193 (FAR-583) added a competing partial index,
-            # ix_runs_org_completed_at_terminal_sweep, that the planner can
-            # prefer over the dedicated streak reshape index on the tiny seeded
-            # table (their cost estimates are near-identical at 5 rows). That
-            # makes this plan-based assertion flaky, so drop the competing index
-            # for the span of the EXPLAIN only. Postgres DDL is transactional,
-            # so ROLLBACK restores it and the rest of the integration session is
-            # unaffected (the DB is session-scoped across all integration tests).
+            # Drop every competing trigger_id-leading index for the span of the
+            # EXPLAIN only, so the purpose-built streak keyset is the sole index
+            # that can serve the query regardless of the planner's cost estimate
+            # on the tiny seeded table. The old partial sweep index
+            # (ix_runs_org_completed_at_terminal_sweep) was removed from the
+            # schema by migration 0215, so its DROP is a defensive no-op. Postgres
+            # DDL is transactional, so ROLLBACK restores every index and the
+            # session-scoped integration DB is left intact for later tests.
             await conn.execute(text("DROP INDEX IF EXISTS ix_runs_org_completed_at_terminal_sweep"))
+            await conn.execute(text("DROP INDEX IF EXISTS ix_runs_trigger_id"))
+            await conn.execute(text("DROP INDEX IF EXISTS ix_runs_trigger_id_created_at"))
+            await conn.execute(text("DROP INDEX IF EXISTS ix_runs_trigger_id_status"))
             plan = await conn.execute(
                 text(explain_sql),
                 {"tid": str(trigger_id), "cutoff": _now() - timedelta(days=2)},
@@ -780,6 +785,6 @@ async def test_streak_sql_uses_the_reshaped_index(
             await conn.execute(text("RESET enable_seqscan"))
     joined = "\n".join(rows)
     assert "Seq Scan" not in joined, f"streak query must be index-backed, not a Seq Scan:\n{joined}"
-    assert "ix_runs_streak_engine" in joined or "ix_runs_org_completed_at_terminal_sweep" in joined, (
-        f"streak query must use a purpose-built runs index:\n{joined}"
+    assert "ix_runs_streak_engine" in joined, (
+        f"streak query must use the purpose-built ix_runs_streak_engine index:\n{joined}"
     )
