@@ -18,7 +18,7 @@ import {
  * Runs against the REAL backend (staging/app); skips the local target. The
  * stage-board seam: the /runs table is FILTERED (search narrows to a
  * pipeline) and the run's DETAIL page renders the persisted record — trigger
- * actor, node progress chips and the input payload the run was started with.
+ * actor, the parked HITL gate and the input payload the run was started with.
  *
  * A parked manual-node run is used because it never self-completes, so the
  * rows state is stable for the whole inspection. The run is cancelled at the
@@ -70,10 +70,12 @@ test.describe('Real-stack journeys: runs search + run detail record', { tag: '@r
 
       // The detail page renders the persisted record...
       await page.goto(`/runs/${run.run_id}`)
-      // ...the per-node progress chips list the manual node by its label...
-      const chips = page.getByTestId('run-detail-node-progress')
-      await expect(chips).toBeVisible({ timeout: 30_000 })
-      await expect(page.getByText('E2E Human Input').first()).toBeVisible()
+      // ...the run is parked at its human gate, so the detail page renders the
+      // HITL gate card. The live node-progress strip is deliberately NOT
+      // asserted here: it renders only once a node reports telemetry/output,
+      // and a parked manual node has executed nothing yet (the Execution
+      // Trace section shows its empty state instead).
+      await expect(page.getByTestId('hitl-gate-card')).toBeVisible({ timeout: 30_000 })
       // ...the trigger actor records a real MANUAL trigger (persisted on
       // the run row, rendered from the backend values)...
       await expect(page.getByTestId('run-detail-trigger-actor')).toContainText(/manual/i)

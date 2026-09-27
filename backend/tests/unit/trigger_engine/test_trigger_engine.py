@@ -812,6 +812,9 @@ async def test_handle_webhook_success_no_hmac() -> None:
     run, te, _payload = result
     assert run is run_mock
     assert te.validation_result == "accepted"
+    # A delivery that created a run stamps the trigger's last-fired time so the
+    # trigger list reflects the real fire (cron/polling do the same).
+    assert isinstance(trigger.last_fired_at, datetime.datetime)
 
 
 async def test_handle_webhook_success_with_hmac() -> None:
