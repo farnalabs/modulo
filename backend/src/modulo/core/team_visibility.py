@@ -12,7 +12,7 @@ organisation, so they never produce a mismatch.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -168,7 +168,7 @@ async def _find_team_scope_mismatches[MismatchT](
     if not parsed_ids:
         return []
 
-    rows = (
+    rows: Sequence[Any] = (
         (
             await session.execute(
                 select(model).where(
