@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -74,5 +74,5 @@ class Evidence(Base, TimestampMixin):
         server_default=func.now(),
         nullable=False,
     )
-    producer_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    producer_type: Mapped[str] = mapped_column(Text(), nullable=False)
     producer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

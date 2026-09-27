@@ -32,6 +32,13 @@ _ORG_ISOLATION_POLICY = "organisation_id = nullif(current_setting('app.organisat
 
 _TABLE = "evidence"
 
+# Module-level tuple of org-scoped tables created by this migration.
+# The RLS coverage test (test_rls_coverage.py) detects tables via Style 2:
+# it imports migration modules and reads any module-level tuple/list whose
+# elements are all strings.  This tuple must contain every table that
+# receives ENABLE ROW LEVEL SECURITY below.
+_ORG_SCOPED_TABLES = (_TABLE,)
+
 _OWNER_TRANSFER_SQL = (
     "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') "
     "THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
@@ -41,6 +48,22 @@ _GRANT_SQL = (
     "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_app') "
     "THEN GRANT SELECT, INSERT, UPDATE, DELETE ON public.{table} TO modulo_app; END IF; END $$;"
 )
+
+
+def _enable_rls() -> None:
+    """Enable + FORCE RLS with the org-isolation policy on all new tables."""
+    for table in _ORG_SCOPED_TABLES:
+        # Step 1: ownership transfer to modulo_migrate.
+        op.execute(text(_OWNER_TRANSFER_SQL.format(table=table)))
+        # Step 2: enable RLS.
+        op.execute(text('ALTER TABLE public."' + table + '" ENABLE ROW LEVEL SECURITY'))
+        # Step 3: force RLS.
+        op.execute(text('ALTER TABLE public."' + table + '" FORCE ROW LEVEL SECURITY'))
+        # Step 4: org-isolation policy.
+        op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON public."' + table + '"'))
+        op.execute(
+            text('CREATE POLICY rls_org_isolation ON public."' + table + '" USING (' + _ORG_ISOLATION_POLICY + ")")
+        )
 
 
 def _is_postgres() -> bool:
@@ -126,15 +149,7 @@ def upgrade() -> None:
     )
 
     # Four-step RLS pattern (§3.1, mirroring 0250_eval_policy_gate).
-    # Step 1: ownership transfer to modulo_migrate.
-    op.execute(text(_OWNER_TRANSFER_SQL.format(table=_TABLE)))
-    # Step 2: enable RLS.
-    op.execute(text('ALTER TABLE public."' + _TABLE + '" ENABLE ROW LEVEL SECURITY'))
-    # Step 3: force RLS.
-    op.execute(text('ALTER TABLE public."' + _TABLE + '" FORCE ROW LEVEL SECURITY'))
-    # Step 4: org-isolation policy.
-    op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON public."' + _TABLE + '"'))
-    op.execute(text('CREATE POLICY rls_org_isolation ON public."' + _TABLE + '" USING (' + _ORG_ISOLATION_POLICY + ")"))
+    _enable_rls()
 
     # Grant DML to runtime role when the role exists.
     op.execute(text(_GRANT_SQL.format(table=_TABLE)))
