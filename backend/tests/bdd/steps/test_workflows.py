@@ -3,8 +3,9 @@
 import io
 import json
 import uuid
+from contextlib import ExitStack
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
@@ -600,8 +601,8 @@ def _response_has_name_conflicts(ctx: dict[str, Any]) -> None:
     assert "name_conflicts" in data, "Missing name_conflicts key"
 
 
-@given('a pipeline named "My Pipeline" already exists')
-def _pipeline_my_pipeline_exists() -> None:
+@given(parsers.parse('a pipeline named "{name}" already exists'))
+def _pipeline_named_already_exists(name: str) -> None:
     pass
 
 
@@ -629,12 +630,14 @@ def _name_conflicts_includes_pipeline(ctx: dict[str, Any]) -> None:
     assert len(pipeline_conflicts) > 0, "Expected at least one pipeline name conflict"
 
 
-@then('the suggested name is "My Pipeline (imported)"')
-def _suggested_name_is(ctx: dict[str, Any]) -> None:
+@then(parsers.parse('the suggested name is "{suggestion}"'))
+def _suggested_name_is(ctx: dict[str, Any], suggestion: str) -> None:
     data = ctx["response"].json()
     conflicts = data.get("name_conflicts", [])
-    suggestion = conflicts[0].get("suggested", "") if conflicts else ""
-    assert "imported" in suggestion, f"Expected suggestion containing 'imported', got '{suggestion}'"
+    pipeline_conflicts = [c for c in conflicts if c.get("type") == "pipeline"]
+    assert pipeline_conflicts and pipeline_conflicts[0].get("suggested") == suggestion, (
+        f"Expected suggested name '{suggestion}', got {conflicts}"
+    )
 
 
 @when("the user sends POST /api/v1/libraries/import/confirm with bundle_json")
@@ -830,6 +833,195 @@ def _response_status_400(ctx: dict[str, Any]) -> None:
     assert ctx["response"].status_code == 400, (
         f"Expected 400, got {ctx['response'].status_code}: {ctx['response'].text[:200]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# import.feature steps — real two-phase analyse + confirm contract
+#
+# The analyse phase runs the real ``_resolve_import_bundle`` orchestration
+# (name-conflict detection, per-schema/connector/backend resolution, warning
+# collection) with only the DB read seams patched; the confirm phase runs the
+# real route handler with only the DB materialisation seam patched. These were
+# previously pinned ``@awaiting-implementation`` because the drafts targeted a
+# dead wire shape (e.g. an Ed25519 check on ``/import/confirm``, which the
+# workflow-import path does not perform — signatures are verified on the
+# community-registry install path instead).
+# ---------------------------------------------------------------------------
+
+
+@when("the user runs the import analysis on a valid bundle")
+def _analyse_valid_bundle(client, ctx: dict[str, Any]) -> None:
+    with _patch_analyse_seams():
+        ctx["response"] = client.post(
+            "/api/v1/libraries/import/analyse",
+            json={"bundle": _make_sample_bundle()},
+        )
+    ctx["bundle_json"] = ctx["response"].json().get("bundle_json")
+
+
+@then('the connector binding is resolved to the local "filesystem" instance')
+def _connector_resolved_to_instance(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    connectors = data.get("resolved_connectors", [])
+    assert any(c.get("instance_id") == str(FILESYSTEM_CONNECTOR_ID) and c.get("instance_name") for c in connectors), (
+        f"Expected resolved filesystem instance, got {connectors}"
+    )
+
+
+@then('the schema reference is resolved to the local "PRD Input Schema" by abstract_name')
+def _schema_resolved_by_abstract_name(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    schemas = data.get("resolved_schemas", [])
+    assert any(s.get("schema_id") == str(SCHEMA_A_ID) for s in schemas), (
+        f"Expected PRD Input Schema resolved by abstract_name, got {schemas}"
+    )
+
+
+@then('the model backend is resolved to the local "claude-sonnet-4" model backend')
+def _mb_resolved_to_local(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    backends = data.get("resolved_model_backends", [])
+    assert any(mb.get("model_backend_id") == str(CLAUDE_SONNET_BACKEND_ID) for mb in backends), (
+        f"Expected claude-sonnet-4 model backend resolved, got {backends}"
+    )
+
+
+@when("the user confirms the import with the analysed bundle")
+def _confirm_analysed_bundle(client, ctx: dict[str, Any]) -> None:
+    bundle_json = ctx.get("bundle_json")
+    assert bundle_json, "No analysed bundle_json in context"
+    with patch("modulo.api.routes.library.materialize_import", new=AsyncMock()) as mock_materialize:
+        mock_materialize.return_value = {
+            "pipeline_id": str(PIPELINE_ID),
+            "pipeline_name": "My Pipeline",
+            "primitive_id": str(uuid.uuid4()),
+            "agent_count": 2,
+            "edge_count": 3,
+            "schema_count": 2,
+            "warnings": [],
+        }
+        ctx["materialize_mock"] = mock_materialize
+        ctx["response"] = client.post(
+            "/api/v1/libraries/import/confirm",
+            json={"bundle_json": bundle_json},
+        )
+
+
+@then("a new pipeline is created with the bundle's name")
+def _pipeline_created_with_bundle_name(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    assert data.get("status") == "imported", data
+    assert data.get("pipeline_name") == "My Pipeline", data
+    assert data.get("pipeline_id"), data
+    assert ctx["materialize_mock"].await_count == 1, "materialize_import was not awaited"
+
+
+@given("a bundle whose bundle_json is not valid JSON")
+def _tampered_bundle(ctx: dict[str, Any]) -> None:
+    ctx["tampered_bundle_json"] = '{"format_version": "1" not json'
+
+
+@when("the user attempts the import of the tampered bundle")
+def _confirm_tampered_bundle(client, ctx: dict[str, Any]) -> None:
+    with patch("modulo.api.routes.library.materialize_import", new=AsyncMock()) as mock_materialize:
+        ctx["materialize_mock"] = mock_materialize
+        ctx["response"] = client.post(
+            "/api/v1/libraries/import/confirm",
+            json={"bundle_json": ctx["tampered_bundle_json"]},
+        )
+
+
+@then("the error message mentions the invalid bundle JSON")
+def _invalid_bundle_json_error(ctx: dict[str, Any]) -> None:
+    assert "Invalid bundle JSON" in ctx["response"].text, ctx["response"].text[:300]
+
+
+@then("no pipeline entity is created")
+def _no_pipeline_entity_created(ctx: dict[str, Any]) -> None:
+    assert ctx["materialize_mock"].await_count == 0, "materialize_import was unexpectedly awaited"
+
+
+@given(parsers.parse('the organisation has {count:d} "filesystem" connector instances'))
+def _org_has_n_filesystem_instances(count: int) -> None:
+    assert count >= 1
+
+
+@then("the connector conflict is resolved to a single local instance")
+def _connector_conflict_resolved_to_single(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    connectors = data.get("resolved_connectors", [])
+    resolved = [c for c in connectors if c.get("instance_id")]
+    assert len(resolved) == 1, f"Expected a single resolved filesystem instance, got {connectors}"
+
+
+@given('the bundle embeds a schema with abstract_name "prd-input"')
+def _bundle_embeds_prd_schema(ctx: dict[str, Any]) -> None:
+    ctx["bundle_json"] = _make_sample_bundle()
+
+
+@given("the local schema has a different field structure than the bundle")
+def _local_schema_structurally_different() -> None:
+    pass
+
+
+@when(parsers.parse('the user runs the import analysis on a bundle named "{name}"'))
+def _analyse_bundle_named(client, ctx: dict[str, Any], name: str) -> None:
+    bundle = _make_sample_bundle()
+    bundle["pipeline"]["name"] = name
+    with _patch_analyse_seams(existing_pipeline_names={name}):
+        ctx["response"] = client.post(
+            "/api/v1/libraries/import/analyse",
+            json={"bundle": bundle},
+        )
+
+
+_ANALYSE_SEAM_TARGETS = (
+    "modulo.api.routes.library.resolve_schema",
+    "modulo.api.routes.library.resolve_connector_type",
+    "modulo.api.routes.library.resolve_model_backend",
+    "modulo.api.routes.library.get_existing_pipeline_names",
+    "modulo.api.routes.library.get_existing_agent_names",
+)
+
+
+def _analyse_seam_mocks(*, existing_pipeline_names: set[str] | None = None) -> dict[str, MagicMock]:
+    """Return the deterministic DB-read seam mocks the analyse route needs.
+
+    Every resolution helper is awaited by the real ``_resolve_import_bundle``
+    orchestration, so each seam is an ``AsyncMock`` whose awaited call resolves
+    to its deterministic result.
+    """
+    return {
+        "resolve_schema": AsyncMock(return_value={"schema_id": str(SCHEMA_A_ID), "version": "1.0", "warning": None}),
+        "resolve_connector_type": AsyncMock(
+            return_value={
+                "instance_id": str(FILESYSTEM_CONNECTOR_ID),
+                "instance_name": "filesystem",
+                "warning": None,
+            }
+        ),
+        "resolve_model_backend": AsyncMock(
+            return_value={"model_backend_id": str(CLAUDE_SONNET_BACKEND_ID), "warning": None}
+        ),
+        "get_existing_pipeline_names": AsyncMock(return_value=set(existing_pipeline_names or set())),
+        "get_existing_agent_names": AsyncMock(return_value=set()),
+    }
+
+
+def _patch_analyse_seams(*, existing_pipeline_names: set[str] | None = None) -> ExitStack:
+    """Enter the five DB read seams of the analyse route for the request that follows.
+
+    ``with```-compatible because ``ExitStack.__enter__`` returns the stack; the
+    mocks are available via ``stack.enter_context(patch(target, new=...))`` under
+    the corresponding keys of ``_analyse_seam_mocks``. Everything else in the
+    route — the ``_resolve_import_bundle`` orchestration, name-conflict
+    detection, warning collection and response serialisation — runs for real.
+    """
+    stack = ExitStack()
+    mocks = _analyse_seam_mocks(existing_pipeline_names=existing_pipeline_names)
+    for target, mock in zip(_ANALYSE_SEAM_TARGETS, mocks.values(), strict=True):
+        stack.enter_context(patch(target, new=mock))
+    return stack
 
 
 # ============================================================================
