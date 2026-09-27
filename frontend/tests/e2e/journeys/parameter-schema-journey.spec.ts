@@ -85,14 +85,14 @@ test.describe('Real-stack journeys: parameter schema + set', { tag: '@regression
 
       // Persisted: the backend lists the set with the exact stored value.
       await expect.poll(async () => {
-        const res = await apiFetch<{ items: Array<{ id: string; name: string; values: Record<string, unknown> }> }>(
+        const res = await apiFetch<Array<{ id: string; name: string; values: Record<string, unknown> }>>(
           apiBase,
           token,
           'GET',
           `/api/v1/parameter-schemas/${schemaId}/sets`,
         )
         if (res.status !== 200) return null
-        return (res.body?.items ?? []).find(
+        return (res.body ?? []).find(
           (s) => s.name === setName && s.values?.[paramName] === 'e2e-journey-value',
         ) ?? null
       }, { timeout: 30_000, intervals: [1_000, 2_000, 5_000] }).toBeTruthy()
@@ -104,13 +104,13 @@ test.describe('Real-stack journeys: parameter schema + set', { tag: '@regression
       await expect(setDeleteButton).toBeVisible()
       await setDeleteButton.click()
       await expect.poll(async () => {
-        const res = await apiFetch<{ items: Array<{ id: string; name: string }> }>(
+        const res = await apiFetch<Array<{ id: string; name: string }>>(
           apiBase,
           token,
           'GET',
           `/api/v1/parameter-schemas/${schemaId}/sets`,
         )
-        return (res.body?.items ?? []).some((s) => s.name === setName)
+        return (res.body ?? []).some((s) => s.name === setName)
       }, { timeout: 30_000, intervals: [1_000, 2_000, 5_000] }).toBe(false)
 
       // Back to the schema list and delete through the row's real flow.

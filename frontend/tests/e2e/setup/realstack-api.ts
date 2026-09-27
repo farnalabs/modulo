@@ -651,17 +651,13 @@ export interface ParameterSetItem {
   values: Record<string, unknown>
 }
 
-interface ParameterSetListResponse {
-  items: ParameterSetItem[]
-}
-
-/** List a parameter schema's sets (admin). */
-export async function listParameterSets(apiBase: string, token: string, schemaId: string): Promise<ParameterSetListResponse> {
-  const res = await apiFetch<ParameterSetListResponse>(apiBase, token, 'GET', `/api/v1/parameter-schemas/${schemaId}/sets`)
+/** List a parameter schema's sets (admin). The endpoint returns a bare array. */
+export async function listParameterSets(apiBase: string, token: string, schemaId: string): Promise<ParameterSetItem[]> {
+  const res = await apiFetch<ParameterSetItem[]>(apiBase, token, 'GET', `/api/v1/parameter-schemas/${schemaId}/sets`)
   if (res.status !== 200) {
     throw new Error(`[realstack] parameter set list failed: ${res.status} ${res.text.slice(0, 300)}`)
   }
-  return res.body ?? { items: [] }
+  return res.body ?? []
 }
 
 /** Best-effort parameter schema deletion (page 1 lists + clean 200/404). */
