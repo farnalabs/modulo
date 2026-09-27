@@ -721,7 +721,7 @@ class TestC15EvaluateResultPassing:
 # ---------------------------------------------------------------------------
 
 
-class TestC16HitlGateEvalPersistsBeforeRaise:
+class TestC16HitlReviewEvalPersistsBeforeRaise:
     """C16: HITL gate-eval loop persists block result before EvalBlockedError."""
 
     async def test_c16_via_run_gate_evals(self) -> None:
@@ -752,7 +752,7 @@ class TestC16HitlGateEvalPersistsBeforeRaise:
                     state=state,
                     eval_definitions=[eval_def],
                     node_type_map=None,
-                    gate_id="gate-1",
+                    review_id="gate-1",
                     session_factory=factory,
                     org_id=org_id,
                 )
@@ -766,9 +766,9 @@ class TestC16HitlGateEvalPersistsBeforeRaise:
         assert len(session.added) == 1
         assert session.added[0].passed is False
 
-    async def test_c16_via_make_hitl_gate_fn(self) -> None:
-        """Exercise make_hitl_gate_fn with eval_definitions — the full HITL path."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+    async def test_c16_via_make_hitl_review_fn(self) -> None:
+        """Exercise make_hitl_review_fn with eval_definitions — the full HITL path."""
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         eval_def = _eval_def(
             name="gate-block-fn",
@@ -778,13 +778,13 @@ class TestC16HitlGateEvalPersistsBeforeRaise:
         session = _make_session()
         factory = _session_factory(session)
         org_id = uuid4()
-        node_fn = make_hitl_gate_fn(
-            {"gate_id": "g"},
+        node_fn = make_hitl_review_fn(
+            {"review_id": "g"},
             eval_definitions=[eval_def],
             session_factory=factory,
             org_id=org_id,
         )
-        state: dict[str, Any] = {"text": "fail", "artifacts": [], "_hitl_gates": [], "_run_id": uuid4()}
+        state: dict[str, Any] = {"text": "fail", "artifacts": [], "_hitl_reviews": [], "_run_id": uuid4()}
         _patch_rls()  # patch eval_persist_order where set_rls_org/ctx are called
 
         try:
@@ -815,22 +815,22 @@ class TestC17HitlResumeNoDuplicateRows:
     async def test_c17_resume_skips_eval_loop(self) -> None:
         """A resumed gate (state has _hitl_decision) returns immediately
         without calling _run_gate_evals, so no rows are created."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         eval_def = _eval_def(
             name="should-not-run",
             pattern="pass",
             failure_behaviour="block",
         )
-        node_fn = make_hitl_gate_fn(
-            {"gate_id": "g1"},
+        node_fn = make_hitl_review_fn(
+            {"review_id": "g1"},
             eval_definitions=[eval_def],
         )
-        # Simulate a resume: _hitl_decision is set with matching gate_id
+        # Simulate a resume: _hitl_decision is set with matching review_id
         state: dict[str, Any] = {
             "artifacts": [],
-            "_hitl_decision": {"action": "approved", "gate_id": "g1"},
-            "_hitl_gates": [{"gate_id": "g1"}],
+            "_hitl_decision": {"action": "approved", "review_id": "g1"},
+            "_hitl_reviews": [{"review_id": "g1"}],
         }
 
         result = await node_fn(state)
@@ -838,9 +838,9 @@ class TestC17HitlResumeNoDuplicateRows:
         assert result["artifacts"][0]["result"] == "approved"
         # The resume path returns before _run_gate_evals — no DB interaction.
         # We verify this by asserting the eval was NOT computed (no session calls).
-        # The structural guard is in _hitl_gate_resume_result (node_runner.py:4187):
+        # The structural guard is in _hitl_review_resume_result (node_runner.py:4187):
         # ``if decision is None: return (False, None)`` — when a decision is
-        # present and matches the gate_id, it returns immediately without
+        # present and matches the review_id, it returns immediately without
         # reaching the eval loop.
 
 

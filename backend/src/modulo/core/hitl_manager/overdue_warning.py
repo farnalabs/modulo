@@ -82,7 +82,7 @@ async def get_overdue_claims(
         {
             "id": str(claim.id),
             "pipeline_run_id": str(claim.run_id),
-            "node_id": claim.gate_id,
+            "node_id": claim.review_id,
             "claimed_at": claim.claimed_at.isoformat(),
             "age_hours": round(max((now - claim.claimed_at).total_seconds(), 0.0) / _SECONDS_PER_HOUR, 1),
             "status": "escalated" if claim.claimed_at < escalation_cutoff else "warning",
@@ -107,7 +107,7 @@ async def dispatch_overdue_notifications(
     ``notifier.dispatch_event`` the claim's ``overdue_notified_at`` is stamped
     in a follow-up transaction, keeping the sweep idempotent.
 
-    Returns the list of dispatched claim entries (claim_id, run_id, gate_id,
+    Returns the list of dispatched claim entries (claim_id, run_id, review_id,
     pipeline_name, minutes_overdue).
     """
     if warning_hours < 0:
@@ -207,7 +207,7 @@ async def _fetch_overdue_entries(
             {
                 "claim_id": claim.id,
                 "run_id": claim.run_id,
-                "gate_id": claim.gate_id,
+                "review_id": claim.review_id,
                 "pipeline_name": pipeline_name,
                 "minutes_overdue": int((now - claim.claimed_at).total_seconds() // 60),
             }
@@ -236,7 +236,7 @@ async def _dispatch_overdue_entries(
                 event_type=EVENT_HITL_OVERDUE,
                 payload={
                     "run_id": str(entry["run_id"]),
-                    "gate_id": entry["gate_id"],
+                    "review_id": entry["review_id"],
                     "pipeline_name": entry["pipeline_name"],
                     "minutes_overdue": entry["minutes_overdue"],
                 },
@@ -248,7 +248,7 @@ async def _dispatch_overdue_entries(
         except Exception:
             _log.exception(
                 "hitl.overdue_job.notification_failed",
-                extra={"gate_id": entry["gate_id"], "run_id": str(entry["run_id"])},
+                extra={"review_id": entry["review_id"], "run_id": str(entry["run_id"])},
             )
     return dispatched
 

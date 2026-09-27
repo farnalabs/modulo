@@ -7,7 +7,7 @@ bypasses ``finalize_cost``: the SAQ task_failure hook (``saq_hooks``), the
 stale-run sweep terminalizers (``never_dispatched`` / ``capacity_timeout`` /
 ``worker_lost`` in ``pipeline_execution``), the ``dispatcher_reconcile``
 terminalizers (``executor_superseded`` / ``claim_cap_exhausted`` /
-``dispatch_failed`` / ``hitl_gate_expired``) and ``fail_run_terminal``
+``dispatch_failed`` / ``hitl_review_expired``) and ``fail_run_terminal``
 (``executor_stalled`` / ``executor_heartbeat_lost`` / ``executor_failed`` /
 ``executor_setup_failed``).
 Each compensating write runs in its OWN separate session AFTER the run is

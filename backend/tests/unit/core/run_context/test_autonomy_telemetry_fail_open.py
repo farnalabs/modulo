@@ -71,7 +71,7 @@ async def test_emit_payload_construction_failure_is_fail_open(monkeypatch: pytes
         _session_factory,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         autonomy_level="manual_approval",
         gate_outcome="fired",
     )

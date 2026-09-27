@@ -4,7 +4,7 @@ Covers ``_weakening_types`` detecting response_contract changes as gate
 weakening.
 """
 
-from modulo.db.crud.hitl_gate_guard import _weakening_types
+from modulo.db.crud.hitl_review_guard import _weakening_types
 
 
 class TestResponseContractWeakening:

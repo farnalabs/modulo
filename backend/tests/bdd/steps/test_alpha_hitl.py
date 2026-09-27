@@ -24,14 +24,14 @@ def i_am_approver_in_org(org: str, request):
 @given(parsers.parse('a run is waiting at gate "{gate}"'))
 def run_waiting_at_gate(gate: str, request):
     request.node._run_id = uuid.uuid4()
-    request.node._gate_id = gate
+    request.node._review_id = gate
     request.node._claim_token = "test_claim_token"
 
 
 @given(parsers.parse('I have claimed gate "{gate}"'))
 def i_have_claimed(gate: str, request):
     request.node._claim_token = "test_claim_token"
-    request.node._gate_id = gate
+    request.node._review_id = gate
 
 
 @when(parsers.parse('I POST /api/runs/{run_id}/approve with claim_token and decision "{decision}"'))

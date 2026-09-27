@@ -632,7 +632,7 @@ def test_hitl_eval_condition_uses_source_node_id_fallback():
             "source_node_id": "a",
             "target": "b",
             "type": "normal",
-            "hitl_gate_config": {"eval_condition": {"threshold": 0.5, "operator": "gte"}},
+            "hitl_review_config": {"eval_condition": {"threshold": 0.5, "operator": "gte"}},
         },
         result,
     )

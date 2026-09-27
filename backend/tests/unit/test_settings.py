@@ -135,3 +135,38 @@ def test_instance_identity_reads_env_at_call_time(monkeypatch: pytest.MonkeyPatc
     assert settings_mod.resolve_instance_identity() == "first-host"
     monkeypatch.setenv("HOSTNAME", "second-host")
     assert settings_mod.resolve_instance_identity() == "second-host"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1104 HITL review cancel-grace transition
+# ---------------------------------------------------------------------------
+
+
+def test_hitl_cancel_grace_falls_back_to_deprecated_env(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When only the deprecated ``HITL_GATE_CANCEL_GRACE_SECONDS`` is set, its
+    value is used and a deprecation warning is emitted."""
+    monkeypatch.delenv("HITL_REVIEW_CANCEL_GRACE_SECONDS", raising=False)
+    monkeypatch.setenv("HITL_GATE_CANCEL_GRACE_SECONDS", "4242")
+
+    with caplog.at_level(logging.WARNING):
+        settings = _make()
+
+    assert settings.hitl_review_cancel_grace_seconds == 4242
+    assert "HITL_GATE_CANCEL_GRACE_SECONDS is deprecated" in caplog.text
+
+
+def test_hitl_cancel_grace_new_env_wins_over_deprecated(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The new ``HITL_REVIEW_CANCEL_GRACE_SECONDS`` takes precedence and no
+    deprecation warning is emitted when both are present."""
+    monkeypatch.setenv("HITL_REVIEW_CANCEL_GRACE_SECONDS", "900")
+    monkeypatch.setenv("HITL_GATE_CANCEL_GRACE_SECONDS", "4242")
+
+    with caplog.at_level(logging.WARNING):
+        settings = _make()
+
+    assert settings.hitl_review_cancel_grace_seconds == 900
+    assert "deprecated" not in caplog.text

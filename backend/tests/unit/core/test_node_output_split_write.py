@@ -109,7 +109,7 @@ def test_split_merge_mixed_segment_lockstep_and_values() -> None:
         "node-gate": {
             "artifacts": [
                 {
-                    "node_id": "hitl_gate_a_b",
+                    "node_id": "hitl_review_a_b",
                     "status": "interrupted",
                     "result": "approved",
                     "human_data": {"action": "approved"},
@@ -120,7 +120,7 @@ def test_split_merge_mixed_segment_lockstep_and_values() -> None:
     type_map = {
         "node-sb": "sandbox_agent",
         "node-ag": "agent",
-        "hitl_gate_a_b": "gate",
+        "hitl_review_a_b": "gate",
     }
     outputs, telemetry = _split_merge_outputs(None, None, segment, type_map, run_id="run-1")
     assert set(outputs) == set(segment)  # lockstep on both columns

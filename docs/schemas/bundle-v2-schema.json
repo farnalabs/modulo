@@ -179,7 +179,7 @@
                 "type": "string",
                 "enum": ["normal", "reject", "conditional"]
               },
-              "hitl_gate_config": {
+              "hitl_review_config": {
                 "oneOf": [
                   { "type": "null" },
                   {

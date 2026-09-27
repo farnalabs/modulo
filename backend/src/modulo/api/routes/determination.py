@@ -76,7 +76,7 @@ class DraftEdgeResponse(BaseModel):
     source: str
     target: str
     edge_type: str = "normal"
-    hitl_gate: bool = False
+    hitl_review: bool = False
 
 
 class AutomationSuggestion(BaseModel):
@@ -281,7 +281,7 @@ async def create_determination_draft(
                     source=e.source,
                     target=e.target,
                     edge_type=e.edge_type,
-                    hitl_gate=e.hitl_gate,
+                    hitl_review=e.hitl_review,
                 )
                 for e in draft.edges
             ],

@@ -26,8 +26,8 @@ from sqlalchemy.pool import NullPool
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.base import PageResult, apply_updates
-from modulo.db.crud.hitl_gate_guard import (
-    HitlGateWeakeningDenied,
+from modulo.db.crud.hitl_review_guard import (
+    HitlReviewWeakeningDenied,
     apply_gated_edge_diff,
     build_gate_diff_payload,
     denial_detail,
@@ -866,7 +866,7 @@ async def _clone_edges(
     """Copy the source's first-class edges onto the clone.
 
     Returns the number of edges copied. Any gated edge (non-None
-    ``hitl_gate_config``) is collected and, if at least one exists, emitted as a
+    ``hitl_review_config``) is collected and, if at least one exists, emitted as a
     single batched ``edge_created_with_gate`` audit event after the flush.
     """
     _log.info("Copying edges for pipeline %s -> %s", source_id, cloned_id)
@@ -879,12 +879,12 @@ async def _clone_edges(
             target_node_id=edge["target_node_id"],
             edge_type=edge["edge_type"],
             condition_expression=edge.get("condition_expression"),
-            hitl_gate_config=copy.deepcopy(edge["hitl_gate_config"]),
+            hitl_review_config=copy.deepcopy(edge["hitl_review_config"]),
             source_port=edge.get("source_port") or "out",
             target_port=edge.get("target_port") or "in",
         )
         session.add(cloned_edge)
-        if edge["hitl_gate_config"] is not None:
+        if edge["hitl_review_config"] is not None:
             gated_cloned_edges.append(cloned_edge)
     await session.flush()
     if gated_cloned_edges:
@@ -964,7 +964,7 @@ def _edge_to_plain_dict(e: PipelineEdge) -> dict[str, Any]:
         "edge_type": e.edge_type,
         "source_port": e.source_port or "out",
         "target_port": e.target_port or "in",
-        "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+        "hitl_review_config": copy.deepcopy(e.hitl_review_config),
         "condition_expression": getattr(e, "condition_expression", None),
     }
 
@@ -1150,13 +1150,13 @@ def _preserve_omitted_gate_config(
     edge: dict[str, Any],
     old_by_key: dict[tuple[str, str, str], Any],
 ) -> Any:
-    """Resolve the ``hitl_gate_config`` to persist for a proposed edge.
+    """Resolve the ``hitl_review_config`` to persist for a proposed edge.
 
-    Mirrors ``hitl_gate_guard._normalize_edge`` presence semantics: when the
-    client omits the ``hitl_gate_config`` key (or sends
-    ``hitl_gate_config_present=False``) for an edge whose topology key matches
+    Mirrors ``hitl_review_guard._normalize_edge`` presence semantics: when the
+    client omits the ``hitl_review_config`` key (or sends
+    ``hitl_review_config_present=False``) for an edge whose topology key matches
     a pre-existing gated edge, the stored value is preserved; for an edge with
-    no prior gate the omission persists ``None``. Any ``hitl_gate_config`` value
+    no prior gate the omission persists ``None``. Any ``hitl_review_config`` value
     carried alongside an omission signal is ignored, exactly as the guard
     ignores it — a client cannot sneak a gate value past an explicit
     ``present=False``. The delete+reinsert write path must honour the guard's
@@ -1164,9 +1164,9 @@ def _preserve_omitted_gate_config(
     — otherwise a client that simply omits the key would silently wipe the
     gate with zero audit.
     """
-    present = edge.get("hitl_gate_config_present", "hitl_gate_config" in edge)
+    present = edge.get("hitl_review_config_present", "hitl_review_config" in edge)
     if present:
-        return edge.get("hitl_gate_config")
+        return edge.get("hitl_review_config")
     key = (
         str(edge["source_node_id"]),
         str(edge["target_node_id"]),
@@ -1231,7 +1231,7 @@ async def replace_pipeline_graph(
     to False with no live-role query. For ``"rest"`` with ``account_id`` the
     caller's live org role is re-read under the lock (fail-closed on DB error,
     no retry). A gate-weakening write by a non-privileged caller raises
-    ``HitlGateWeakeningDenied`` before the delete/insert executes.
+    ``HitlReviewWeakeningDenied`` before the delete/insert executes.
 
     FAR-309 PR A review: the guardrail-binding strip guard
     (``enforce_guardrail_binding_strip``) runs here too, under the same row
@@ -1269,7 +1269,7 @@ async def replace_pipeline_graph(
             "target_node_id": str(e.target_node_id),
             "edge_type": e.edge_type,
             "condition_expression": getattr(e, "condition_expression", None),
-            "hitl_gate_config": copy.deepcopy(e.hitl_gate_config),
+            "hitl_review_config": copy.deepcopy(e.hitl_review_config),
             "source_port": getattr(e, "source_port", None) or "out",
             "target_port": getattr(e, "target_port", None) or "in",
         }
@@ -1303,7 +1303,7 @@ async def replace_pipeline_graph(
     )
     all_weakened = (*diff.weakened_edges, *diff.weakened_nodes)
     if diff.denied:
-        raise HitlGateWeakeningDenied(
+        raise HitlReviewWeakeningDenied(
             reason_code=diff.reason_code or "insufficient-role",
             correlation_keys=[w.correlation_key for w in all_weakened],
             weakening_types=sorted({t for w in all_weakened for t in w.weakening_types}),
@@ -1314,7 +1314,7 @@ async def replace_pipeline_graph(
         await append_audit_event(
             session,
             org_id=org_id,
-            event_type="hitl_gate_removed",
+            event_type="hitl_review_removed",
             actor_user_id=account_id,
             resource_type="pipeline",
             resource_id=pipeline_id,
@@ -1327,9 +1327,9 @@ async def replace_pipeline_graph(
     pipeline.graph_nodes_json = nodes
     await session.execute(delete(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
     old_by_key = {
-        (str(e["source_node_id"]), str(e["target_node_id"]), str(e["edge_type"])): e["hitl_gate_config"]
+        (str(e["source_node_id"]), str(e["target_node_id"]), str(e["edge_type"])): e["hitl_review_config"]
         for e in old_edges
-        if e.get("hitl_gate_config") is not None
+        if e.get("hitl_review_config") is not None
     }
     # Coerce edge id/source/target to uuid.UUID objects. The REST Pydantic path
     # already does this, but MCP passes raw dicts with string ids — and SQLAlchemy's
@@ -1346,7 +1346,7 @@ async def replace_pipeline_graph(
             target_node_id=uuid.UUID(str(edge["target_node_id"])),
             edge_type=edge["edge_type"],
             condition_expression=edge.get("condition_expression"),
-            hitl_gate_config=_preserve_omitted_gate_config(edge, old_by_key),
+            hitl_review_config=_preserve_omitted_gate_config(edge, old_by_key),
             source_port=edge.get("source_port") or "out",
             target_port=edge.get("target_port") or "in",
         )

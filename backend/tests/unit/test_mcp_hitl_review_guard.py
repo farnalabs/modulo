@@ -47,7 +47,7 @@ class _EdgeRow:
         self.source_node_id = uuid.UUID(_NODE_A)
         self.target_node_id = uuid.UUID(_NODE_B)
         self.edge_type = "normal"
-        self.hitl_gate_config = dict(_GATE)
+        self.hitl_review_config = dict(_GATE)
 
 
 @pytest.fixture(autouse=True)
@@ -109,8 +109,8 @@ def _weakening_edge_payload() -> list[dict]:
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": {**_GATE, "human_only": False},
-            "hitl_gate_config_present": True,
+            "hitl_review_config": {**_GATE, "human_only": False},
+            "hitl_review_config_present": True,
         }
     ]
 
@@ -124,11 +124,11 @@ async def test_mcp_update_pipeline_graph_weakening_denied(monkeypatch: pytest.Mo
 
     result = await update_pipeline_graph(pipeline_id=_PIPELINE, nodes=[], edges=_weakening_edge_payload())
 
-    assert result["error"] == "hitl_gate_removal_denied", result
+    assert result["error"] == "hitl_review_removal_denied", result
     assert result["reason_code"] == "mcp-weakening-not-permitted"
     assert result["affected_edges"][0]["source_node_id"] == _NODE_A
     audit.assert_awaited_once()
-    assert audit.call_args.kwargs["event_type"] == "hitl_gate_removal_denied"
+    assert audit.call_args.kwargs["event_type"] == "hitl_review_removal_denied"
     assert audit.call_args.kwargs["payload_json"]["caller_type"] == "mcp"
     assert audit.call_args.kwargs["payload_json"]["denied"] is True
 
@@ -141,7 +141,7 @@ async def test_mcp_structural_edge_deletion_denied(monkeypatch: pytest.MonkeyPat
 
     result = await update_pipeline_graph(pipeline_id=_PIPELINE, nodes=[], edges=[])
 
-    assert result["error"] == "hitl_gate_removal_denied"
+    assert result["error"] == "hitl_review_removal_denied"
     assert result["reason_code"] == "mcp-weakening-not-permitted"
 
 
@@ -152,7 +152,7 @@ async def test_mcp_non_weakening_graph_write_allowed(monkeypatch: pytest.MonkeyP
     _ctx_role.set("operator")
     # Old edge has no gate -> nothing to weaken.
     old = _EdgeRow()
-    old.hitl_gate_config = None
+    old.hitl_review_config = None
     _session, audit = _patch_session_and_audit(monkeypatch, old_edge=old)
 
     result = await update_pipeline_graph(
@@ -164,8 +164,8 @@ async def test_mcp_non_weakening_graph_write_allowed(monkeypatch: pytest.MonkeyP
                 "source_node_id": _NODE_A,
                 "target_node_id": _NODE_B,
                 "edge_type": "normal",
-                "hitl_gate_config": None,
-                "hitl_gate_config_present": True,
+                "hitl_review_config": None,
+                "hitl_review_config_present": True,
             }
         ],
     )
@@ -184,5 +184,5 @@ async def test_mcp_denial_audit_never_masked_by_audit_failure(monkeypatch: pytes
 
     result = await update_pipeline_graph(pipeline_id=_PIPELINE, nodes=[], edges=_weakening_edge_payload())
 
-    assert result["error"] == "hitl_gate_removal_denied"
+    assert result["error"] == "hitl_review_removal_denied"
     assert result["reason_code"] == "mcp-weakening-not-permitted"

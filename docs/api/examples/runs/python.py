@@ -132,7 +132,7 @@ def main():
         gates = resp.json().get("gates", [])
         print(f"  {len(gates)} pending gate(s)")
         for g in gates:
-            print(f"    - {g['gate_id']} (node: {g.get('node_id', 'N/A')})")
+            print(f"    - {g['review_id']} (node: {g.get('node_id', 'N/A')})")
     else:
         print(f"  Could not fetch gates ({resp.status_code})")
 

@@ -38,7 +38,7 @@ from modulo.api.mcp_server import (
     list_trigger_events,
     list_triggers,
     query_analytics,
-    resource_hitl_gate,
+    resource_hitl_review,
     resource_pipeline_detail,
     resource_pipeline_runs,
     resource_pipeline_snapshot_detail,
@@ -655,7 +655,7 @@ class TestListPendingHitlTeamScope(_AuthContext):
             result = await list_pending_hitl()
 
         assert result["total"] == 0
-        assert not result["gates"]
+        assert not result["reviews"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_pending_hitl_org_wide_key_no_team_filter(self, mock_validate_auth: AsyncMock) -> None:
@@ -811,7 +811,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
         ):
             mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
             mock_session.return_value = _make_session_context(session)
-            result = await review_hitl(run_id=str(run_id), gate_id="gate-1", action="claim")
+            result = await review_hitl(run_id=str(run_id), review_id="gate-1", action="claim")
 
         assert result["error"] == "team_boundary_violation"
         mock_manager_cls.return_value.claim.assert_not_called()
@@ -835,7 +835,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
         ):
             mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
             mock_session.return_value = _make_session_context(session)
-            result = await review_hitl(run_id=str(run_id), gate_id="gate-1", action="approve", claim_token="tok")
+            result = await review_hitl(run_id=str(run_id), review_id="gate-1", action="approve", claim_token="tok")
 
         assert result["error"] == "team_boundary_violation"
         mock_manager_cls.return_value.approve.assert_not_called()
@@ -859,7 +859,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
         ):
             mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=None)
             mock_session.return_value = _make_session_context(session)
-            result = await review_hitl(run_id=str(run_id), gate_id="gate-1", action="claim")
+            result = await review_hitl(run_id=str(run_id), review_id="gate-1", action="claim")
 
         assert result["error"] == "team_boundary_violation"
         mock_manager_cls.return_value.claim.assert_not_called()
@@ -886,7 +886,7 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
             mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_A)
             mock_session.return_value = _make_session_context(session)
             mock_manager_cls.return_value.claim = AsyncMock(return_value=claimed)
-            result = await review_hitl(run_id=str(run_id), gate_id="gate-1", action="claim")
+            result = await review_hitl(run_id=str(run_id), review_id="gate-1", action="claim")
 
         # This class isolates team-scope enforcement; the human_only gate is
         # patched out so the test does not depend on the snapshot-graph resolver
@@ -1150,7 +1150,7 @@ class TestResourceTeamScope(_AuthContext):
         assert "team_boundary_violation" in result
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_resource_hitl_gate_blocked_for_other_teams_run(self, mock_validate_auth: AsyncMock) -> None:
+    async def test_resource_hitl_review_blocked_for_other_teams_run(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
         gate = MagicMock()
@@ -1166,7 +1166,7 @@ class TestResourceTeamScope(_AuthContext):
         ):
             mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
             mock_session.return_value = _make_session_context(session)
-            result = await resource_hitl_gate(run_id=str(run_id), gate_id="gate-1")
+            result = await resource_hitl_review(run_id=str(run_id), review_id="gate-1")
 
         assert "team_boundary_violation" in result
 

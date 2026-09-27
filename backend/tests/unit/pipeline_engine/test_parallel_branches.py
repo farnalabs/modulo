@@ -392,8 +392,8 @@ async def _gate_branch(state: dict[str, Any]) -> dict[str, Any]:
     decision = state.get("_hitl_decision")
     if decision is not None:
         return {"artifacts": [{"node_id": "gate-b", "status": "resumed", "action": decision.get("action")}]}
-    state["_hitl_gates"] = list(state.get("_hitl_gates") or [])
-    decision = interrupt({"gate_id": "gate-b"})
+    state["_hitl_reviews"] = list(state.get("_hitl_reviews") or [])
+    decision = interrupt({"review_id": "gate-b"})
     return await _gate_branch({**state, "_hitl_decision": decision})
 
 
@@ -409,7 +409,11 @@ class TestHitlInterplay:
 
         thread = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread}}
-        initial: dict[str, Any] = {"run_context": {"cancelled": False, "input": {}}, "artifacts": [], "_hitl_gates": []}
+        initial: dict[str, Any] = {
+            "run_context": {"cancelled": False, "input": {}},
+            "artifacts": [],
+            "_hitl_reviews": [],
+        }
 
         result = await compiled.ainvoke(initial, config)
         # Interrupt surfaced via __interrupt__ in returned state (langgraph 1.x).
@@ -561,7 +565,11 @@ class TestParallelHitlSibling:
 
         thread = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread}}
-        initial: dict[str, Any] = {"run_context": {"cancelled": False, "input": {}}, "artifacts": [], "_hitl_gates": []}
+        initial: dict[str, Any] = {
+            "run_context": {"cancelled": False, "input": {}},
+            "artifacts": [],
+            "_hitl_reviews": [],
+        }
 
         interrupted = await compiled.ainvoke(initial, config)
         assert interrupted.get("__interrupt__"), "expected a HITL interrupt in the gate branch"

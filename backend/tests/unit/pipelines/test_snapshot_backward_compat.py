@@ -66,8 +66,8 @@ _OLD_FORMAT_WITH_GATES: dict[str, Any] = {
             "source": "start",
             "target": "end",
             "type": "normal",
-            "hitl_gate_config": {
-                "gate_id": "review-gate",
+            "hitl_review_config": {
+                "review_id": "review-gate",
                 "human_only": False,
             },
         },
@@ -75,14 +75,14 @@ _OLD_FORMAT_WITH_GATES: dict[str, Any] = {
 }
 
 
-def test_old_snapshot_with_hitl_gate_compiles():
+def test_old_snapshot_with_hitl_review_compiles():
     """Old-format snapshots with HITL gates should compile."""
     _clear_cache()
     compiled = build_graph_from_json(_OLD_FORMAT_WITH_GATES)
     assert compiled is not None
 
 
-async def test_old_snapshot_with_hitl_gate_executes_and_interrupts():
+async def test_old_snapshot_with_hitl_review_executes_and_interrupts():
     """Old-format snapshots with HITL gates must pause at the gate at runtime.
 
     The gate node is wired between the source and target nodes; invoking the
@@ -92,8 +92,8 @@ async def test_old_snapshot_with_hitl_gate_executes_and_interrupts():
     compiled = build_graph_from_json(_OLD_FORMAT_WITH_GATES)
 
     graph = compiled.get_graph()
-    gate_node_ids = {node for node in graph.nodes if node.startswith("hitl_gate_")}
-    assert gate_node_ids == {"hitl_gate_start_end"}
+    gate_node_ids = {node for node in graph.nodes if node.startswith("hitl_review_")}
+    assert gate_node_ids == {"hitl_review_start_end"}
 
     initial_state: dict[str, Any] = {
         "run_context": {"cancelled": False, "input": {}},
@@ -105,7 +105,7 @@ async def test_old_snapshot_with_hitl_gate_executes_and_interrupts():
     assert [a["node_id"] for a in result["artifacts"]] == ["start"]
     interrupts = result.get("__interrupt__")
     assert interrupts, "graph should interrupt at the HITL gate"
-    assert interrupts[0].value["gate_id"] == "hitl_gate_start_end"
+    assert interrupts[0].value["review_id"] == "hitl_review_start_end"
 
 
 # ---------------------------------------------------------------------------

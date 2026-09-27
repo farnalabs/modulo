@@ -2,7 +2,7 @@
 
 Mirrors test_autonomy_telemetry.py: fail-open emission with the RLS
 org/execution-context transaction shape, CancelledError re-raised, and a
-payload carrying gate_id / requested / effective / ceiling (FAR-1163 S0).
+payload carrying review_id / requested / effective / ceiling (FAR-1163 S0).
 """
 
 import uuid
@@ -62,7 +62,7 @@ async def test_clamp_emits_event_with_expected_payload(monkeypatch: pytest.Monke
         _session_factory,
         org_id=org_id,
         run_id=run_id,
-        gate_id="g1",
+        review_id="g1",
         requested="fully_autonomous",
         effective="manual_approval",
         ceiling="manual_approval",
@@ -83,7 +83,7 @@ async def test_clamp_emits_event_with_expected_payload(monkeypatch: pytest.Monke
     assert kwargs["resource_type"] == "run"
     assert str(kwargs["resource_id"]) == str(run_id)
     payload = kwargs["payload_json"]
-    assert payload["gate_id"] == "g1"
+    assert payload["review_id"] == "g1"
     assert payload["requested"] == "fully_autonomous"
     assert payload["effective"] == "manual_approval"
     assert payload["ceiling"] == "manual_approval"
@@ -112,7 +112,7 @@ async def test_clamp_noop_when_session_factory_missing(monkeypatch: pytest.Monke
         None,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         requested="fully_autonomous",
         effective="manual_approval",
         ceiling="manual_approval",
@@ -130,7 +130,7 @@ async def test_clamp_noop_when_org_id_missing(monkeypatch: pytest.MonkeyPatch) -
         _session_factory,
         org_id=None,
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         requested="fully_autonomous",
         effective="manual_approval",
         ceiling="manual_approval",
@@ -155,7 +155,7 @@ async def test_clamp_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> No
         _session_factory,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         requested="notify_on_complete",
         effective="manual_approval",
         ceiling="manual_approval",
@@ -183,7 +183,7 @@ async def test_clamp_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch)
             _session_factory,
             org_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
-            gate_id="g1",
+            review_id="g1",
             requested="fully_autonomous",
             effective="manual_approval",
             ceiling="manual_approval",
@@ -216,7 +216,7 @@ async def test_clamp_payload_construction_failure_is_fail_open(monkeypatch: pyte
         _session_factory,
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        gate_id="g1",
+        review_id="g1",
         requested="fully_autonomous",
         effective="manual_approval",
         ceiling="manual_approval",

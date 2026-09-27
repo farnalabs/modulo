@@ -101,7 +101,7 @@ async def test_snapshot_with_composite_node_is_expanded_and_compiles() -> None:
     edge.source_node_id = composite_id
     edge.target_node_id = target_id
     edge.edge_type = "normal"
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
 
     session = AsyncMock(spec=AsyncSession)
     lock_result = MagicMock()

@@ -52,7 +52,7 @@ events into typed notification payloads; and in-app notifications stream over SS
       `error_detail`, includes the failed node name and error message, retries up to 3
       times, and auto-disables the endpoint after 10 consecutive failures (logging an
       alert) (`failure_webhook.feature`)
-- [x] A HITL webhook fires when a run reaches an approval gate with `run_id`/`gate_id`
+- [x] A HITL webhook fires when a run reaches an approval gate with `run_id`/`review_id`
       and gate context, retries on failure, and after final failure the event lands on the
       dead-letter queue (`hitl_webhook.feature`)
 - [x] Outgoing webhooks are signed with HMAC-SHA256 (per-endpoint secrets) and carry

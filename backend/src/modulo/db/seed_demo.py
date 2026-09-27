@@ -658,7 +658,7 @@ def _edge_rows(organisation_id: uuid.UUID, spec: _PipelineSpec) -> list[dict[str
             "target_node_id": uuid.UUID(demo_node_id(spec.name, edge.target)),
             "edge_type": edge.edge_type,
             "condition_expression": edge.condition_expression,
-            "hitl_gate_config": None,
+            "hitl_review_config": None,
         }
         for edge in spec.edges
     ]
@@ -668,7 +668,7 @@ def _snapshot_graph_json(nodes: list[dict[str, Any]], edge_rows: list[dict[str, 
     """The v1 snapshot ``graph_json`` in the shape run-start snapshots use.
 
     Mirrors ``crud.pipeline_snapshot._load_pipeline_and_edges`` (edges as
-    ``id/source/target/type/hitl_gate_config/condition_expression``), so the
+    ``id/source/target/type/hitl_review_config/condition_expression``), so the
     run detail's node labels and the GraphValidator read it like a real
     snapshot.
     """
@@ -680,7 +680,7 @@ def _snapshot_graph_json(nodes: list[dict[str, Any]], edge_rows: list[dict[str, 
                 "source": str(edge["source_node_id"]),
                 "target": str(edge["target_node_id"]),
                 "type": edge["edge_type"],
-                "hitl_gate_config": edge["hitl_gate_config"],
+                "hitl_review_config": edge["hitl_review_config"],
                 "condition_expression": edge["condition_expression"],
             }
             for edge in edge_rows
@@ -981,7 +981,7 @@ def _edge_signature(row: Mapping[str, Any]) -> tuple[str, str, str, str, str | N
         str(row["target_node_id"]),
         str(row["edge_type"]),
         row["condition_expression"],
-        row["hitl_gate_config"],
+        row["hitl_review_config"],
     )
 
 
@@ -1014,7 +1014,7 @@ async def _converge_pipeline_edges(
                 "target_node_id": edge.target_node_id,
                 "edge_type": edge.edge_type,
                 "condition_expression": edge.condition_expression,
-                "hitl_gate_config": edge.hitl_gate_config,
+                "hitl_review_config": edge.hitl_review_config,
             }
         )
         for edge in existing

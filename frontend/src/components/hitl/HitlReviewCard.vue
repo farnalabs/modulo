@@ -5,16 +5,16 @@
       <span :class="statusBadgeClass(status)">{{ status }}</span>
       <div class="min-w-0 flex-1">
         <h3 class="text-base font-semibold leading-tight text-foreground">
-          {{ gate.label || shortId(gate.gate_id) }}
+          {{ gate.label || shortId(gate.review_id) }}
         </h3>
         <p v-if="gate.description" class="mt-0.5 truncate text-xs text-muted-foreground">{{ gate.description }}</p>
       </div>
       <button
         type="button"
         data-testid="hitl-gate-copy-id"
-        :aria-label="$t('hitl.gate.copy_gate_id')"
+        :aria-label="$t('hitl.gate.copy_review_id')"
         class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
-        @click="copyText(gate.gate_id)"
+        @click="copyText(gate.review_id)"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       </button>
@@ -279,13 +279,13 @@ import { formatApiError } from '../../lib/api/formatError'
 import { claimFailureMessage } from '../../lib/hitlClaimFailure'
 import { shortId } from '../../utils/format'
 import { formatDateShortWithTime } from '../../lib/formatDate'
-import { useHitlGateState } from '../../composables/useHitlGateState'
+import { useHitlReviewState } from '../../composables/useHitlReviewState'
 import Button from 'primevue/button'
 import HitlBriefing from '../HitlBriefing.vue'
 
-export interface HitlGate {
+export interface HitlReview {
   run_id: string
-  gate_id: string
+  review_id: string
   pipeline_id: string
   pipeline_name?: string | null
   label?: string | null
@@ -315,7 +315,7 @@ interface HitlMessage {
 
 const props = withDefaults(
   defineProps<{
-    gate: HitlGate
+    gate: HitlReview
     showRunLink?: boolean
   }>(),
   { showRunLink: false },
@@ -330,19 +330,19 @@ const emit = defineEmits<{
 const { t } = useI18n()
 
 // Per-gate session state (FAR-686): the claim token and notes live in a
-// module-scoped store keyed by run_id:gate_id so they survive the card
+// module-scoped store keyed by run_id:review_id so they survive the card
 // unmounting — the review page's auto-refresh unmounts the whole list branch
 // every 30s. A gate the server reports as pending has no live claim anymore,
 // so any persisted token for it is stale and is dropped at setup; the card
 // then offers a fresh claim instead of approving with a dead token.
-const gateState = useHitlGateState(props.gate.run_id, props.gate.gate_id)
-if (!props.gate.claimed_by) gateState.clear()
+const reviewState = useHitlReviewState(props.gate.run_id, props.gate.review_id)
+if (!props.gate.claimed_by) reviewState.clear()
 
-const claimToken = gateState.claimToken
-const notes = gateState.notes
-const editingSubject = gateState.editingSubject
-const modifiedSubject = gateState.modifiedSubject
-const selectedOption = gateState.selectedOption
+const claimToken = reviewState.claimToken
+const notes = reviewState.notes
+const editingSubject = reviewState.editingSubject
+const modifiedSubject = reviewState.modifiedSubject
+const selectedOption = reviewState.selectedOption
 const claimedByYou = ref(false)
 const claiming = ref(false)
 const actioning = ref<'approve' | 'reject' | 'modify-approve' | null>(null)
@@ -360,8 +360,8 @@ const isForeignClaim = computed(() => props.gate.claimed_by != null && props.gat
 watch(
   isForeignClaim,
   (foreign) => {
-    if (foreign && gateState.claimToken.value) {
-      gateState.clear()
+    if (foreign && reviewState.claimToken.value) {
+      reviewState.clear()
       claimedByYou.value = false
     }
   },
@@ -558,8 +558,8 @@ async function claimGate() {
   claiming.value = true
   message.value = null
   try {
-    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/claim', {
-      params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
+    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{review_id}/claim', {
+      params: { path: { run_id: props.gate.run_id, review_id: props.gate.review_id } },
       body: { expiry_minutes: 15 },
     })
     if (err) {
@@ -571,7 +571,7 @@ async function claimGate() {
       emit('claim-failed', failure)
     } else if (data) {
       const d = data as { claim_token: string; expires_at: string }
-      gateState.setClaimToken(d.claim_token)
+      reviewState.setClaimToken(d.claim_token)
       claimedByYou.value = true
       const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_claimed_you_can_now_approve_or_reject') }
       showMessage(payload)
@@ -605,10 +605,10 @@ async function decideGate(decision: 'approve' | 'reject') {
   try {
     const { error: err } = await api.POST(
       decision === 'approve'
-        ? '/api/v1/runs/{run_id}/hitl/{gate_id}/approve'
-        : '/api/v1/runs/{run_id}/hitl/{gate_id}/reject',
+        ? '/api/v1/runs/{run_id}/hitl/{review_id}/approve'
+        : '/api/v1/runs/{run_id}/hitl/{review_id}/reject',
       {
-        params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
+        params: { path: { run_id: props.gate.run_id, review_id: props.gate.review_id } },
         body:
           decision === 'approve'
             ? {
@@ -626,7 +626,7 @@ async function decideGate(decision: 'approve' | 'reject') {
     } else {
       // Decision done: drop the persisted token/notes for this gate so no
       // stale session state is left behind (FAR-686).
-      gateState.clear()
+      reviewState.clear()
       claimedByYou.value = false
       const payload: HitlMessage = { type: 'success', text: t(successKey) }
       showMessage(payload)
@@ -705,9 +705,9 @@ async function modifyAndApprove() {
   const reconstructedOutput = { ...JSON.parse(JSON.stringify(parent)), [leafKey]: modifiedSubject.value }
   try {
     const { error: err } = await api.POST(
-      '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
+      '/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification',
       {
-        params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
+        params: { path: { run_id: props.gate.run_id, review_id: props.gate.review_id } },
         body: {
           claim_token: token,
           modified_output: reconstructedOutput,
@@ -724,7 +724,7 @@ async function modifyAndApprove() {
     if (err) {
       showMessage({ type: 'error', text: `${t('hitl.gate.approve_failed')} ${formatApiError(err)}` }, false)
     } else {
-      gateState.clear()
+      reviewState.clear()
       editingSubject.value = false
       modifiedSubject.value = ''
       claimedByYou.value = false

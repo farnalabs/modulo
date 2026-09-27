@@ -1276,7 +1276,7 @@ async def test_mid_graph_wedge_spares_recently_started_run(
 # FAR-648 expired-HITL-gate terminalizer — real Postgres under the
 # non-superuser RLS engine. An ``awaiting_human`` run whose every undecided
 # gate is unclaimed and past ``expires_at + grace`` is terminalized
-# ``cancelled`` (``hitl_gate_expired``); any live human work (a claimed gate,
+# ``cancelled`` (``hitl_review_expired``); any live human work (a claimed gate,
 # an in-grace gate, or a decided gate) spares the run.
 # ---------------------------------------------------------------------------
 
@@ -1286,7 +1286,7 @@ async def _seed_hitl_claim(
     org_id: uuid.UUID,
     run_id: uuid.UUID,
     pipeline_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     *,
     account_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
@@ -1305,7 +1305,7 @@ async def _seed_hitl_claim(
                 organisation_id=org_id,
                 run_id=run_id,
                 pipeline_id=pipeline_id,
-                gate_id=gate_id,
+                review_id=review_id,
                 account_id=account_id,
                 claimed_at=datetime.now(UTC) if account_id is not None else None,
                 expires_at=expires_at if expires_at is not None else datetime.now(UTC) + timedelta(hours=24),
@@ -1322,8 +1322,8 @@ async def test_expired_unclaimed_gate_terminalizes_awaiting_human_run(
 ) -> None:
     """An awaiting_human run whose gate expired UNCLAIMED + UNDECIDED past the
     grace window is a zombie holding an org slot — terminalized
-    ``cancelled``/``hitl_gate_expired`` (FAR-648)."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+    ``cancelled``/``hitl_review_expired`` (FAR-648)."""
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlExpireOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlExpire", user_id)
@@ -1331,16 +1331,16 @@ async def test_expired_unclaimed_gate_terminalizes_awaiting_human_run(
     run = await _seed_run(db_engine, org_id, pipe, snap, status="awaiting_human")
     await _seed_hitl_claim(db_engine, org_id, run, pipe, "gate-1", expires_at=datetime.now(UTC) - timedelta(hours=2))
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=3600)
     assert count == 1
 
     status, code = await _run_state(db_engine, org_id, run)
     assert status == "cancelled"
-    assert code == "hitl_gate_expired"
+    assert code == "hitl_review_expired"
 
     # FAR-1233: the watchdog records WHY/WHO with the status flip.
     reason, actor = await _run_cancel_reason(db_engine, org_id, run)
-    assert reason == "hitl_gate_expired"
+    assert reason == "hitl_review_expired"
     assert actor == "system"
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -1359,7 +1359,7 @@ async def test_in_grace_gate_spares_awaiting_human_run(
 ) -> None:
     """A gate past ``expires_at`` but INSIDE the grace window is still live
     human work — the run stays ``awaiting_human``."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlGraceOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlGrace", user_id)
@@ -1367,7 +1367,7 @@ async def test_in_grace_gate_spares_awaiting_human_run(
     run = await _seed_run(db_engine, org_id, pipe, snap, status="awaiting_human")
     await _seed_hitl_claim(db_engine, org_id, run, pipe, "gate-1", expires_at=datetime.now(UTC) - timedelta(minutes=30))
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1381,7 +1381,7 @@ async def test_claimed_gate_spares_awaiting_human_run(
 ) -> None:
     """A CLAIMED gate (account_id set) past expiry is a reviewer actively
     working — the run is never terminalized under them."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlClaimedOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlClaimed", user_id)
@@ -1397,7 +1397,7 @@ async def test_claimed_gate_spares_awaiting_human_run(
         expires_at=datetime.now(UTC) - timedelta(hours=2),
     )
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1411,7 +1411,7 @@ async def test_decided_gate_spares_awaiting_human_run(
 ) -> None:
     """A DECIDED gate is not undecided work — the run belongs to the F6a
     committed-decision recovery, never to the expiry terminalizer."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlDecidedOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlDecided", user_id)
@@ -1428,7 +1428,7 @@ async def test_decided_gate_spares_awaiting_human_run(
         decision="approved",
     )
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1443,7 +1443,7 @@ async def test_second_in_grace_gate_spares_awaiting_human_run(
     """Multi-gate safety (mirrors the park sweep): ONE expired-unclaimed gate
     plus ONE in-grace undecided gate means live human work still exists — the
     run must not be terminalized on the stale orphan alone."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMultiGateOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMultiGate", user_id)
@@ -1452,7 +1452,7 @@ async def test_second_in_grace_gate_spares_awaiting_human_run(
     await _seed_hitl_claim(db_engine, org_id, run, pipe, "gate-1", expires_at=datetime.now(UTC) - timedelta(hours=2))
     await _seed_hitl_claim(db_engine, org_id, run, pipe, "gate-2", expires_at=datetime.now(UTC) - timedelta(minutes=30))
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1466,7 +1466,7 @@ async def test_cancellation_requested_run_spared_by_gate_expiry_terminalizer(
 ) -> None:
     """CANCEL-WINS precedence: a cancellation-requested run is owned by the
     cancel path — the terminalizer never writes ``cancelled`` over it."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlCancelWinsOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlCancelWins", user_id)
@@ -1478,7 +1478,7 @@ async def test_cancellation_requested_run_spared_by_gate_expiry_terminalizer(
         await set_rls_org(session, org_id)
         await session.execute(text("UPDATE runs SET cancellation_requested = true WHERE id = :rid"), {"rid": str(run)})
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1493,12 +1493,12 @@ async def test_gate_expiry_terminalizer_is_org_scoped(
     """Cross-org isolation: reconciling org B must never terminalize org A's
     identical zombie. Both orgs hold an awaiting_human run with an
     expired-unclaimed gate; the sweep runs for org B ONLY — its run goes
-    ``cancelled``/``hitl_gate_expired`` while org A's stays ``awaiting_human``
+    ``cancelled``/``hitl_review_expired`` while org A's stays ``awaiting_human``
     untouched. Pins the ``hc.organisation_id = runs.organisation_id``
     correlation and the org-scoped UPDATE (the RLS org context alone would
     hide org A's rows, but the correlation is what keeps the SQL correct
     under any future bypass)."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     org_a, user_a = await _seed_org_account(db_engine, "HitlCrossOrgA", cap=None)
     pipe_a = await _seed_pipeline(db_engine, org_a, "PipeHitlCrossA", user_a)
@@ -1512,12 +1512,12 @@ async def test_gate_expiry_terminalizer_is_org_scoped(
     run_b = await _seed_run(db_engine, org_b, pipe_b, snap_b, status="awaiting_human")
     await _seed_hitl_claim(db_engine, org_b, run_b, pipe_b, "gate-1", expires_at=datetime.now(UTC) - timedelta(hours=2))
 
-    count = await _terminalize_count(app_engine, org_b, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_b, _terminalize_expired_hitl_reviews, grace_seconds=3600)
     assert count == 1
 
     status_b, code_b = await _run_state(db_engine, org_b, run_b)
     assert status_b == "cancelled"
-    assert code_b == "hitl_gate_expired"
+    assert code_b == "hitl_review_expired"
 
     status_a, code_a = await _run_state(db_engine, org_a, run_a)
     assert status_a == "awaiting_human"
@@ -1531,7 +1531,7 @@ async def test_gate_expiry_terminalizer_is_org_scoped(
 # whose gate/claim row was never written is collected by NEITHER and holds an
 # org slot. This sweep terminalizes exactly that class past the grace window:
 # ``awaiting_human`` + zero claims + created before the grace, as
-# ``cancelled``/``hitl_gate_missing``; any run with a claim (live or not) and
+# ``cancelled``/``hitl_review_missing``; any run with a claim (live or not) and
 # any run inside the grace is spared.
 # ---------------------------------------------------------------------------
 
@@ -1544,8 +1544,8 @@ async def test_zero_claim_awaiting_human_older_than_grace_terminalizes(
     """An awaiting_human run with ZERO hitl_claims rows created before the
     grace window is a true orphan (a legitimate in-flight gate ALWAYS has its
     claim row durably committed before the status flip) — terminalized
-    ``cancelled``/``hitl_gate_missing`` (FAR-721)."""
-    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+    ``cancelled``/``hitl_review_missing`` (FAR-721)."""
+    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissing", user_id)
@@ -1559,16 +1559,16 @@ async def test_zero_claim_awaiting_human_older_than_grace_terminalizes(
         created_at=datetime.now(UTC) - timedelta(hours=2),
     )
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_review_missing, grace_seconds=3600)
     assert count == 1
 
     status, code = await _run_state(db_engine, org_id, run)
     assert status == "cancelled"
-    assert code == "hitl_gate_missing"
+    assert code == "hitl_review_missing"
 
     # FAR-1233: the watchdog records WHY/WHO with the status flip.
     reason, actor = await _run_cancel_reason(db_engine, org_id, run)
-    assert reason == "hitl_gate_missing"
+    assert reason == "hitl_review_missing"
     assert actor == "system"
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -1589,7 +1589,7 @@ async def test_zero_claim_awaiting_human_with_live_claim_spared(
     expired — and is NEVER collected by the zero-claim sweep (its NOT EXISTS
     predicate spares it). Acceptance: a run with a live HITL claim is never
     terminalized."""
-    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingClaimedOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingClaimed", user_id)
@@ -1604,7 +1604,7 @@ async def test_zero_claim_awaiting_human_with_live_claim_spared(
     )
     await _seed_hitl_claim(db_engine, org_id, run, pipe, "gate-1", expires_at=datetime.now(UTC) + timedelta(hours=24))
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_review_missing, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1618,7 +1618,7 @@ async def test_zero_claim_awaiting_human_in_grace_spared(
 ) -> None:
     """A zero-claim run INSIDE the grace window is spared — the sweep only
     collects the genuinely-orphaned class once it has aged past the grace."""
-    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingGraceOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingGrace", user_id)
@@ -1632,7 +1632,7 @@ async def test_zero_claim_awaiting_human_in_grace_spared(
         created_at=datetime.now(UTC) - timedelta(minutes=30),
     )
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_review_missing, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1646,7 +1646,7 @@ async def test_zero_claim_cancellation_requested_run_spared(
 ) -> None:
     """CANCEL-WINS precedence: a cancellation-requested zero-claim run is
     owned by the cancel path — the sweep never writes ``cancelled`` over it."""
-    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_id, user_id = await _seed_org_account(db_engine, "HitlMissingCancelOrg", cap=None)
     pipe = await _seed_pipeline(db_engine, org_id, "PipeHitlMissingCancel", user_id)
@@ -1664,7 +1664,7 @@ async def test_zero_claim_cancellation_requested_run_spared(
         await set_rls_org(session, org_id)
         await session.execute(text("UPDATE runs SET cancellation_requested = true WHERE id = :rid"), {"rid": str(run)})
 
-    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_id, _terminalize_hitl_review_missing, grace_seconds=3600)
     assert count == 0
 
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1679,7 +1679,7 @@ async def test_zero_claim_terminalizer_is_org_scoped(
     """Cross-org isolation: reconciling org B must never terminalize org A's
     identical zero-claim orphan. Pins the ``hc.organisation_id =
     runs.organisation_id`` correlation and the org-scoped UPDATE."""
-    from modulo.core.cron_helpers import _terminalize_hitl_gate_missing
+    from modulo.core.cron_helpers import _terminalize_hitl_review_missing
 
     org_a, user_a = await _seed_org_account(db_engine, "HitlMissingCrossOrgA", cap=None)
     pipe_a = await _seed_pipeline(db_engine, org_a, "PipeHitlMissingCrossA", user_a)
@@ -1705,12 +1705,12 @@ async def test_zero_claim_terminalizer_is_org_scoped(
         created_at=datetime.now(UTC) - timedelta(hours=2),
     )
 
-    count = await _terminalize_count(app_engine, org_b, _terminalize_hitl_gate_missing, grace_seconds=3600)
+    count = await _terminalize_count(app_engine, org_b, _terminalize_hitl_review_missing, grace_seconds=3600)
     assert count == 1
 
     status_b, code_b = await _run_state(db_engine, org_b, run_b)
     assert status_b == "cancelled"
-    assert code_b == "hitl_gate_missing"
+    assert code_b == "hitl_review_missing"
 
     status_a, code_a = await _run_state(db_engine, org_a, run_a)
     assert status_a == "awaiting_human"

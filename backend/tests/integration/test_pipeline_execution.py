@@ -436,7 +436,7 @@ async def test_claim_resume_run_async_matches_hitl_parked_with_committed_decisio
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, gate_id, "
+                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, "
                 "expires_at, decision, decision_at, decision_payload) "
                 "VALUES (:cid, :oid, :rid, :pid, :gid, now(), 'approved', now(), CAST(:p AS json))"
             ),
@@ -446,7 +446,7 @@ async def test_claim_resume_run_async_matches_hitl_parked_with_committed_decisio
                 "rid": str(run_id),
                 "pid": str(test_pipeline),
                 "gid": "gate-1",
-                "p": json.dumps({"action": "approved", "gate_id": "gate-1"}),
+                "p": json.dumps({"action": "approved", "review_id": "gate-1"}),
             },
         )
 

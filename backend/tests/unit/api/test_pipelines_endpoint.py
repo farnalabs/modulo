@@ -18,14 +18,14 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.api.routes.pipelines import (
     HITL_DESCRIPTION_MIN_LENGTH,
-    HitlGateConfig,
+    HitlReviewConfig,
     PipelineGraphNode,
     _resolve_graph_references,
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.graph_validator._types import ValidationResult
-from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 from modulo.db.crud.pipeline_folder import create_folder, update_folder
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -842,7 +842,7 @@ def test_get_pipeline_graph_returns_authoritative_graph(client: TestClient) -> N
     edge.target_node_id = uuid.uuid4()
     edge.edge_type = "normal"
     edge.condition_expression = None
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
     edge.source_port = "out"
     edge.target_port = "in"
     nodes = [
@@ -924,7 +924,7 @@ def test_replace_pipeline_graph_rejects_duplicate_paths(client: TestClient) -> N
         "source_node_id": str(source),
         "target_node_id": str(target),
         "edge_type": "normal",
-        "hitl_gate_config": None,
+        "hitl_review_config": None,
     }
     resp = client.patch(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -1178,7 +1178,7 @@ def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient
     """FAR-210 MAJOR-2 contract round-trip: a gate edge carrying correction_target
     is accepted by the real endpoint and SURVIVES the wire — the persisted edge
     data (what becomes the snapshot graph_json) carries it, and the response
-    echoes it. Without the HitlGateConfig field, Pydantic's extra='ignore'
+    echoes it. Without the HitlReviewConfig field, Pydantic's extra='ignore'
     silently drops it before model_dump."""
     node_id = uuid.uuid4()
     target_id = uuid.uuid4()
@@ -1200,7 +1200,7 @@ def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient
             "source_node_id": str(node_id),
             "target_node_id": str(target_id),
             "edge_type": "normal",
-            "hitl_gate_config": {
+            "hitl_review_config": {
                 "label": "Review",
                 "description": "Reviewer decides whether the merged fix is safe.",
                 "reject_target": str(reject_id),
@@ -1233,14 +1233,14 @@ def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient
     assert resp.status_code == 200
     # The persisted edge data (the snapshot graph_json source) carries the field.
     persisted_edge = persisted["edges"][0]
-    assert persisted_edge["hitl_gate_config"]["correction_target"] == str(correction_id)
-    assert persisted_edge["hitl_gate_config"]["reject_target"] == str(reject_id)
+    assert persisted_edge["hitl_review_config"]["correction_target"] == str(correction_id)
+    assert persisted_edge["hitl_review_config"]["reject_target"] == str(reject_id)
     # The response round-trips it back.
-    assert resp.json()["edges"][0]["hitl_gate_config"]["correction_target"] == str(correction_id)
+    assert resp.json()["edges"][0]["hitl_review_config"]["correction_target"] == str(correction_id)
 
 
 def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> None:
-    """FAR-210 MAJOR-2: a reload (GET /graph) of a gate whose hitl_gate_config
+    """FAR-210 MAJOR-2: a reload (GET /graph) of a gate whose hitl_review_config
     carries correction_target returns it — the field survives the
     PipelineGraphEdge round-trip. The stored "Gate" description is a legacy
     sub-minimum value and MUST stay readable (FAR-613 read leniency)."""
@@ -1254,7 +1254,7 @@ def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> Non
     edge.condition_expression = None
     edge.source_port = "out"
     edge.target_port = "in"
-    edge.hitl_gate_config = {
+    edge.hitl_review_config = {
         "label": "Review",
         "description": "Gate",
         "reject_target": str(uuid.uuid4()),
@@ -1274,11 +1274,11 @@ def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> Non
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
     assert resp.status_code == 200
-    assert resp.json()["edges"][0]["hitl_gate_config"]["correction_target"] == str(correction_id)
+    assert resp.json()["edges"][0]["hitl_review_config"]["correction_target"] == str(correction_id)
 
 
 def test_replace_pipeline_graph_rejects_short_gate_description(client: TestClient) -> None:
-    """FAR-613: the HitlGateConfig Pydantic validator enforces the description
+    """FAR-613: the HitlReviewConfig Pydantic validator enforces the description
     minimum on the API WRITE path — a gate edge whose description is shorter
     than HITL_DESCRIPTION_MIN_LENGTH is rejected with 422 at request parse,
     before any CRUD runs."""
@@ -1293,7 +1293,7 @@ def test_replace_pipeline_graph_rejects_short_gate_description(client: TestClien
             "source_node_id": str(node_id),
             "target_node_id": str(target_id),
             "edge_type": "normal",
-            "hitl_gate_config": {
+            "hitl_review_config": {
                 "label": "Review",
                 "description": "Gate",
                 "claim_expiry_minutes": 60,
@@ -1326,7 +1326,7 @@ def test_get_pipeline_graph_tolerates_legacy_short_gate_description(client: Test
     edge.condition_expression = None
     edge.source_port = "out"
     edge.target_port = "in"
-    edge.hitl_gate_config = {
+    edge.hitl_review_config = {
         "label": "Review",
         "description": "Gate",
         "claim_expiry_minutes": 60,
@@ -1344,11 +1344,11 @@ def test_get_pipeline_graph_tolerates_legacy_short_gate_description(client: Test
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
     assert resp.status_code == 200
-    assert resp.json()["edges"][0]["hitl_gate_config"]["description"] == "Gate"
+    assert resp.json()["edges"][0]["hitl_review_config"]["description"] == "Gate"
 
 
-def test_hitl_gate_config_description_minimum_boundary() -> None:
-    """FAR-613: the HitlGateConfig model itself rejects a description below
+def test_hitl_review_config_description_minimum_boundary() -> None:
+    """FAR-613: the HitlReviewConfig model itself rejects a description below
     the shared minimum and accepts one at exactly the minimum."""
     base = {
         "label": "Review",
@@ -1357,9 +1357,9 @@ def test_hitl_gate_config_description_minimum_boundary() -> None:
     }
 
     with pytest.raises(ValidationError, match="human-provided description"):
-        HitlGateConfig.model_validate({**base, "description": "too short"})
+        HitlReviewConfig.model_validate({**base, "description": "too short"})
 
-    at_minimum = HitlGateConfig.model_validate({**base, "description": "x" * HITL_DESCRIPTION_MIN_LENGTH})
+    at_minimum = HitlReviewConfig.model_validate({**base, "description": "x" * HITL_DESCRIPTION_MIN_LENGTH})
     assert at_minimum.description == "x" * HITL_DESCRIPTION_MIN_LENGTH
 
 
@@ -1414,12 +1414,12 @@ def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) ->
     assert "exfiltration channel" in resp.json()["detail"]
 
 
-def test_replace_pipeline_graph_blocks_undescribed_node_level_hitl_gate_422(client: TestClient) -> None:
+def test_replace_pipeline_graph_blocks_undescribed_node_level_hitl_review_422(client: TestClient) -> None:
     """FAR-613 iteration-1 MAJOR-3: the node-level HITL description requirement
     must HARD-REJECT a REST graph save like the guardrail codes. A node's
     ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
-    edge-level ``HitlGateConfig`` Pydantic contract, so
-    ``HITL_GATE_DESCRIPTION_REQUIRED`` from the validator is the ONLY save-time
+    edge-level ``HitlReviewConfig`` Pydantic contract, so
+    ``HITL_REVIEW_DESCRIPTION_REQUIRED`` from the validator is the ONLY save-time
     gate. Without the reject-set entry the issue is advisory-only: the graph
     save succeeds and the node-level gate persists with no description. The
     reject raises inside ``session.begin()`` so the already-run graph write
@@ -1445,8 +1445,8 @@ def test_replace_pipeline_graph_blocks_undescribed_node_level_hitl_gate_422(clie
     ]
     validation = ValidationResult()
     validation.error(
-        "HITL_GATE_DESCRIPTION_REQUIRED",
-        f"HITL gate on node '{node_id}' requires a human-provided description "
+        "HITL_REVIEW_DESCRIPTION_REQUIRED",
+        f"HITL review on node '{node_id}' requires a human-provided description "
         f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
         node_id=str(node_id),
     )
@@ -2935,10 +2935,10 @@ class TestCompositeValidation:
         issues = self._run_check(graph)
         assert any(i["code"] == "COMPOSITE_SUBGRAPH_DUPLICATE_NODE_ID" for i in issues)
 
-    def test_hitl_gate_on_sub_edge_is_error(self) -> None:
+    def test_hitl_review_on_sub_edge_is_error(self) -> None:
         graph = {
             "nodes": [{"id": "a"}, {"id": "b"}],
-            "edges": [{"source": "a", "target": "b", "hitl_gate_config": {"label": "x"}}],
+            "edges": [{"source": "a", "target": "b", "hitl_review_config": {"label": "x"}}],
         }
         issues = self._run_check(graph)
         assert any(i["code"] == "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED" for i in issues)

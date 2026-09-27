@@ -68,7 +68,7 @@ router = APIRouter(prefix="/api/v1", tags=["feedback"])
 
 
 class CreateFeedbackRequest(BaseModel):
-    gate_id: str
+    review_id: str
     rejection_reason: str
     rejected_output: ClassVar[dict[str, Any]] = {}
     producing_node_id: str
@@ -122,7 +122,7 @@ def _serialise_record(
     return {
         "id": str(r.id),
         "run_id": str(r.run_id) if r.run_id else None,
-        "gate_id": r.gate_id,
+        "review_id": r.review_id,
         "rejected_by": str(r.account_id) if r.account_id else None,
         "rejection_reason": r.rejection_reason,
         "rejected_output": getattr(r, "rejected_output", {}),
@@ -161,7 +161,7 @@ async def create_feedback(
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.create_feedback_record(
                 run_id=run_id,
-                gate_id=req.gate_id,
+                review_id=req.review_id,
                 account_id=principal.account_id,
                 rejection_reason=req.rejection_reason,
                 rejected_output=req.rejected_output,
@@ -204,7 +204,7 @@ async def create_feedback(
         resource_id=record.id,
         payload={
             "run_id": str(record.run_id) if record.run_id else None,
-            "gate_id": record.gate_id,
+            "review_id": record.review_id,
             "feedback_handler_type": record.feedback_handler_type,
         },
         log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
@@ -213,7 +213,7 @@ async def create_feedback(
     return {
         "id": str(record.id),
         "run_id": str(record.run_id),
-        "gate_id": record.gate_id,
+        "review_id": record.review_id,
         "rejected_by": str(record.account_id),
         "rejection_reason": record.rejection_reason,
         "feedback_status": record.feedback_status,
@@ -779,7 +779,7 @@ async def _append_feedback_status_audit(
             "new_status": record.feedback_status,
             "action": "update_status",
             "run_id": str(record.run_id) if record.run_id else None,
-            "gate_id": record.gate_id,
+            "review_id": record.review_id,
         },
         log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,
     )
@@ -1088,7 +1088,7 @@ async def review_feedback(
                 "new_status": transitioned_to,
                 "action": req.action,
                 "run_id": str(record.run_id) if record.run_id else None,
-                "gate_id": record.gate_id,
+                "review_id": record.review_id,
                 "correction_run_id": correction_run_id,
             },
             log_key=_CODE_FEEDBACK_AUDIT_APPEND_FAILED,

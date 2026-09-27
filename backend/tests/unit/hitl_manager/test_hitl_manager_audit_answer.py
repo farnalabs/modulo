@@ -12,7 +12,7 @@ from modulo.core.hitl_manager import HITLManager
 def _make_gate(**overrides: object) -> MagicMock:
     gate = MagicMock()
     gate.run_id = overrides.get("run_id", "run-1")
-    gate.gate_id = overrides.get("gate_id", "gate-1")
+    gate.review_id = overrides.get("review_id", "gate-1")
     gate.decision = overrides.get("decision", "approved")
     gate.required_team_id = overrides.get("required_team_id")
     return gate

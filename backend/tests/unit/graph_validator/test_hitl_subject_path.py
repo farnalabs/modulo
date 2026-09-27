@@ -1,9 +1,9 @@
 """Unit tests for the FAR-859 HITL subject_path validation.
 
 Covers ``_check_hitl_subject_path`` (HITL_SUBJECT_PATH_*) and
-``_check_hitl_gate_subject_paths`` via the save-time entry point
+``_check_hitl_review_subject_paths`` via the save-time entry point
 ``validate_definition``. Both gate shapes are exercised: EDGE-level
-``hitl_gate_config`` and FAR-402 node-level ``hitl_config``.
+``hitl_review_config`` and FAR-402 node-level ``hitl_config``.
 """
 
 from typing import Any
@@ -42,7 +42,7 @@ def _gated_edge_graph(
         config["subject_path"] = subject_path
     return {
         "nodes": [{"id": _UUID_A}, {"id": _UUID_B}],
-        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal", "hitl_gate_config": config}],
+        "edges": [{"source": _UUID_A, "target": _UUID_B, "type": "normal", "hitl_review_config": config}],
     }
 
 
@@ -155,7 +155,7 @@ async def test_node_gate_config_injected_on_edge_not_double_reported():
     outgoing edge (composite-expanded / compiled shape) is reported ONCE —
     under the node pass, never duplicated as an edge error."""
     graph = _hitl_node_graph(subject_path="bad[[")
-    graph["edges"][0]["hitl_gate_config"] = dict(graph["nodes"][0]["hitl_config"])
+    graph["edges"][0]["hitl_review_config"] = dict(graph["nodes"][0]["hitl_config"])
     result = await GraphValidator().validate_definition(graph, _session_returning())
     issues = [i for i in result.issues if i.code == "HITL_SUBJECT_PATH_INVALID_JMESPATH"]
     assert len(issues) == 1

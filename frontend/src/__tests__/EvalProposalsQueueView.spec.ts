@@ -7,7 +7,7 @@ const { sampleResponse, mockPatch } = vi.hoisted(() => {
   const makeItem = (id: string, feedback_status: string) => ({
     id,
     run_id: 'run-1',
-    gate_id: 'review',
+    review_id: 'review',
     rejected_by: null,
     rejection_reason: '',
     rejected_output: {},

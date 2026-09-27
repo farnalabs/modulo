@@ -1,7 +1,7 @@
 """FAR-1233: the HITL zombie terminalizers record WHY they cancelled.
 
-``_terminalize_expired_hitl_gates`` (FAR-648) and
-``_terminalize_hitl_gate_missing`` (FAR-721) are the only two WATCHDOG-owned
+``_terminalize_expired_hitl_reviews`` (FAR-648) and
+``_terminalize_hitl_review_missing`` (FAR-721) are the only two WATCHDOG-owned
 cancellation sites: they flip ``status='cancelled'`` from raw SQL, so the
 cancellation reason has to ride the SAME UPDATE — there is no ORM object to
 annotate afterwards. These tests capture the SQL + bound params each terminalizer
@@ -19,8 +19,8 @@ import pytest
 
 from modulo.core import cron_helpers as ch
 from modulo.db.models.run import (
-    CANCEL_REASON_HITL_GATE_EXPIRED,
-    CANCEL_REASON_HITL_GATE_MISSING,
+    CANCEL_REASON_HITL_REVIEW_EXPIRED,
+    CANCEL_REASON_HITL_REVIEW_MISSING,
     CANCELLED_BY_SYSTEM,
 )
 
@@ -54,17 +54,17 @@ def _single_call(session: _CaptureSession) -> tuple[str, dict[str, Any]]:
     return session.calls[0]
 
 
-class TestExpiredHitlGateTerminalizer:
+class TestExpiredHitlReviewTerminalizer:
     @pytest.mark.asyncio
     async def test_records_cancel_reason_on_the_status_flip(self) -> None:
         session = _CaptureSession()
 
-        await ch._terminalize_expired_hitl_gates(session, ORG, grace_seconds=60)
+        await ch._terminalize_expired_hitl_reviews(session, ORG, grace_seconds=60)
 
         sql, params = _single_call(session)
         assert "cancel_reason=:reason" in sql
         assert "cancelled_by=:actor" in sql
-        assert params["reason"] == CANCEL_REASON_HITL_GATE_EXPIRED
+        assert params["reason"] == CANCEL_REASON_HITL_REVIEW_EXPIRED
         assert params["actor"] == CANCELLED_BY_SYSTEM
 
     @pytest.mark.asyncio
@@ -73,32 +73,32 @@ class TestExpiredHitlGateTerminalizer:
         — a drift between them reads as two different failures in the UI."""
         session = _CaptureSession()
 
-        await ch._terminalize_expired_hitl_gates(session, ORG, grace_seconds=60)
+        await ch._terminalize_expired_hitl_reviews(session, ORG, grace_seconds=60)
 
         _, params = _single_call(session)
-        assert params["code"] == "hitl_gate_expired"
-        assert params["reason"] == CANCEL_REASON_HITL_GATE_EXPIRED
+        assert params["code"] == "hitl_review_expired"
+        assert params["reason"] == CANCEL_REASON_HITL_REVIEW_EXPIRED
 
 
-class TestMissingHitlGateTerminalizer:
+class TestMissingHitlReviewTerminalizer:
     @pytest.mark.asyncio
     async def test_records_cancel_reason_on_the_status_flip(self) -> None:
         session = _CaptureSession()
 
-        await ch._terminalize_hitl_gate_missing(session, ORG, grace_seconds=60)
+        await ch._terminalize_hitl_review_missing(session, ORG, grace_seconds=60)
 
         sql, params = _single_call(session)
         assert "cancel_reason=:reason" in sql
         assert "cancelled_by=:actor" in sql
-        assert params["reason"] == CANCEL_REASON_HITL_GATE_MISSING
+        assert params["reason"] == CANCEL_REASON_HITL_REVIEW_MISSING
         assert params["actor"] == CANCELLED_BY_SYSTEM
 
     @pytest.mark.asyncio
     async def test_reason_pairs_with_the_error_code(self) -> None:
         session = _CaptureSession()
 
-        await ch._terminalize_hitl_gate_missing(session, ORG, grace_seconds=60)
+        await ch._terminalize_hitl_review_missing(session, ORG, grace_seconds=60)
 
         _, params = _single_call(session)
-        assert params["code"] == "hitl_gate_missing"
-        assert params["reason"] == CANCEL_REASON_HITL_GATE_MISSING
+        assert params["code"] == "hitl_review_missing"
+        assert params["reason"] == CANCEL_REASON_HITL_REVIEW_MISSING

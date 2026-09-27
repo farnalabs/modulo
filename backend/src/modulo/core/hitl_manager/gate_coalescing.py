@@ -83,9 +83,9 @@ _SUPERSEDE_REASON = "superseded_by_newer_payload (FAR-604 D4 gate coalescing)"
 _LIVE_RUN_STATUSES = (AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS)
 
 
-def _coalesce_lock_key(org_id: uuid.UUID, pipeline_id: uuid.UUID, gate_id: str, entity_key: str) -> str:
+def _coalesce_lock_key(org_id: uuid.UUID, pipeline_id: uuid.UUID, review_id: str, entity_key: str) -> str:
     """The advisory-lock key naming one work item's coalescing decision."""
-    return f"{org_id}:{pipeline_id}:{gate_id}:{entity_key}"
+    return f"{org_id}:{pipeline_id}:{review_id}:{entity_key}"
 
 
 async def _serialise_coalesce_scan(session: AsyncSession, lock_key: str) -> None:
@@ -111,7 +111,7 @@ async def evaluate_gate_coalescing(
     session: AsyncSession,
     *,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     pipeline_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> CoalesceOutcome:
@@ -142,7 +142,7 @@ async def evaluate_gate_coalescing(
 
     # qa F2: concurrent duplicate deliveries for this work item serialise
     # before any of them scans (the lock lives to transaction end).
-    await _serialise_coalesce_scan(session, _coalesce_lock_key(org_id, pipeline_id, gate_id, entity_key))
+    await _serialise_coalesce_scan(session, _coalesce_lock_key(org_id, pipeline_id, review_id, entity_key))
 
     dialect_postgres = await get_dialect_name(session) == "postgresql"
     columns: list[Any] = [HitlClaim, Run.input_hash]
@@ -157,7 +157,7 @@ async def evaluate_gate_coalescing(
         .where(
             HitlClaim.pipeline_id == pipeline_id,
             HitlClaim.organisation_id == org_id,
-            HitlClaim.gate_id == gate_id,
+            HitlClaim.review_id == review_id,
             HitlClaim.decision.is_(None),
             HitlClaim.account_id.is_(None),
             HitlClaim.run_id != run_id,
@@ -188,7 +188,7 @@ async def evaluate_gate_coalescing(
         _log.warning(
             "hitl_coalesce.reused run=%s gate=%s existing_claim=%s existing_run=%s key=%s",
             run_id,
-            gate_id,
+            review_id,
             old_claim.id,
             old_claim.run_id,
             entity_key,
@@ -200,7 +200,7 @@ async def evaluate_gate_coalescing(
             old_claim.id,
             {
                 "pipeline_run_id": str(run_id),
-                "node_id": gate_id,
+                "node_id": review_id,
                 "reused_claim_id": str(old_claim.id),
                 "reused_run_id": str(old_claim.run_id),
                 "coalesce_key": entity_key,
@@ -224,7 +224,7 @@ async def evaluate_gate_coalescing(
         .values(
             decision="rejected",
             decision_at=now,
-            decision_payload={"action": "rejected", "gate_id": gate_id, "reason": _SUPERSEDE_REASON},
+            decision_payload={"action": "rejected", "review_id": review_id, "reason": _SUPERSEDE_REASON},
             account_id=None,
             claim_token=None,
             expires_at=now,
@@ -239,7 +239,7 @@ async def evaluate_gate_coalescing(
             old_claim.id,
             old_claim.run_id,
             run_id,
-            gate_id,
+            review_id,
             entity_key,
         )
         await _audit(
@@ -249,7 +249,7 @@ async def evaluate_gate_coalescing(
             old_claim.id,
             {
                 "pipeline_run_id": str(old_claim.run_id),
-                "node_id": gate_id,
+                "node_id": review_id,
                 "superseded_by_run_id": str(run_id),
                 "coalesce_key": entity_key,
                 "reason": _SUPERSEDE_REASON,
@@ -262,7 +262,7 @@ async def evaluate_gate_coalescing(
             "hitl_coalesce.supersede_skipped_claimed old_claim=%s new_run=%s gate=%s",
             old_claim.id,
             run_id,
-            gate_id,
+            review_id,
         )
     return "raise"
 

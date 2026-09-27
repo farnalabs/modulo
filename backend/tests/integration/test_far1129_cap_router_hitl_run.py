@@ -1,7 +1,7 @@
 """FAR-1129 cap-router: real LangGraph execution for Router + HITL nodes.
 
 The router/HITL node unit coverage drives ``make_router_node_fn`` /
-``make_hitl_gate_fn`` in isolation. These tests round-trip the nodes through
+``make_hitl_review_fn`` in isolation. These tests round-trip the nodes through
 ``build_graph_from_json`` + a real ``compiled.ainvoke`` (the repo's pipeline
 runtime), so the wiring that actually reaches those functions — graph
 compilation, conditional-edge routing, the synthetic HITL gate node, the
@@ -190,7 +190,7 @@ async def test_router_no_match_raises_from_real_run() -> None:
         )
 
 
-async def test_hitl_gate_interrupts_then_resumes_and_completes() -> None:
+async def test_hitl_review_interrupts_then_resumes_and_completes() -> None:
     hub = ModelBackendHub()
     backend_id = str(uuid.uuid4())
     hub.register(uuid.UUID(backend_id), _StubAdapter({"process hello": json.dumps({"out": "ok"})}))
@@ -204,8 +204,8 @@ async def test_hitl_gate_interrupts_then_resumes_and_completes() -> None:
                 "source": agent_a["id"],
                 "target": agent_b["id"],
                 "type": "normal",
-                "hitl_gate_config": {
-                    "gate_id": "review_before_b",
+                "hitl_review_config": {
+                    "review_id": "review_before_b",
                     "label": "review",
                     "description": "review step",
                     "human_only": True,
@@ -230,13 +230,13 @@ async def test_hitl_gate_interrupts_then_resumes_and_completes() -> None:
         checkpoint = await compiled.aget_state(config)
         assert checkpoint.next
         interrupt = checkpoint.interrupts[0]
-        gate_id = interrupt.value["gate_id"]
+        review_id = interrupt.value["review_id"]
         # The compile path re-stamps the gate with a synthetic id derived from
         # the source/target pair — the decision MUST use this (FAR-541).
-        assert gate_id == f"hitl_gate_{agent_a['id']}_{agent_b['id']}"
-        # The human decision must carry the SAME gate_id the gate stamped
+        assert review_id == f"hitl_review_{agent_a['id']}_{agent_b['id']}"
+        # The human decision must carry the SAME review_id the gate stamped
         # (FAR-541) — a mismatched stamp is ignored / not resumed.
-        await compiled.aupdate_state(config, {"_hitl_decision": {"action": "approved", "gate_id": gate_id}})
+        await compiled.aupdate_state(config, {"_hitl_decision": {"action": "approved", "review_id": review_id}})
         resumed = await compiled.ainvoke(None, config)
 
         artifacts = resumed.get("artifacts") or []

@@ -127,7 +127,7 @@ def deliver_output(gate: str, client, request):
     request.node._audit_event_type = "hitl.output_delivered"
 
 
-@given("a HITL gate claim has expired")
+@given("a HITL review claim has expired")
 def hitl_claim_expired(request):
     request.node._audit_event_type = "hitl.claim_expired"
 

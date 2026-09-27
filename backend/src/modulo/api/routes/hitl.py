@@ -73,16 +73,16 @@ from modulo.core.pipeline_engine.executor import (
     SandboxCapacityExceededError,
     org_sandbox_capacity_free,
 )
-from modulo.db.crud.hitl_gate_config import (
+from modulo.db.crud.hitl_review_config import (
     EVENT_HUMAN_ONLY_DENIED,
     edge_source_or_target,
-    hitl_gate_exists_but_unresolved,
+    hitl_review_exists_but_unresolved,
     human_only_denial,
-    make_gate_id,
-    resolve_gate_description,
-    resolve_gate_descriptions,
-    resolve_hitl_gate_config,
-    snapshot_gate_config_map,
+    make_review_id,
+    resolve_hitl_review_config,
+    resolve_review_description,
+    resolve_review_descriptions,
+    snapshot_review_config_map,
 )
 from modulo.db.crud.run import get_run, transition_run
 from modulo.db.models.account import Account
@@ -122,11 +122,11 @@ def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
 # Repeated log/decorator keys (S1192).
-_CODE_HITL_CLAIM_GATE = "hitl.claim_gate"
+_CODE_HITL_CLAIM_REVIEW = "hitl.claim_review"
 _PERM_HITL_LIST = "hitl.list"
 
 #: FAR-634: the audit event type emitted on EVERY human_only denial (REST +
-#: MCP) — imported from ``db.crud.hitl_gate_config`` (the shared cross-surface
+#: MCP) — imported from ``db.crud.hitl_review_config`` (the shared cross-surface
 #: home) so the REST and MCP emitters cannot fork the audit stream on a rename.
 #: Denied-attempt visibility is cheap probe detection (post FAR-611 sweep).
 
@@ -147,7 +147,7 @@ class HumanOnlyDenied(HTTPException):
         detail: str,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         action: str,
         org_id: uuid.UUID,
         account_id: uuid.UUID,
@@ -157,7 +157,7 @@ class HumanOnlyDenied(HTTPException):
     ) -> None:
         super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
         self.run_id = run_id
-        self.gate_id = gate_id
+        self.review_id = review_id
         self.action = action
         self.org_id = org_id
         self.account_id = account_id
@@ -178,7 +178,7 @@ class ClaimRequest(BaseModel):
 
 class ClaimResponse(BaseModel):
     run_id: uuid.UUID
-    gate_id: str
+    review_id: str
     claim_token: str
     expires_at: str
 
@@ -200,7 +200,7 @@ class ApproveWithModificationRequest(BaseModel):
     #: ``ApproveRequest.answer``. A choice gate REQUIRES a valid ``option_id``
     #: on this path too — without it a reviewer could approve-with-modification
     #: while skipping the declared choice (the answer becomes
-    #: ``hitl_answer_{gate_id}`` in run state for downstream conditional edges).
+    #: ``hitl_answer_{review_id}`` in run state for downstream conditional edges).
     answer: dict[str, Any] | None = None
 
 
@@ -219,9 +219,9 @@ class ManualOutputRequest(BaseModel):
     output: dict[str, Any]
 
 
-class GateResponse(BaseModel):
+class ReviewResponse(BaseModel):
     run_id: uuid.UUID
-    gate_id: str
+    review_id: str
     pipeline_id: uuid.UUID
     pipeline_name: str | None = None
     claimed_by: uuid.UUID | None = None
@@ -229,12 +229,12 @@ class GateResponse(BaseModel):
     expires_at: str | None = None
     decision: str | None = None
     decision_at: str | None = None
-    #: Human label from the snapshot edge's ``hitl_gate_config.label``
+    #: Human label from the snapshot edge's ``hitl_review_config.label``
     #: (frontend UUID hygiene — falls back to shortId when absent).
     label: str | None = None
     #: FAR-613: the gate config's human description — WHY this gate exists.
     #: Resolved with the FAR-688 unified precedence (context-first, snapshot
-    #: fallback via ``hitl_gate_config.resolve_gate_description`` — the same
+    #: fallback via ``hitl_review_config.resolve_review_description`` — the same
     #: rule every briefing surface applies). None for legacy gates → the UI
     #: renders the muted no-description fallback.
     #:
@@ -247,7 +247,7 @@ class GateResponse(BaseModel):
     #: FAR-613: the fire-time briefing bundle persisted on the claim row
     #: (condition, FAR-688 matched ``condition_result``, trigger, source
     #: node, bounded artifacts, reason, pipeline_name). None for legacy
-    #: gates. Shape: ``modulo.core.pipeline_engine.hitl_context.HitlGateContext``
+    #: gates. Shape: ``modulo.core.pipeline_engine.hitl_context.HitlReviewContext``
     #: (kept as an open dict here — the API contract must accept legacy
     #: bundles that predate any key).
     context: dict[str, Any] | None = None
@@ -261,34 +261,34 @@ class GateResponse(BaseModel):
     claimed_by_me: bool = False
 
 
-class PendingGatesResponse(BaseModel):
-    gates: list[GateResponse]
+class PendingReviewsResponse(BaseModel):
+    reviews: list[ReviewResponse]
 
 
-class GateListResponse(BaseModel):
-    """Paginated org gate listing (FAR-692) — the repo's standard list envelope."""
+class ReviewListResponse(BaseModel):
+    """Paginated org review listing (FAR-692) — the repo's standard list envelope."""
 
-    items: list[GateResponse]
+    items: list[ReviewResponse]
     total: int
     page: int
     page_size: int
 
 
-#: FAR-692: the ``status`` query param on GET /api/v1/hitl/gates. A Literal type
+#: FAR-692: the ``status`` query param on GET /api/v1/hitl/reviews. A Literal type
 #: (not a bare str) so FastAPI's request validation rejects unknown values with
 #: 422 for free — no hand-rolled validation in the handler.
-GateStatusFilter = Literal["undecided", "pending", "claimed", "approved", "rejected", "all"]
+ReviewStatusFilter = Literal["undecided", "pending", "claimed", "approved", "rejected", "all"]
 
 #: page_size is clamped (not 422'd) at this ceiling — mirrors the runs-list
 #: convention of a bounded page size without failing the whole request.
-_GATE_PAGE_SIZE_MAX = 100
+_REVIEW_PAGE_SIZE_MAX = 100
 
-#: The ``status`` values on GET /api/v1/hitl/gates that view PENDING WORK. The
+#: The ``status`` values on GET /api/v1/hitl/reviews that view PENDING WORK. The
 #: data-rot fence (FAR-612/FAR-604) applies only to these: like
 #: ``HITLManager.list_pending`` they join ``runs`` and keep only gates whose run
 #: is still actionable. ``approved``/``rejected`` (decided history) and ``all``
-#: (audit view) are deliberately unfenced — see ``list_org_gates``.
-_PENDING_WORK_GATE_STATUSES = frozenset({"undecided", "pending", "claimed"})
+#: (audit view) are deliberately unfenced — see ``list_org_reviews``.
+_PENDING_WORK_REVIEW_STATUSES = frozenset({"undecided", "pending", "claimed"})
 
 
 async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -339,7 +339,7 @@ async def _enforce_human_only_gate(
     session: AsyncSession,
     principal: TenantPrincipal,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     action: str,
 ) -> None:
     """Raise 403 when a non-browser credential decides a ``human_only`` gate.
@@ -347,14 +347,14 @@ async def _enforce_human_only_gate(
     FAR-610: the decision routes previously performed no ``human_only`` check.
     The gate's config is resolved from the run's snapshot graph (falling back
     to the live edges / live HITL-node config) via the shared resolver
-    (:func:`modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config`) — the
+    (:func:`modulo.db.crud.hitl_review_config.resolve_hitl_review_config`) — the
     gate id maps to exactly one edge by topology, never by position. Runs
     BEFORE the capacity check and the manager call so a denial has no side
     effects (fail fast, gate left undecided).
 
     Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
     gate actually fired (a claim row exists — see
-    :func:`modulo.db.crud.hitl_gate_config.hitl_gate_exists_but_unresolved`),
+    :func:`modulo.db.crud.hitl_review_config.hitl_review_exists_but_unresolved`),
     the human_only policy cannot be verified, so non-browser principals are
     denied rather than silently allowed. Browser JWTs pass either way (the
     UI is their enforcement surface), and manual-node ids short-circuit
@@ -396,24 +396,24 @@ async def _enforce_human_only_gate(
     Hot path (FAR-610 review): the first line short-circuits browser JWTs —
     they are always allowed, so the resolver's queries never run on the
     common UI approve flow. The deny policy itself lives in the shared pure
-    verdict :func:`modulo.db.crud.hitl_gate_config.human_only_denial`; the
+    verdict :func:`modulo.db.crud.hitl_review_config.human_only_denial`; the
     fail-closed claim lookup runs only when the config is unresolvable.
     """
     non_browser_credential = principal.via_api_key or principal.client_kind != CLIENT_KIND_BROWSER
     if not non_browser_credential:
         return
-    config = await resolve_hitl_gate_config(
+    config = await resolve_hitl_review_config(
         session,
         run_id=run_id,
-        gate_id=gate_id,
+        review_id=review_id,
         org_id=principal.organisation_id,
     )
     gate_fired = False
     if config is None:
-        gate_fired = await hitl_gate_exists_but_unresolved(
+        gate_fired = await hitl_review_exists_but_unresolved(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=principal.organisation_id,
         )
     verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
@@ -421,7 +421,7 @@ async def _enforce_human_only_gate(
         raise HumanOnlyDenied(
             verdict,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             action=action,
             org_id=principal.organisation_id,
             account_id=principal.account_id,
@@ -447,7 +447,7 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
         EVENT_HUMAN_ONLY_DENIED,
         extra={
             "run_id": str(exc.run_id),
-            "gate_id": exc.gate_id,
+            "review_id": exc.review_id,
             "action": exc.action,
             "surface": "rest",
             "principal_kind": exc.principal_kind,
@@ -456,7 +456,7 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
     )
     payload: dict[str, Any] = {
         "run_id": str(exc.run_id),
-        "gate_id": exc.gate_id,
+        "review_id": exc.review_id,
         "action": exc.action,
         "surface": "rest",
         "principal_kind": exc.principal_kind,
@@ -483,7 +483,7 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
     except Exception:
         logger.warning(
             "hitl.human_only_denial_audit_failed",
-            extra={"run_id": str(exc.run_id), "gate_id": exc.gate_id, "action": exc.action},
+            extra={"run_id": str(exc.run_id), "review_id": exc.review_id, "action": exc.action},
             exc_info=True,
         )
 
@@ -509,7 +509,7 @@ class AnswerValidationErrorHTTP(HTTPException):
 async def _validate_choice_answer(
     session: AsyncSession,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     org_id: uuid.UUID,
     answer: dict[str, Any] | None,
     require_answer: bool = False,
@@ -533,7 +533,7 @@ async def _validate_choice_answer(
         return await validate_hitl_answer(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             answer=answer,
             require_answer=require_answer,
@@ -548,18 +548,18 @@ async def _validate_choice_answer(
 
 
 @router.post(
-    "/runs/{run_id}/hitl/{gate_id}/claim",
+    "/runs/{run_id}/hitl/{review_id}/claim",
     status_code=status.HTTP_200_OK,
 )
-@handle_db_errors(_CODE_HITL_CLAIM_GATE)
-async def claim_gate(
+@handle_db_errors(_CODE_HITL_CLAIM_REVIEW)
+async def claim_review(
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     req: ClaimRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("hitl.claim"),
 ) -> ClaimResponse:
-    """Atomically claim a HITL gate. Returns a claim_token for approve/reject.
+    """Atomically claim a HITL review. Returns a claim_token for approve/reject.
 
     FAR-609: claim is human_only too — a non-browser credential (API key /
     non-browser JWT) cannot CLAIM nor decide a human_only gate, so the same
@@ -582,11 +582,11 @@ async def claim_gate(
                 # FAR-609: non-browser principals are denied human_only gates
                 # on claim exactly like on the decision routes. The check
                 # short-circuits browser JWTs before writing anything.
-                await _enforce_human_only_gate(session, principal, run_id, gate_id, "claim")
+                await _enforce_human_only_gate(session, principal, run_id, review_id, "claim")
                 gate = await mgr.claim(
                     session,
                     run_id=run_id,
-                    gate_id=gate_id,
+                    review_id=review_id,
                     org_id=principal.organisation_id,
                     claimant_id=principal.account_id,
                     expiry_minutes=req.expiry_minutes,
@@ -599,20 +599,20 @@ async def claim_gate(
                 # types so the frontend can discriminate by ``type`` instead
                 # of substring-matching English prose. Detail text is
                 # unchanged (the i18n keys render the same messages).
-                raise ProblemException(ProblemType.HITL_GATE_ALREADY_CLAIMED, detail=str(exc)) from exc
+                raise ProblemException(ProblemType.HITL_REVIEW_ALREADY_CLAIMED, detail=str(exc)) from exc
             except GateAlreadyDecidedError as exc:
                 # A decided gate previously fell through to the generic
                 # Exception backstop (500) on this route; a stale row on
                 # screen makes this reachable, so it is a 409 like the other
                 # claim conflicts.
-                raise ProblemException(ProblemType.HITL_GATE_ALREADY_DECIDED, detail=str(exc)) from exc
+                raise ProblemException(ProblemType.HITL_REVIEW_ALREADY_DECIDED, detail=str(exc)) from exc
             except RunNotAwaitingError as exc:
                 # FAR-612: a terminal/still-executing run must never be flipped
                 # to "claimed" by a stale gate claim -- 409 with the run's
                 # actual status so the operator sees why.
                 raise ProblemException(ProblemType.HITL_RUN_NOT_AWAITING, detail=str(exc)) from exc
             except NotTeamMemberError as exc:
-                logger.warning("hitl.claim_gate.team_access_denied: %s", exc)
+                logger.warning("hitl.claim_review.team_access_denied: %s", exc)
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
             # FAR-612: flip the run to "claimed" through the fenced transition
@@ -635,13 +635,13 @@ async def claim_gate(
                 allowed_from=frozenset({"awaiting_human"}),
             )
     except ProgrammingError as exc:
-        logger.exception(_CODE_HITL_CLAIM_GATE)
+        logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception(_CODE_HITL_CLAIM_GATE)
+        logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -655,7 +655,7 @@ async def claim_gate(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("hitl.claim_gate.unexpected_error")
+        logger.exception("hitl.claim_review.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
@@ -668,7 +668,7 @@ async def claim_gate(
         )
     return ClaimResponse(
         run_id=gate.run_id,
-        gate_id=gate.gate_id,
+        review_id=gate.review_id,
         claim_token=gate.claim_token,
         expires_at=gate.expires_at.isoformat(),
     )
@@ -678,7 +678,7 @@ async def _run_hitl_manager(
     session: AsyncSession,
     principal: TenantPrincipal,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     *,
     enforce_human_only: bool,
     require_sandbox: bool,
@@ -705,7 +705,7 @@ async def _run_hitl_manager(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             if enforce_human_only:
-                await _enforce_human_only_gate(session, principal, run_id, gate_id, audit_action)
+                await _enforce_human_only_gate(session, principal, run_id, review_id, audit_action)
             if require_sandbox:
                 await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
@@ -716,7 +716,7 @@ async def _run_hitl_manager(
                 return await getattr(mgr, mgr_method)(
                     session,
                     run_id=run_id,
-                    gate_id=gate_id,
+                    review_id=review_id,
                     org_id=principal.organisation_id,
                     actor_id=principal.account_id,
                     **manager_kwargs,
@@ -767,13 +767,13 @@ async def _run_hitl_manager(
 
 
 @router.post(
-    "/runs/{run_id}/hitl/{gate_id}/approve",
+    "/runs/{run_id}/hitl/{review_id}/approve",
     status_code=status.HTTP_200_OK,
 )
-@handle_db_errors("hitl.approve_gate")
-async def approve_gate(
+@handle_db_errors("hitl.approve_review")
+async def approve_review(
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     req: ApproveRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
@@ -786,15 +786,15 @@ async def approve_gate(
     # could approve while skipping the declared choice (mirrors
     # approve-with-modification).
     validated_answer = await _validate_choice_answer(
-        session, run_id, gate_id, principal.organisation_id, req.answer, require_answer=True
+        session, run_id, review_id, principal.organisation_id, req.answer, require_answer=True
     )
     # FAR-541: every resume decision is STAMPED with the gate it resolves so a
-    # per-gate consumer (``_hitl_gate_resume_result``) can reject a foreign
+    # per-gate consumer (``_hitl_review_resume_result``) can reject a foreign
     # decision left in state by an earlier gate (decisions are per-RUN but
     # consumers are per-gate; ``_hitl_decision`` is never cleared). HITLManager._decide
     # would stamp the persisted payload anyway; this explicit stamp feeds the
     # DIRECT executor.resume injection below, which bypasses _decide.
-    resume_data: dict[str, Any] = {"action": "approved", "gate_id": gate_id}
+    resume_data: dict[str, Any] = {"action": "approved", "review_id": review_id}
     if req.notes:
         resume_data["notes"] = req.notes
     if validated_answer is not None:
@@ -804,7 +804,7 @@ async def approve_gate(
         session,
         principal,
         run_id,
-        gate_id,
+        review_id,
         enforce_human_only=True,
         require_sandbox=True,
         mgr_method="approve",
@@ -824,7 +824,7 @@ async def approve_gate(
     except SandboxCapacityExceededError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("hitl.approve_gate.resume_failed")
+        logger.exception("hitl.approve_review.resume_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to resume pipeline after approval",
@@ -839,19 +839,19 @@ async def approve_gate(
 
 
 @router.post(
-    "/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
+    "/runs/{run_id}/hitl/{review_id}/approve-with-modification",
     status_code=status.HTTP_200_OK,
 )
-@handle_db_errors("hitl.approve_gate_with_modification")
-async def approve_gate_with_modification(
+@handle_db_errors("hitl.approve_review_with_modification")
+async def approve_review_with_modification(
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     req: ApproveWithModificationRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
-    """Approve a HITL gate with a modified output payload.
+    """Approve a HITL review with a modified output payload.
 
     The human reviewer's modified output replaces the agent's original output
     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
@@ -863,30 +863,30 @@ async def approve_gate_with_modification(
     # modify-approve while skipping the declared choice (previously nothing
     # validated, so the requirement was silently skipped).
     validated_answer = await _validate_choice_answer(
-        session, run_id, gate_id, principal.organisation_id, req.answer, require_answer=True
+        session, run_id, review_id, principal.organisation_id, req.answer, require_answer=True
     )
-    # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
     # The real writer contract: action "approved" + "modified_output" (there is
     # no "approved_with_modification" action). _decide would stamp the persisted
     # payload anyway; this explicit stamp feeds the DIRECT executor.resume
     # injection below, which bypasses _decide.
     resume_data: dict[str, Any] = {
         "action": "approved",
-        "gate_id": gate_id,
+        "review_id": review_id,
         "modified_output": req.modified_output,
     }
     if req.notes:
         resume_data["notes"] = req.notes
     if validated_answer is not None:
         # FAR-907: the answer rides in the persisted decision so
-        # ``_inject_answer_state`` places ``hitl_answer_<gate_id>`` in run
+        # ``_inject_answer_state`` places ``hitl_answer_<review_id>`` in run
         # state exactly as on the plain approve path.
         resume_data["answer"] = validated_answer
     await _run_hitl_manager(
         session,
         principal,
         run_id,
-        gate_id,
+        review_id,
         enforce_human_only=True,
         require_sandbox=True,
         mgr_method="approve_with_modification",
@@ -922,20 +922,20 @@ async def approve_gate_with_modification(
 
 
 @router.post(
-    "/runs/{run_id}/hitl/{gate_id}/reject",
+    "/runs/{run_id}/hitl/{review_id}/reject",
     status_code=status.HTTP_200_OK,
 )
-@handle_db_errors("hitl.reject_gate")
-async def reject_gate(
+@handle_db_errors("hitl.reject_review")
+async def reject_review(
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     req: RejectRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = require_permission("hitl.reject"),
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
-    # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
     # No require_sandbox guard here (unlike the resume actions): rejecting
     # routes the run to its reject_target or terminates it, so it must not be
     # blocked because the org is at sandbox capacity. The human_only guard is
@@ -944,12 +944,12 @@ async def reject_gate(
     # default-human_only gate (FAR-609), so they cannot reach reject either —
     # only a principal already holding a claim can reject. Agent-only runs on
     # default gates require browser-human intervention (intended policy).
-    resume_data: dict[str, Any] = {"action": "rejected", "gate_id": gate_id, "reason": req.reason}
+    resume_data: dict[str, Any] = {"action": "rejected", "review_id": review_id, "reason": req.reason}
     await _run_hitl_manager(
         session,
         principal,
         run_id,
-        gate_id,
+        review_id,
         enforce_human_only=False,
         require_sandbox=False,
         mgr_method="reject",
@@ -969,7 +969,7 @@ async def reject_gate(
             check_sandbox_capacity=False,
         )
     except Exception as exc:
-        logger.exception("hitl.reject_gate.resume_failed")
+        logger.exception("hitl.reject_review.resume_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to resume pipeline after rejection",
@@ -979,24 +979,24 @@ async def reject_gate(
 
 
 # ---------------------------------------------------------------------------
-# Deliver Manual — human supplies output directly at a HITL gate
+# Deliver Manual — human supplies output directly at a HITL review
 # ---------------------------------------------------------------------------
 
 
 @router.post(
-    "/runs/{run_id}/hitl/{gate_id}/deliver-manual",
+    "/runs/{run_id}/hitl/{review_id}/deliver-manual",
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.deliver_manual_output")
 async def deliver_manual_output(
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     req: DeliverManualRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = require_permission("hitl.deliver_manual"),
 ) -> dict[str, str]:
-    """Deliver manually-supplied output at a HITL gate and resume the run.
+    """Deliver manually-supplied output at a HITL review and resume the run.
 
     The reviewer provides the output directly instead of routing to a
     correction run or back to the agent. The output is validated and the
@@ -1008,15 +1008,15 @@ async def deliver_manual_output(
             detail="output must be a non-empty object",
         )
 
-    # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
+    # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
     # _decide would stamp the persisted payload anyway; this explicit stamp
     # feeds the DIRECT executor.resume injection below, which bypasses _decide.
-    resume_data: dict[str, Any] = {"action": "deliver_manual", "gate_id": gate_id, "output": req.output}
+    resume_data: dict[str, Any] = {"action": "deliver_manual", "review_id": review_id, "output": req.output}
     await _run_hitl_manager(
         session,
         principal,
         run_id,
-        gate_id,
+        review_id,
         enforce_human_only=True,
         require_sandbox=True,
         mgr_method="deliver_manual",
@@ -1051,13 +1051,13 @@ async def deliver_manual_output(
 
 
 @router.post(
-    "/runs/{run_id}/manual/{gate_id}/submit",
+    "/runs/{run_id}/manual/{review_id}/submit",
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.submit_manual_output")
 async def submit_manual_output(
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     req: ManualOutputRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
@@ -1068,12 +1068,12 @@ async def submit_manual_output(
     # consumer (``_manual_node``) resumes only on a decision stamped for it.
     # _decide would stamp the persisted payload anyway; this explicit stamp
     # feeds the DIRECT executor.resume injection below, which bypasses _decide.
-    resume_data: dict[str, Any] = {"action": "manual_output", "gate_id": gate_id, "output": req.output}
+    resume_data: dict[str, Any] = {"action": "manual_output", "review_id": review_id, "output": req.output}
     await _run_hitl_manager(
         session,
         principal,
         run_id,
-        gate_id,
+        review_id,
         enforce_human_only=True,
         require_sandbox=True,
         mgr_method="approve",
@@ -1110,12 +1110,12 @@ async def submit_manual_output(
 @router.get(
     "/runs/{run_id}/hitl/pending",
 )
-@handle_db_errors("hitl.list_run_pending_gates")
-async def list_run_pending_gates(
+@handle_db_errors("hitl.list_run_pending_reviews")
+async def list_run_pending_reviews(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
-) -> PendingGatesResponse:
+) -> PendingReviewsResponse:
     """List all pending (undecided) HITL gates for a specific run."""
     try:
         async with session.begin():
@@ -1139,8 +1139,8 @@ async def list_run_pending_gates(
                 pipeline = await session.get(Pipeline, gates[0].pipeline_id)
                 pipeline_name = pipeline.name if pipeline else None
 
-            gate_label_map: dict[str, str] = {}
-            gate_description_map: dict[str, str | None] = {}
+            review_label_map: dict[str, str] = {}
+            review_description_map: dict[str, str | None] = {}
             if run is not None and run.snapshot_id:
                 snap_result = await session.execute(
                     select(PipelineSnapshot).where(
@@ -1150,31 +1150,31 @@ async def list_run_pending_gates(
                 )
                 snapshot = snap_result.scalar_one_or_none()
                 if snapshot is not None and isinstance(snapshot.graph_json, dict):
-                    gate_label_map = _build_gate_label_map(snapshot.graph_json)
+                    review_label_map = _build_review_label_map(snapshot.graph_json)
                     # FAR-688 unified precedence: the fire-time captured
                     # description (the claim's context) wins; the snapshot
                     # config's description is the fallback — the SAME rule
                     # the org-level endpoints apply via
-                    # ``resolve_gate_descriptions``.
-                    gate_config_map = snapshot_gate_config_map(snapshot.graph_json)
-                    gate_description_map = {
-                        g.gate_id: resolve_gate_description(
+                    # ``resolve_review_descriptions``.
+                    review_config_map = snapshot_review_config_map(snapshot.graph_json)
+                    review_description_map = {
+                        g.review_id: resolve_review_description(
                             g.context_json if isinstance(g.context_json, dict) else None,
-                            gate_config_map.get(g.gate_id),
+                            review_config_map.get(g.review_id),
                         )
                         for g in gates
                     }
 
-            if not gate_description_map and gates:
+            if not review_description_map and gates:
                 # FAR-688: when the snapshot is unavailable (no snapshot_id,
                 # retention pruned the row, or a non-dict graph) the
                 # context-first pass above never ran — resolve from the claim
                 # row's captured briefing ALONE (context-first, no snapshot
                 # fallback) so this surface agrees with the org-level
-                # ``resolve_gate_descriptions`` resolver instead of muting a
+                # ``resolve_review_descriptions`` resolver instead of muting a
                 # description the capture carries.
-                gate_description_map = {
-                    g.gate_id: resolve_gate_description(
+                review_description_map = {
+                    g.review_id: resolve_review_description(
                         g.context_json if isinstance(g.context_json, dict) else None, None
                     )
                     for g in gates
@@ -1184,13 +1184,13 @@ async def list_run_pending_gates(
             # stamp, resolved inside the same transaction/RLS context.
             claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
-        logger.exception("hitl.list_run_pending_gates")
+        logger.exception("hitl.list_run_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("hitl.list_run_pending_gates")
+        logger.exception("hitl.list_run_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1198,19 +1198,19 @@ async def list_run_pending_gates(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("hitl.list_run_pending_gates.unexpected_error")
+        logger.exception("hitl.list_run_pending_reviews.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
-    return PendingGatesResponse(
-        gates=[
-            _gate_to_response(
+    return PendingReviewsResponse(
+        reviews=[
+            _review_to_response(
                 g,
                 pipeline_name=pipeline_name,
-                label=gate_label_map.get(g.gate_id),
-                description=gate_description_map.get(g.gate_id),
+                label=review_label_map.get(g.review_id),
+                description=review_description_map.get(g.review_id),
                 claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
                 claimed_by_me=g.account_id == principal.account_id,
             )
@@ -1222,12 +1222,12 @@ async def list_run_pending_gates(
 @router.get(
     "/hitl/pending",
 )
-@handle_db_errors("hitl.list_org_pending_gates")
-async def list_org_pending_gates(
+@handle_db_errors("hitl.list_org_pending_reviews")
+async def list_org_pending_reviews(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
-) -> PendingGatesResponse:
-    """List pending HITL gates across the organisation.
+) -> PendingReviewsResponse:
+    """List pending HITL reviews across the organisation.
 
     Gates on terminal runs are excluded (they are data rot, not pending work):
     the manager joins ``runs`` and keeps only undecided gates whose run is in
@@ -1255,25 +1255,25 @@ async def list_org_pending_gates(
             # graph via the shared batched resolver (two IN queries over the
             # few pending gates' runs + snapshots — never per-gate walks), so
             # the org review page gets the briefing without an N+1. Context
-            # comes from the claim row itself (_gate_to_response).
-            description_by_gate = await resolve_gate_descriptions(
+            # comes from the claim row itself (_review_to_response).
+            description_by_review = await resolve_review_descriptions(
                 session, gates=gates, org_id=principal.organisation_id
             )
             # FAR-686: also resolve each gate's human label at org level so the
             # shared gate card shows a readable name (frontend falls back to
             # shortId when a label is missing).
-            gate_label_map = await _load_gate_label_map(session, gates)
+            review_label_map = await _load_review_label_map(session, gates)
             # FAR-691: batched claimant display names + the caller-owns-claim
             # stamp, resolved inside the same transaction/RLS context.
             claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
-        logger.exception("hitl.list_org_pending_gates")
+        logger.exception("hitl.list_org_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("hitl.list_org_pending_gates")
+        logger.exception("hitl.list_org_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1281,7 +1281,7 @@ async def list_org_pending_gates(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("hitl.list_org_pending_gates.unexpected_error")
+        logger.exception("hitl.list_org_pending_reviews.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
@@ -1289,17 +1289,17 @@ async def list_org_pending_gates(
 
     # Org-level: gates span many runs, so per-run snapshot lookups are
     # expensive. Description IS resolved (FAR-613) and labels (FAR-686) are
-    # both resolved in one batched pass each, keyed by (run_id, gate_id)
+    # both resolved in one batched pass each, keyed by (run_id, review_id)
     # because gate ids are only unique per run — two runs can reuse the same
     # gate id with different labels/descriptions. Frontend falls back to
     # shortId when a label is missing.
-    return PendingGatesResponse(
-        gates=[
-            _gate_to_response(
+    return PendingReviewsResponse(
+        reviews=[
+            _review_to_response(
                 g,
                 pipeline_name=pipeline_map.get(g.pipeline_id),
-                description=description_by_gate.get((g.run_id, g.gate_id)),
-                label=gate_label_map.get((g.run_id, g.gate_id)),
+                description=description_by_review.get((g.run_id, g.review_id)),
+                label=review_label_map.get((g.run_id, g.review_id)),
                 claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
                 claimed_by_me=g.account_id == principal.account_id,
             )
@@ -1309,16 +1309,16 @@ async def list_org_pending_gates(
 
 
 @router.get(
-    "/hitl/gates",
+    "/hitl/reviews",
 )
-@handle_db_errors("hitl.list_org_gates")
-async def list_org_gates(
-    status_filter: GateStatusFilter = Query(default="undecided", alias="status"),
+@handle_db_errors("hitl.list_org_reviews")
+async def list_org_reviews(
+    status_filter: ReviewStatusFilter = Query(default="undecided", alias="status"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
-) -> GateListResponse:
+) -> ReviewListResponse:
     """Paginated org-wide gate listing including DECIDED gates (FAR-692).
 
     The review page's status filter was a no-op for approved/rejected because
@@ -1345,46 +1345,46 @@ async def list_org_gates(
     ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
     consumers depend on its undecided-only shape). The response envelope
     mirrors the repo's standard list convention (items/total/page/page_size,
-    as the runs list uses) with the existing ``GateResponse`` items.
+    as the runs list uses) with the existing ``ReviewResponse`` items.
     """
-    decision_filters = _gate_decision_filters(status_filter)
+    decision_filters = _review_decision_filters(status_filter)
 
     # Pending-work fence (FAR-612/FAR-604): the undecided family must match
     # HITLManager.list_pending — joined to runs and restricted to runs still
     # in an actionable status, because an undecided gate on a terminal/
     # complete run is orphaned data rot, not pending work. History views
     # (approved/rejected) and the `all` audit view are deliberately unfenced.
-    fenced_to_actionable_runs = status_filter in _PENDING_WORK_GATE_STATUSES
+    fenced_to_actionable_runs = status_filter in _PENDING_WORK_REVIEW_STATUSES
     if fenced_to_actionable_runs:
         decision_filters.append(Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES))
 
     # page_size clamps at the ceiling (never 422s) — an oversized client hint
     # still gets a usable page, matching the "don't fail the request" intent.
-    effective_page_size = min(page_size, _GATE_PAGE_SIZE_MAX)
+    effective_page_size = min(page_size, _REVIEW_PAGE_SIZE_MAX)
 
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            total, gates = await _fetch_gate_page(
+            total, gates = await _fetch_review_page(
                 session,
                 decision_filters=decision_filters,
                 fenced_to_actionable_runs=fenced_to_actionable_runs,
                 page=page,
                 effective_page_size=effective_page_size,
             )
-            pipeline_map, description_by_gate, gate_label_map, claimant_names = await _load_gate_page_enrichment(
+            pipeline_map, description_by_review, review_label_map, claimant_names = await _load_review_page_enrichment(
                 session, gates=gates, organisation_id=principal.organisation_id
             )
     except ProgrammingError as exc:
-        logger.exception("hitl.list_org_gates")
+        logger.exception("hitl.list_org_reviews")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("hitl.list_org_gates")
+        logger.exception("hitl.list_org_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1392,19 +1392,19 @@ async def list_org_gates(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("hitl.list_org_gates.unexpected_error")
+        logger.exception("hitl.list_org_reviews.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
-    return GateListResponse(
+    return ReviewListResponse(
         items=[
-            _gate_to_response(
+            _review_to_response(
                 g,
                 pipeline_name=pipeline_map.get(g.pipeline_id),
-                description=description_by_gate.get((g.run_id, g.gate_id)),
-                label=gate_label_map.get((g.run_id, g.gate_id)),
+                description=description_by_review.get((g.run_id, g.review_id)),
+                label=review_label_map.get((g.run_id, g.review_id)),
                 claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
                 claimed_by_me=g.account_id == principal.account_id,
             )
@@ -1421,8 +1421,8 @@ async def list_org_gates(
 # ---------------------------------------------------------------------------
 
 
-def _gate_decision_filters(status_filter: GateStatusFilter) -> list[Any]:
-    """Decision-column WHERE filters for each ``/hitl/gates`` status filter (FAR-692).
+def _review_decision_filters(status_filter: ReviewStatusFilter) -> list[Any]:
+    """Decision-column WHERE filters for each ``/hitl/reviews`` status filter (FAR-692).
 
     ``undecided`` keeps claimed + unclaimed; ``pending`` narrows to unclaimed;
     ``claimed`` to claimed; ``approved``/``rejected`` surface the decided
@@ -1442,7 +1442,7 @@ def _gate_decision_filters(status_filter: GateStatusFilter) -> list[Any]:
     return [HitlClaim.decision == "rejected"]
 
 
-async def _fetch_gate_page(
+async def _fetch_review_page(
     session: AsyncSession,
     *,
     decision_filters: list[Any],
@@ -1450,7 +1450,7 @@ async def _fetch_gate_page(
     page: int,
     effective_page_size: int,
 ) -> tuple[int, list[HitlClaim]]:
-    """Run the count + page queries for ``/hitl/gates`` in the caller's transaction.
+    """Run the count + page queries for ``/hitl/reviews`` in the caller's transaction.
 
     Count and page derive from the SAME composed filters; the runs join is
     part of both so the count matches the fenced page. The page query is
@@ -1481,7 +1481,7 @@ async def _fetch_gate_page(
     return total, gates
 
 
-async def _load_gate_page_enrichment(
+async def _load_review_page_enrichment(
     session: AsyncSession,
     *,
     gates: list[HitlClaim],
@@ -1492,11 +1492,11 @@ async def _load_gate_page_enrichment(
     dict[tuple[uuid.UUID, str], str],
     dict[uuid.UUID, str],
 ]:
-    """Batched briefing enrichment for the ``/hitl/gates`` page (FAR-692).
+    """Batched briefing enrichment for the ``/hitl/reviews`` page (FAR-692).
 
     Decided gates carry the same enrichment as pending ones: pipeline names,
     descriptions (FAR-613), human labels (FAR-686 — resolved for decided
-    gates too, keyed by (run_id, gate_id)) and claimant display names +
+    gates too, keyed by (run_id, review_id)) and claimant display names +
     the caller-owns-claim stamp (FAR-691), all in batched passes inside the
     caller's transaction/RLS context.
     """
@@ -1506,19 +1506,19 @@ async def _load_gate_page_enrichment(
         pipeline_rows = await session.execute(select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids)))
         pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
 
-    description_by_gate = await resolve_gate_descriptions(session, gates=gates, org_id=organisation_id)
-    gate_label_map = await _load_gate_label_map(session, gates)
+    description_by_review = await resolve_review_descriptions(session, gates=gates, org_id=organisation_id)
+    review_label_map = await _load_review_label_map(session, gates)
     claimant_names = await _load_claimant_name_map(session, gates)
-    return pipeline_map, description_by_gate, gate_label_map, claimant_names
+    return pipeline_map, description_by_review, review_label_map, claimant_names
 
 
-async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[tuple[uuid.UUID, str], str]:
-    """Batched ``(run_id, gate_id) -> human label`` resolution for the org endpoint.
+async def _load_review_label_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[tuple[uuid.UUID, str], str]:
+    """Batched ``(run_id, review_id) -> human label`` resolution for the org endpoint.
 
-    Keyed by ``(run_id, gate_id)`` — gate ids are unique per run only, so
-    keying by bare gate_id would collide across runs sharing an id.
+    Keyed by ``(run_id, review_id)`` — gate ids are unique per run only, so
+    keying by bare review_id would collide across runs sharing an id.
 
-    Resolves each pending gate's run -> snapshot -> ``hitl_gate_config.label``
+    Resolves each pending gate's run -> snapshot -> ``hitl_review_config.label``
     with two set-based queries (runs, then snapshots). Graceful degradation:
     a missing run/snapshot or a non-dict ``graph_json`` simply leaves that
     gate without a label (frontend falls back to shortId) — one bad snapshot
@@ -1543,37 +1543,37 @@ async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) ->
         if not isinstance(graph_json, dict):
             continue
         try:
-            labels_by_snapshot[snap_id] = _build_gate_label_map(graph_json)
+            labels_by_snapshot[snap_id] = _build_review_label_map(graph_json)
         except Exception:
             # One corrupted snapshot must not break the whole pending list.
-            logger.exception("hitl.list_org_pending_gates.label_map_failed")
+            logger.exception("hitl.list_org_pending_reviews.label_map_failed")
 
-    gate_label_map: dict[tuple[uuid.UUID, str], str] = {}
+    review_label_map: dict[tuple[uuid.UUID, str], str] = {}
     for g in gates:
         snap_id = run_to_snapshot.get(g.run_id)
         if snap_id is None:
             continue
-        label = labels_by_snapshot.get(snap_id, {}).get(g.gate_id)
+        label = labels_by_snapshot.get(snap_id, {}).get(g.review_id)
         if label:
-            gate_label_map[(g.run_id, g.gate_id)] = label
-    return gate_label_map
+            review_label_map[(g.run_id, g.review_id)] = label
+    return review_label_map
 
 
-def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
-    """Map gate_id -> human label from snapshot edges carrying hitl_gate_config.
+def _build_review_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
+    """Map review_id -> human label from snapshot edges carrying hitl_review_config.
 
-    Gate id format is ``hitl_gate_<source>_<target>`` (see
-    ``graph_cache._make_gate_id``). Edges without a ``label`` in their
-    ``hitl_gate_config`` are omitted so the frontend falls back to shortId.
+    Gate id format is ``hitl_review_<source>_<target>`` (see
+    ``graph_cache._make_review_id``). Edges without a ``label`` in their
+    ``hitl_review_config`` are omitted so the frontend falls back to shortId.
     Node-key resolution uses the shared ``edge_source_or_target`` (canonical +
     persisted key styles) — the same helper the FAR-610 gate-config resolver
     uses, so labels and enforcement always agree on the gate id derivation.
     """
-    gate_label_map: dict[str, str] = {}
+    review_label_map: dict[str, str] = {}
     for edge in graph_json.get("edges", []):
         if not isinstance(edge, dict):
             continue
-        hitl_config = edge.get("hitl_gate_config")
+        hitl_config = edge.get("hitl_review_config")
         if not isinstance(hitl_config, dict):
             continue
         label = hitl_config.get("label")
@@ -1582,21 +1582,21 @@ def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
         source = edge_source_or_target(edge, "source")
         target = edge_source_or_target(edge, "target")
         if source and target:
-            gate_label_map[make_gate_id(source, target)] = str(label)
-    return gate_label_map
+            review_label_map[make_review_id(source, target)] = str(label)
+    return review_label_map
 
 
-def _gate_to_response(
+def _review_to_response(
     g: HitlClaim,
     pipeline_name: str | None = None,
     label: str | None = None,
     description: str | None = None,
     claimed_by_name: str | None = None,
     claimed_by_me: bool = False,
-) -> GateResponse:
-    return GateResponse(
+) -> ReviewResponse:
+    return ReviewResponse(
         run_id=g.run_id,
-        gate_id=g.gate_id,
+        review_id=g.review_id,
         pipeline_id=g.pipeline_id,
         pipeline_name=pipeline_name,
         claimed_by=g.account_id,
@@ -1618,7 +1618,7 @@ async def _load_claimant_name_map(session: AsyncSession, gates: list[HitlClaim])
     FAR-691: the review page renders "Claimed by <name>" instead of a raw
     account UUID. Collects the claimant account ids from the pending gates
     and resolves them with ONE select on the accounts table — the same
-    batched pattern as :func:`_load_gate_label_map`. The best human-readable
+    batched pattern as :func:`_load_review_label_map`. The best human-readable
     field wins (``display_name``, falling back to ``email`` when the display
     name is empty); a missing account row simply leaves that gate without a
     name (the frontend falls back to the raw UUID). All lookups happen

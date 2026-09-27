@@ -39,7 +39,7 @@ async def get_or_create_feedback_record(
     org_id: UUID,
     run_id: UUID,
     node_id: str,
-    gate_id: str,
+    review_id: str,
     account_id: UUID | None,
     rejection_reason: str,
     rejected_output: dict[str, Any],
@@ -59,7 +59,7 @@ async def get_or_create_feedback_record(
     record = FeedbackRecord(
         organisation_id=org_id,
         run_id=run_id,
-        gate_id=gate_id,
+        review_id=review_id,
         account_id=account_id,
         rejection_reason=rejection_reason,
         rejected_output=rejected_output,

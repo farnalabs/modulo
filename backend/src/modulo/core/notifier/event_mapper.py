@@ -52,8 +52,8 @@ _RUN_DETAIL_URL = "/runs/{run_id}"
 # HITL-gate guard events (hitl-gate-removal-guard-plan.md v19 §5). These are
 # emitted by the service-layer backstop as AuditEvents; the config registration
 # keeps the in-app Notification surface aware of them (scope: admin).
-EVENT_HITL_GATE_REMOVED = "hitl_gate_removed"
-EVENT_HITL_GATE_REMOVAL_DENIED = "hitl_gate_removal_denied"
+EVENT_HITL_REVIEW_REMOVED = "hitl_review_removed"
+EVENT_HITL_REVIEW_REMOVAL_DENIED = "hitl_review_removal_denied"
 
 _EVENT_CONFIG: dict[str, dict[str, Any]] = {
     EVENT_HITL_AWAITING: {
@@ -112,7 +112,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
-    EVENT_HITL_GATE_REMOVED: {
+    EVENT_HITL_REVIEW_REMOVED: {
         "level": "warning",
         "scope": "admin",
         "category": "hitl.gate_removed",
@@ -120,7 +120,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
-    EVENT_HITL_GATE_REMOVAL_DENIED: {
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: {
         "level": "error",
         "scope": "admin",
         "category": "hitl.gate_removal_denied",
@@ -211,8 +211,8 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
     EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
     EVENT_HITL_APPROVE_SWEEP: "HITL approve sweep suspected",
-    EVENT_HITL_GATE_REMOVED: "HITL gate weakened — {pipeline_name}",
-    EVENT_HITL_GATE_REMOVAL_DENIED: "HITL gate removal denied",
+    EVENT_HITL_REVIEW_REMOVED: "HITL review weakened — {pipeline_name}",
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: "HITL review removal denied",
     EVENT_EVAL_REGRESSION: "Eval regression detected — {agent_name}",
     EVENT_EVAL_BLOCKED: "Eval blocked — {pipeline_name}",
     EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
@@ -234,11 +234,11 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
     EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
     EVENT_HITL_APPROVE_SWEEP: (
-        "{approve_count} HITL gates across {distinct_pipeline_count} pipelines were approved by "
+        "{approve_count} HITL reviews across {distinct_pipeline_count} pipelines were approved by "
         "actor {actor} within {window_seconds} seconds — possible bulk-approve sweep."
     ),
-    EVENT_HITL_GATE_REMOVED: 'A HITL gate on "{pipeline_name}" was weakened or removed.',
-    EVENT_HITL_GATE_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL gate was denied.",
+    EVENT_HITL_REVIEW_REMOVED: 'A HITL review on "{pipeline_name}" was weakened or removed.',
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL review was denied.",
     EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
     EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
     EVENT_FEEDBACK_PENDING: "A feedback record is pending your review.",
@@ -271,9 +271,9 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_BUDGET_EXCEEDED: _RUN_DETAIL_URL,
     EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
     EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,
-    EVENT_HITL_GATE_REMOVED: None,
+    EVENT_HITL_REVIEW_REMOVED: None,
     EVENT_HITL_APPROVE_SWEEP: None,
-    EVENT_HITL_GATE_REMOVAL_DENIED: None,
+    EVENT_HITL_REVIEW_REMOVAL_DENIED: None,
     EVENT_EVAL_REGRESSION: "/evals",
     EVENT_EVAL_BLOCKED: _RUN_DETAIL_URL,
     EVENT_FEEDBACK_PENDING: "/feedback/inbox",

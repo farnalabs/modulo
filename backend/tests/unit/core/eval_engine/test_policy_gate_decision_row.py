@@ -23,14 +23,14 @@ from modulo.core.eval_engine.policy_gate import (
 )
 
 org_id = uuid.uuid4()
-gate_id = uuid.uuid4()
+review_id = uuid.uuid4()
 eval_id = uuid.uuid4()
 _run_id = uuid.uuid4()
 
 
 def _policy_gate(**overrides) -> PolicyGateView:
     base = {
-        "id": gate_id,
+        "id": review_id,
         "organisation_id": org_id,
         "version": 3,
         "node_id": uuid.uuid4(),
@@ -125,5 +125,5 @@ class TestBuildDecisionRowIsPure:
         # No session, no engine, no repository — only IDs and an Outcome.
         row = build_decision_row(_snapshot(), _outcome_defined_pass(), _run_id)
 
-        assert row.policy_gate_id == gate_id
+        assert row.policy_gate_id == review_id
         assert row.eval_id == eval_id

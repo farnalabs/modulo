@@ -125,7 +125,7 @@ def _record(**overrides: Any) -> MagicMock:
     r.id = uuid.uuid4()
     r.organisation_id = _ORG
     r.run_id = _RUN
-    r.gate_id = "gate-1"
+    r.review_id = "gate-1"
     r.account_id = _USER
     r.rejection_reason = "secret detected"
     r.rejected_output = {"body": "secret: hunter2"}

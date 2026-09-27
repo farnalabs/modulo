@@ -388,9 +388,9 @@ class TestConstants:
             "review_hitl:deliver_manual",
             "copy_library_primitive",
             "list_pending_hitl",
-            "list_hitl_gates",
-            "get_hitl_gate",
-            "get_pipeline_gates",
+            "list_hitl_reviews",
+            "get_hitl_review",
+            "get_pipeline_reviews",
             "get_run_output",
             "create_pipeline",
             "update_pipeline_graph",
@@ -508,7 +508,7 @@ class TestToolHandlerScopeErrorFormat:
             ("cancel_run", {"run_id": _FAKE_ID}),
             ("list_pending_hitl", {}),
             ("copy_library_primitive", {"primitive_id": _FAKE_ID}),
-            ("review_hitl", {"run_id": _FAKE_ID, "gate_id": "gate-1", "action": "claim"}),
+            ("review_hitl", {"run_id": _FAKE_ID, "review_id": "gate-1", "action": "claim"}),
         ],
     )
     async def test_insufficient_scope_when_role_none(
@@ -534,7 +534,7 @@ class TestToolHandlerScopeErrorFormat:
         _role.set("viewer")
         result = await _rh(
             run_id=_FAKE_ID,
-            gate_id="gate-1",
+            review_id="gate-1",
             action="approve",
             claim_token="tok",
         )
@@ -548,7 +548,7 @@ class TestToolHandlerScopeErrorFormat:
         _role.set("runner")
         result = await _rh(
             run_id=_FAKE_ID,
-            gate_id="gate-1",
+            review_id="gate-1",
             action="approve",
             claim_token="tok",
         )
@@ -569,7 +569,7 @@ class TestToolHandlerScopeErrorFormat:
             manager_class.return_value.claim = AsyncMock(return_value=gate)
             result = await _rh(
                 run_id=_FAKE_ID,
-                gate_id="gate-1",
+                review_id="gate-1",
                 action="claim",
             )
             assert result.get("error") != "insufficient_scope"
@@ -900,7 +900,7 @@ class TestCheckToolScopeDelegation:
                 patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
                 patch("modulo.api.mcp_server._session"),
                 patch(
-                    "modulo.api.mcp_server._load_pending_hitl_gates",
+                    "modulo.api.mcp_server._load_pending_hitl_reviews",
                     new=AsyncMock(return_value=([], 0)),
                 ),
             ):

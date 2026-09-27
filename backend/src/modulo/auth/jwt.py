@@ -301,13 +301,13 @@ def create_claim_token(
     secret_key: str,
     *,
     run_id: str,
-    gate_id: str,
+    review_id: str,
     client_id: str,
     expiry_minutes: int = _CLAIM_TOKEN_MINUTES,
 ) -> str:
     """Short-lived JWT scoped to a specific HITL gate claim.
 
-    The token encodes ``run_id``, ``gate_id``, and ``client_id`` (the
+    The token encodes ``run_id``, ``review_id``, and ``client_id`` (the
     claimant) so that approve/reject can verify the claim scope without a
     separate DB lookup of who claimed the gate.
     """
@@ -316,7 +316,7 @@ def create_claim_token(
         "sub": subject,
         "purpose": "claim_token",
         "run_id": run_id,
-        "gate_id": gate_id,
+        "review_id": review_id,
         "client_id": client_id,
         "iat": now,
         "exp": now + timedelta(minutes=expiry_minutes),
@@ -329,7 +329,7 @@ def decode_claim_token(
     secret_key: str,
     *,
     run_id: str,
-    gate_id: str,
+    review_id: str,
     expected_client_id: str | None = None,
 ) -> dict[str, object]:
     """Validate a claim-token JWT and return its payload.
@@ -337,7 +337,7 @@ def decode_claim_token(
     Checks:
     * Signature + expiry (via ``jwt.decode``).
     * ``purpose == "claim_token"``.
-    * ``run_id``, ``gate_id``, and optionally ``client_id`` match the expected values.
+    * ``run_id``, ``review_id``, and optionally ``client_id`` match the expected values.
 
     Returns the full payload dict on success.
     """
@@ -348,9 +348,9 @@ def decode_claim_token(
     actual_run: object = payload.get("run_id")
     if actual_run != run_id:
         raise JWTError("claim_token run_id mismatch")
-    actual_gate: object = payload.get("gate_id")
-    if actual_gate != gate_id:
-        raise JWTError("claim_token gate_id mismatch")
+    actual_gate: object = payload.get("review_id")
+    if actual_gate != review_id:
+        raise JWTError("claim_token review_id mismatch")
     if expected_client_id is not None:
         actual_client: object = payload.get("client_id")
         if actual_client != expected_client_id:

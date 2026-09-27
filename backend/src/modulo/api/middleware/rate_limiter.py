@@ -67,9 +67,9 @@ _log = logging.getLogger(__name__)
 
 _redis_clients: set[Any] = set()
 
-# FAR-611: HITL paths are /api/v1/runs/{run_id}/hitl/{gate_id}/{action}.
+# FAR-611: HITL paths are /api/v1/runs/{run_id}/hitl/{review_id}/{action}.
 # The run id is a UUID, but the gate id is an arbitrary node id (gate ids look
-# like "hitl_gate_<source>_<target>") and the trailing segment is the review
+# like "hitl_review_<source>_<target>") and the trailing segment is the review
 # action (claim / approve / reject / deliver-manual / approve-with-modification).
 # The pre-FAR-611 normalizer only stripped hex-UUID gate segments, so real gate
 # ids kept the raw gate id AND action in the bucket key: one bucket per gate per
@@ -81,7 +81,7 @@ _RE_VARIABLE_SEGMENT = re.compile(
     r"/runs/[^/]+/hitl/[^/]+(?:/[^/]+)?",
 )
 
-# FAR-611 review fix: POST /api/v1/runs/{run_id}/manual/{gate_id}/submit is a
+# FAR-611 review fix: POST /api/v1/runs/{run_id}/manual/{review_id}/submit is a
 # full HITL approve-capability route (it drives HITLManager.approve and resumes
 # the run) but its path carries no "/hitl/" segment, so the HITL rule never
 # matched it and it rode the 60/min runs rule with per-gate bucketing — a
@@ -94,7 +94,7 @@ _RE_MANUAL_SUBMIT_SEGMENT = re.compile(
 )
 
 # The single placeholder tail shared by BOTH budgeted HITL surfaces.
-_HITL_BUCKET_TAIL = "/runs/<run_id>/hitl/<gate_id>"
+_HITL_BUCKET_TAIL = "/runs/<run_id>/hitl/<review_id>"
 
 
 def _is_hitl_budget_path(path: str) -> bool:
@@ -208,9 +208,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     # PRD §7.18: HITL review actions — 20/min per user, AGGREGATE across
     # runs, gates, and actions (FAR-611). The review endpoints live under
-    # /api/v1/runs/{run_id}/hitl/{gate_id}/{action} where the run/gate ids are
+    # /api/v1/runs/{run_id}/hitl/{review_id}/{action} where the run/gate ids are
     # variable, so a static prefix cannot match them; the "/hitl/" marker and
-    # the /manual/{gate_id}/submit route (an approve-capability surface that
+    # the /manual/{review_id}/submit route (an approve-capability surface that
     # lacks the /hitl/ segment — FAR-611 review fix) are matched as path
     # segments by _rule_for / _should_rate_limit, and _client_key normalizes
     # the whole variable tail (see _RE_VARIABLE_SEGMENT /

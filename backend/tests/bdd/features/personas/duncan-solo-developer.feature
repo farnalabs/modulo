@@ -65,7 +65,7 @@ Feature: Duncan — Solo Developer
 
   @goal-solo-single-hitl
   Scenario: Duncan approves only the deploy gate manually
-    Given a run is waiting at HITL gate "deploy"
+    Given a run is waiting at HITL review "deploy"
     When I claim the gate
     And I approve the gate with my decision
     Then the run resumes

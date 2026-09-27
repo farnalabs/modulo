@@ -17,7 +17,7 @@ from modulo.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audi
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
-from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
+from modulo.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -90,7 +90,7 @@ class TestClaimGateKeepsParkedRunParked:
     def _claim_gate_response() -> MagicMock:
         gate = MagicMock()
         gate.run_id = _RUN_ID
-        gate.gate_id = "gate-1"
+        gate.review_id = "gate-1"
         gate.claim_token = "tok-123"
         gate.expires_at = datetime.now(UTC)
         return gate
@@ -164,7 +164,7 @@ class TestClaimGateRunStatusFence:
         gate = MagicMock()
         gate.claim_token = "tok-123"
         gate.run_id = _RUN_ID
-        gate.gate_id = "gate-1"
+        gate.review_id = "gate-1"
         gate.expires_at = datetime(2026, 1, 1, tzinfo=UTC)
         return gate
 
@@ -208,8 +208,8 @@ class TestClaimGateRunStatusFence:
 
 
 class TestApproveGateSQLAlchemyError:
-    @patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_approve_gate_returns_503(self, client: TestClient) -> None:
         resp = client.post(
@@ -220,8 +220,8 @@ class TestApproveGateSQLAlchemyError:
 
 
 class TestApproveGateAtSandboxCapacity:
-    @patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
-    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.org_sandbox_capacity_free",
         new=AsyncMock(return_value=False),
@@ -282,10 +282,10 @@ class TestResumeSandboxCapacityExceeded:
     ) -> None:
         executor = self._executor_raising()
         with (
-            patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
             # FAR-907: the modify-approve path now validates the answer contract,
             # which resolves the gate config through the shared validator module.
-            patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
+            patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch(
                 f"modulo.api.routes.hitl.HITLManager.{hitl_method}",
@@ -333,8 +333,8 @@ class TestResumeDataGateStamp:
         executor = MagicMock()
         executor.resume = AsyncMock()
         with (
-            patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
-            patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
+            patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager", return_value=manager),
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
@@ -344,20 +344,20 @@ class TestResumeDataGateStamp:
         assert resp.status_code == 200
         method_mock.assert_awaited_once()
         persisted = method_mock.await_args.kwargs["decision_payload"]
-        assert persisted["gate_id"] == expected_stamp
+        assert persisted["review_id"] == expected_stamp
         injected = executor.resume.await_args.kwargs["resume_data"]
         assert injected == persisted
-        assert injected["gate_id"] == expected_stamp
+        assert injected["review_id"] == expected_stamp
 
 
 class TestApproveWithModificationSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.HITLManager.approve_with_modification",
         new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
     )
     def test_approve_with_modification_returns_503(self, client: TestClient) -> None:
-        with patch("modulo.api.hitl_answer_validation.resolve_hitl_gate_config", new=AsyncMock(return_value=None)):
+        with patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None)):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
                 json={"claim_token": "test-token", "modified_output": {"key": "value"}, "notes": "modified"},
@@ -376,7 +376,7 @@ class TestRejectGateSQLAlchemyError:
 
 
 class TestDeliverManualSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.HITLManager.deliver_manual",
         new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
@@ -390,7 +390,7 @@ class TestDeliverManualSQLAlchemyError:
 
 
 class TestSubmitManualSQLAlchemyError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_submit_manual_returns_503(self, client: TestClient) -> None:
         resp = client.post(
@@ -401,7 +401,7 @@ class TestSubmitManualSQLAlchemyError:
 
 
 class TestSubmitManualNotTeamMemberError:
-    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.HITLManager.approve",
         new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
@@ -431,13 +431,13 @@ class TestListOrgPendingGatesSQLAlchemyError:
         assert resp.status_code == 503
 
 
-class TestGateResponseLabel:
-    def test_gate_to_response_passes_label_through(self) -> None:
-        from modulo.api.routes.hitl import _gate_to_response
+class TestReviewResponseLabel:
+    def test_review_to_response_passes_label_through(self) -> None:
+        from modulo.api.routes.hitl import _review_to_response
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
-        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.review_id = "hitl_review_planner_deploy"
         claim.pipeline_id = uuid.uuid4()
         claim.account_id = _USER_ID
         claim.claimed_at = None
@@ -445,17 +445,17 @@ class TestGateResponseLabel:
         claim.decision = None
         claim.decision_at = None
 
-        resp = _gate_to_response(claim, pipeline_name="My Pipeline", label="Deploy gate")
+        resp = _review_to_response(claim, pipeline_name="My Pipeline", label="Deploy gate")
 
-        assert resp.gate_id == "hitl_gate_planner_deploy"
+        assert resp.review_id == "hitl_review_planner_deploy"
         assert resp.label == "Deploy gate"
 
-    def test_gate_to_response_label_defaults_to_none(self) -> None:
-        from modulo.api.routes.hitl import _gate_to_response
+    def test_review_to_response_label_defaults_to_none(self) -> None:
+        from modulo.api.routes.hitl import _review_to_response
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
-        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.review_id = "hitl_review_planner_deploy"
         claim.pipeline_id = uuid.uuid4()
         claim.account_id = _USER_ID
         claim.claimed_at = None
@@ -463,27 +463,27 @@ class TestGateResponseLabel:
         claim.decision = None
         claim.decision_at = None
 
-        resp = _gate_to_response(claim)
+        resp = _review_to_response(claim)
 
         assert resp.label is None
 
-    def test_build_gate_label_map_from_snapshot_edges(self) -> None:
-        from modulo.api.routes.hitl import _build_gate_label_map
+    def test_build_review_label_map_from_snapshot_edges(self) -> None:
+        from modulo.api.routes.hitl import _build_review_label_map
 
         graph = {
             "edges": [
-                {"source": "planner", "target": "deploy", "hitl_gate_config": {"label": "Deploy gate"}},
-                {"source_node_id": "a", "target_node_id": "b", "hitl_gate_config": {"label": "Review gate"}},
-                {"source": "e", "target": "f", "hitl_gate_config": {"label": ""}},
+                {"source": "planner", "target": "deploy", "hitl_review_config": {"label": "Deploy gate"}},
+                {"source_node_id": "a", "target_node_id": "b", "hitl_review_config": {"label": "Review gate"}},
+                {"source": "e", "target": "f", "hitl_review_config": {"label": ""}},
                 {"source": "g", "target": "h"},
-                {"hitl_gate_config": {"label": "no-edge-keys"}},
+                {"hitl_review_config": {"label": "no-edge-keys"}},
                 "not-a-dict",
             ]
         }
 
-        assert _build_gate_label_map(graph) == {
-            "hitl_gate_planner_deploy": "Deploy gate",
-            "hitl_gate_a_b": "Review gate",
+        assert _build_review_label_map(graph) == {
+            "hitl_review_planner_deploy": "Deploy gate",
+            "hitl_review_a_b": "Review gate",
         }
 
 
@@ -506,12 +506,12 @@ class TestListRunPendingGatesLabelResolution:
         snapshot = MagicMock()
         snapshot.graph_json = {
             "nodes": [],
-            "edges": [{"source": "planner", "target": "deploy", "hitl_gate_config": {"label": "Deploy gate"}}],
+            "edges": [{"source": "planner", "target": "deploy", "hitl_review_config": {"label": "Deploy gate"}}],
         }
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
-        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.review_id = "hitl_review_planner_deploy"
         claim.pipeline_id = uuid.uuid4()
         claim.account_id = _USER_ID
         claim.claimed_at = None
@@ -540,8 +540,8 @@ class TestListRunPendingGatesLabelResolution:
             app.dependency_overrides.clear()
 
         assert resp.status_code == 200
-        gates = resp.json()["gates"]
-        assert gates[0]["gate_id"] == "hitl_gate_planner_deploy"
+        gates = resp.json()["reviews"]
+        assert gates[0]["review_id"] == "hitl_review_planner_deploy"
         assert gates[0]["label"] == "Deploy gate"
 
     def test_list_run_pending_gates_label_none_without_snapshot(self, client: TestClient) -> None:
@@ -561,7 +561,7 @@ class TestListRunPendingGatesLabelResolution:
 
         claim = MagicMock()
         claim.run_id = _RUN_ID
-        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.review_id = "hitl_review_planner_deploy"
         claim.pipeline_id = uuid.uuid4()
         claim.account_id = _USER_ID
         claim.claimed_at = None
@@ -587,7 +587,7 @@ class TestListRunPendingGatesLabelResolution:
             app.dependency_overrides.clear()
 
         assert resp.status_code == 200
-        assert resp.json()["gates"][0]["label"] is None
+        assert resp.json()["reviews"][0]["label"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -595,14 +595,14 @@ class TestListRunPendingGatesLabelResolution:
 # ---------------------------------------------------------------------------
 
 # FAR-634 review: the denial detail is the shared MSG_HUMAN_ONLY_DENY constant
-# (single-sourced in db.crud.hitl_gate_config) — REST and MCP must deny with
+# (single-sourced in db.crud.hitl_review_config) — REST and MCP must deny with
 # the SAME wording.
 _HUMAN_ONLY_DETAIL = MSG_HUMAN_ONLY_DENY
 _UNRESOLVABLE_DETAIL = MSG_HUMAN_ONLY_UNRESOLVED
 _SRC_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TGT_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 _SNAPSHOT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
-_GATE_ID = f"hitl_gate_{_SRC_ID}_{_TGT_ID}"
+_REVIEW_ID = f"hitl_review_{_SRC_ID}_{_TGT_ID}"
 
 
 def _resume_executor() -> MagicMock:
@@ -669,7 +669,7 @@ def _human_only_snapshot(*, human_only: bool = True) -> MagicMock:
             {
                 "source": str(_SRC_ID),
                 "target": str(_TGT_ID),
-                "hitl_gate_config": {"human_only": human_only},
+                "hitl_review_config": {"human_only": human_only},
             }
         ],
     }
@@ -737,7 +737,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -749,12 +749,12 @@ class TestHumanOnlyRestEnforcement:
         """Legacy run without a snapshot: the live-edge fallback still resolves
         the gate config by topology and blocks the API-key principal."""
         live_edge = MagicMock()
-        live_edge.hitl_gate_config = {"human_only": True}
+        live_edge.hitl_review_config = {"human_only": True}
         with patch("modulo.api.routes.hitl.HITLManager"):
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=live_edge)
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -772,7 +772,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=False)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -791,7 +791,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot(human_only=False))
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -808,7 +808,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -829,7 +829,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=None)
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -849,7 +849,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=False)
             self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -863,7 +863,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve-with-modification",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve-with-modification",
                 json={"claim_token": "tok", "modified_output": {"k": "v"}},
             )
 
@@ -878,7 +878,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/deliver-manual",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/deliver-manual",
                 json={"claim_token": "tok", "output": {"result": "ok"}},
             )
 
@@ -887,7 +887,7 @@ class TestHumanOnlyRestEnforcement:
         deliver.assert_not_called()
 
     def test_submit_manual_node_id_api_key_allowed(self, client: TestClient) -> None:
-        """submit-manual's gate_id is a manual-NODE id (not hitl_gate_*); the
+        """submit-manual's review_id is a manual-NODE id (not hitl_review_*); the
         human_only check resolves None and never over-blocks."""
         approve = AsyncMock()
         with (
@@ -922,7 +922,7 @@ class TestHumanOnlyRestEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/reject",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/reject",
                 json={"claim_token": "tok", "reason": "not good"},
             )
 
@@ -965,7 +965,7 @@ class TestHumanOnlyClaimEnforcement:
     def _gate_claim_mock() -> MagicMock:
         gate = MagicMock()
         gate.run_id = _RUN_ID
-        gate.gate_id = _GATE_ID
+        gate.review_id = _REVIEW_ID
         gate.claim_token = "tok-claim"
         gate.expires_at = datetime.now(UTC) + timedelta(minutes=15)
         return gate
@@ -980,7 +980,7 @@ class TestHumanOnlyClaimEnforcement:
                 {
                     "source": str(_SRC_ID),
                     "target": str(_TGT_ID),
-                    "hitl_gate_config": {"label": "Legacy gate"},
+                    "hitl_review_config": {"label": "Legacy gate"},
                 }
             ],
         }
@@ -996,7 +996,7 @@ class TestHumanOnlyClaimEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/claim",
                 json={"expiry_minutes": 15},
             )
 
@@ -1016,7 +1016,7 @@ class TestHumanOnlyClaimEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=self._untagged_config_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/claim",
                 json={"expiry_minutes": 15},
             )
 
@@ -1036,7 +1036,7 @@ class TestHumanOnlyClaimEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/claim",
                 json={"expiry_minutes": 15},
             )
 
@@ -1044,7 +1044,7 @@ class TestHumanOnlyClaimEnforcement:
         emit.assert_awaited_once()
         denied = emit.await_args.args[0]
         assert denied.action == "claim"
-        assert denied.gate_id == _GATE_ID
+        assert denied.review_id == _REVIEW_ID
         claim.assert_not_called()
 
     def test_claim_human_only_browser_jwt_allowed(self, client: TestClient) -> None:
@@ -1058,7 +1058,7 @@ class TestHumanOnlyClaimEnforcement:
             _override_principal(via_api_key=False)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/claim",
                 json={"expiry_minutes": 15},
             )
 
@@ -1077,7 +1077,7 @@ class TestHumanOnlyClaimEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot(human_only=False))
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/claim",
                 json={"expiry_minutes": 15},
             )
 
@@ -1099,7 +1099,7 @@ class TestHumanOnlyClaimEnforcement:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot(human_only=False))
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/claim",
                 json={"expiry_minutes": 15},
             )
 
@@ -1119,7 +1119,7 @@ class TestHumanOnlyClaimEnforcement:
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/claim",
                 json={"expiry_minutes": 15},
             )
 
@@ -1171,7 +1171,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -1188,7 +1188,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve-with-modification",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve-with-modification",
                 json={"claim_token": "tok", "modified_output": {"k": "v"}},
             )
 
@@ -1207,7 +1207,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(snapshot_id=None), claim_row={"human_only": True})
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -1226,7 +1226,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=False, client_kind="hologram")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -1246,7 +1246,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=False, client_kind="browser")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -1263,7 +1263,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=True, client_kind="browser")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -1277,7 +1277,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/deliver-manual",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/deliver-manual",
                 json={"claim_token": "tok", "output": {"result": "ok"}},
             )
 
@@ -1298,7 +1298,7 @@ class TestHumanOnlyClientKindEnforcement:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/reject",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/reject",
                 json={"claim_token": "tok", "reason": "not good"},
             )
 
@@ -1336,7 +1336,7 @@ class TestHumanOnlyDenialAudit:
 
     def test_denial_emits_audit_event_with_denial_fields(self, client: TestClient) -> None:
         """The REST denial routes emit the audit through ``_run_hitl_manager``
-        after the decision transaction rolled back, carrying run_id / gate_id /
+        after the decision transaction rolled back, carrying run_id / review_id /
         action / principal kind / client kind."""
         emit = AsyncMock()
         with (
@@ -1346,7 +1346,7 @@ class TestHumanOnlyDenialAudit:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -1354,7 +1354,7 @@ class TestHumanOnlyDenialAudit:
         emit.assert_awaited_once()
         exc = emit.await_args.args[0]
         assert exc.run_id == _RUN_ID
-        assert exc.gate_id == _GATE_ID
+        assert exc.review_id == _REVIEW_ID
         assert exc.action == "approve"
         assert exc.org_id == _ORG_ID
         assert exc.principal_kind == "jwt"
@@ -1373,7 +1373,7 @@ class TestHumanOnlyDenialAudit:
             # run with NO snapshot: the claim stamp is the only config source.
             self._install_session(_make_hitl_run(snapshot_id=None), claim_row={"human_only": True})
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/manual/{_GATE_ID}/submit",
+                f"/api/v1/runs/{_RUN_ID}/manual/{_REVIEW_ID}/submit",
                 json={"claim_token": "tok", "output": {"o": 1}},
             )
 
@@ -1401,7 +1401,7 @@ class TestHumanOnlyDenialAudit:
             _override_principal(via_api_key=False, client_kind="programmatic")
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
             resp = client.post(
-                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_REVIEW_ID}/approve",
                 json={"claim_token": "tok"},
             )
 
@@ -1418,7 +1418,7 @@ class TestHumanOnlyDenialAudit:
         emit_exc = HumanOnlyDenied(
             _HUMAN_ONLY_DETAIL,
             run_id=_RUN_ID,
-            gate_id=_GATE_ID,
+            review_id=_REVIEW_ID,
             action="approve",
             org_id=_ORG_ID,
             account_id=_USER_ID,
@@ -1442,7 +1442,7 @@ class TestHumanOnlyDenialAudit:
         assert kwargs["resource_id"] == _RUN_ID
         payload = kwargs["payload_json"]
         assert payload["run_id"] == str(_RUN_ID)
-        assert payload["gate_id"] == _GATE_ID
+        assert payload["review_id"] == _REVIEW_ID
         assert payload["action"] == "approve"
         assert payload["surface"] == "rest"
         assert payload["principal_kind"] == "jwt"
@@ -1455,7 +1455,7 @@ class TestHumanOnlyDenialAudit:
         emit_exc = HumanOnlyDenied(
             _HUMAN_ONLY_DETAIL,
             run_id=_RUN_ID,
-            gate_id=_GATE_ID,
+            review_id=_REVIEW_ID,
             action="approve",
             org_id=_ORG_ID,
             account_id=_USER_ID,

@@ -66,7 +66,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     edge.source_node_id = source_id
     edge.target_node_id = target_id
     edge.edge_type = "normal"
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
     edge.condition_expression = None
 
     agent = MagicMock()
@@ -153,7 +153,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
             "source": str(source_id),
             "target": str(target_id),
             "type": "normal",
-            "hitl_gate_config": None,
+            "hitl_review_config": None,
             "condition_expression": None,
         }
     ]
@@ -226,7 +226,7 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
     edge.source_node_id = source_id
     edge.target_node_id = target_id
     edge.edge_type = "conditional"
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
     edge.condition_expression = expr
 
     session = AsyncMock(spec=AsyncSession)
@@ -251,7 +251,7 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
             "source": str(source_id),
             "target": str(target_id),
             "type": "conditional",
-            "hitl_gate_config": None,
+            "hitl_review_config": None,
             "condition_expression": expr,
         }
     ]
@@ -284,7 +284,7 @@ async def test_snapshot_carries_pipeline_default_autonomy_level(autonomy: str | 
     edge.source_node_id = source_id
     edge.target_node_id = target_id
     edge.edge_type = "normal"
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
@@ -332,7 +332,7 @@ async def test_snapshot_carries_pipeline_max_autonomy_level(ceiling: str | None)
     edge.source_node_id = source_id
     edge.target_node_id = target_id
     edge.edge_type = "normal"
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
@@ -409,7 +409,7 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     edge.source_node_id = source_id
     edge.target_node_id = target_id
     edge.edge_type = "normal"
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)

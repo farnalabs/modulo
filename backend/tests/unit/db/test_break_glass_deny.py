@@ -144,7 +144,7 @@ ROLE_RESOLUTION_SITES: dict[str, str] = {
     "modulo/api/routes/auth.py": "401 — refresh / ws-token / me deny (OrganisationMembershipNotFound)",
     "modulo/auth/dependencies.py": "401 — _verify_identity deny (OrganisationMembershipNotFound)",
     "modulo/auth/oauth.py": "401 — InvalidGrantError on OAuth token/refresh",
-    "modulo/db/crud/hitl_gate_guard.py": "deny — HitlGateWeakeningDenied (fail-closed)",
+    "modulo/db/crud/hitl_review_guard.py": "deny — HitlReviewWeakeningDenied (fail-closed)",
 }
 
 MEMBERSHIP_LOOKUP_SITES: dict[str, str] = {

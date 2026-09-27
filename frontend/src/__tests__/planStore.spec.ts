@@ -11,7 +11,7 @@ const mockFlagsResponse = {
   flags: [
     { name: 'parallel_branches', description: 'Parallel branches', tier: 'team', currently_active: true, depends_on: null },
     { name: 'eval_system', description: 'Eval system', tier: 'team', currently_active: false, depends_on: null },
-    { name: 'hitl_gates', description: 'HITL gates', tier: 'community', currently_active: true, depends_on: null },
+    { name: 'hitl_reviews', description: 'HITL gates', tier: 'community', currently_active: true, depends_on: null },
   ],
   would_activate: [],
 }
@@ -121,7 +121,7 @@ describe('usePlanStore', () => {
     expect(store.features).toEqual({
       parallel_branches: true,
       eval_system: false,
-      hitl_gates: true,
+      hitl_reviews: true,
     })
     expect(store.isTeam).toBe(true)
     expect(store.isLoading).toBe(false)
@@ -575,7 +575,7 @@ describe('usePlanStore', () => {
       expect(parseFlagCache(localStorage.getItem(FLAG_CACHE_KEY))).toEqual({
         parallel_branches: true,
         eval_system: false,
-        hitl_gates: true,
+        hitl_reviews: true,
       })
     })
 
@@ -731,7 +731,7 @@ describe('usePlanStore', () => {
       expect(parseFlagCache(localStorage.getItem(flagCacheKey('org-a')))).toEqual({
         parallel_branches: true,
         eval_system: false,
-        hitl_gates: true,
+        hitl_reviews: true,
       })
       expect(localStorage.getItem(flagCacheKey('org-b'))).toBeNull()
       expect(localStorage.getItem(flagCacheKey(null))).toBeNull()

@@ -801,7 +801,7 @@ def _pipeline_fakes() -> dict[str, Any]:
         source_node_id=uuid.uuid4(),
         target_node_id=uuid.uuid4(),
         edge_type="normal",
-        hitl_gate_config=None,
+        hitl_review_config=None,
     )
     return {
         "pipeline": pipeline,
@@ -891,7 +891,7 @@ async def test_export_pipeline_bundle_builds_portable_zip(monkeypatch: pytest.Mo
             "source_node_id": str(fakes["edge"].source_node_id),
             "target_node_id": str(fakes["edge"].target_node_id),
             "edge_type": "normal",
-            "hitl_gate_config": None,
+            "hitl_review_config": None,
         }
     ]
 
@@ -957,7 +957,7 @@ async def test_export_pipeline_bundle_without_graph_nodes(monkeypatch: pytest.Mo
             "source_node_id": str(fakes["edge"].source_node_id),
             "target_node_id": str(fakes["edge"].target_node_id),
             "edge_type": "normal",
-            "hitl_gate_config": None,
+            "hitl_review_config": None,
         }
     ]
 

@@ -113,7 +113,7 @@ def _orm_edge(**extra: Any) -> PipelineEdge:
     edge.source_node_id = uuid.uuid4()
     edge.target_node_id = uuid.uuid4()
     edge.edge_type = "normal"
-    edge.hitl_gate_config = None
+    edge.hitl_review_config = None
     edge.condition_expression = None
     edge.source_port = "out"
     edge.target_port = "in"
@@ -327,13 +327,13 @@ def _make_mock_edge(
     source_id: uuid.UUID,
     target_id: uuid.UUID,
     edge_type: str = "normal",
-    hitl_gate_config: dict[str, Any] | None = None,
+    hitl_review_config: dict[str, Any] | None = None,
 ) -> MagicMock:
     edge = MagicMock()
     edge.source_node_id = source_id
     edge.target_node_id = target_id
     edge.edge_type = edge_type
-    edge.hitl_gate_config = hitl_gate_config
+    edge.hitl_review_config = hitl_review_config
     edge.condition_expression = None
     edge.source_port = "out"
     edge.target_port = "in"
@@ -639,10 +639,10 @@ class TestSecretNonLeak:
 
 
 class TestEdgeFallbackPreservesConfig:
-    """Edge fallback must preserve hitl_gate_config and condition_expression."""
+    """Edge fallback must preserve hitl_review_config and condition_expression."""
 
-    def test_edge_hitl_gate_config_preserved(self) -> None:
-        """An edge with hitl_gate_config that fails validation must still
+    def test_edge_hitl_review_config_preserved(self) -> None:
+        """An edge with hitl_review_config that fails validation must still
         return its gate config in the fallback."""
         src, tgt = uuid.uuid4(), uuid.uuid4()
         gate_config = {
@@ -655,15 +655,15 @@ class TestEdgeFallbackPreservesConfig:
             "source_node_id": str(src),
             "target_node_id": str(tgt),
             "edge_type": "INVALID_EDGE_TYPE",
-            "hitl_gate_config": gate_config,
+            "hitl_review_config": gate_config,
             "condition_expression": "state.approved == true",
         }
         resp = _graph_response([], [edge])
         assert len(resp.edges) == 1
         returned = resp.edges[0]
-        # hitl_gate_config is preserved (raw dict from model_construct)
-        assert returned.hitl_gate_config is not None
-        assert returned.hitl_gate_config["label"] == "Human Review"
+        # hitl_review_config is preserved (raw dict from model_construct)
+        assert returned.hitl_review_config is not None
+        assert returned.hitl_review_config["label"] == "Human Review"
         assert returned.condition_expression == "state.approved == true"
         assert any(i.code == "edge_validation_failed" for i in resp.validation_issues)
 
@@ -790,12 +790,12 @@ class TestNonDictEdgeEntry:
         assert not any(i.code == "edge_invalid_entry" for i in resp.validation_issues)
 
     def test_orm_edge_failing_validation_is_preserved(self) -> None:
-        """An ORM edge whose hitl_gate_config fails the current schema must be
+        """An ORM edge whose hitl_review_config fails the current schema must be
         returned through the fallback (preserving stored fields), not dropped."""
-        edge = _orm_edge(hitl_gate_config={"label": "x"})
+        edge = _orm_edge(hitl_review_config={"label": "x"})
         resp = _graph_response([], [edge])
         assert len(resp.edges) == 1
-        assert resp.edges[0].hitl_gate_config == {"label": "x"}
+        assert resp.edges[0].hitl_review_config == {"label": "x"}
         assert any(i.code == "edge_validation_failed" for i in resp.validation_issues)
 
 

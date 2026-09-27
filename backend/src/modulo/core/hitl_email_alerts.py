@@ -49,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.auth.permissions import resolve_required
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.email_service import send_email
-from modulo.core.pipeline_engine.hitl_context import HitlGateContext, slice_with_marker
+from modulo.core.pipeline_engine.hitl_context import HitlReviewContext, slice_with_marker
 from modulo.db.models.account import Account
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.rls import set_rls_org
@@ -162,7 +162,7 @@ def _run_link(settings: Settings, run_id: uuid.UUID) -> str:
 def _build_email(
     gate_label: str,
     run_url: str,
-    briefing: HitlGateContext | dict[str, Any] | None = None,
+    briefing: HitlReviewContext | dict[str, Any] | None = None,
 ) -> tuple[str, str, str]:
     """Build the plain-text + HTML (subject, body_html, body_text) email.
 
@@ -243,7 +243,7 @@ async def send_hitl_email_alerts(
     recipients: list[str],
     run_id: uuid.UUID,
     gate_label: str,
-    briefing: HitlGateContext | dict[str, Any] | None = None,
+    briefing: HitlReviewContext | dict[str, Any] | None = None,
 ) -> None:
     """Send the gate-awaiting email to every recipient. Never raises.
 
@@ -279,7 +279,7 @@ async def dispatch_hitl_email_alerts(
     pipeline_id: uuid.UUID,
     run_id: uuid.UUID,
     gate_label: str,
-    briefing: HitlGateContext | dict[str, Any] | None = None,
+    briefing: HitlReviewContext | dict[str, Any] | None = None,
 ) -> None:
     """Resolve the recipients via *session* and send. Never raises.
 
@@ -320,7 +320,7 @@ async def _run_hitl_email_dispatch(
     pipeline_id: uuid.UUID,
     run_id: uuid.UUID,
     gate_label: str,
-    briefing: HitlGateContext | dict[str, Any] | None = None,
+    briefing: HitlReviewContext | dict[str, Any] | None = None,
 ) -> None:
     """Background task body: resolve in a short RLS transaction, then send.
 
@@ -357,7 +357,7 @@ def schedule_hitl_email_dispatch(
     pipeline_id: uuid.UUID,
     run_id: uuid.UUID,
     gate_label: str,
-    briefing: HitlGateContext | dict[str, Any] | None = None,
+    briefing: HitlReviewContext | dict[str, Any] | None = None,
 ) -> None:
     """Fire-and-forget the HITL email dispatch (called from ``create_gate``).
 

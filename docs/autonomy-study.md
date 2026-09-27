@@ -14,21 +14,21 @@ explicitly below.
 
 ## 1. The claim we are making
 
-Modulo lets each pipeline choose a default **autonomy level** for its HITL gates:
+Modulo lets each pipeline choose a default **autonomy level** for its HITL reviews:
 
-| Level | HITL gate behaviour |
+| Level | HITL review behaviour |
 |---|---|
 | `manual_approval` | Gate halts; a human must review and approve/reject. |
 | `notify_on_complete` | Gate is auto-approved at runtime but emits a notification for observability. |
 | `fully_autonomous` | Gate is skipped entirely; no halt, no notification. |
 
 Each pipeline also carries an optional **ceiling** (`max_autonomy_level`). At
-every HITL gate, a context-setter's `autonomy_recommendation` may *lower* the
+every HITL review, a context-setter's `autonomy_recommendation` may *lower* the
 level freely, but may *raise* it only up to that ceiling. When no ceiling is
 configured, the effective ceiling is the pipeline's own default level — so a
 recommendation can only lower autonomy, never escalate a `manual_approval`
 pipeline toward `fully_autonomous`. Every clamp is recorded as a
-`run.autonomy_recommendation_clamped` audit event carrying `gate_id`,
+`run.autonomy_recommendation_clamped` audit event carrying `review_id`,
 `requested`, `effective` and `ceiling`.
 
 The *progressive* claim: autonomy should **rise** for change classes that
@@ -52,8 +52,8 @@ Discovered by reading the codebase at implementation time:
 | Signal | Recorded? | Where |
 |---|---|---|
 | Pipeline autonomy **level *configured*** | ✅ | `pipeline.autonomy_level_changed` audit event (`api/routes/pipelines.py:_maybe_audit_autonomy_change`) |
-| HITL gate **decisions** (claimed/approved/rejected/expired) | ✅ | `hitl_gate_*` events; `core/hitl_manager` |
-| HITL gate **eval result** (LLM-judge before interrupt) | ✅ | `hitl_gate.eval_result` telemetry |
+| HITL review **decisions** (claimed/approved/rejected/expired) | ✅ | `hitl_review_*` events; `core/hitl_manager` |
+| HITL review **eval result** (LLM-judge before interrupt) | ✅ | `hitl_review.eval_result` telemetry |
 | **Per-run effective autonomy** actually applied | ❌ *new* | **Now emitted**: `run.autonomy_level_applied` (`core/run_context/autonomy_telemetry.py`) |
 | **Gate-fire** (human path taken vs bypassed) per run | ❌ *new* | **Now emitted** as `gate_outcome` in the same event |
 | **Defect-escape** (autonomous change later reverted/fixed) | ❌ | Not yet – see §6 |
@@ -69,7 +69,7 @@ item, not yet instrumented.
 
 ### 3.1 Primary events (the evidence record)
 
-`run.autonomy_level_applied` – emitted once per HITL gate evaluation at runtime:
+`run.autonomy_level_applied` – emitted once per HITL review evaluation at runtime:
 
 ```json
 {
@@ -77,7 +77,7 @@ item, not yet instrumented.
   "resource_type": "run",
   "resource_id": "<run_id>",
   "payload_json": {
-    "gate_id": "<gate_id>",
+    "review_id": "<review_id>",
     "autonomy_level": "manual_approval | notify_on_complete | fully_autonomous",
     "gate_outcome": "skipped | auto_approved | fired",
     "pipeline_id": "<pipeline_id>",
@@ -201,7 +201,7 @@ environment with live runs.*
 
 - **New module:** `backend/src/modulo/core/run_context/autonomy_telemetry.py`
   – `emit_autonomy_telemetry()` (fail-open, session-factory driven).
-- **Wired at:** `core/pipeline_engine/node_runner.py:make_hitl_gate_fn._hitl_gate`
+- **Wired at:** `core/pipeline_engine/node_runner.py:make_hitl_review_fn._hitl_review`
   – emits `skipped` / `auto_approved` (when the gate is bypassed) and `fired`
   (when the human path is taken).
 - **Registered:** `run.autonomy_level_applied` added to

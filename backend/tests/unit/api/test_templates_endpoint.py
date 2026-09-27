@@ -279,7 +279,7 @@ def test_create_from_template_not_found(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
-def test_create_from_template_with_hitl_gate(client: TestClient) -> None:
+def test_create_from_template_with_hitl_review(client: TestClient) -> None:
     template_id = uuid.uuid4()
     template_prim = _make_template_primitive(
         id=template_id,
@@ -317,7 +317,7 @@ def test_create_from_template_with_hitl_gate(client: TestClient) -> None:
                     "source_node_id": "n2",
                     "target_node_id": "n3",
                     "edge_type": "normal",
-                    "hitl_gate_config": {
+                    "hitl_review_config": {
                         "label": "Approve",
                         "description": "Review before proceeding",
                         "claim_expiry_minutes": 60,

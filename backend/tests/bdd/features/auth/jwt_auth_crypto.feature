@@ -73,7 +73,7 @@ Feature: JWT Token Lifecycle and Purpose Isolation
     And I rotate the token
     Then rotation is rejected
 
-  Scenario: A claim token scopes a HITL gate decision to one run and gate
+  Scenario: A claim token scopes a HITL review decision to one run and gate
     When a claim token is minted for user "alice" for run "22222222-2222-2222-2222-222222222222" and gate "review-step"
     And I decode the claim token against run "22222222-2222-2222-2222-222222222222" and gate "review-step"
     Then the claim token is accepted

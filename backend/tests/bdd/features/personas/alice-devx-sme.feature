@@ -24,10 +24,10 @@ Feature: Alice — Head of DevX at an SME
 
   @goal-alice-hitl-deploy-gate
   Scenario: Alice enforces human-only approval on deploy
-    Given pipeline "current-sdlc" has a HITL gate at "deploy"
+    Given pipeline "current-sdlc" has a HITL review at "deploy"
     When a run reaches the "deploy" gate
     Then the run pauses
-    And the HITL gate has human_only true
+    And the HITL review has human_only true
     And no MCP tool can approve this gate
 
   @goal-alice-hitl-proof @awaiting-implementation
@@ -93,7 +93,7 @@ Feature: Alice — Head of DevX at an SME
 
   @goal-alice-hitl-webhook
   Scenario: Alice's team gets Slack notifications when HITL is waiting
-    Given a run is waiting at HITL gate "deploy"
-    When the HITL gate triggers a notification
+    Given a run is waiting at HITL review "deploy"
+    When the HITL review triggers a notification
     Then a webhook POST is sent to the configured Slack endpoint
     And the webhook payload includes the run ID and gate name

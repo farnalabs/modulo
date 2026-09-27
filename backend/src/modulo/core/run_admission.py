@@ -164,7 +164,7 @@ async def park_expired_hitl_runs(
     *,
     grace_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Park runs whose HITL gate expired unanswered past the grace window (D2).
+    """Park runs whose HITL review expired unanswered past the grace window (D2).
 
     The HITL-capacity half of the FAR-604 design: a run waiting at a gate the
     human never answered used to sit ``awaiting_human`` forever (the

@@ -82,7 +82,7 @@ class TestUpdatePipelineGraphGuardrailStrip:
         translates the ``GuardrailBindingStripDenied`` it raises into
         ``guardrail_strip_forbidden``. Without the service-layer guard this
         save would proceed (the bound node's guardrail would silently drop)."""
-        from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+        from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
         _set_ctx(role="operator")
         pipeline_id = uuid.uuid4()
@@ -215,7 +215,7 @@ class TestUpdatePipelineGraphHitlDescription:
     @patch("modulo.db.crud.pipeline.get_pipeline")
     @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
     @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
-    async def test_undescribed_node_level_hitl_gate_rejected(
+    async def test_undescribed_node_level_hitl_review_rejected(
         self,
         mock_replace_graph: AsyncMock,
         mock_find_mismatches: AsyncMock,
@@ -248,7 +248,7 @@ class TestUpdatePipelineGraphHitlDescription:
     @patch("modulo.db.crud.pipeline.get_pipeline")
     @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
     @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
-    async def test_described_node_level_hitl_gate_succeeds(
+    async def test_described_node_level_hitl_review_succeeds(
         self,
         mock_replace_graph: AsyncMock,
         mock_find_mismatches: AsyncMock,

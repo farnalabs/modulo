@@ -4,8 +4,8 @@ Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
                         outgoing HITL gate edges (handled externally via
                         intermediate gate nodes).
-  - hitl_gate:         intermediate node inserted by build_graph_from_json for
-                        every edge that carries a hitl_gate_config.  Calls
+  - hitl_review:         intermediate node inserted by build_graph_from_json for
+                        every edge that carries a hitl_review_config.  Calls
                         interrupt(gate_payload) and blocks until a human reviews
                         it, unless the effective autonomy level (from run_context
                         or pipeline default) bypasses the gate.  Also supports
@@ -30,7 +30,7 @@ Autonomy integration:
     Defaults to True (FAR-609) when the config omits the field.
 
 Conditional gating ((Section 8.17):
-  - ``condition`` on ``hitl_gate_config``:  JMESPath expression evaluated
+  - ``condition`` on ``hitl_review_config``:  JMESPath expression evaluated
     against the current state (upstream node output).  If falsy the gate is
     skipped.  If truthy or absent the gate proceeds to autonomy checks.
 
@@ -141,7 +141,7 @@ from modulo.core.run_context.autonomy import (
     AutonomyResolution,
     resolve_autonomy,
     should_notify_on_complete,
-    should_skip_hitl_gate,
+    should_skip_hitl_review,
 )
 from modulo.core.run_context.autonomy_telemetry import (
     emit_autonomy_clamp_telemetry,
@@ -149,7 +149,7 @@ from modulo.core.run_context.autonomy_telemetry import (
 )
 from modulo.core.schema_registry.contract import write_schema_contract
 from modulo.core.schema_registry.rendering import SchemaProfile, render_for_profile
-from modulo.db.crud.hitl_gate_config import human_only_effective
+from modulo.db.crud.hitl_review_config import human_only_effective
 from modulo.db.lifecycle_refs import (
     _SOURCE_RANK,
     WORK_ITEM_REFS_KEY,
@@ -352,13 +352,13 @@ def _node_ancestor_injected_work_item_refs(
         return []
 
 
-def _normalize_required_team_id(gate_id: str, raw: Any) -> str | None:
+def _normalize_required_team_id(review_id: str, raw: Any) -> str | None:
     """Validate a HITL gate's ``required_team_id`` and return a canonical UUID
     string, or None when absent/invalid.
 
     The executor parses the interrupt payload's ``required_team_id`` with
     ``uuid.UUID(...)``; an unparseable value would raise there and fail the
-    run. The config normally arrives UUID-typed via ``HitlGateConfig``
+    run. The config normally arrives UUID-typed via ``HitlReviewConfig``
     validation, but a corrupted snapshot / raw-DB gate config can carry an
     arbitrary string — normalise here so the executor never sees an invalid
     value. An invalid value is logged and treated as "no team restriction"
@@ -372,8 +372,8 @@ def _normalize_required_team_id(gate_id: str, raw: Any) -> str | None:
         return str(uuid.UUID(str(raw)))
     except (ValueError, TypeError, AttributeError):
         _log.warning(
-            "hitl_gate.invalid_required_team_id",
-            extra={"gate_id": gate_id, "required_team_id_raw": str(raw)},
+            "hitl_review.invalid_required_team_id",
+            extra={"review_id": review_id, "required_team_id_raw": str(raw)},
         )
         return None
 
@@ -3244,7 +3244,7 @@ def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> b
             return score != threshold
         case _:
             _log.warning(
-                "hitl_gate.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold}
+                "hitl_review.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold}
             )
             return False
 
@@ -3388,7 +3388,7 @@ async def _run_conformance_gate(
       - On resume of THIS node's conformance block (``state`` carries the
         ``_conformance_blocked_node`` marker set before the interrupt) the
         human decision is routed — and only when the decision is STAMPED for
-        this block (FAR-541: its ``gate_id`` matches the blocked node id or
+        this block (FAR-541: its ``review_id`` matches the blocked node id or
         the block's guardrail gate id; ``_hitl_decision`` alone is NEVER
         trusted to skip the check): ``approved`` (or ``deliver_manual``) is
         the documented human override -> the markers are cleared and the node
@@ -3461,7 +3461,7 @@ def _handle_conformance_resume(state: dict[str, Any], node_id: str) -> bool:
     """Route a human's decision after a conformance block (True: fail closed).
 
     FAR-541: ``_hitl_decision`` alone is NEVER trusted — the decision must be
-    STAMPED for THIS block (its ``gate_id`` matches the blocked node id or the
+    STAMPED for THIS block (its ``review_id`` matches the blocked node id or the
     block's own guardrail gate id, stamped in state as
     ``_conformance_blocked_gate``). ``_hitl_decision`` persists in state for
     the whole run after ANY HITL resume, so a decision made at an earlier gate
@@ -3493,20 +3493,20 @@ def _handle_conformance_resume(state: dict[str, Any], node_id: str) -> bool:
     """
     decision = state.get("_hitl_decision")
     action = decision.get("action") if isinstance(decision, dict) else None
-    stamped_gate = decision.get("gate_id") if isinstance(decision, dict) else None
+    stamped_gate = decision.get("review_id") if isinstance(decision, dict) else None
     blocked_gate = str(state.get("_conformance_blocked_gate") or "")
     accepted_stamps = {node_id, blocked_gate} - {""}
     if stamped_gate is None or str(stamped_gate) not in accepted_stamps:
         _log.warning(
             "conformance.foreign_decision_ignored",
-            extra={"node_id": node_id, "decision_gate_id": stamped_gate},
+            extra={"node_id": node_id, "decision_review_id": stamped_gate},
         )
         # Fail closed: the block STANDS — re-interrupt so the run keeps waiting
         # for a decision stamped for THIS block (a foreign decision never
         # clears a guardrail block).
         replay = interrupt(
             {
-                "gate_id": blocked_gate or node_id,
+                "review_id": blocked_gate or node_id,
                 "node_id": node_id,
                 "conformance_blocked": True,
                 "reason": "awaiting a human decision for this conformance block",
@@ -3526,11 +3526,11 @@ def _handle_conformance_resume(state: dict[str, Any], node_id: str) -> bool:
         # for a manual node, or garbage) fails closed — warn + re-interrupt.
         _log.warning(
             "conformance.unknown_override_ignored",
-            extra={"node_id": node_id, "decision_gate_id": stamped_gate, "action": action},
+            extra={"node_id": node_id, "decision_review_id": stamped_gate, "action": action},
         )
         replay = interrupt(
             {
-                "gate_id": blocked_gate or node_id,
+                "review_id": blocked_gate or node_id,
                 "node_id": node_id,
                 "conformance_blocked": True,
                 "reason": "awaiting a recognized override decision for this conformance block",
@@ -3551,7 +3551,7 @@ def _recheck_after_conformance_interrupt(state: dict[str, Any], node_id: str, re
     (``GuardrailBlockedError``) while the block is still standing, silently
     discarding the decision the human just committed (FAR-541 iteration 4,
     F-6). Mirror the gate node's recursive re-entry
-    (``return await _hitl_gate({**state, "_hitl_decision": decision})``): feed
+    (``return await _hitl_review({**state, "_hitl_decision": decision})``): feed
     the replayed value back through :func:`_handle_conformance_resume` — the
     LIVE state dict is updated in place so the marker-clearing mutations land
     on the state the caller observes. A second foreign replay re-interrupts
@@ -3590,12 +3590,12 @@ async def _handle_conformance_block(
     # stamps the decision with the claim row's gate id — the guardrail gate
     # id the interrupt was created with).
     # Mutations before ``interrupt()`` are persisted by the checkpointer
-    # (same pattern as ``_hitl_gate`` / ``_manual_node``).
+    # (same pattern as ``_hitl_review`` / ``_manual_node``).
     state["_conformance_blocked_node"] = node_id
-    state["_conformance_blocked_gate"] = str(result.gate_id)
+    state["_conformance_blocked_gate"] = str(result.review_id)
     interrupt(
         {
-            "gate_id": result.gate_id,
+            "review_id": result.review_id,
             "reason": result.detail,
             "node_id": node_id,
             "conformance_state": result.state,
@@ -4513,7 +4513,7 @@ _JUDGE_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
 def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
     """Run an async coroutine to completion from a sync context.
 
-    ``make_hitl_gate_fn`` runs inside an already-running asyncio event loop,
+    ``make_hitl_review_fn`` runs inside an already-running asyncio event loop,
     so ``asyncio.run`` and ``loop.run_until_complete`` both raise "This event
     loop is already running". The LLMJudgeCallable protocol is synchronous, so
     we bridge sync -> async by executing the coroutine on a dedicated event
@@ -4539,7 +4539,7 @@ def _build_llm_judge_callable(
 ) -> Callable[[dict[str, Any], EvalDefDTO], dict[str, Any]]:
     """Build a synchronous LLM judge callable backed by a model backend.
 
-    The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_gate_fn``
+    The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
     runs inside an already-running asyncio event loop. We bridge sync -> async
     by running the async backend invoke on a dedicated event loop in a worker
     thread via ``_run_coroutine_sync``.
@@ -4646,15 +4646,15 @@ def _resolve_gate_eval_target(
     if found:
         return contract_output
     _log.debug(
-        "hitl_gate.eval.missing_contract_output",
+        "hitl_review.eval.missing_contract_output",
         extra={"node_id": str(node_id), "node_type": node_type},
     )
     return state
 
 
-def _build_hitl_gate_artifact(gate_id: str, status: str, **extra: Any) -> dict[str, Any]:
+def _build_hitl_review_artifact(review_id: str, status: str, **extra: Any) -> dict[str, Any]:
     """Build the standard HITL gate artifact envelope."""
-    return {"artifacts": [{"node_id": gate_id, "status": status, **extra}]}
+    return {"artifacts": [{"node_id": review_id, "status": status, **extra}]}
 
 
 async def _dispatch_reject_correction_inner(
@@ -4664,7 +4664,7 @@ async def _dispatch_reject_correction_inner(
     correction_target: Any,
     node_output: dict[str, Any],
     decision: Any,
-    gate_id: str,
+    review_id: str,
 ) -> None:
     """Dispatch a single-node correction for a rejected HITL gate (best-effort)."""
     from modulo.core.feedback_manager import dispatch_reject_correction
@@ -4679,22 +4679,22 @@ async def _dispatch_reject_correction_inner(
             rejection_reason=(
                 (decision.get("reason") if isinstance(decision, dict) else None) or "rejected via HITL gate"
             ),
-            gate_id=gate_id,
+            review_id=review_id,
         )
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception(
-            "hitl_gate.reject_correction_dispatch_failed",
-            extra={"gate_id": gate_id, "node_id": str(correction_target)},
+            "hitl_review.reject_correction_dispatch_failed",
+            extra={"review_id": review_id, "node_id": str(correction_target)},
         )
 
 
 async def _dispatch_reject_correction_best_effort(
     state: dict[str, Any],
     decision: Any,
-    gate_id: str,
-    hitl_gate_config: dict[str, Any],
+    review_id: str,
+    hitl_review_config: dict[str, Any],
     session_factory: Any,
     org_id: Any,
 ) -> None:
@@ -4707,17 +4707,17 @@ async def _dispatch_reject_correction_best_effort(
     action = decision.get("action") if isinstance(decision, dict) else None
     is_rejected = action == "rejected"
     if is_rejected and session_factory is not None and org_id is not None:
-        correction_target = hitl_gate_config.get("correction_target")
+        correction_target = hitl_review_config.get("correction_target")
         run_id_for_correction = state.get("_run_id")
         node_output = state.get("output")
         if correction_target and run_id_for_correction and isinstance(node_output, dict):
             await _dispatch_reject_correction_inner(
-                session_factory, org_id, run_id_for_correction, correction_target, node_output, decision, gate_id
+                session_factory, org_id, run_id_for_correction, correction_target, node_output, decision, review_id
             )
 
 
-def _hitl_gate_deliver_manual_result(
-    gate_id: str,
+def _hitl_review_deliver_manual_result(
+    review_id: str,
     decision: Any,
 ) -> tuple[bool, dict[str, Any]]:
     """Build the gate result for a manual-delivery resume decision."""
@@ -4727,7 +4727,7 @@ def _hitl_gate_deliver_manual_result(
         {
             "artifacts": [
                 {
-                    "node_id": gate_id,
+                    "node_id": review_id,
                     "status": "interrupted",
                     "result": "delivered_manual",
                     "human_data": decision,
@@ -4740,15 +4740,15 @@ def _hitl_gate_deliver_manual_result(
 
 
 # FAR-860: the state key prefix for the human's choice answer. Downstream
-# conditional edges branch on ``hitl_answer_<gate_id>`` to read the chosen
+# conditional edges branch on ``hitl_answer_<review_id>`` to read the chosen
 # option id. The key is stable (derived from the gate id) and documented so
 # pipeline authors know the exact state path to reference in JMESPath
 # conditions.
-HITL_ANSWER_STATE_KEY_PREFIX = "hitl_answer_"
+HITL_REVIEW_ANSWER_STATE_KEY_PREFIX = "hitl_review_answer_"
 
 
 def _inject_answer_state(
-    gate_id: str,
+    review_id: str,
     decision: dict[str, Any] | Any,
     gate_result: dict[str, Any],
 ) -> None:
@@ -4756,13 +4756,13 @@ def _inject_answer_state(
 
     FAR-860: when a ``kind: choice`` gate's decision carries an ``answer``
     dict (``{"kind": "choice", "option_id": "<id>"}``), the chosen option id
-    is placed in state as ``hitl_answer_<gate_id>`` so downstream conditional
+    is placed in state as ``hitl_answer_<review_id>`` so downstream conditional
     edges can branch on it via JMESPath.
 
     The injection reuses the existing gate-result-as-state-seam: the gate
     node's return dict IS the state update merged by LangGraph. No new
     routing primitive is needed — existing conditional edges read this key
-    with ``state["hitl_answer_<gate_id>"]``.
+    with ``state["hitl_answer_<review_id>"]``.
 
     ``gate_result`` is mutated in place (the caller owns the dict).
 
@@ -4782,12 +4782,19 @@ def _inject_answer_state(
         return
     option_id = answer.get("option_id")
     if isinstance(option_id, str) and option_id:
-        state_key = f"{HITL_ANSWER_STATE_KEY_PREFIX}{gate_id}"
+        state_key = f"{HITL_REVIEW_ANSWER_STATE_KEY_PREFIX}{review_id}"
         gate_result[state_key] = option_id
+        # Transition shim (FAR-1104): also write under the old key prefix
+        # so in-flight runs checkpointed before the vocab rename can still
+        # read the answer state via the old JMESPath key.
+        old_prefix = "hitl_answer_"
+        old_key = f"{old_prefix}{review_id}"
+        if old_key != state_key:
+            gate_result[old_key] = option_id
 
 
-def _hitl_gate_approve_reject_result(
-    gate_id: str,
+def _hitl_review_approve_reject_result(
+    review_id: str,
     decision: Any,
     is_rejected: bool,
 ) -> dict[str, Any]:
@@ -4796,7 +4803,7 @@ def _hitl_gate_approve_reject_result(
     gate_result: dict[str, Any] = {
         "artifacts": [
             {
-                "node_id": gate_id,
+                "node_id": review_id,
                 "status": "interrupted",
                 "result": result_status,
                 "human_data": decision,
@@ -4811,11 +4818,11 @@ def _hitl_gate_approve_reject_result(
     return gate_result
 
 
-async def _hitl_gate_resume_result(
+async def _hitl_review_resume_result(
     decision: Any,
-    gate_id: str,
+    review_id: str,
     state: dict[str, Any],
-    hitl_gate_config: dict[str, Any],
+    hitl_review_config: dict[str, Any],
     session_factory: Any,
     org_id: Any,
 ) -> tuple[bool, dict[str, Any] | None]:
@@ -4828,12 +4835,12 @@ async def _hitl_gate_resume_result(
     Two fail-closed checks apply (FAR-541), and BOTH must pass:
 
     1. Gate identity: the decision must be STAMPED with THIS gate's id
-       (``decision["gate_id"] == gate_id``). Decisions are per-RUN but
+       (``decision["review_id"] == review_id``). Decisions are per-RUN but
        consumers are per-gate, and ``_hitl_decision`` persists in state for
        the whole run (it is never cleared after consumption), so a decision
        made at an earlier gate would otherwise resolve this one with zero
        human action. A mismatched or missing stamp is ignored with a
-       ``hitl_gate.foreign_decision_ignored`` warning (the gate id and the
+       ``hitl_review.foreign_decision_ignored`` warning (the gate id and the
        decision's stamped gate id only — never payload content) and the gate
        falls through to re-interrupt under human_only.
     2. Action vocabulary: only recognized actions resume — ``approved`` (the
@@ -4850,27 +4857,29 @@ async def _hitl_gate_resume_result(
     if decision is None:
         return (False, None)
     action = decision.get("action") if isinstance(decision, dict) else None
-    stamped_gate = decision.get("gate_id") if isinstance(decision, dict) else None
-    if stamped_gate != gate_id:
+    stamped_gate = decision.get("review_id") if isinstance(decision, dict) else None
+    if stamped_gate != review_id:
         _log.warning(
-            "hitl_gate.foreign_decision_ignored",
-            extra={"gate_id": gate_id, "decision_gate_id": stamped_gate},
+            "hitl_review.foreign_decision_ignored",
+            extra={"review_id": review_id, "decision_review_id": stamped_gate},
         )
         return (False, None)
     if action == "deliver_manual":
-        gate_result = _hitl_gate_deliver_manual_result(gate_id, decision)
-        _inject_answer_state(gate_id, decision, gate_result[1])
+        gate_result = _hitl_review_deliver_manual_result(review_id, decision)
+        _inject_answer_state(review_id, decision, gate_result[1])
         return gate_result
     if action not in ("approved", "rejected"):
         _log.warning(
-            "hitl_gate.malformed_decision_ignored",
-            extra={"gate_id": gate_id, "decision_type": type(decision).__name__, "action": action},
+            "hitl_review.malformed_decision_ignored",
+            extra={"review_id": review_id, "decision_type": type(decision).__name__, "action": action},
         )
         return (False, None)
     is_rejected = action == "rejected"
-    await _dispatch_reject_correction_best_effort(state, decision, gate_id, hitl_gate_config, session_factory, org_id)
-    ar_result = _hitl_gate_approve_reject_result(gate_id, decision, is_rejected)
-    _inject_answer_state(gate_id, decision, ar_result)
+    await _dispatch_reject_correction_best_effort(
+        state, decision, review_id, hitl_review_config, session_factory, org_id
+    )
+    ar_result = _hitl_review_approve_reject_result(review_id, decision, is_rejected)
+    _inject_answer_state(review_id, decision, ar_result)
     return (True, ar_result)
 
 
@@ -4910,8 +4919,8 @@ def _bound_condition_expression(expression: str) -> str:
     return slice_with_marker(expression, _CONDITION_RESULT_FIELD_MAX_CHARS)
 
 
-def _hitl_gate_condition_evaluate(
-    gate_id: str, condition_expr: str | None, state: dict[str, Any]
+def _hitl_review_condition_evaluate(
+    review_id: str, condition_expr: str | None, state: dict[str, Any]
 ) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
     """Evaluate the conditional-gate JMESPath expression (FAR-688).
 
@@ -4934,14 +4943,19 @@ def _hitl_gate_condition_evaluate(
     try:
         compiled = compile_jmespath(condition_expr)
     except ValueError:
-        _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
+        _log.exception("hitl_review.invalid_condition", extra={"condition": condition_expr})
         raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
     result = compiled.search(state)
     if not bool(result):
         # Condition falsy — skip the gate entirely. Preserve the raw result
         # in the artifact (mirrors the pre-refactor behaviour).
         return (
-            _build_hitl_gate_artifact(gate_id, "condition_skipped", condition=condition_expr, condition_result=result),
+            _build_hitl_review_artifact(
+                review_id,
+                "condition_skipped",
+                condition=condition_expr,
+                condition_result=result,
+            ),
             None,
         )
     return None, {
@@ -4965,7 +4979,7 @@ async def _run_gate_evals(
     state: dict[str, Any],
     eval_definitions: Sequence[EvalDefDTO] | None,
     node_type_map: dict[str, str] | None,
-    gate_id: str,
+    review_id: str,
     session_factory: Any,
     org_id: Any,
 ) -> dict[str, EvalResult]:
@@ -4987,9 +5001,9 @@ async def _run_gate_evals(
     def _on_gate_eval_result(eval_def: EvalDefDTO, result: EvalResult) -> None:
         """Per-eval structured log (Defect 3 fix — restores dropped log)."""
         _log.info(
-            "hitl_gate.eval_result",
+            "hitl_review.eval_result",
             extra={
-                "gate_id": gate_id,
+                "review_id": review_id,
                 "eval_name": eval_def.name,
                 "eval_id": str(eval_def.id),
                 "passed": result.passed,
@@ -5004,14 +5018,14 @@ async def _run_gate_evals(
         run_id=_run_id,  # None ⇒ no persistence (Defect 2 fix: no uuid4)
         org_id=org_id,
         session_factory=session_factory,
-        node_id=gate_id,
+        node_id=review_id,
         resolve_llm_judge=_resolve_llm_judge_callable,
         on_eval_result=_on_gate_eval_result,
     )
 
 
-def _hitl_gate_eval_condition_skip(
-    gate_id: str,
+def _hitl_review_eval_condition_skip(
+    review_id: str,
     eval_condition_raw: Any,
     eval_results_by_name: dict[str, EvalResult],
 ) -> dict[str, Any] | None:
@@ -5025,9 +5039,9 @@ def _hitl_gate_eval_condition_skip(
             score: float = matched_result.score or 0.0
             condition_true: bool = _evaluate_eval_condition(score, threshold, operator)
             _log.info(
-                "hitl_gate.eval_condition",
+                "hitl_review.eval_condition",
                 extra={
-                    "gate_id": gate_id,
+                    "review_id": review_id,
                     "eval_name": eval_name,
                     "score": score,
                     "threshold": threshold,
@@ -5036,8 +5050,8 @@ def _hitl_gate_eval_condition_skip(
                 },
             )
             if not condition_true:
-                return _build_hitl_gate_artifact(
-                    gate_id,
+                return _build_hitl_review_artifact(
+                    review_id,
                     "condition_skipped",
                     condition=eval_condition_raw,
                     condition_result=False,
@@ -5045,8 +5059,8 @@ def _hitl_gate_eval_condition_skip(
     return None
 
 
-def _hitl_gate_autonomy_result(
-    gate_id: str, state: dict[str, Any], human_only: bool
+def _hitl_review_autonomy_result(
+    review_id: str, state: dict[str, Any], human_only: bool
 ) -> tuple[AutonomyResolution, dict[str, Any] | None]:
     """Resolve the ceiling-clamped autonomy level; return skip/auto-approve artifact, if any."""
     # Determine effective autonomy level from run_context (FAR-1163: a
@@ -5059,14 +5073,14 @@ def _hitl_gate_autonomy_result(
     human_only_effective: bool = human_only
 
     # human_only overrides everything — always interrupt.
-    if not human_only_effective and should_skip_hitl_gate(autonomy):
+    if not human_only_effective and should_skip_hitl_review(autonomy):
         # fully_autonomous: silently skip the gate.
-        return (resolution, _build_hitl_gate_artifact(gate_id, "skipped", autonomy=autonomy.value))
+        return (resolution, _build_hitl_review_artifact(review_id, "skipped", autonomy=autonomy.value))
     if not human_only_effective and should_notify_on_complete(autonomy):
         # notify_on_complete: auto-approve, record notification artifact.
         return (
             resolution,
-            _build_hitl_gate_artifact(gate_id, "auto_approved", autonomy=autonomy.value),
+            _build_hitl_review_artifact(review_id, "auto_approved", autonomy=autonomy.value),
         )
     return (resolution, None)
 
@@ -5102,15 +5116,15 @@ def _resolve_subject_parent_and_key(
             return parent, leaf_key
     except Exception:
         _log.debug(
-            "hitl_gate.subject_parent_resolution_failed",
+            "hitl_review.subject_parent_resolution_failed",
             extra={"subject_path": subject_path, "prefix": prefix, "leaf_key": leaf_key},
             exc_info=True,
         )
     return None, None
 
 
-def make_hitl_gate_fn(
-    hitl_gate_config: dict[str, Any],
+def make_hitl_review_fn(
+    hitl_review_config: dict[str, Any],
     *,
     eval_definitions: Sequence[EvalDefDTO] | None = None,
     session_factory: Callable[..., Any] | None = None,
@@ -5124,7 +5138,7 @@ def make_hitl_gate_fn(
     auto-approved (notify mode), no interrupt is raised.
 
     Conditional gating:
-      If ``hitl_gate_config`` contains a ``condition`` JMESPath expression,
+      If ``hitl_review_config`` contains a ``condition`` JMESPath expression,
       it is evaluated against the current state.  If the result is falsy
       the gate is skipped entirely (no autonomy or decision checks).
 
@@ -5148,23 +5162,23 @@ def make_hitl_gate_fn(
     the node is re-invoked with ``state["_hitl_decision"]`` populated.
     It then returns artifacts reflecting the human's decision.
     """
-    gate_id: str = hitl_gate_config.get("gate_id", "gate")
+    review_id: str = hitl_review_config.get("review_id", "gate")
     # FAR-609: the human_only default lives in the shared resolver module — a
     # gate config that omits the flag is human-only (every HITL gate defaults
     # to human_only: true; opting out requires an explicit false).
-    human_only: bool = human_only_effective(hitl_gate_config)
-    condition_expr: str | None = hitl_gate_config.get("condition")
-    eval_condition_raw: dict[str, Any] | None = hitl_gate_config.get("eval_condition")
-    required_team_id: str | None = _normalize_required_team_id(gate_id, hitl_gate_config.get("required_team_id"))
-    subject_path: str | None = hitl_gate_config.get("subject_path")
+    human_only: bool = human_only_effective(hitl_review_config)
+    condition_expr: str | None = hitl_review_config.get("condition")
+    eval_condition_raw: dict[str, Any] | None = hitl_review_config.get("eval_condition")
+    required_team_id: str | None = _normalize_required_team_id(review_id, hitl_review_config.get("required_team_id"))
+    subject_path: str | None = hitl_review_config.get("subject_path")
 
-    async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
+    async def _hitl_review(state: dict[str, Any]) -> dict[str, Any]:
         # --- Resume check — always first so condition/evals aren't re-evaluated. ---
-        resumed, resume_result = await _hitl_gate_resume_result(
+        resumed, resume_result = await _hitl_review_resume_result(
             state.get("_hitl_decision"),
-            gate_id,
+            review_id,
             state,
-            hitl_gate_config,
+            hitl_review_config,
             session_factory,
             org_id,
         )
@@ -5177,7 +5191,7 @@ def make_hitl_gate_fn(
         # capture records what made the condition true. The FAR-604 coalescing
         # hash is over ``Run.input_hash``, never this payload — adding a
         # member cannot change coalescing outcomes.
-        condition_skip, condition_result = _hitl_gate_condition_evaluate(gate_id, condition_expr, state)
+        condition_skip, condition_result = _hitl_review_condition_evaluate(review_id, condition_expr, state)
         if condition_skip is not None:
             return condition_skip
 
@@ -5186,18 +5200,18 @@ def make_hitl_gate_fn(
             state,
             eval_definitions,
             node_type_map,
-            gate_id,
+            review_id,
             session_factory,
             org_id,
         )
 
         # --- Eval-reference condition check (Section 8.17 v1). ---
-        eval_condition_skip = _hitl_gate_eval_condition_skip(gate_id, eval_condition_raw, eval_results_by_name)
+        eval_condition_skip = _hitl_review_eval_condition_skip(review_id, eval_condition_raw, eval_results_by_name)
         if eval_condition_skip is not None:
             return eval_condition_skip
 
         # --- Autonomy skip/approve. ---
-        resolution, autonomy_result = _hitl_gate_autonomy_result(gate_id, state, human_only)
+        resolution, autonomy_result = _hitl_review_autonomy_result(review_id, state, human_only)
         autonomy = resolution.effective
         # FAR-1163 S0: when the recommendation was clamped to the ceiling,
         # record the clamp (requested/effective/ceiling) IN ADDITION to the
@@ -5208,7 +5222,7 @@ def make_hitl_gate_fn(
                 session_factory,
                 org_id=org_id,
                 run_id=state.get("_run_id"),
-                gate_id=gate_id,
+                review_id=review_id,
                 requested=resolution.requested.value,
                 effective=autonomy.value,
                 ceiling=resolution.ceiling.value,
@@ -5226,7 +5240,7 @@ def make_hitl_gate_fn(
                 session_factory,
                 org_id=org_id,
                 run_id=state.get("_run_id"),
-                gate_id=gate_id,
+                review_id=review_id,
                 autonomy_level=autonomy.value,
                 gate_outcome=outcome,
                 human_only=human_only,
@@ -5244,7 +5258,7 @@ def make_hitl_gate_fn(
             session_factory,
             org_id=org_id,
             run_id=state.get("_run_id"),
-            gate_id=gate_id,
+            review_id=review_id,
             autonomy_level=autonomy.value,
             gate_outcome="fired",
             human_only=human_only,
@@ -5252,9 +5266,9 @@ def make_hitl_gate_fn(
             # path above — the fired event must be joinable too.
             pipeline_id=state.get("_pipeline_id"),
         )
-        hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
-        hitl_gates.append(hitl_gate_config)
-        state["_hitl_gates"] = hitl_gates
+        hitl_reviews: list[dict[str, Any]] = list(state.get("_hitl_reviews") or [])
+        hitl_reviews.append(hitl_review_config)
+        state["_hitl_reviews"] = hitl_reviews
 
         # FAR-859: resolve subject_path against the SAME state root the
         # condition evaluates against (failure-isolated — a bad path or
@@ -5277,18 +5291,18 @@ def make_hitl_gate_fn(
                     )
             except Exception:
                 _log.debug(
-                    "hitl_gate.subject_path_resolution_failed",
-                    extra={"gate_id": gate_id, "subject_path": subject_path},
+                    "hitl_review.subject_path_resolution_failed",
+                    extra={"review_id": review_id, "subject_path": subject_path},
                     exc_info=True,
                 )
 
         # State mutations before the interrupt are persisted by the checkpointer.
         decision = interrupt(
             {
-                "gate_id": gate_id,
+                "review_id": review_id,
                 "autonomy_level": autonomy.value,
                 "human_only": human_only,
-                "overdue_threshold_minutes": hitl_gate_config.get("overdue_threshold_minutes"),
+                "overdue_threshold_minutes": hitl_review_config.get("overdue_threshold_minutes"),
                 "required_team_id": required_team_id,
                 # FAR-688: the matched condition value ({"expression", "value"},
                 # redacted + bounded) or None when the gate has no condition.
@@ -5306,10 +5320,10 @@ def make_hitl_gate_fn(
                 "subject_leaf_key": resolved_subject_leaf_key,
             }
         )
-        return await _hitl_gate({**state, "_hitl_decision": decision})
+        return await _hitl_review({**state, "_hitl_decision": decision})
 
-    _hitl_gate.__name__ = f"hitl_gate_{gate_id}"
-    return _hitl_gate
+    _hitl_review.__name__ = f"hitl_review_{review_id}"
+    return _hitl_review
 
 
 def _manual_resume_output(
@@ -5378,7 +5392,7 @@ def make_manual_node_fn(
         # with ``manual_output=None``). A mismatched/missing stamp fails
         # closed: the node re-interrupts and keeps waiting for its own input.
         decision = state.get("_hitl_decision")
-        stamped_gate = decision.get("gate_id") if isinstance(decision, dict) else None
+        stamped_gate = decision.get("review_id") if isinstance(decision, dict) else None
         if isinstance(decision, dict) and stamped_gate == node_id:
             # FAR-899: schema validator mode — resolved from the effective-
             # setting store (org.settings_json → system_config → env var →
@@ -5415,7 +5429,7 @@ def make_manual_node_fn(
         if decision is not None:
             _log.warning(
                 "manual_node.foreign_decision_ignored",
-                extra={"node_id": node_id, "decision_gate_id": stamped_gate},
+                extra={"node_id": node_id, "decision_review_id": stamped_gate},
             )
 
         # First invocation —  record pending artifact and interrupt.
@@ -5436,11 +5450,11 @@ def make_manual_node_fn(
                 "manual": True,
                 # FAR-541 (iteration 3): the interrupt payload carries its own
                 # identity stamp. ``_handle_graph_interrupt`` keys the pending
-                # claim row on ``gate_id`` VERBATIM — without this member the
+                # claim row on ``review_id`` VERBATIM — without this member the
                 # manual node's claim row was keyed "" (invisible to the
                 # recover-node 422 guard, unclaimable through the HITL API).
                 # The stamp equals the node id, matching the consumer's check.
-                "gate_id": node_id,
+                "review_id": node_id,
                 "node_id": node_id,
                 "prompt": manual_prompt,
                 "output_schema_id": node_def.get("output_schema_id"),

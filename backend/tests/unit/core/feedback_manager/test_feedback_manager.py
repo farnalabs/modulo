@@ -21,7 +21,7 @@ from modulo.db.models.feedback_record import FeedbackRecord
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _RUN_ID = uuid.uuid4()
-_GATE_ID = "gate-1"
+_REVIEW_ID = "gate-1"
 _PRODUCING_NODE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 
 
@@ -52,7 +52,7 @@ def sample_record() -> FeedbackRecord:
     r.id = uuid.uuid4()
     r.organisation_id = _ORG_ID
     r.run_id = _RUN_ID
-    r.gate_id = _GATE_ID
+    r.review_id = _REVIEW_ID
     r.account_id = _USER_ID
     r.rejection_reason = "Output did not match requirements"
     r.rejected_output = {"result": "wrong answer"}
@@ -82,7 +82,7 @@ class TestCreateFeedbackRecord:
 
         record = await mgr.create_feedback_record(
             run_id=_RUN_ID,
-            gate_id=_GATE_ID,
+            review_id=_REVIEW_ID,
             account_id=_USER_ID,
             rejection_reason="Wrong output",
             rejected_output={"result": "bad"},
@@ -99,7 +99,7 @@ class TestCreateFeedbackRecord:
         added = mock_session.add.call_args.args[0]
         assert added.organisation_id == _ORG_ID
         assert added.run_id == _RUN_ID
-        assert added.gate_id == _GATE_ID
+        assert added.review_id == _REVIEW_ID
         assert added.account_id == _USER_ID
         assert added.rejection_reason == "Wrong output"
         assert added.rejected_output == {"result": "bad"}
@@ -122,7 +122,7 @@ class TestCreateFeedbackRecord:
         ):
             record = await mgr.create_feedback_record(
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=_USER_ID,
                 rejection_reason="Bad output",
                 rejected_output={},
@@ -145,7 +145,7 @@ class TestCreateFeedbackRecord:
         ):
             record = await mgr.create_feedback_record(
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=_USER_ID,
                 rejection_reason="Auto-fix this",
                 rejected_output={"result": "bad"},
@@ -163,7 +163,7 @@ class TestCreateFeedbackRecord:
         with pytest.raises(ValidationError, match="rejection_reason must not be empty"):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=_USER_ID,
                 rejection_reason=reason,
                 rejected_output={},
@@ -175,7 +175,7 @@ class TestCreateFeedbackRecord:
         with pytest.raises(ValidationError, match="must not exceed 5000"):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=_USER_ID,
                 rejection_reason="x" * 5001,
                 rejected_output={},
@@ -187,7 +187,7 @@ class TestCreateFeedbackRecord:
         with pytest.raises(ValidationError, match="must not exceed 100KB"):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=_USER_ID,
                 rejection_reason="bad output",
                 rejected_output={"data": "x" * 200_000},
@@ -202,7 +202,7 @@ class TestCreateFeedbackRecord:
         with pytest.raises(ValidationError, match="unknown feedback_handler_type"):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=_USER_ID,
                 rejection_reason="bad output",
                 rejected_output={},
@@ -220,7 +220,7 @@ class TestCreateFeedbackRecord:
         ):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=_USER_ID,
                 rejection_reason="Manual review",
                 rejected_output={"result": "bad"},
@@ -1078,7 +1078,7 @@ class TestRunPostCorrectionEval:
         r.id = uuid.uuid4()
         r.organisation_id = _ORG_ID
         r.run_id = uuid.uuid4()
-        r.gate_id = _GATE_ID
+        r.review_id = _REVIEW_ID
         r.account_id = _USER_ID
         r.rejection_reason = "bad output"
         r.rejected_output = {"result": "bad"}
@@ -1453,7 +1453,7 @@ class TestRejectCorrectionAccountGate:
                 org_id=_ORG_ID,
                 run_id=_RUN_ID,
                 node_id="node-1",
-                gate_id=_GATE_ID,
+                review_id=_REVIEW_ID,
                 account_id=account_id,
                 rejection_reason="bad output",
                 rejected_output={"x": 1},

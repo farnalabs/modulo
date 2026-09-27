@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.db.crud.hitl_gate_guard import (
+from modulo.db.crud.hitl_review_guard import (
     DiffResult,
     EdgeWeakening,
-    HitlGateWeakeningDenied,
+    HitlReviewWeakeningDenied,
     resolve_effective_privilege,
 )
 from modulo.db.crud.pipeline_snapshot_versioning import (
@@ -349,7 +349,7 @@ class TestRollbackToSnapshot:
                 "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
             ) as mock_create,
-            pytest.raises(HitlGateWeakeningDenied) as excinfo,
+            pytest.raises(HitlReviewWeakeningDenied) as excinfo,
         ):
             await rollback_to_snapshot(session, pid, uuid.uuid4(), is_privileged=False, caller_type="rest")
 
@@ -391,7 +391,7 @@ class TestRollbackToSnapshot:
                 "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
                 new_callable=AsyncMock,
             ) as mock_create,
-            pytest.raises(HitlGateWeakeningDenied) as exc_info,
+            pytest.raises(HitlReviewWeakeningDenied) as exc_info,
         ):
             await rollback_to_snapshot(session, pid, target_sid, is_privileged=False, caller_type="rest")
 
@@ -402,7 +402,7 @@ class TestRollbackToSnapshot:
         mock_create.assert_not_awaited()
 
     async def test_rollback_to_snapshot_audits_gate_weakening_when_allowed(self):
-        """A non-denied weakening must record a hitl_gate_removed audit event."""
+        """A non-denied weakening must record a hitl_review_removed audit event."""
         pid = uuid.uuid4()
         org_id = uuid.uuid4()
         account_id = uuid.uuid4()
@@ -457,7 +457,7 @@ class TestRollbackToSnapshot:
 
         mock_audit.assert_awaited_once()
         audit_kwargs = mock_audit.await_args.kwargs
-        assert audit_kwargs["event_type"] == "hitl_gate_removed"
+        assert audit_kwargs["event_type"] == "hitl_review_removed"
         assert audit_kwargs["org_id"] == org_id
         assert audit_kwargs["actor_user_id"] == account_id
         assert audit_kwargs["resource_type"] == "pipeline"
@@ -521,7 +521,7 @@ class TestRollbackToSnapshot:
 
         assert result is new_snapshot
         mock_audit.assert_awaited_once()
-        assert mock_audit.await_args.kwargs["event_type"] == "hitl_gate_removed"
+        assert mock_audit.await_args.kwargs["event_type"] == "hitl_review_removed"
         assert mock_audit.await_args.kwargs["resource_id"] == pid
         payload = mock_audit.await_args.kwargs["payload_json"]
         assert payload["denied"] is False
@@ -540,7 +540,7 @@ class TestRollbackToSnapshot:
         target.pipeline_id = pid
         target.graph_json = {
             "nodes": nodes,
-            "edges": [{"source": "a", "target": "b", "type": "normal", "hitl_gate_config": new_edge_cfg}],
+            "edges": [{"source": "a", "target": "b", "type": "normal", "hitl_review_config": new_edge_cfg}],
         }
         pipeline = MagicMock()
         pipeline.organisation_id = org_id
@@ -552,7 +552,7 @@ class TestRollbackToSnapshot:
                 source_node_id=uuid.uuid4(),
                 target_node_id=uuid.uuid4(),
                 edge_type="normal",
-                hitl_gate_config=None,
+                hitl_review_config=None,
             )
         ]
         target_result = MagicMock()
@@ -584,7 +584,7 @@ class TestRollbackToSnapshot:
         assert str(new_edge.source_node_id) == "a"
         assert str(new_edge.target_node_id) == "b"
         assert new_edge.edge_type == "normal"
-        assert new_edge.hitl_gate_config == new_edge_cfg
+        assert new_edge.hitl_review_config == new_edge_cfg
 
         mock_create.assert_awaited_once_with(
             session, pipeline_id=pid, account_id=None, version_kind="edit", created_kind="rollback"

@@ -13,10 +13,10 @@ Modulo owns the orchestration layer – the visual, composable pipeline of atomi
 
 ## 2. Current state (what already exists – do not reinvent)
 
-- Graph storage: nodes as JSON on `Pipeline.graph_nodes_json`; edges as a real table `PipelineEdge` (`edge_type ∈ {normal,reject,conditional}`, `condition_expression` JMESPath, `hitl_gate_config`).
+- Graph storage: nodes as JSON on `Pipeline.graph_nodes_json`; edges as a real table `PipelineEdge` (`edge_type ∈ {normal,reject,conditional}`, `condition_expression` JMESPath, `hitl_review_config`).
 - Execution: LangGraph `StateGraph`, compiled per-snapshot, cached by `(pipeline_id, snapshot_id)`. Fan-out is native (multiple normal edges → parallel superstep). Fan-in is implicit via a state reducer (list concat; `run_context` dict last-write-wins – a known hazard).
 - Routing: conditional edges (JMESPath), reject edges (HITL kickback), LLM routing (`routing_mode="llm"` + `routing_label`), and a `loop` edge type that exists *only* in compiled `graph_json` (not in the API schema – a discrepancy).
-- HITL: an **edge gate**, realized as a synthetic `hitl_gate_{src}_{tgt}` node at compile time. Separate `manual` node type = human *produces* output.
+- HITL: an **edge gate**, realized as a synthetic `hitl_review_{src}_{tgt}` node at compile time. Separate `manual` node type = human *produces* output.
 - Retry: pipeline-level `retry_policy` (run-level re-dispatch, max 5, jittered backoff — the in-job sleep is configurable via the optional run-level `backoff_schedule: {delay_seconds: 1-300, multiplier?: 1.0-10.0}` key, default 45s × 2.0, code-held 300s cap, +25% jitter; see ADR 028) + transient node-level requeue. **No per-edge retry.** Retries blanket-disabled if any node has `idempotent=false`.
 - Scoping: no per-node tool allow-list. Tool access is inherited from the referenced `Agent` (`connector_type_refs`, `model_backend_id`, `required_environment_capabilities`) + sandbox capability scoping + per-node `env_vars`/`context_files`.
 - Versioning: full snapshot versioning, `diff_snapshots` (structural per-field), `rollback_to_snapshot` (new snapshot, HITL-removal guard). Frontend is **Vue Flow**.
@@ -55,7 +55,7 @@ No separate "conditional edge" concept – conditionality is a Router rule. The 
 
 ### D. HITL as a first-class step → **`hitl` node type**
 Promote HITL from an edge property to a **draggable node**, while keeping the synthetic-gate compile path for backward compat. A `hitl` node carries: `mode: approve_reject|collect_input`, `form_schema_ref`, `reject_target`, `correction_target`, `claim_team_id`, `claim_expiry_min`, `human_only`, `eval_before_interrupt`.
-- **Compile-equivalence:** `hitl` node compiles to EXACTLY the existing synthetic-gate path (`edge.hitl_gate_config`); add a compile-equivalence test (new node == legacy edge gate). Verify the synthetic-gate implementation supports each HITL field (the engine uses `required_team_id`, `overdue_threshold_minutes`, `eval_condition`, `condition`, `human_only`, `gate_id` – map fields 1:1 before claiming equivalence).
+- **Compile-equivalence:** `hitl` node compiles to EXACTLY the existing synthetic-gate path (`edge.hitl_review_config`); add a compile-equivalence test (new node == legacy edge gate). Verify the synthetic-gate implementation supports each HITL field (the engine uses `required_team_id`, `overdue_threshold_minutes`, `eval_condition`, `condition`, `human_only`, `review_id` – map fields 1:1 before claiming equivalence).
 - **Migration:** auto-convert existing edge-gate HITL to `hitl` nodes during backfill; edge-gate authoring deprecated but compile-supported; non-mappable edge-gate conditions surfaced as a migration **WARNING** stating the node will proceed *ungated* (not silently dropped). `manual` node RETAINED as a non-gating human-output step; `hitl` is the gating variant.
 
 ### E. Node-level tool/context scoping → **capability_scope block** (gated on FAR-408 merged+stable)

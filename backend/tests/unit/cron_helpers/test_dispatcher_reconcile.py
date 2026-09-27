@@ -93,12 +93,12 @@ class _MockSession:
                 # its age-bound predicate since it references hitl_claims in
                 # its NOT EXISTS guard (like the FAR-648 sweep) and its error
                 # code is a bound param.
-                ids = self.terminalizer_rows.get("hitl_gate_missing", [])
+                ids = self.terminalizer_rows.get("hitl_review_missing", [])
             elif "hitl_claims" in s:
                 # FAR-648 expired-HITL-gate terminalizer — the EXISTS-gated
                 # UPDATE-runs statement (error code is a bound param, so it
                 # cannot be keyed by code).
-                ids = self.terminalizer_rows.get("hitl_gate_expired", [])
+                ids = self.terminalizer_rows.get("hitl_review_expired", [])
             r = MagicMock()
             r.all.return_value = [(uid,) for uid in ids]
             r.rowcount = len(ids)
@@ -181,7 +181,7 @@ def _settings(**overrides: object) -> MagicMock:
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
         "saq_run_claim_cap": 20,
-        "hitl_gate_cancel_grace_seconds": 3600,
+        "hitl_review_cancel_grace_seconds": 3600,
         "modulo_telemetry_enabled": False,
         # FAR-746 knobs as REAL ints — the product code uses
         # _int_setting's coded default for anything that is not literally
@@ -224,9 +224,9 @@ async def _run_reconcile(
 ) -> tuple[dict[str, Any], Any, Any, Any, Any, _MockSession]:
     """Drive one ``dispatcher_reconcile`` tick against a fully mocked env.
 
-    ``terminalizer`` optionally patches ``_terminalize_expired_hitl_gates``
+    ``terminalizer`` optionally patches ``_terminalize_expired_hitl_reviews``
     (FAR-648 wiring tests) and ``terminalizer_missing`` optionally patches
-    ``_terminalize_hitl_gate_missing`` (FAR-721 wiring tests) — the caller
+    ``_terminalize_hitl_review_missing`` (FAR-721 wiring tests) — the caller
     keeps its own reference and asserts on it directly; ``settings_overrides``
     feeds ``_settings`` so a test can prove a settings-derived value (e.g. the
     gate-expiry grace) reaches the reconciled code unchanged. Both default to
@@ -248,9 +248,9 @@ async def _run_reconcile(
         stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
         stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
         if terminalizer is not None:
-            stack.enter_context(patch.object(ch, "_terminalize_expired_hitl_gates", terminalizer))
+            stack.enter_context(patch.object(ch, "_terminalize_expired_hitl_reviews", terminalizer))
         if terminalizer_missing is not None:
-            stack.enter_context(patch.object(ch, "_terminalize_hitl_gate_missing", terminalizer_missing))
+            stack.enter_context(patch.object(ch, "_terminalize_hitl_review_missing", terminalizer_missing))
         reenqueue = stack.enter_context(
             patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
         )
@@ -717,7 +717,7 @@ class TestHitlResumeOrSkipPredicateMatrix:
         ``resume_run`` through the SAME committed-decision guard — the run
         self-heals via the existing reconcile→resume path instead of being
         stranded parked forever."""
-        payload = {"action": "approved", "gate_id": "hitl_gate_a_b"}
+        payload = {"action": "approved", "review_id": "hitl_review_a_b"}
         skip, data, summary, guard, resume = await self._resolve(
             monkeypatch, "hitl_parked", committed=True, resume_data=payload
         )
@@ -774,8 +774,8 @@ class TestHitlResumeOrSkipPredicateMatrix:
         session = AsyncMock()
         session.execute = AsyncMock(
             side_effect=[
-                _result_row(("approved", {"action": "approved", "gate_id": "hitl_gate_a_b"}, "hitl_gate_a_b")),
-                _result_row(("hitl_gate_c_d",)),  # gate B: claimed, undecided
+                _result_row(("approved", {"action": "approved", "review_id": "hitl_review_a_b"}, "hitl_review_a_b")),
+                _result_row(("hitl_review_c_d",)),  # gate B: claimed, undecided
             ]
         )
         summary: dict[str, Any] = {"skipped": 0}
@@ -789,7 +789,7 @@ class TestHitlResumeOrSkipPredicateMatrix:
     async def test_cross_gate_matched_decision_resume_was_structurally_dead(self) -> None:
         """FAR-541 iteration 4 (FIX C): the old "claimed + same-gate committed
         decision -> resume" branch was STRUCTURALLY DEAD — under
-        ``uq_hitl_claims_run_gate`` (UNIQUE (run_id, gate_id)) a
+        ``uq_hitl_claims_run_gate`` (UNIQUE (run_id, review_id)) a
         claimed-UNDECIDED row and a DECIDED row for the same gate cannot
         coexist, so that test mocked a constraint-violating impossible state.
         The REAL claimed state a committed decision can coexist with is the
@@ -800,8 +800,8 @@ class TestHitlResumeOrSkipPredicateMatrix:
         session = AsyncMock()
         session.execute = AsyncMock(
             side_effect=[
-                _result_row(("approved", {"action": "approved", "gate_id": "hitl_gate_a_b"}, "hitl_gate_a_b")),
-                _result_row(("hitl_gate_c_d",)),  # gate B: claimed, undecided
+                _result_row(("approved", {"action": "approved", "review_id": "hitl_review_a_b"}, "hitl_review_a_b")),
+                _result_row(("hitl_review_c_d",)),  # gate B: claimed, undecided
             ]
         )
         assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
@@ -1957,8 +1957,8 @@ class TestAwaitingHumanHasCommittedDecision:
     unconditionally as of iteration 4 / FIX C; the no-undecided-rows branch
     accepts only identity-consumable actions)."""
 
-    _LATEST_SQL = "SELECT decision, decision_payload, gate_id FROM hitl_claims"
-    _CLAIMED_SQL = "SELECT gate_id FROM hitl_claims"
+    _LATEST_SQL = "SELECT decision, decision_payload, review_id FROM hitl_claims"
+    _CLAIMED_SQL = "SELECT review_id FROM hitl_claims"
     _UNDECIDED_SQL = "SELECT 1 FROM hitl_claims"
 
     def _mock_session(self, results: list[Any]) -> AsyncMock:
@@ -2038,7 +2038,7 @@ class TestAwaitingHumanHasCommittedDecision:
         decided gate's interrupt with its resume job lost)."""
         session = self._mock_session(
             [
-                ("approved", {"action": "approved", "gate_id": "hitl_gate_b"}, "hitl_gate_b"),
+                ("approved", {"action": "approved", "review_id": "hitl_review_b"}, "hitl_review_b"),
                 None,  # no claimed-undecided row
                 None,  # no undecided rows at all
             ]
@@ -2051,7 +2051,7 @@ class TestAwaitingHumanHasCommittedDecision:
         replayed onto a run waiting at claimed gate B -> SKIP."""
         session = self._mock_session(
             [
-                ("approved", {"action": "approved", "gate_id": "gate-a"}, "gate-a"),
+                ("approved", {"action": "approved", "review_id": "gate-a"}, "gate-a"),
                 ("gate-b",),
             ]
         )
@@ -2078,7 +2078,7 @@ class TestAwaitingHumanHasCommittedDecision:
         session = AsyncMock()
         session.execute = AsyncMock(
             side_effect=[
-                _result_row(("approved", {"action": "approved", "gate_id": "gate-a"}, "gate-a")),
+                _result_row(("approved", {"action": "approved", "review_id": "gate-a"}, "gate-a")),
                 _result_row(None),  # no claimed-undecided row
                 _result_row(("x",)),  # an undecided row EXISTS
             ]
@@ -2092,7 +2092,7 @@ class TestAwaitingHumanHasCommittedDecision:
         stamp -> resume."""
         session = self._mock_session(
             [
-                ("approved", {"action": "approved", "gate_id": "gate-b"}, "gate-b"),
+                ("approved", {"action": "approved", "review_id": "gate-b"}, "gate-b"),
                 None,  # no claimed-undecided row
                 None,  # no undecided rows at all
             ]
@@ -2121,7 +2121,7 @@ class TestAwaitingHumanHasCommittedDecision:
         run forever (re-decide 409s, recover-node bounces)."""
         session = self._mock_session(
             [
-                ("approved", {"action": "manual_output", "gate_id": "node-1", "output": {"answer": 42}}, "node-1"),
+                ("approved", {"action": "manual_output", "review_id": "node-1", "output": {"answer": 42}}, "node-1"),
                 None,  # no claimed-undecided row
                 None,  # no undecided rows at all
             ]
@@ -2144,7 +2144,7 @@ class TestAwaitingHumanHasCommittedDecision:
         no re-dispatch loop."""
         session = self._mock_session(
             [
-                ("approved", {"action": "manual_output", "gate_id": "node-9", "output": {"a": 1}}, "node-9"),
+                ("approved", {"action": "manual_output", "review_id": "node-9", "output": {"a": 1}}, "node-9"),
                 ("gate-b",),
             ]
         )
@@ -2161,8 +2161,8 @@ class TestAwaitingHumanHasCommittedDecision:
             [
                 (
                     "approved",
-                    {"action": "approved", "gate_id": "hitl_gate_b", "modified_output": {"v": 1}},
-                    "hitl_gate_b",
+                    {"action": "approved", "review_id": "hitl_review_b", "modified_output": {"v": 1}},
+                    "hitl_review_b",
                 ),
                 None,  # no claimed-undecided row
                 None,  # no undecided rows at all
@@ -2181,7 +2181,7 @@ class TestAwaitingHumanHasCommittedDecision:
             [
                 (
                     "approved",
-                    {"action": "approved_with_modification", "gate_id": "gate-b", "modified_output": {"v": 1}},
+                    {"action": "approved_with_modification", "review_id": "gate-b", "modified_output": {"v": 1}},
                     "gate-b",
                 ),
                 None,  # no claimed-undecided row
@@ -2200,7 +2200,11 @@ class TestAwaitingHumanHasCommittedDecision:
         ``test_manual_output_with_output_is_committed``.)"""
         session = self._mock_session(
             [
-                ("approved", {"action": "manual_output", "gate_id": "hitl_gate_b", "output": {"a": 1}}, "hitl_gate_b"),
+                (
+                    "approved",
+                    {"action": "manual_output", "review_id": "hitl_review_b", "output": {"a": 1}},
+                    "hitl_review_b",
+                ),
                 None,  # no claimed-undecided row
                 None,  # no undecided rows at all
             ]
@@ -2218,7 +2222,7 @@ class TestAwaitingHumanHasCommittedDecision:
             [
                 (
                     "approved",
-                    {"action": "manual_output", "gate_id": "guardrail_conformance_g1", "output": {"a": 1}},
+                    {"action": "manual_output", "review_id": "guardrail_conformance_g1", "output": {"a": 1}},
                     "guardrail_conformance_g1",
                 ),
                 None,  # no claimed-undecided row
@@ -2234,7 +2238,7 @@ class TestAwaitingHumanHasCommittedDecision:
         stamp check and bouncing off the consumer once."""
         session = self._mock_session(
             [
-                ("approved", {"action": "approved", "gate_id": ""}, ""),
+                ("approved", {"action": "approved", "review_id": ""}, ""),
                 None,  # no claimed-undecided row
                 None,  # no undecided rows at all
             ]
@@ -2274,8 +2278,8 @@ class TestAwaitingHumanHasCommittedDecision:
         stable when two claimed-undecided rows share a claim timestamp."""
         session = self._mock_session(
             [
-                ("approved", {"action": "approved", "gate_id": "hitl_gate_b"}, "hitl_gate_b"),
-                ("hitl_gate_b",),  # a claimed-undecided row exists -> 2nd query fires
+                ("approved", {"action": "approved", "review_id": "hitl_review_b"}, "hitl_review_b"),
+                ("hitl_review_b",),  # a claimed-undecided row exists -> 2nd query fires
             ]
         )
         await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING)
@@ -2293,8 +2297,8 @@ class TestAwaitingHumanHasCommittedDecision:
             [
                 (
                     "deliver_manual",
-                    {"action": "deliver_manual", "gate_id": "hitl_gate_b", "output": {"z": 3}},
-                    "hitl_gate_b",
+                    {"action": "deliver_manual", "review_id": "hitl_review_b", "output": {"z": 3}},
+                    "hitl_review_b",
                 ),
                 None,  # no claimed-undecided row
                 None,  # no undecided rows at all
@@ -2305,7 +2309,7 @@ class TestAwaitingHumanHasCommittedDecision:
 
 class TestCommittedDecisionResumeData:
     """FAR-541: the reconstructed resume payload always carries the decision
-    row's ``gate_id`` so the consumer's identity check passes for rows the
+    row's ``review_id`` so the consumer's identity check passes for rows the
     reconcile is allowed to resume."""
 
     def _mock_session(self, row: tuple[Any, ...] | None) -> AsyncMock:
@@ -2321,30 +2325,30 @@ class TestCommittedDecisionResumeData:
         assert await ch._committed_decision_resume_data(session, ORG, RUN_AWAITING) is None
 
     @pytest.mark.asyncio
-    async def test_legacy_payload_less_row_gets_row_gate_id(self) -> None:
+    async def test_legacy_payload_less_row_gets_row_review_id(self) -> None:
         session = self._mock_session(("approved", None, "gate-b"))
         data = await ch._committed_decision_resume_data(session, ORG, RUN_AWAITING)
-        assert data == {"action": "approved", "gate_id": "gate-b"}
+        assert data == {"action": "approved", "review_id": "gate-b"}
 
     @pytest.mark.asyncio
     async def test_stamped_payload_round_trips_verbatim(self) -> None:
-        payload = {"action": "rejected", "gate_id": "gate-b", "reason": "no"}
+        payload = {"action": "rejected", "review_id": "gate-b", "reason": "no"}
         session = self._mock_session(("rejected", payload, "gate-b"))
         data = await ch._committed_decision_resume_data(session, ORG, RUN_AWAITING)
         assert data == payload
 
     @pytest.mark.asyncio
-    async def test_pre_stamping_payload_gets_row_gate_id_added(self) -> None:
+    async def test_pre_stamping_payload_gets_row_review_id_added(self) -> None:
         payload = {"action": "approved", "notes": "ok"}
         session = self._mock_session(("approved", payload, "gate-b"))
         data = await ch._committed_decision_resume_data(session, ORG, RUN_AWAITING)
-        assert data == {"action": "approved", "notes": "ok", "gate_id": "gate-b"}
+        assert data == {"action": "approved", "notes": "ok", "review_id": "gate-b"}
 
     @pytest.mark.asyncio
     async def test_json_string_payload_is_parsed(self) -> None:
-        session = self._mock_session(("approved", '{"action": "approved", "gate_id": "gate-b"}', "gate-b"))
+        session = self._mock_session(("approved", '{"action": "approved", "review_id": "gate-b"}', "gate-b"))
         data = await ch._committed_decision_resume_data(session, ORG, RUN_AWAITING)
-        assert data == {"action": "approved", "gate_id": "gate-b"}
+        assert data == {"action": "approved", "review_id": "gate-b"}
 
 
 class TestRunApiKeySweepWiring:
@@ -2523,7 +2527,7 @@ class TestRollbackThresholdsWiring:
         assert summary["scanned"] == 0
 
 
-class TestTerminalizeExpiredHitlGates:
+class TestTerminalizeExpiredHitlReviews:
     """FAR-648: the expired-HITL-gate terminalizer's SQL contract.
 
     The sweep is a SINGLE guarded UPDATE — there is no separate select, so the
@@ -2537,22 +2541,22 @@ class TestTerminalizeExpiredHitlGates:
     async def _run(self, terminalized: list[uuid.UUID] | None = None) -> tuple[list[uuid.UUID], _MockSession]:
         session = _MockSession([])
         if terminalized is not None:
-            session.terminalizer_rows["hitl_gate_expired"] = terminalized
-        returned = await ch._terminalize_expired_hitl_gates(session, ORG, grace_seconds=3600)
+            session.terminalizer_rows["hitl_review_expired"] = terminalized
+        returned = await ch._terminalize_expired_hitl_reviews(session, ORG, grace_seconds=3600)
         return returned, session
 
     @pytest.mark.asyncio
-    async def test_writes_cancelled_with_hitl_gate_expired_code_and_detail(self) -> None:
+    async def test_writes_cancelled_with_hitl_review_expired_code_and_detail(self) -> None:
         """P7' contract: the terminalizer writes status='cancelled' with the
-        new ``hitl_gate_expired`` code and its synthetic error_detail."""
+        new ``hitl_review_expired`` code and its synthetic error_detail."""
         _returned, session = await self._run()
         stmt, params = session.executed[-1]
         sql = str(stmt)
         assert "status='cancelled'" in sql
         assert "error_code=:code" in sql
-        assert params["code"] == ch._HITL_GATE_EXPIRED_ERROR_CODE
-        assert ch._HITL_GATE_EXPIRED_ERROR_CODE == "hitl_gate_expired"
-        assert params["detail"] == ch._HITL_GATE_EXPIRED_ERROR_DETAIL
+        assert params["code"] == ch._HITL_REVIEW_EXPIRED_ERROR_CODE
+        assert ch._HITL_REVIEW_EXPIRED_ERROR_CODE == "hitl_review_expired"
+        assert params["detail"] == ch._HITL_REVIEW_EXPIRED_ERROR_DETAIL
 
     @pytest.mark.asyncio
     async def test_source_status_bound_to_awaiting_human_constant(self) -> None:
@@ -2601,14 +2605,14 @@ class TestTerminalizeExpiredHitlGates:
         assert not returned
 
 
-class TestHitlGateExpiryTerminalizerWiring:
+class TestHitlReviewExpiryTerminalizerWiring:
     """FAR-648 wiring: the reconcile tick must invoke the expired-HITL-gate
     terminalizer with the settings grace and fold its results into the summary
     stats key + the post-commit compensating daily fact (P6', FAR-162)."""
 
     def test_stats_key_declared_in_both_vocabularies(self) -> None:
-        assert "hitl_gate_expired_terminalized" in ch._dispatcher_reconcile_stats
-        assert "hitl_gate_expired_terminalized" in ch._dispatcher_summary()
+        assert "hitl_review_expired_terminalized" in ch._dispatcher_reconcile_stats
+        assert "hitl_review_expired_terminalized" in ch._dispatcher_summary()
 
     @pytest.mark.asyncio
     async def test_reconcile_invokes_terminalizer_with_settings_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2620,7 +2624,7 @@ class TestHitlGateExpiryTerminalizerWiring:
 
         terminalizer.assert_awaited_once()
         assert terminalizer.await_args.kwargs["grace_seconds"] == 3600
-        assert summary["hitl_gate_expired_terminalized"] == 1
+        assert summary["hitl_review_expired_terminalized"] == 1
         session.record_facts.assert_awaited_once_with(expired_run, ORG)
 
     @pytest.mark.asyncio
@@ -2632,13 +2636,13 @@ class TestHitlGateExpiryTerminalizerWiring:
             monkeypatch,
             [],
             terminalizer=terminalizer,
-            settings_overrides={"hitl_gate_cancel_grace_seconds": 180},
+            settings_overrides={"hitl_review_cancel_grace_seconds": 180},
         )
 
         assert terminalizer.await_args.kwargs["grace_seconds"] == 180
 
 
-class TestTerminalizeHitlGateMissing:
+class TestTerminalizeHitlReviewMissing:
     """FAR-721: the zero-claim-``awaiting_human`` terminalizer's SQL contract.
 
     The complement sweep is a SINGLE guarded UPDATE (the same TOCTOU-safe
@@ -2651,23 +2655,23 @@ class TestTerminalizeHitlGateMissing:
     async def _run(self, terminalized: list[uuid.UUID] | None = None) -> tuple[list[uuid.UUID], _MockSession]:
         session = _MockSession([])
         if terminalized is not None:
-            session.terminalizer_rows["hitl_gate_missing"] = terminalized
-        returned = await ch._terminalize_hitl_gate_missing(session, ORG, grace_seconds=3600)
+            session.terminalizer_rows["hitl_review_missing"] = terminalized
+        returned = await ch._terminalize_hitl_review_missing(session, ORG, grace_seconds=3600)
         return returned, session
 
     @pytest.mark.asyncio
-    async def test_writes_cancelled_with_hitl_gate_missing_code_and_detail(self) -> None:
+    async def test_writes_cancelled_with_hitl_review_missing_code_and_detail(self) -> None:
         """P7' contract: the terminalizer writes status='cancelled' with the
-        new ``hitl_gate_missing`` code and its synthetic error_detail — distinct
-        from the FAR-648 ``hitl_gate_expired`` code."""
+        new ``hitl_review_missing`` code and its synthetic error_detail — distinct
+        from the FAR-648 ``hitl_review_expired`` code."""
         _returned, session = await self._run()
         stmt, params = session.executed[-1]
         sql = str(stmt)
         assert "status='cancelled'" in sql
-        assert params["code"] == ch._HITL_GATE_MISSING_ERROR_CODE
-        assert ch._HITL_GATE_MISSING_ERROR_CODE == "hitl_gate_missing"
-        assert ch._HITL_GATE_MISSING_ERROR_CODE != ch._HITL_GATE_EXPIRED_ERROR_CODE
-        assert params["detail"] == ch._HITL_GATE_MISSING_ERROR_DETAIL
+        assert params["code"] == ch._HITL_REVIEW_MISSING_ERROR_CODE
+        assert ch._HITL_REVIEW_MISSING_ERROR_CODE == "hitl_review_missing"
+        assert ch._HITL_REVIEW_MISSING_ERROR_CODE != ch._HITL_REVIEW_EXPIRED_ERROR_CODE
+        assert params["detail"] == ch._HITL_REVIEW_MISSING_ERROR_DETAIL
 
     @pytest.mark.asyncio
     async def test_source_status_bound_to_awaiting_human_constant(self) -> None:
@@ -2724,14 +2728,14 @@ class TestTerminalizeHitlGateMissing:
         assert not returned
 
 
-class TestHitlGateMissingTerminalizerWiring:
+class TestHitlReviewMissingTerminalizerWiring:
     """FAR-721 wiring: the reconcile tick must invoke the zero-claim
     terminalizer with the settings grace and fold its results into the summary
     stats key + the post-commit compensating daily fact (P6', FAR-162)."""
 
     def test_stats_key_declared_in_both_vocabularies(self) -> None:
-        assert "hitl_gate_missing_terminalized" in ch._dispatcher_reconcile_stats
-        assert "hitl_gate_missing_terminalized" in ch._dispatcher_summary()
+        assert "hitl_review_missing_terminalized" in ch._dispatcher_reconcile_stats
+        assert "hitl_review_missing_terminalized" in ch._dispatcher_summary()
 
     @pytest.mark.asyncio
     async def test_reconcile_invokes_terminalizer_with_settings_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2743,7 +2747,7 @@ class TestHitlGateMissingTerminalizerWiring:
 
         terminalizer.assert_awaited_once()
         assert terminalizer.await_args.kwargs["grace_seconds"] == 3600
-        assert summary["hitl_gate_missing_terminalized"] == 1
+        assert summary["hitl_review_missing_terminalized"] == 1
         session.record_facts.assert_awaited_once_with(orphaned_run, ORG)
 
     @pytest.mark.asyncio
@@ -2755,7 +2759,7 @@ class TestHitlGateMissingTerminalizerWiring:
             monkeypatch,
             [],
             terminalizer_missing=terminalizer,
-            settings_overrides={"hitl_gate_cancel_grace_seconds": 180},
+            settings_overrides={"hitl_review_cancel_grace_seconds": 180},
         )
 
         assert terminalizer.await_args.kwargs["grace_seconds"] == 180
@@ -2773,7 +2777,7 @@ class TestHitlGateMissingTerminalizerWiring:
             settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 2},
         )
 
-        assert summary["hitl_gate_missing_terminalized"] == 2
+        assert summary["hitl_review_missing_terminalized"] == 2
         assert summary["terminalize_capped"] == 1
 
     @pytest.mark.asyncio
@@ -2787,7 +2791,7 @@ class TestHitlGateMissingTerminalizerWiring:
             settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 25},
         )
 
-        assert summary["hitl_gate_missing_terminalized"] == 1
+        assert summary["hitl_review_missing_terminalized"] == 1
         assert summary["terminalize_capped"] == 0
 
 
@@ -3073,7 +3077,7 @@ class TestTerminalizeBatchCap:
     async def test_claim_cap_and_hitl_updates_carry_limit_param(self) -> None:
         session = _MockSession([])
         await ch._terminalize_claim_cap_exhausted(session, ORG, claim_cap=20, stale_seconds=600, max_rows=9)
-        await ch._terminalize_expired_hitl_gates(session, ORG, grace_seconds=3600, max_rows=11)
+        await ch._terminalize_expired_hitl_reviews(session, ORG, grace_seconds=3600, max_rows=11)
         claim_stmt, claim_params = session.executed[-2]
         hitl_stmt, hitl_params = session.executed[-1]
         assert "LIMIT :max_rows" in str(claim_stmt)

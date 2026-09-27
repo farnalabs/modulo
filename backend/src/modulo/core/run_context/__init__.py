@@ -14,7 +14,7 @@ from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
     resolve_autonomy,
     should_notify_on_complete,
-    should_skip_hitl_gate,
+    should_skip_hitl_review,
     validate_autonomy_ceiling,
 )
 from modulo.core.run_context.autonomy_telemetry import (
@@ -34,6 +34,6 @@ __all__ = [
     "emit_autonomy_clamp_telemetry",
     "resolve_autonomy",
     "should_notify_on_complete",
-    "should_skip_hitl_gate",
+    "should_skip_hitl_review",
     "validate_autonomy_ceiling",
 ]

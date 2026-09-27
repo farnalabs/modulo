@@ -1,6 +1,6 @@
 """Unit tests for llm_judge evals inside a HITL gate (FAR-307).
 
-Prior to the fix, an ``llm_judge`` eval run inside ``make_hitl_gate_fn`` never
+Prior to the fix, an ``llm_judge`` eval run inside ``make_hitl_review_fn`` never
 received an ``llm_judge_callable``, so ``_evaluate_llm`` returned a fail result
 with ``score=0.0`` and a conditional gate referencing it fired on EVERY run.
 This suite proves the fix: the judge callable is resolved from
@@ -73,9 +73,9 @@ def _run_gate_fn(
     eval_defs: list[EvalDefinition] | None,
 ) -> bool:
     """Run the HITL gate node fn synchronously; return True if it interrupts."""
-    from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=eval_defs)
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=eval_defs)
 
     async def _run() -> Any:
         return await node_fn(state)
@@ -96,7 +96,7 @@ def _run_gate_fn(
 
 def _gate_config(eval_name: str) -> dict[str, Any]:
     return {
-        "gate_id": "gate-llm",
+        "review_id": "gate-llm",
         "label": "LLM Judge Gate",
         "description": "Gate that fires when the LLM judge scores low",
         "human_only": False,
@@ -111,7 +111,7 @@ def _gate_config(eval_name: str) -> dict[str, Any]:
 def _base_state() -> dict[str, Any]:
     return {
         "artifacts": [],
-        "_hitl_gates": [],
+        "_hitl_reviews": [],
         "run_context": {"autonomy_recommendation": "manual_approval"},
         "content": "some agent output",
     }

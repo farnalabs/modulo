@@ -22,7 +22,7 @@ Feature: Pipeline Node Types
     Then the run continues
     And the manual output is available in artifacts
 
-  Scenario: HITL gate node interrupts for approval
-    Given a pipeline with a HITL gate node "pre-deploy"
+  Scenario: HITL review node interrupts for approval
+    Given a pipeline with a HITL review node "pre-deploy"
     When the run reaches the "pre-deploy" gate
     Then the run status becomes "waiting_for_approval"

@@ -122,7 +122,7 @@ def _gated_edge() -> _Row:
         edge_type="normal",
         source_port="out",
         target_port="in",
-        hitl_gate_config={"human_only": True},
+        hitl_review_config={"human_only": True},
     )
 
 
@@ -262,7 +262,7 @@ async def test_clone_emits_one_batched_gate_audit_event(monkeypatch: pytest.Monk
         edge_type="normal",
         source_port="out",
         target_port="in",
-        hitl_gate_config=None,
+        hitl_review_config=None,
     )
     edges = [_gated_edge(), _gated_edge(), ungated]
     read_session = _make_read_session(
@@ -304,7 +304,7 @@ async def test_clone_preserves_non_default_edge_ports(monkeypatch: pytest.Monkey
         source_node_id=uuid.UUID(_NODE_A),
         target_node_id=uuid.UUID(_NODE_B),
         edge_type="normal",
-        hitl_gate_config=None,
+        hitl_review_config=None,
         source_port="custom_out",
         target_port="custom_in",
     )
@@ -355,7 +355,7 @@ async def test_clone_edges_coalesces_null_ports_to_default(monkeypatch: pytest.M
             "source_node_id": uuid.UUID(_NODE_A),
             "target_node_id": uuid.UUID(_NODE_B),
             "edge_type": "normal",
-            "hitl_gate_config": None,
+            "hitl_review_config": None,
             "source_port": None,
             "target_port": None,
         }
@@ -390,7 +390,7 @@ async def test_clone_falls_back_to_default_ports_when_source_ports_null(monkeypa
         source_node_id=uuid.UUID(_NODE_A),
         target_node_id=uuid.UUID(_NODE_B),
         edge_type="normal",
-        hitl_gate_config=None,
+        hitl_review_config=None,
         source_port=None,
         target_port=None,
     )
@@ -430,7 +430,7 @@ async def test_clone_no_gate_edges_emits_no_gate_audit(monkeypatch: pytest.Monke
             edge_type="normal",
             source_port="out",
             target_port="in",
-            hitl_gate_config=None,
+            hitl_review_config=None,
         )
     ]
     read_session = _make_read_session(

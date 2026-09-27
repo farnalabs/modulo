@@ -175,7 +175,7 @@ async def test_non_list_sub_edges_skipped() -> None:
 async def test_sub_edge_with_gate_config_is_error() -> None:
     sub_graph = {
         "nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],
-        "edges": [{"source": "a", "target": "b", "hitl_gate_config": {"mode": "manual"}}],
+        "edges": [{"source": "a", "target": "b", "hitl_review_config": {"mode": "manual"}}],
     }
     result = await _run_for_sub_graph(sub_graph)
     assert "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED" in _codes(result)

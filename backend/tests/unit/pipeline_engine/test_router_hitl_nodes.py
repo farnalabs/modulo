@@ -178,13 +178,13 @@ def _compiled_structure(graph_json):
     with (
         patch("modulo.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
         patch("modulo.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_gate_fn", MagicMock()),
+        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
     ):
         compiled = build_graph_from_json(graph_json)
     g = compiled.get_graph()
     nodes = {n for n in g.nodes if n not in ("__start__", "__end__")}
     edges = {(s, t) for s, t, *_ in g.edges if s not in ("__start__", "__end__") and t not in ("__start__", "__end__")}
-    gate_nodes = {n for n in nodes if "hitl_gate" in str(n)}
+    gate_nodes = {n for n in nodes if "hitl_review" in str(n)}
     return nodes, edges, gate_nodes
 
 
@@ -193,7 +193,7 @@ def test_hitl_node_compiles_like_edge_gate():
     # Legacy: an agent node A with an HITL-gated edge to B.
     legacy = {
         "nodes": [{"id": "A", "node_type": "agent"}, {"id": "B", "node_type": "agent"}],
-        "edges": [{"source": "A", "target": "B", "hitl_gate_config": dict(hitl_config)}],
+        "edges": [{"source": "A", "target": "B", "hitl_review_config": dict(hitl_config)}],
     }
     # New: an `hitl` node H (producing output) with a normal edge to B.
     new = {
@@ -303,7 +303,7 @@ def test_router_rule_targets_excluded_from_entry_point():
     with (
         patch("modulo.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
         patch("modulo.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_gate_fn", MagicMock()),
+        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
     ):
         compiled = build_graph_from_json(graph_json)
     graph = compiled.get_graph()

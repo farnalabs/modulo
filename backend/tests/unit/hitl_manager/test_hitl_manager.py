@@ -50,7 +50,7 @@ def _gate(
     g = MagicMock(spec=HitlClaim)
     g.id = uuid.uuid4()
     g.run_id = _RUN
-    g.gate_id = _GATE
+    g.review_id = _GATE
     g.pipeline_id = _PIPELINE
     g.organisation_id = _ORG
     g.account_id = account_id
@@ -127,8 +127,8 @@ def _session_update(
     update_result = MagicMock()
     # For the claim() UPDATE RETURNING id
     update_result.scalar_one_or_none.return_value = uuid.uuid4() if rows_returned > 0 else None
-    # For expire_stale() UPDATE RETURNING run_id, gate_id
-    row = type("Row", (), {"run_id": _RUN, "gate_id": _GATE})
+    # For expire_stale() UPDATE RETURNING run_id, review_id
+    row = type("Row", (), {"run_id": _RUN, "review_id": _GATE})
     update_result.all.return_value = [row()] * rows_returned
 
     run_result = MagicMock()
@@ -210,7 +210,7 @@ def _assert_decode_scope_args(mock_decode: MagicMock) -> None:
     mock_decode.assert_called_once()
     call_kwargs = mock_decode.call_args.kwargs
     assert call_kwargs["run_id"] == str(_RUN)
-    assert call_kwargs["gate_id"] == _GATE
+    assert call_kwargs["review_id"] == _GATE
     assert mock_decode.call_args.args[0] == "aaa.bbb.ccc"
     assert mock_decode.call_args.args[1] == "test-secret-key-with-enough-length"
 
@@ -223,12 +223,12 @@ def _assert_decode_scope_args(mock_decode: MagicMock) -> None:
 async def test_create_gate_inserts_new_row():
     session = _session_get(return_value=None)
     mgr = HITLManager()
-    _gate = await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+    _gate = await mgr.create_gate(session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
     session.add.assert_called_once()
     session.flush.assert_called_once()
     added = session.add.call_args[0][0]
     assert added.run_id == _RUN
-    assert added.gate_id == _GATE
+    assert added.review_id == _GATE
     assert added.account_id is None
 
 
@@ -240,7 +240,7 @@ async def test_create_gate_stamps_gate_config_json():
     await mgr.create_gate(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         pipeline_id=_PIPELINE,
         org_id=_ORG,
         gate_config_json={"human_only": True},
@@ -252,16 +252,16 @@ async def test_create_gate_stamps_gate_config_json():
 async def test_create_gate_without_stamp_leaves_gate_config_null():
     session = _session_get(return_value=None)
     mgr = HITLManager()
-    await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+    await mgr.create_gate(session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
     added = session.add.call_args[0][0]
     assert added.gate_config_json is None
 
 
-async def test_create_gate_idempotent_if_exists():
+async def test_create_review_idempotent_if_exists():
     existing = _gate()
     session = _session_get(return_value=existing)
     mgr = HITLManager()
-    result = await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+    result = await mgr.create_gate(session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
     assert result is existing
     session.add.assert_not_called()
 
@@ -290,7 +290,7 @@ async def test_create_gate_integrity_error_returns_existing_row():
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     mgr = HITLManager()
-    result = await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+    result = await mgr.create_gate(session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
     assert result is existing
 
 
@@ -313,7 +313,7 @@ async def test_create_gate_integrity_error_lost_race_raises():
 
     mgr = HITLManager()
     with pytest.raises(RuntimeError, match="Concurrent gate creation lost race"):
-        await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+        await mgr.create_gate(session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +330,7 @@ async def test_claim_success_sets_token_and_expiry():
     )
     session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
     mgr = HITLManager()
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
 
 
@@ -351,7 +351,7 @@ async def test_claim_success_emits_hitl_claimed_audit():
     mgr = HITLManager()
     audit = AsyncMock(return_value=MagicMock())
     with patch("modulo.core.hitl_manager.append_audit_event", new=audit):
-        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is claimed_gate
     audit.assert_awaited_once()
@@ -381,7 +381,7 @@ async def test_claim_audit_failure_does_not_block_claim():
         raise RuntimeError("audit boom")
 
     with patch("modulo.core.hitl_manager.append_audit_event", side_effect=_raise_audit):
-        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
 
 
@@ -397,13 +397,13 @@ async def test_claim_with_secret_key_uses_jwt_token():
     mgr = HITLManager(secret_key="test-secret-key-with-enough-length")
 
     with patch("modulo.core.hitl_manager._create_claim_jwt", return_value="signed.token.value") as mock_jwt:
-        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is claimed_gate
     mock_jwt.assert_called_once()
     call_kwargs = mock_jwt.call_args.kwargs
     assert call_kwargs["run_id"] == str(_RUN)
-    assert call_kwargs["gate_id"] == _GATE
+    assert call_kwargs["review_id"] == _GATE
     assert call_kwargs["client_id"] == str(_USER)
     assert call_kwargs["expiry_minutes"] == 15
 
@@ -413,14 +413,14 @@ async def test_claim_already_claimed_raises():
     session = _session_update(rows_returned=0, gate=existing, pre_check_gate=existing)
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_gate_not_found_raises():
     session = _session_update(rows_returned=0, gate=None, pre_check_gate=None)
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 def _session_race(
@@ -495,7 +495,7 @@ async def test_claim_race_run_went_terminal_raises_run_not_awaiting():
     )
     mgr = HITLManager()
     with pytest.raises(RunNotAwaitingError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_race_gate_decided_raises_gate_already_decided():
@@ -511,7 +511,7 @@ async def test_claim_race_gate_decided_raises_gate_already_decided():
     )
     mgr = HITLManager()
     with pytest.raises(GateAlreadyDecidedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_race_another_account_claimed_raises_already_claimed():
@@ -528,7 +528,7 @@ async def test_claim_race_another_account_claimed_raises_already_claimed():
     )
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_race_gate_vanished_raises_gate_not_found():
@@ -543,7 +543,7 @@ async def test_claim_race_gate_vanished_raises_gate_not_found():
     )
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_custom_expiry_minutes_is_applied():
@@ -590,7 +590,7 @@ async def test_claim_custom_expiry_minutes_is_applied():
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     mgr = HITLManager()
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=60)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=60)
     assert result is claimed_gate
 
     assert len(captured) == 1
@@ -604,7 +604,7 @@ async def test_claim_non_positive_expiry_raises():
     session = _session_update(rows_returned=1, gate=None, pre_check_gate=None)
     mgr = HITLManager()
     with pytest.raises(HITLError, match="expiry_minutes must be positive"):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=0)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER, expiry_minutes=0)
 
 
 async def test_claim_already_decided_raises():
@@ -613,7 +613,7 @@ async def test_claim_already_decided_raises():
     session = _session_update(rows_returned=0, gate=decided, pre_check_gate=decided)
     mgr = HITLManager()
     with pytest.raises(GateAlreadyDecidedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_gate_vanished_after_update_raises():
@@ -622,7 +622,7 @@ async def test_claim_gate_vanished_after_update_raises():
     session = _session_update(rows_returned=1, gate=None, pre_check_gate=unclaimed)
     mgr = HITLManager()
     with pytest.raises(GateVanishedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_update_race_raises():
@@ -631,7 +631,7 @@ async def test_claim_update_race_raises():
     session = _session_update(rows_returned=0, gate=unclaimed, pre_check_gate=unclaimed)
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_update_statement_carries_run_status_exists_predicate():
@@ -681,7 +681,7 @@ async def test_claim_update_statement_carries_run_status_exists_predicate():
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     mgr = HITLManager()
-    await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert len(captured) == 1
     update_sql = str(captured[0].compile(compile_kwargs={"literal_binds": True})).lower()
@@ -733,7 +733,7 @@ async def test_claim_update_race_on_terminal_run_raises_run_not_awaiting():
 
     mgr = HITLManager()
     with pytest.raises(RunNotAwaitingError, match="status: complete"):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_update_race_on_decided_gate_raises_gate_already_decided():
@@ -786,7 +786,7 @@ async def test_claim_update_race_on_decided_gate_raises_gate_already_decided():
 
     mgr = HITLManager()
     with pytest.raises(GateAlreadyDecidedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 @pytest.mark.parametrize("run_status", ["complete", "failed", "running", "cancelled"])
@@ -800,7 +800,7 @@ async def test_claim_on_non_awaiting_run_raises(run_status: str):
     session = _session_update(rows_returned=1, gate=gate, pre_check_gate=gate, run_status=run_status)
     mgr = HITLManager()
     with pytest.raises(RunNotAwaitingError, match=f"status: {run_status}"):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_on_parked_run_succeeds():
@@ -818,7 +818,7 @@ async def test_claim_on_parked_run_succeeds():
     )
     session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check, run_status="hitl_parked")
     mgr = HITLManager()
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
 
 
@@ -828,7 +828,7 @@ async def test_claim_when_run_row_missing_raises_gate_not_found():
     session = _session_update(rows_returned=1, gate=gate, pre_check_gate=gate, run_status=None)
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_run_lookup_is_org_scoped():
@@ -846,7 +846,7 @@ async def test_claim_run_lookup_is_org_scoped():
 
     session.execute = _capture
     mgr = HITLManager()
-    await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert len(run_select) == 1
     sql = str(run_select[0].compile(compile_kwargs={"literal_binds": True}))
     assert "organisation_id" in sql
@@ -864,7 +864,7 @@ async def test_claim_after_expiry_reset_succeeds():
     )
     session = _session_update(rows_returned=1, gate=claimed, pre_check_gate=reset_gate, run_status="awaiting_human")
     mgr = HITLManager()
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
 
 
@@ -919,7 +919,7 @@ async def test_claim_same_account_reclaim_issues_fresh_token():
 
     mgr = HITLManager()
     with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
-        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is reclaimed
     assert result.account_id == _USER
@@ -976,7 +976,7 @@ async def test_claim_same_account_reclaim_team_scoped_gate():
     session.get = AsyncMock(return_value=reclaimed)
     mgr = HITLManager()
     with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
-        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is reclaimed
     assert result.claim_token == "new-token"
@@ -1029,7 +1029,7 @@ async def test_claim_same_account_reclaim_on_claimed_run_succeeds():
 
     mgr = HITLManager()
     with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
-        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert result is reclaimed
     assert result.account_id == _USER
@@ -1051,7 +1051,7 @@ async def test_claim_cross_account_on_claimed_run_still_blocked():
     session = _session_update(rows_returned=0, gate=existing, pre_check_gate=existing, run_status="claimed")
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 @pytest.mark.parametrize("run_status", ["complete", "failed", "running", "cancelled"])
@@ -1064,7 +1064,7 @@ async def test_claim_same_account_on_terminal_run_still_blocked(run_status: str)
     session = _session_update(rows_returned=1, gate=held, pre_check_gate=held, run_status=run_status)
     mgr = HITLManager()
     with pytest.raises(RunNotAwaitingError, match=f"status: {run_status}"):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_cross_account_on_claimed_gate_raises():
@@ -1074,7 +1074,7 @@ async def test_claim_cross_account_on_claimed_gate_raises():
     session = _session_update(rows_returned=0, gate=existing, pre_check_gate=existing)
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_update_where_allows_unclaimed_or_same_account_only():
@@ -1102,13 +1102,13 @@ async def test_create_gate_with_required_team_id():
     session = _session_get(return_value=None)
     mgr = HITLManager()
     result = await mgr.create_gate(
-        session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG, required_team_id=_TEAM
+        session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG, required_team_id=_TEAM
     )
     session.add.assert_called_once()
     added = session.add.call_args[0][0]
     assert added.organisation_id == _ORG
     assert added.run_id == _RUN
-    assert added.gate_id == _GATE
+    assert added.review_id == _GATE
     assert added.pipeline_id == _PIPELINE
     assert added.required_team_id == _TEAM
     assert result.required_team_id == _TEAM
@@ -1171,7 +1171,7 @@ async def test_claim_team_member_can_claim():
     session.execute = _execute
     session.get = AsyncMock(return_value=claimed)
     mgr = HITLManager()
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
     assert team_check_count == 2
 
@@ -1226,7 +1226,7 @@ async def test_claim_team_membership_query_restricts_to_runner_or_operator_role(
     session.execute = _execute
     session.get = AsyncMock(return_value=claimed)
     mgr = HITLManager()
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
     assert len(membership_stmts) == 2, "Both membership queries must be executed"
     for stmt in membership_stmts:
@@ -1271,7 +1271,7 @@ async def test_claim_team_viewer_role_denied():
     session.execute = _execute
     mgr = HITLManager()
     with pytest.raises(NotTeamMemberError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert membership_check_hit, "Team membership check was not performed"
     assert call_no == 3, "Claim must fail before the claim UPDATE"
 
@@ -1328,7 +1328,7 @@ async def test_claim_team_role_lost_between_check_and_update_undoes_claim():
     session.execute = _execute
     mgr = HITLManager()
     with pytest.raises(NotTeamMemberError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert len(undo_stmt) == 1, "Claim should be undone when team role drops below runner/operator"
     undo_values = {col.name: expr.value for col, expr in undo_stmt[0]._values.items()}
@@ -1392,7 +1392,7 @@ async def test_claim_membership_lost_between_check_and_update_undoes_claim():
     session.execute = _execute
     mgr = HITLManager()
     with pytest.raises(NotTeamMemberError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
     assert len(undo_stmt) == 1, "Claim should be undone when membership is lost post-check"
     undo_values = {col.name: expr.value for col, expr in undo_stmt[0]._values.items()}
@@ -1439,7 +1439,7 @@ async def test_claim_non_team_member_raises():
     session.execute = _execute
     mgr = HITLManager()
     with pytest.raises(NotTeamMemberError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert team_check_hit, "Team membership check was not performed"
 
 
@@ -1473,7 +1473,7 @@ async def test_claim_locked_gate_vanished_raises():
     session.execute = _execute
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_locked_gate_already_decided_raises():
@@ -1505,7 +1505,7 @@ async def test_claim_locked_gate_already_decided_raises():
     session.execute = _execute
     mgr = HITLManager()
     with pytest.raises(GateAlreadyDecidedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_locked_gate_already_claimed_raises():
@@ -1537,7 +1537,7 @@ async def test_claim_locked_gate_already_claimed_raises():
     session.execute = _execute
     mgr = HITLManager()
     with pytest.raises(AlreadyClaimedError):
-        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+        await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
 async def test_claim_no_required_team_still_works():
@@ -1577,7 +1577,7 @@ async def test_claim_no_required_team_still_works():
     session.execute = _execute
     session.get = AsyncMock(return_value=claimed)
     mgr = HITLManager()
-    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    result = await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
 
 
@@ -1592,7 +1592,7 @@ async def test_approve_valid_token_records_decision():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
-    result = await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+    result = await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token")
     assert result.decision == "approved"
     assert result.claim_token is None
     assert result.account_id is None
@@ -1604,7 +1604,7 @@ async def test_approve_wrong_token_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="wrong")
 
 
 async def test_approve_expired_token_raises():
@@ -1613,14 +1613,14 @@ async def test_approve_expired_token_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_approve_gate_not_found_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=None)
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_approve_already_decided_raises():
@@ -1628,7 +1628,7 @@ async def test_approve_already_decided_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(GateAlreadyDecidedError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_approve_null_expires_at_raises_expired():
@@ -1638,7 +1638,7 @@ async def test_approve_null_expires_at_raises_expired():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_approve_gate_vanished_after_update_raises():
@@ -1648,7 +1648,7 @@ async def test_approve_gate_vanished_after_update_raises():
     session = _session_decide(update_returns_id=gate.id, session_get_gate=None)
     mgr = HITLManager()
     with pytest.raises(GateVanishedError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_approve_jwt_expired_signature_raises_expired():
@@ -1667,7 +1667,7 @@ async def test_approve_jwt_expired_signature_raises_expired():
         ) as mock_decode,
         pytest.raises(ClaimTokenExpiredError),
     ):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
 
     _assert_decode_scope_args(mock_decode)
 
@@ -1688,7 +1688,7 @@ async def test_approve_jwt_invalid_signature_raises_invalid():
         ) as mock_decode,
         pytest.raises(ClaimTokenInvalidError),
     ):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
 
     _assert_decode_scope_args(mock_decode)
 
@@ -1710,7 +1710,7 @@ async def test_approve_with_modification_valid_token_and_audit():
     result = await mgr.approve_with_modification(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="good-token",
         modified_output=modified,
@@ -1733,7 +1733,7 @@ async def test_approve_with_modification_wrong_token_raises():
         await mgr.approve_with_modification(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="wrong",
             modified_output={"data": "x"},
@@ -1749,7 +1749,7 @@ async def test_approve_with_modification_expired_token_raises():
         await mgr.approve_with_modification(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="tok",
             modified_output={"data": "x"},
@@ -1763,7 +1763,7 @@ async def test_approve_with_modification_gate_not_found_raises():
         await mgr.approve_with_modification(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="tok",
             modified_output={"data": "x"},
@@ -1778,7 +1778,7 @@ async def test_approve_with_modification_already_decided_raises():
         await mgr.approve_with_modification(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="tok",
             modified_output={"data": "x"},
@@ -1792,7 +1792,7 @@ async def test_approve_existing_claim_without_token_raises_expired():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_approve_audit_cancellation_propagates():
@@ -1810,7 +1810,7 @@ async def test_approve_audit_cancellation_propagates():
         ),
         pytest.raises(asyncio.CancelledError),
     ):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token")
 
 
 # ---------------------------------------------------------------------------
@@ -1832,30 +1832,30 @@ async def test_approve_persists_decision_payload():
     await mgr.approve(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="good-token",
         decision_payload=payload,
     )
     values = _update_values(captured[0])
     assert values["decision"] == "approved"
-    assert values["decision_payload"] == {"action": "approved", "notes": "looks good", "gate_id": _GATE}
+    assert values["decision_payload"] == {"action": "approved", "notes": "looks good", "review_id": _GATE}
     # The caller's dict is copied, not mutated (it feeds the direct resume too).
     assert payload == {"action": "approved", "notes": "looks good"}
 
 
 async def test_approve_without_payload_defaults_to_action():
     """approve() with no payload persists a faithful stamped
-    ``{"action": "approved", "gate_id": <row gate>}`` (FAR-541 iteration 3:
+    ``{"action": "approved", "review_id": <row gate>}`` (FAR-541 iteration 3:
     _decide is the stamp authority)."""
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session, captured = _session_decide_capture(gate.id, gate_decided)
     mgr = HITLManager()
-    await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+    await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token")
     values = _update_values(captured[0])
-    assert values["decision_payload"] == {"action": "approved", "gate_id": _GATE}
+    assert values["decision_payload"] == {"action": "approved", "review_id": _GATE}
 
 
 async def test_approve_with_modification_persists_modified_output_payload():
@@ -1870,13 +1870,13 @@ async def test_approve_with_modification_persists_modified_output_payload():
     await mgr.approve_with_modification(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="good-token",
         modified_output=modified,
     )
     values = _update_values(captured[0])
-    assert values["decision_payload"] == {"action": "approved", "modified_output": modified, "gate_id": _GATE}
+    assert values["decision_payload"] == {"action": "approved", "modified_output": modified, "review_id": _GATE}
 
 
 async def test_reject_persists_reason_payload():
@@ -1886,10 +1886,10 @@ async def test_reject_persists_reason_payload():
     gate_decided = _gate(account_id=None, claim_token=None, decision="rejected")
     session, captured = _session_decide_capture(gate.id, gate_decided)
     mgr = HITLManager()
-    await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", reason="needs rework")
+    await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", reason="needs rework")
     values = _update_values(captured[0])
     assert values["decision"] == "rejected"
-    assert values["decision_payload"] == {"action": "rejected", "reason": "needs rework", "gate_id": _GATE}
+    assert values["decision_payload"] == {"action": "rejected", "reason": "needs rework", "review_id": _GATE}
 
 
 async def test_deliver_manual_persists_output_payload():
@@ -1904,14 +1904,14 @@ async def test_deliver_manual_persists_output_payload():
     await mgr.deliver_manual(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="good-token",
         output=manual,
     )
     values = _update_values(captured[0])
     assert values["decision"] == "deliver_manual"
-    assert values["decision_payload"] == {"action": "deliver_manual", "output": manual, "gate_id": _GATE}
+    assert values["decision_payload"] == {"action": "deliver_manual", "output": manual, "review_id": _GATE}
 
 
 async def test_decide_accepts_payload_stamped_for_this_gate():
@@ -1925,13 +1925,13 @@ async def test_decide_accepts_payload_stamped_for_this_gate():
     await mgr.approve(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="good-token",
-        decision_payload={"action": "approved", "gate_id": _GATE, "notes": "ok"},
+        decision_payload={"action": "approved", "review_id": _GATE, "notes": "ok"},
     )
     values = _update_values(captured[0])
-    assert values["decision_payload"] == {"action": "approved", "gate_id": _GATE, "notes": "ok"}
+    assert values["decision_payload"] == {"action": "approved", "review_id": _GATE, "notes": "ok"}
 
 
 async def test_decide_rejects_foreign_stamped_payload():
@@ -1946,10 +1946,10 @@ async def test_decide_rejects_foreign_stamped_payload():
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="good-token",
-            decision_payload={"action": "approved", "gate_id": "some-other-gate"},
+            decision_payload={"action": "approved", "review_id": "some-other-gate"},
         )
 
 
@@ -1964,7 +1964,7 @@ async def test_decision_payload_must_be_dict():
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="good-token",
             decision_payload="not-a-dict",  # type: ignore[arg-type]
@@ -1982,7 +1982,7 @@ async def test_decision_payload_output_must_be_dict():
         await mgr.approve(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="good-token",
             decision_payload={"action": "approved", "output": ["not", "a", "dict"]},
@@ -2001,7 +2001,7 @@ async def test_decision_payload_size_limited():
         await mgr.deliver_manual(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="good-token",
             output={"blob": "x" * (256 * 1024 + 1)},
@@ -2038,7 +2038,7 @@ async def test_reject_valid_token_records_decision():
     gate_decided = _gate(account_id=None, claim_token=None, decision="rejected")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
-    result = await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+    result = await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
     assert result.decision == "rejected"
     assert result.claim_token is None
 
@@ -2049,7 +2049,7 @@ async def test_reject_wrong_token_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenInvalidError):
-        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong")
+        await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="wrong")
 
 
 async def test_reject_expired_token_raises():
@@ -2058,14 +2058,14 @@ async def test_reject_expired_token_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
-        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_reject_gate_not_found_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=None)
     mgr = HITLManager()
     with pytest.raises(GateNotFoundError):
-        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 async def test_reject_already_decided_raises():
@@ -2073,7 +2073,7 @@ async def test_reject_already_decided_raises():
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
     mgr = HITLManager()
     with pytest.raises(GateAlreadyDecidedError):
-        await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
 # ---------------------------------------------------------------------------
@@ -2092,7 +2092,7 @@ async def test_deliver_manual_valid_token_records_decision():
     result = await mgr.deliver_manual(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="good-token",
         output=manual_output,
@@ -2113,7 +2113,7 @@ async def test_deliver_manual_with_empty_output_accepts():
     result = await mgr.deliver_manual(
         session,
         run_id=_RUN,
-        gate_id=_GATE,
+        review_id=_GATE,
         org_id=_ORG,
         claim_token="tok",
         output={},
@@ -2131,7 +2131,7 @@ async def test_deliver_manual_wrong_token_raises():
         await mgr.deliver_manual(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="wrong",
             output={"data": "x"},
@@ -2147,7 +2147,7 @@ async def test_deliver_manual_expired_token_raises():
         await mgr.deliver_manual(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="tok",
             output={"data": "x"},
@@ -2161,7 +2161,7 @@ async def test_deliver_manual_gate_not_found_raises():
         await mgr.deliver_manual(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="tok",
             output={"data": "x"},
@@ -2176,7 +2176,7 @@ async def test_deliver_manual_already_decided_raises():
         await mgr.deliver_manual(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="tok",
             output={"data": "x"},
@@ -2192,7 +2192,7 @@ async def test_deliver_manual_null_expires_at_raises_expired():
         await mgr.deliver_manual(
             session,
             run_id=_RUN,
-            gate_id=_GATE,
+            review_id=_GATE,
             org_id=_ORG,
             claim_token="tok",
             output={"data": "x"},
@@ -2207,16 +2207,16 @@ async def test_deliver_manual_null_expires_at_raises_expired():
 async def test_expire_stale_returns_expired_gates():
     session = AsyncMock()
     expired_result = MagicMock()
-    row = type("Row", (), {"run_id": _RUN, "gate_id": "gate-a"})
-    row2 = type("Row", (), {"run_id": _RUN, "gate_id": "gate-b"})
+    row = type("Row", (), {"run_id": _RUN, "review_id": "gate-a"})
+    row2 = type("Row", (), {"run_id": _RUN, "review_id": "gate-b"})
     expired_result.all.return_value = [row(), row2()]
     session.execute = AsyncMock(return_value=expired_result)
 
     mgr = HITLManager()
     expired = await mgr.expire_stale(session, _ORG)
     assert len(expired) == 2
-    assert expired[0] == {"run_id": _RUN, "gate_id": "gate-a"}
-    assert expired[1] == {"run_id": _RUN, "gate_id": "gate-b"}
+    assert expired[0] == {"run_id": _RUN, "review_id": "gate-a"}
+    assert expired[1] == {"run_id": _RUN, "review_id": "gate-b"}
 
 
 async def test_expire_stale_none_expired_returns_empty():
@@ -2238,7 +2238,7 @@ async def test_expire_stale_none_expired_returns_empty():
 async def test_get_gate_returns_none_when_missing():
     session = _session_get(return_value=None)
     mgr = HITLManager()
-    result = await mgr.get_gate(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG)
+    result = await mgr.get_gate(session, run_id=_RUN, review_id=_GATE, org_id=_ORG)
     assert result is None
 
 
@@ -2246,7 +2246,7 @@ async def test_get_gate_returns_existing():
     gate = _gate()
     session = _session_get(return_value=gate)
     mgr = HITLManager()
-    result = await mgr.get_gate(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG)
+    result = await mgr.get_gate(session, run_id=_RUN, review_id=_GATE, org_id=_ORG)
     assert result is gate
 
 
@@ -2371,7 +2371,7 @@ async def test_list_overdue_returns_overdue_gates():
     mgr = HITLManager()
     overdue = await mgr.list_overdue(session, _ORG, threshold_minutes=30)
     assert len(overdue) == 1
-    assert overdue[0]["gate_id"] == _GATE
+    assert overdue[0]["review_id"] == _GATE
 
 
 async def test_list_overdue_below_threshold_returns_empty():
@@ -2476,7 +2476,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     session_factory = MagicMock(side_effect=lambda: _ctx())
 
     async def _failing_stream(*args: Any, **kwargs: Any) -> Any:
-        raise GraphInterrupt((Interrupt(value={"gate_id": "step-1"}),))
+        raise GraphInterrupt((Interrupt(value={"review_id": "step-1"}),))
         yield  # pragma: no cover
 
     compiled = MagicMock()
@@ -2559,7 +2559,7 @@ async def _claim_capture() -> tuple[HITLManager, AsyncMock, list[Any]]:
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     mgr = HITLManager()
-    await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    await mgr.claim(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claimant_id=_USER)
     return mgr, session, captured
 
 
@@ -2603,7 +2603,7 @@ async def test_decide_update_where_checks_expires_at_gt_now():
 
     session.execute = _capture_execute
     mgr = HITLManager()
-    await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+    await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token")
 
     assert len(captured) >= 1
     stmt = captured[0]
@@ -2651,7 +2651,7 @@ async def test_manager_instance_is_stateless_across_concurrent_claims():
     claimed_a = _gate(account_id=_USER, claim_token="tok-a", expires_at=datetime.now(UTC) + timedelta(minutes=15))
     claimed_b = _gate(account_id=_USER, claim_token="tok-b", expires_at=datetime.now(UTC) + timedelta(minutes=15))
 
-    async def _run_claim(gate_id: str, gate: HitlClaim, claimed: HitlClaim) -> HitlClaim:
+    async def _run_claim(review_id: str, gate: HitlClaim, claimed: HitlClaim) -> HitlClaim:
         session = AsyncMock()
         session.add = MagicMock()
         session.flush = AsyncMock()
@@ -2675,7 +2675,7 @@ async def test_manager_instance_is_stateless_across_concurrent_claims():
         begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
         begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
         session.begin_nested = MagicMock(return_value=begin_nested_cm)
-        return await mgr.claim(session, run_id=_RUN, gate_id=gate_id, org_id=_ORG, claimant_id=_USER)
+        return await mgr.claim(session, run_id=_RUN, review_id=review_id, org_id=_ORG, claimant_id=_USER)
 
     result_a, result_b = await asyncio.gather(
         _run_claim("gate-a", gate_a, claimed_a),
@@ -2701,7 +2701,7 @@ def test_hitl_claim_model_columns_stable():
     columns = {c.name for c in sa_inspect(HitlClaim).columns}
     expected_columns = (
         "run_id",
-        "gate_id",
+        "review_id",
         "pipeline_id",
         "account_id",
         "claim_token",
@@ -2719,7 +2719,7 @@ def test_hitl_claim_model_columns_stable():
 
 
 async def _interrupt_payload(gate_config: dict[str, Any]) -> dict[str, Any]:
-    """Run a hitl_gate node fn built from ``gate_config`` and return the interrupt payload.
+    """Run a hitl_review node fn built from ``gate_config`` and return the interrupt payload.
 
     Mirrors ``test_node_runner_hitl.py``: ``interrupt`` is stubbed to raise
     ``GraphInterrupt`` carrying its value so the first-invocation payload can
@@ -2728,46 +2728,46 @@ async def _interrupt_payload(gate_config: dict[str, Any]) -> dict[str, Any]:
     from langgraph.errors import GraphInterrupt
     from langgraph.types import Interrupt
 
-    from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
 
     def _raise_interrupt(value: Any) -> None:
         raise GraphInterrupt((Interrupt(value=value),))
 
-    node_fn = make_hitl_gate_fn(gate_config)
+    node_fn = make_hitl_review_fn(gate_config)
     with (
         patch("modulo.core.pipeline_engine.node_runner.interrupt", side_effect=_raise_interrupt),
         pytest.raises(GraphInterrupt) as exc_info,
     ):
-        await node_fn({"artifacts": [], "_hitl_gates": []})
+        await node_fn({"artifacts": [], "_hitl_reviews": []})
     interrupt_list = exc_info.value.args[0]
     return interrupt_list[0].value
 
 
-async def test_hitl_gate_invalid_required_team_id_is_logged_and_sanitized(caplog) -> None:
+async def test_hitl_review_invalid_required_team_id_is_logged_and_sanitized(caplog) -> None:
     """An unparseable ``required_team_id`` on a gate config is logged and
     normalised to None in the interrupt payload — the executor's
     ``uuid.UUID()`` conversion must never see an invalid string (logged, not
     raised)."""
     caplog.set_level("WARNING", logger="modulo.core.pipeline_engine.node_runner")
     payload = await _interrupt_payload(
-        {"gate_id": "review-step", "human_only": False, "required_team_id": "not-a-uuid"}
+        {"review_id": "review-step", "human_only": False, "required_team_id": "not-a-uuid"}
     )
     assert payload["required_team_id"] is None
-    assert "hitl_gate.invalid_required_team_id" in caplog.text
+    assert "hitl_review.invalid_required_team_id" in caplog.text
 
 
-async def test_hitl_gate_valid_required_team_id_passes_through() -> None:
+async def test_hitl_review_valid_required_team_id_passes_through() -> None:
     """A valid UUID string is preserved in the interrupt payload unchanged."""
     team_id = uuid.uuid4()
     payload = await _interrupt_payload(
-        {"gate_id": "review-step", "human_only": False, "required_team_id": str(team_id)}
+        {"review_id": "review-step", "human_only": False, "required_team_id": str(team_id)}
     )
     assert payload["required_team_id"] == str(team_id)
 
 
-async def test_hitl_gate_required_team_id_absent_is_none() -> None:
+async def test_hitl_review_required_team_id_absent_is_none() -> None:
     """Gate without ``required_team_id`` still carries None (no restriction)."""
-    payload = await _interrupt_payload({"gate_id": "review-step", "human_only": False})
+    payload = await _interrupt_payload({"review_id": "review-step", "human_only": False})
     assert payload["required_team_id"] is None
 
 
@@ -2826,7 +2826,7 @@ async def test_decide_unparks_parked_run():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session, stmts = _session_decide_capturing(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
-    result = await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+    result = await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token")
     assert result.decision == "approved"
     # The un-park is issued directly after the decision commit (before the
     # audit append) and is guarded to parked runs only.
@@ -2843,7 +2843,7 @@ async def test_decide_unpark_is_guarded_to_parked_status():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="rejected")
     session, stmts = _session_decide_capturing(update_returns_id=gate.id, session_get_gate=gate_decided)
     mgr = HITLManager()
-    await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token", reason="no")
+    await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token", reason="no")
     assert len(stmts) >= 2
     unpark_values = _bound_values(stmts[1])
     # The guard value (hitl_parked) and target (awaiting_human) are both
@@ -2876,7 +2876,7 @@ async def test_decide_failure_does_not_unpark():
     session.get = AsyncMock(return_value=None)
     mgr = HITLManager()
     with pytest.raises(ClaimTokenExpiredError):
-        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+        await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok")
     # The decision UPDATE + the diagnosis SELECT ran — NO un-park write.
     assert len(stmts) == 2
     for stmt in stmts:

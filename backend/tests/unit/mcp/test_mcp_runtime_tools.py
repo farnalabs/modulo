@@ -26,8 +26,8 @@ from modulo.core.hitl_manager import (
     RunNotAwaitingError,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
-from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED
-from modulo.db.crud.hitl_gate_config import MSG_HUMAN_ONLY_DENY as _MSG_HUMAN_ONLY_DENY
+from modulo.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED
+from modulo.db.crud.hitl_review_config import MSG_HUMAN_ONLY_DENY as _MSG_HUMAN_ONLY_DENY
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -427,9 +427,9 @@ class TestDeletePipeline(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-def _make_hitl_gate(
+def _make_hitl_review(
     *,
-    gate_id: str = "gate-1",
+    review_id: str = "gate-1",
     account_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
     required_team_id: uuid.UUID | None = None,
@@ -437,7 +437,7 @@ def _make_hitl_gate(
 ) -> MagicMock:
     gate = MagicMock()
     gate.run_id = run_id or uuid.uuid4()
-    gate.gate_id = gate_id
+    gate.review_id = review_id
     gate.pipeline_id = uuid.uuid4()
     gate.account_id = account_id
     gate.expires_at = expires_at
@@ -477,11 +477,11 @@ class TestListPendingHitl(_AuthContext):
         expires_at = datetime(2026, 1, 1, 13, 0, tzinfo=UTC)
         shared_run_id = uuid.uuid4()
         gates = [
-            _make_hitl_gate(
-                gate_id="gate-1", account_id=None, expires_at=expires_at, required_team_id=None, run_id=shared_run_id
+            _make_hitl_review(
+                review_id="gate-1", account_id=None, expires_at=expires_at, required_team_id=None, run_id=shared_run_id
             ),
-            _make_hitl_gate(
-                gate_id="gate-2",
+            _make_hitl_review(
+                review_id="gate-2",
                 account_id=uuid.uuid4(),
                 expires_at=None,
                 required_team_id=uuid.uuid4(),
@@ -519,22 +519,22 @@ class TestListPendingHitl(_AuthContext):
         assert result["page_size"] == 20
         assert result["total"] == 2
         assert result["has_more"] is False
-        assert result["gates"][0]["run_id"] == str(gates[0].run_id)
-        assert result["gates"][0]["gate_id"] == "gate-1"
-        assert result["gates"][0]["pipeline_id"] == str(gates[0].pipeline_id)
-        assert result["gates"][0]["claimed_by"] is None
-        assert result["gates"][0]["expires_at"] == expires_at.isoformat()
-        assert result["gates"][0]["required_team_id"] is None
-        assert result["gates"][1]["claimed_by"] == str(gates[1].account_id)
-        assert result["gates"][1]["expires_at"] is None
-        assert result["gates"][1]["required_team_id"] == str(gates[1].required_team_id)
+        assert result["reviews"][0]["run_id"] == str(gates[0].run_id)
+        assert result["reviews"][0]["review_id"] == "gate-1"
+        assert result["reviews"][0]["pipeline_id"] == str(gates[0].pipeline_id)
+        assert result["reviews"][0]["claimed_by"] is None
+        assert result["reviews"][0]["expires_at"] == expires_at.isoformat()
+        assert result["reviews"][0]["required_team_id"] is None
+        assert result["reviews"][1]["claimed_by"] == str(gates[1].account_id)
+        assert result["reviews"][1]["expires_at"] is None
+        assert result["reviews"][1]["required_team_id"] == str(gates[1].required_team_id)
         # FAR-613 briefing fields: unresolvable configs map to None.
-        assert result["gates"][0]["description"] is None
-        assert result["gates"][0]["context"] is None
+        assert result["reviews"][0]["description"] is None
+        assert result["reviews"][0]["context"] is None
         # FAR-609: an unresolvable gate-config falls back to the fail-safe
-        # DEFAULT_HUMAN_ONLY (True) so MCP never under-reports a gate.
-        assert result["gates"][0]["human_only"] is True
-        assert result["gates"][1]["human_only"] is True
+        # DEFAULT_HUMAN_ONLY (True) so MCP never under-reports a review.
+        assert result["reviews"][0]["human_only"] is True
+        assert result["reviews"][1]["human_only"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -545,17 +545,17 @@ class TestListPendingHitl(_AuthContext):
     ) -> None:
         """FAR-613: topology-shaped gates resolve their snapshot description;
         context comes from the claim row."""
-        from modulo.db.crud.hitl_gate_config import make_gate_id
+        from modulo.db.crud.hitl_review_config import make_review_id
 
         source, target = str(uuid.uuid4()), str(uuid.uuid4())
-        resolved_gate_id = make_gate_id(source, target)
+        resolved_review_id = make_review_id(source, target)
         context = {"trigger": "condition", "condition": "output.severity == 'high'"}
-        gate = _make_hitl_gate(gate_id=resolved_gate_id)
+        gate = _make_hitl_review(review_id=resolved_review_id)
         gate.context_json = context
         graph = {
             "nodes": [],
             "edges": [
-                {"source": source, "target": target, "hitl_gate_config": {"description": "MCP briefing description."}}
+                {"source": source, "target": target, "hitl_review_config": {"description": "MCP briefing description."}}
             ],
         }
         count_result = MagicMock()
@@ -583,11 +583,11 @@ class TestListPendingHitl(_AuthContext):
 
         result = await list_pending_hitl()
 
-        assert result["gates"][0]["description"] == "MCP briefing description."
-        assert result["gates"][0]["context"] == context
+        assert result["reviews"][0]["description"] == "MCP briefing description."
+        assert result["reviews"][0]["context"] == context
         # FAR-609: a snapshot config without an explicit human_only flag falls
         # back to the fail-safe True default.
-        assert result["gates"][0]["human_only"] is True
+        assert result["reviews"][0]["human_only"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -607,7 +607,7 @@ class TestListPendingHitl(_AuthContext):
 
         result = await list_pending_hitl()
 
-        assert not result["gates"]
+        assert not result["reviews"]
         assert result["total"] == 0
         assert result["has_more"] is False
 
@@ -619,7 +619,7 @@ class TestListPendingHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         shared_run_id = uuid.uuid4()
-        gates = [_make_hitl_gate(gate_id=f"gate-{i}", run_id=shared_run_id) for i in range(20)]
+        gates = [_make_hitl_review(review_id=f"gate-{i}", run_id=shared_run_id) for i in range(20)]
         count_result = MagicMock()
         count_result.scalar_one.return_value = 25
         gates_result = MagicMock()
@@ -645,7 +645,7 @@ class TestListPendingHitl(_AuthContext):
         result = await list_pending_hitl()
 
         assert result["total"] == 25
-        assert len(result["gates"]) == 20
+        assert len(result["reviews"]) == 20
         assert result["has_more"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -700,12 +700,12 @@ class TestListPendingHitl(_AuthContext):
 class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
         assert result["error"] == "auth_expired"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_id_returns_invalid_id(self, mock_validate_auth: AsyncMock) -> None:
-        result = await review_hitl(run_id="not-a-uuid", gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id="not-a-uuid", review_id="gate-1", action="claim")
 
         assert result["error"] == "invalid_id"
         assert result["field"] == "run_id"
@@ -717,7 +717,7 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="bogus")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="bogus")
 
         assert result["error"] == "invalid_action"
         mock_manager_cls.assert_called_once()
@@ -734,7 +734,7 @@ class TestReviewHitl(_AuthContext):
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
-            result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+            result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
         assert result["error"] == "insufficient_scope"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -745,7 +745,7 @@ class TestReviewHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         self._set_role_operator()
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve")
 
         assert result["error"] == "claim_token_required"
 
@@ -757,7 +757,7 @@ class TestReviewHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         self._set_role_operator()
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="reject")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="reject")
 
         assert result["error"] == "claim_token_required"
 
@@ -769,7 +769,7 @@ class TestReviewHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         self._set_role_operator()
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="deliver_manual")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="deliver_manual")
 
         assert result["error"] == "claim_token_required"
 
@@ -783,7 +783,7 @@ class TestReviewHitl(_AuthContext):
         self._set_role_operator()
         result = await review_hitl(
             run_id=str(uuid.uuid4()),
-            gate_id="gate-1",
+            review_id="gate-1",
             action="deliver_manual",
             claim_token="tok",
         )
@@ -811,7 +811,7 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls.return_value = manager
 
         run_id = str(uuid.uuid4())
-        result = await review_hitl(run_id=run_id, gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="claim")
 
         assert result["status"] == "claimed"
         assert result["claim_token"] == "tok-123"
@@ -841,14 +841,14 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls.return_value = manager
 
         run_id = str(uuid.uuid4())
-        result = await review_hitl(run_id=run_id, gate_id="gate-1", action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "gate_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1"}
         manager.approve.assert_awaited_once()
         # FAR-541: the persisted decision payload is stamped with the gate id.
         assert manager.approve.await_args.kwargs["decision_payload"] == {
             "action": "approved",
-            "gate_id": "gate-1",
+            "review_id": "gate-1",
         }
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -870,14 +870,14 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls.return_value = manager
 
         run_id = str(uuid.uuid4())
-        result = await review_hitl(run_id=run_id, gate_id="gate-1", action="reject", claim_token="tok-123")
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="reject", claim_token="tok-123")
 
-        assert result == {"status": "rejected", "gate_id": "gate-1"}
+        assert result == {"status": "rejected", "review_id": "gate-1"}
         manager.reject.assert_awaited_once()
         # FAR-541: the persisted decision payload is stamped with the gate id.
         assert manager.reject.await_args.kwargs["decision_payload"] == {
             "action": "rejected",
-            "gate_id": "gate-1",
+            "review_id": "gate-1",
         }
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -895,7 +895,7 @@ class TestReviewHitl(_AuthContext):
 
         mock_sesh = AsyncMock()
         # 1: run lookup; 2: gate-config snapshot lookup (gate id "gate-1" is
-        # not a hitl_gate_* id, so the human_only check resolves None).
+        # not a hitl_review_* id, so the human_only check resolves None).
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -903,18 +903,18 @@ class TestReviewHitl(_AuthContext):
         run_id = str(uuid.uuid4())
         result = await review_hitl(
             run_id=run_id,
-            gate_id="gate-1",
+            review_id="gate-1",
             action="deliver_manual",
             claim_token="tok-123",
             output={"result": "ok"},
         )
 
-        assert result == {"status": "delivered_manual", "gate_id": "gate-1"}
+        assert result == {"status": "delivered_manual", "review_id": "gate-1"}
         manager.deliver_manual.assert_awaited_once()
         # FAR-541: the persisted decision payload is stamped with the gate id.
         assert manager.deliver_manual.await_args.kwargs["decision_payload"] == {
             "action": "deliver_manual",
-            "gate_id": "gate-1",
+            "review_id": "gate-1",
             "output": {"result": "ok"},
         }
 
@@ -941,9 +941,11 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok-123")
+        result = await review_hitl(
+            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
+        )
 
-        assert result == {"status": "approved", "gate_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1"}
         assert manager.approve.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
         assert manager.approve.await_args.kwargs["client_type"] == "mcp"
 
@@ -965,7 +967,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
 
         assert result["status"] == "claimed"
         assert manager.claim.await_args.kwargs["claimant_id"] == _PLACEHOLDER_USER_ID
@@ -997,19 +999,19 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls.return_value = manager
 
         result_reject = await review_hitl(
-            run_id=str(uuid.uuid4()), gate_id="gate-1", action="reject", claim_token="tok-123", reason="nope"
+            run_id=str(uuid.uuid4()), review_id="gate-1", action="reject", claim_token="tok-123", reason="nope"
         )
         result_manual = await review_hitl(
             run_id=str(uuid.uuid4()),
-            gate_id="gate-1",
+            review_id="gate-1",
             action="deliver_manual",
             claim_token="tok-123",
             output={"result": "ok"},
         )
 
-        assert result_reject == {"status": "rejected", "gate_id": "gate-1"}
+        assert result_reject == {"status": "rejected", "review_id": "gate-1"}
         assert manager.reject.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
-        assert result_manual == {"status": "delivered_manual", "gate_id": "gate-1"}
+        assert result_manual == {"status": "delivered_manual", "review_id": "gate-1"}
         assert manager.deliver_manual.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1037,9 +1039,11 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok-123")
+        result = await review_hitl(
+            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
+        )
 
-        assert result == {"status": "approved", "gate_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1"}
         assert manager.approve.await_args.kwargs["actor_id"] == account_id
         assert manager.approve.await_args.kwargs["actor_id"] != uuid.UUID(int=0)
 
@@ -1066,9 +1070,11 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok-123")
+        result = await review_hitl(
+            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
+        )
 
-        assert result == {"status": "approved", "gate_id": "gate-1"}
+        assert result == {"status": "approved", "review_id": "gate-1"}
         assert manager.approve.await_args.kwargs["actor_id"] is None
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1092,7 +1098,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
 
         assert result["error"] == "no_user_context"
         manager.claim.assert_not_called()
@@ -1108,7 +1114,7 @@ class TestReviewHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         """FAR-610: the gate config is resolved from the run's SNAPSHOT graph
-        by edge topology (hitl_gate_<source>_<target>), not from the first
+        by edge topology (hitl_review_<source>_<target>), not from the first
         edge of the pipeline in arbitrary order."""
         self._set_role_operator()
         manager = MagicMock()
@@ -1116,7 +1122,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1124,7 +1130,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
             ],
         }
 
@@ -1140,7 +1146,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
         assert result["error"] == "human_only_gate"
         manager.approve.assert_not_called()
@@ -1156,7 +1162,7 @@ class TestReviewHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         """FAR-610 regression: the pipeline's FIRST edge has no
-        hitl_gate_config (the old ``.scalars().first()`` read exactly that edge
+        hitl_review_config (the old ``.scalars().first()`` read exactly that edge
         and allowed the approve); the gated edge elsewhere in the graph IS
         human_only and must block."""
         self._set_role_operator()
@@ -1165,7 +1171,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1173,10 +1179,10 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                # First edge: no hitl_gate_config — the pre-FAR-610 bug read
+                # First edge: no hitl_review_config — the pre-FAR-610 bug read
                 # THIS edge's config and let the approve through.
                 {"source": "n1", "target": "n2"},
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
             ],
         }
 
@@ -1192,7 +1198,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
         assert result["error"] == "human_only_gate"
         manager.approve.assert_not_called()
@@ -1215,7 +1221,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1223,7 +1229,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
             ],
         }
 
@@ -1241,7 +1247,7 @@ class TestReviewHitl(_AuthContext):
 
         result = await review_hitl(
             run_id=str(run.id),
-            gate_id=gate_id,
+            review_id=review_id,
             action="deliver_manual",
             claim_token="tok-123",
             output={"result": "ok"},
@@ -1269,7 +1275,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1277,7 +1283,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
             ],
         }
 
@@ -1293,7 +1299,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="claim")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="claim")
 
         assert result["error"] == "human_only_gate"
         manager.claim.assert_not_called()
@@ -1316,7 +1322,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1324,7 +1330,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"label": "Legacy"}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"label": "Legacy"}},
             ],
         }
 
@@ -1339,7 +1345,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="claim")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="claim")
 
         assert result["error"] == "human_only_gate"
         manager.claim.assert_not_called()
@@ -1364,7 +1370,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1372,7 +1378,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": False}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": False}},
             ],
         }
 
@@ -1387,7 +1393,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="claim")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="claim")
 
         assert result.get("status") == "claimed", result
         manager.claim.assert_awaited_once()
@@ -1412,7 +1418,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
@@ -1439,7 +1445,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
         assert result["error"] == "human_only_gate"
         assert "could not be resolved" in result["detail"]
@@ -1462,7 +1468,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
@@ -1487,9 +1493,9 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
-        assert result == {"status": "approved", "gate_id": gate_id}
+        assert result == {"status": "approved", "review_id": review_id}
         manager.approve.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1511,7 +1517,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1519,7 +1525,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
             ],
         }
 
@@ -1537,13 +1543,13 @@ class TestReviewHitl(_AuthContext):
 
         result = await review_hitl(
             run_id=str(run.id),
-            gate_id=gate_id,
+            review_id=review_id,
             action="reject",
             claim_token="tok-123",
             reason="not good",
         )
 
-        assert result == {"status": "rejected", "gate_id": gate_id}
+        assert result == {"status": "rejected", "review_id": review_id}
         manager.reject.assert_awaited_once()
 
     @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
@@ -1565,7 +1571,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run_id = uuid.uuid4()
         run = MagicMock()
         run.id = run_id
@@ -1574,7 +1580,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
             ],
         }
 
@@ -1590,7 +1596,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run_id), gate_id=gate_id, action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=str(run_id), review_id=review_id, action="approve", claim_token="tok-123")
 
         assert result["error"] == "human_only_gate"
         mock_append.assert_awaited_once()
@@ -1600,7 +1606,7 @@ class TestReviewHitl(_AuthContext):
         assert kwargs["resource_id"] == run_id
         payload = kwargs["payload_json"]
         assert payload["run_id"] == str(run_id)
-        assert payload["gate_id"] == gate_id
+        assert payload["review_id"] == review_id
         assert payload["action"] == "approve"
         assert payload["surface"] == "mcp"
         assert payload["reason"] == _MSG_HUMAN_ONLY_DENY
@@ -1626,7 +1632,7 @@ class TestReviewHitl(_AuthContext):
 
         src = uuid.uuid4()
         tgt = uuid.uuid4()
-        gate_id = f"hitl_gate_{src}_{tgt}"
+        review_id = f"hitl_review_{src}_{tgt}"
         run = MagicMock()
         run.id = uuid.uuid4()
         run.snapshot_id = uuid.uuid4()
@@ -1634,7 +1640,7 @@ class TestReviewHitl(_AuthContext):
         snapshot.graph_json = {
             "nodes": [],
             "edges": [
-                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                {"source": str(src), "target": str(tgt), "hitl_review_config": {"human_only": True}},
             ],
         }
 
@@ -1650,7 +1656,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=str(run.id), review_id=review_id, action="approve", claim_token="tok-123")
 
         assert result["error"] == "human_only_gate"
         manager.approve.assert_not_called()
@@ -1674,11 +1680,11 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls.return_value = manager
 
         run_id = str(run_id_uuid)
-        result = await review_hitl(run_id=run_id, gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=run_id, review_id="gate-1", action="claim")
 
-        assert result["error"] == "gate_not_found"
+        assert result["error"] == "review_not_found"
         assert result["run_id"] == run_id
-        assert result["gate_id"] == "gate-1"
+        assert result["review_id"] == "gate-1"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
@@ -1697,7 +1703,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
 
         assert result["error"] == "already_claimed"
 
@@ -1718,7 +1724,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
 
         assert result["error"] == "not_team_member"
 
@@ -1744,7 +1750,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="bad")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="bad")
 
         assert result["error"] == "claim_token_invalid"
 
@@ -1766,7 +1772,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="reject", claim_token="stale")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="reject", claim_token="stale")
 
         assert result["error"] == "claim_token_expired"
         assert "Re-claim" in result["detail"]
@@ -1793,7 +1799,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok")
 
         assert result["error"] == "already_decided"
 
@@ -1818,7 +1824,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
 
         assert result["error"] == "run_not_awaiting"
         assert "complete" in result["detail"]
@@ -1850,7 +1856,7 @@ class TestReviewHitl(_AuthContext):
 
         result = await review_hitl(
             run_id=str(uuid.uuid4()),
-            gate_id="gate-1",
+            review_id="gate-1",
             action="approve",
             claim_token="tok",
             output={"not": "relevant"},
@@ -1876,7 +1882,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="claim")
 
         assert result["error"] == "migration_required"
 
@@ -1902,7 +1908,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok")
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok")
 
         assert result["error"] == "internal_error"
 

@@ -118,9 +118,9 @@ async def test_topology_single_node_no_edges():
             },
             "TOPOLOGY_CYCLE",
         ),
-        # FAR-541 (iteration 4, m4): the hitl_gate_ prefix is reserved for the
+        # FAR-541 (iteration 4, m4): the hitl_review_ prefix is reserved for the
         # executor's synthesized HITL gate nodes.
-        ({"nodes": [{"id": "hitl_gate_a_b"}], "edges": []}, "TOPOLOGY_NODE_RESERVED_ID_PREFIX"),
+        ({"nodes": [{"id": "hitl_review_a_b"}], "edges": []}, "TOPOLOGY_NODE_RESERVED_ID_PREFIX"),
     ],
 )
 async def test_topology_errors(graph_json, expected_code):
@@ -131,21 +131,21 @@ async def test_topology_errors(graph_json, expected_code):
     assert any(i.code == expected_code for i in result.issues)
 
 
-async def test_topology_reserved_hitl_gate_prefix_error_attributes_node():
+async def test_topology_reserved_hitl_review_prefix_error_attributes_node():
     """FAR-541 (iteration 4, m4): a user node id squatting the reserved
-    ``hitl_gate_`` prefix is rejected at validation time with the node id
+    ``hitl_review_`` prefix is rejected at validation time with the node id
     attributed — consumers (recover-node 422 guard, dispatcher reconcile,
     HITL routing) key on the prefix to tell a real gate apart from manual
     nodes and guardrail rows."""
     result = await GraphValidator().validate(
-        _snapshot(graph_json={"nodes": [{"id": "hitl_gate_x_y"}, {"id": "b"}], "edges": []}),
+        _snapshot(graph_json={"nodes": [{"id": "hitl_review_x_y"}, {"id": "b"}], "edges": []}),
         _session_returning([]),
     )
 
     issue = next(i for i in result.issues if i.code == "TOPOLOGY_NODE_RESERVED_ID_PREFIX")
-    assert issue.node_id == "hitl_gate_x_y"
+    assert issue.node_id == "hitl_review_x_y"
     assert "reserved" in issue.message
-    assert "hitl_gate_" in issue.message
+    assert "hitl_review_" in issue.message
 
 
 async def test_topology_null_source_uses_missing_value_marker():

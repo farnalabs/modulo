@@ -580,7 +580,7 @@ class TestGraphSaveGateParity:
         graph endpoint — an invalid graph is rejected 422 on BOTH (before the
         fix, the apply path saved without running _validate_graph_save, so
         GUARDRAIL_CAP_EXCEEDED / REDACT_CORRECT_BLOCKED /
-        HITL_GATE_DESCRIPTION_REQUIRED never fired there)."""
+        HITL_REVIEW_DESCRIPTION_REQUIRED never fired there)."""
         node_id = str(uuid.uuid4())
         nodes = [
             {
@@ -593,8 +593,8 @@ class TestGraphSaveGateParity:
         edges: list[dict] = []
         validation = ValidationResult()
         validation.error(
-            "HITL_GATE_DESCRIPTION_REQUIRED",
-            "HITL gate on node requires a human-provided description",
+            "HITL_REVIEW_DESCRIPTION_REQUIRED",
+            "HITL review on node requires a human-provided description",
             node_id=node_id,
         )
         pipeline = MagicMock()
