@@ -56,6 +56,7 @@ vi.mock('../lib/jwt', () => ({
 import { api } from '../lib/api/client'
 import { decodeJwtPayload } from '../lib/jwt'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
+import McpOauthClientsCard from '../components/settings/McpOauthClientsCard.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 
 const getMock = api.GET as unknown as Mock
@@ -66,6 +67,18 @@ const decodeJwtPayloadMock = decodeJwtPayload as unknown as Mock
 
 const dialogStub = { template: '<div><slot /></div>' }
 const stubs = { Dialog: dialogStub, DialogContent: dialogStub, DialogDescription: dialogStub, DialogFooter: dialogStub, DialogHeader: dialogStub, DialogTitle: dialogStub, FeatureGate: dialogStub }
+
+/**
+ * The OAuth surface was extracted into `McpOauthClientsCard`, so its state
+ * and handlers live on the child. Every OAuth case below still drives the
+ * REAL child through the mounted parent (props in, `refresh` emit out) -
+ * only the handle it reaches for moved.
+ */
+function oauthVm(wrapper: ReturnType<typeof mountView>) {
+  const card = wrapper.findComponent(McpOauthClientsCard)
+  expect(card.exists()).toBe(true)
+  return card.vm as any
+}
 
 function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, oauth: unknown = mockOAuthClients) {
   getMock.mockImplementation((path: string) => {
@@ -623,7 +636,7 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
     await nextTick()
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
 
     await vm.registerOauthClient()
     await flushPromises()
@@ -669,7 +682,7 @@ describe('SettingsMcpView', () => {
     }
     await nextTick()
 
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     await vm.registerOauthClient()
     await flushPromises()
 
@@ -712,7 +725,7 @@ describe('SettingsMcpView', () => {
     await box.trigger('change')
     await nextTick()
 
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     await vm.registerOauthClient()
     await flushPromises()
 
@@ -733,7 +746,7 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('Are you sure you want to revoke the OAuth client')
     expect(wrapper.text()).toContain('CLI Client')
 
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     await vm.revokeOauthClient()
     await flushPromises()
     expect(deleteMock).toHaveBeenCalledWith('/api/v1/mcp/oauth/clients/{client_id}', {
@@ -920,6 +933,7 @@ describe('SettingsMcpView', () => {
     await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
     await nextTick()
     const registerForm = wrapper
+      .findComponent(McpOauthClientsCard)
       .findAllComponents(FormDialog)
       .find((dialog) => dialog.props('confirmText') === 'Register OAuth Client')
     expect(registerForm).toBeDefined()
@@ -950,7 +964,7 @@ describe('SettingsMcpView', () => {
     await box.trigger('change')
     await nextTick()
 
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     expect(vm.oauthRedirectList).toEqual(['https://a.example/cb', 'https://b.example/cb'])
     await vm.registerOauthClient()
     await flushPromises()
@@ -979,7 +993,7 @@ describe('SettingsMcpView', () => {
     await box.trigger('change')
     await nextTick()
 
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     await vm.registerOauthClient()
     await flushPromises()
     expect(postMock).not.toHaveBeenCalled()
@@ -1008,7 +1022,7 @@ describe('SettingsMcpView', () => {
     await box.trigger('change')
     await nextTick()
 
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     await vm.registerOauthClient()
     await flushPromises()
     expect(postMock).toHaveBeenCalledWith('/api/v1/mcp/oauth/clients', {
@@ -1028,7 +1042,7 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
     await nextTick()
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     await vm.copyToClipboard('mod_oauth_secret_value_123', 'oauth-client-secret')
     await nextTick()
 
@@ -1066,7 +1080,7 @@ describe('SettingsMcpView', () => {
     await box.trigger('change')
     await nextTick()
 
-    const vm = wrapper.vm as any
+    const vm = oauthVm(wrapper)
     await vm.registerOauthClient()
     await flushPromises()
     expect(

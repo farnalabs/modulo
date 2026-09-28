@@ -580,6 +580,7 @@ OWNED_PAGES = {
     "/settings/guardrails": "frontend/src/views/SettingsGuardrailsView.vue",
     "/settings/mcp": (
         "frontend/src/views/SettingsMcpView.vue",
+        "frontend/src/components/settings/McpOauthClientsCard.vue",
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
