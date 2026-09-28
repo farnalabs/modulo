@@ -1757,6 +1757,30 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: org-hitl-review-window-load-error
+        type: element
+        dynamic_testid: false
+      - testid: org-hitl-review-window-retry
+        type: button
+        dynamic_testid: false
+      - testid: org-hitl-review-window-value
+        type: input
+        dynamic_testid: false
+      - testid: org-hitl-review-window-unit
+        type: select
+        dynamic_testid: false
+      - testid: org-hitl-review-window-save
+        type: button
+        dynamic_testid: false
+      - testid: org-hitl-review-window-error
+        type: element
+        dynamic_testid: false
+      - testid: org-hitl-review-window-saved
+        type: element
+        dynamic_testid: false
+      - testid: org-hitl-review-window-status
+        type: element
+        dynamic_testid: false
     /admin/parameter-schemas:
       - testid: paramschema-new
         type: button
@@ -2915,6 +2939,12 @@ elements:
     /pipelines/:id/editor:
       - testid: pipeline-editor-save
         type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-hitl-review-window
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-ownerless-gate-advisory
+        type: element
         dynamic_testid: false
       - testid: pipeline-editor-save-error
         type: element
