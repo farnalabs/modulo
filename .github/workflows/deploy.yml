@@ -355,7 +355,32 @@ jobs:
       - name: Security audit
         shell: bash
         run: |
-          uv run --no-build --project backend --no-sync pip-audit
+          set -uo pipefail
+          LOG="$(mktemp)"
+          trap 'rm -f "$LOG"' EXIT
+          for attempt in 1 2 3; do
+            : > "$LOG"
+            set +e
+            uv run --no-build --project backend --no-sync pip-audit 2>&1 | tee "$LOG"
+            RC=${PIPESTATUS[0]}
+            set -e
+            if [ "$RC" -eq 0 ]; then
+              echo "::notice::pip-audit succeeded on attempt ${attempt}/3."
+              break
+            fi
+            if grep -qE "pip_audit\._service\.interface\.(ServiceError|ConnectionError)|[0-9]{3} Server Error|Backend is unhealthy|Could not connect to PyPI|PyPI is not redirecting properly" "$LOG"; then
+              if [ "$attempt" -lt 3 ]; then
+                echo "::warning::pip-audit hit a transient PyPI service error (attempt ${attempt}/3); retrying."
+                sleep $((attempt * 10))
+              else
+                echo "::error::pip-audit still hit a transient PyPI service error after 3 attempts."
+                exit 1
+              fi
+              continue
+            fi
+            echo "::error::pip-audit failed with a non-transient error or found vulnerabilities; not retrying."
+            exit "$RC"
+          done
           if git rev-parse --verify --quiet HEAD^ >/dev/null 2>&1; then uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit HEAD^ --error .; else uv run --no-build --project backend --no-sync semgrep --config=.semgrep/ --error .; fi
 
   pre-deploy-gate:

@@ -26,7 +26,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+from modulo.core.pipeline_engine.sandbox_policy import (
+    DELIVERY_SENTINEL_SPEC_KEY,
+    apply_sandbox_policy,
+)
 from modulo.core.runtime_provider import (
     IsolationPolicy,
     ProviderCapabilityUnsupportedError,
@@ -260,6 +263,62 @@ async def test_apply_isolation_connect_cancellation_propagates() -> None:
 # ---------------------------------------------------------------------------
 # 4. IsolationPolicy carrier shape
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 5. FAR-1264: delivery-sentinel extraction on the REAL provider path
+# ---------------------------------------------------------------------------
+
+
+def _sentinel_spec(**kwargs: Any) -> WorkspaceSpec:
+    return WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        **kwargs,
+    )
+
+
+async def test_apply_isolation_threads_sentinel_and_run_scope_to_policy() -> None:
+    """The REAL ``E2BRuntimeProvider.apply_isolation`` (not a fake override)
+    reads the sentinel from ``spec.workspace_metadata`` and the run id from
+    ``spec.run_id`` and installs the gh guard with the run-scoped marker."""
+    sandbox = _RecordingSandbox()
+    provider = E2BRuntimeProvider(api_key="sentinel-key")
+    provider._sandboxes["sbx-sentinel"] = sandbox
+    spec = _sentinel_spec(
+        run_id=uuid.UUID("11111111-2222-3333-4444-555555555555"),
+        workspace_metadata={DELIVERY_SENTINEL_SPEC_KEY: "PR_CREATED"},
+    )
+
+    await provider.apply_isolation("sbx-sentinel", spec, _policy())
+
+    guard_scripts = [script for script, _, _ in sandbox.commands.calls if ".modulo-real" in script]
+    assert guard_scripts, "sentinel-carrying spec must install the gh guard"
+    assert "11111111-2222-3333-4444-555555555555" in guard_scripts[0]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(123, id="non-str"),
+        pytest.param("", id="empty-str"),
+        pytest.param(None, id="none"),
+    ],
+)
+async def test_apply_isolation_degrades_to_no_guard_for_malformed_sentinel(raw: Any) -> None:
+    """The metadata dict is engine-supplied, so a malformed/absent value is
+    type-narrowed to "no guard" — never a crash, never an install."""
+    sandbox = _RecordingSandbox()
+    provider = E2BRuntimeProvider(api_key="sentinel-key")
+    provider._sandboxes["sbx-degrade"] = sandbox
+    spec = _sentinel_spec(
+        run_id=uuid.uuid4(),
+        workspace_metadata={DELIVERY_SENTINEL_SPEC_KEY: raw},
+    )
+
+    await provider.apply_isolation("sbx-degrade", spec, _policy())
+
+    assert not any(".modulo-real" in script for script, _, _ in sandbox.commands.calls)
 
 
 def test_isolation_policy_defaults_match_legacy_defaults() -> None:

@@ -501,8 +501,8 @@ class E2BRuntimeProvider(RuntimeProvider):
         ADR 040 ``apply_isolation``: wraps the existing
         ``sandbox_policy.apply_sandbox_policy`` — the same script builders,
         the same step order (git-credential scope -> egress allowlist ->
-        read-only seal), the same ``user=root``, and the same
-        enforcement-critical-raise vs egress-best-effort split — so the
+        FAR-1264 gh guard -> read-only seal), the same ``user=root``, and the
+        same enforcement-critical-raise vs best-effort split — so the
         flag-ON primitive and the flag-OFF engine invocation emit identical
         enforcement for a fixed policy (pinned by the R3 parity unit test).
 
@@ -512,14 +512,30 @@ class E2BRuntimeProvider(RuntimeProvider):
         pattern as :meth:`destroy_workspace_by_ref` — so the R3 flag-ON
         engine path can enforce a workspace the legacy direct path
         provisioned. ``spec`` carries workspace attribution for callers; the
-        scripts target the fixed ``/home/user`` workspace and do not read it.
+        enforcement scripts target the fixed ``/home/user`` workspace and do
+        not read it — EXCEPT the FAR-1264 delivery sentinel: the engine
+        threads the node's ``delivery_sentinel`` through
+        ``spec.workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`` (the
+        per-invocation carrier) and it gates the one-PR-per-run ``gh`` guard;
+        ``spec.run_id`` scopes the guard's claim marker so a marker can never
+        leak across runs. Both are absent on a spec built without them, so
+        every existing caller and the R3 parity test are unaffected.
         """
         # Lazy import (house convention): sandbox_policy is dependency-free,
         # but importing it pulls the pipeline_engine package __init__ — the
         # engine process already has it loaded when this runs.
-        from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+        from modulo.core.pipeline_engine.sandbox_policy import (
+            DELIVERY_SENTINEL_SPEC_KEY,
+            apply_sandbox_policy,
+        )
 
         sandbox = await self._resolve_sandbox(provider_ref, "apply isolation")
+        # FAR-1264: resolve the run-scoped one-PR-per-run guard inputs from
+        # the spec (type-narrowed: the metadata dict is engine-supplied, so a
+        # malformed/foreign value degrades to "no guard", never a crash).
+        _sentinel_raw = (spec.workspace_metadata or {}).get(DELIVERY_SENTINEL_SPEC_KEY)
+        _delivery_sentinel = _sentinel_raw if isinstance(_sentinel_raw, str) and _sentinel_raw else None
+        _run_scope = str(spec.run_id) if spec.run_id is not None else None
         await apply_sandbox_policy(
             sandbox,
             read_only=policy.read_only,
@@ -528,6 +544,8 @@ class E2BRuntimeProvider(RuntimeProvider):
             egress_allowlist=policy.egress_allowlist,
             allowed_hosts=policy.allowed_hosts,
             command_timeout=policy.command_timeout,
+            delivery_sentinel=_delivery_sentinel,
+            run_scope=_run_scope,
         )
 
     # ------------------------------------------------------------------
