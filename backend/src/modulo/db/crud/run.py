@@ -11,6 +11,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -3050,7 +3051,7 @@ async def count_active_sandbox_runs_for_org(
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Run.id != exclude_run_id)
-    rows = (await session.execute(stmt)).scalars()
+    rows: Iterable[dict[str, Any] | None] = (await session.execute(stmt)).scalars()
     return sum(1 for graph_json in rows if _graph_contains_sandbox_agent(graph_json))
 
 

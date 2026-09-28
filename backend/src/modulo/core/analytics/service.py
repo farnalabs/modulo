@@ -478,7 +478,7 @@ async def run_analytics_query(
     }
 
 
-def _pipeline_caps_stmt(org_id: uuid.UUID, pipeline_ids: tuple[uuid.UUID, ...]) -> Any:
+def _pipeline_caps_stmt(org_id: uuid.UUID, pipeline_ids: tuple[uuid.UUID, ...]) -> sa.Select[int]:
     scope = Pipeline.id.in_(pipeline_ids) if pipeline_ids else sa.true()
     return sa.select(Pipeline.max_concurrent_runs).where(
         scope,
