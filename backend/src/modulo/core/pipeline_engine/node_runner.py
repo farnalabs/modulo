@@ -1108,6 +1108,7 @@ async def _apply_isolation_via_provider(
     egress_allowlist: list[dict[str, Any]] | None,
     allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
+    delivery_sentinel: str | None = None,
 ) -> None:
     """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
 
@@ -1127,7 +1128,17 @@ async def _apply_isolation_via_provider(
       - no key / provider build failure / missing sandbox id fail CLOSED as
         the same tier refusal (isolation is enforcement-critical: never
         silently skipped).
+
+    FAR-1264: ``delivery_sentinel`` (optional, default ``None`` — existing
+    callers unaffected) rides the per-invocation ``WorkspaceSpec`` under
+    ``workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`` to the E2B provider's
+    ``apply_isolation``, which threads it into ``apply_sandbox_policy`` for
+    the one-PR-per-run ``gh`` guard. ``IsolationPolicy`` does not model the
+    sentinel (it is the three enforcement controls, ADR 040), and the spec
+    built here is call-scoped attribution — never persisted to the workspace
+    in this flow — so the metadata dict is the carrier.
     """
+    from modulo.core.pipeline_engine.sandbox_policy import DELIVERY_SENTINEL_SPEC_KEY
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import (
         IsolationPolicy,
@@ -1153,6 +1164,7 @@ async def _apply_isolation_via_provider(
         organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
         run_id=_parse_uuid_opt(run_id),
         egress_policy=egress_policy,
+        workspace_metadata=({DELIVERY_SENTINEL_SPEC_KEY: delivery_sentinel} if delivery_sentinel else {}),
     )
     policy = IsolationPolicy(
         read_only=read_only,
@@ -7627,16 +7639,50 @@ def _configure_stall_detector(
     return _stall
 
 
-def _should_apply_sandbox_policy(
+def _has_enforcement_sandbox_controls(
     *,
     read_only: bool,
     git_credentials: str | None,
     egress_policy: str | None,
     egress_allowlist: list[dict[str, Any]] | None,
 ) -> bool:
-    """True when the FAR-212 sandbox policy step must run before the command."""
+    """True when an ENFORCEMENT-CRITICAL sandbox control is configured.
+
+    The pre-FAR-1264 body of :func:`_should_apply_sandbox_policy`: the
+    git-credential scope, the read-only seal, and the selected-mode egress
+    allowlist. Failures of THESE controls must propagate (fail-closed — see
+    ``apply_sandbox_policy``), unlike the FAR-1264 ``gh``-guard install,
+    which is best-effort.
+    """
     return (
         read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and bool(egress_allowlist))
+    )
+
+
+def _should_apply_sandbox_policy(
+    *,
+    read_only: bool,
+    git_credentials: str | None,
+    egress_policy: str | None,
+    egress_allowlist: list[dict[str, Any]] | None,
+    delivery_sentinel: str | None = None,
+) -> bool:
+    """True when the FAR-212 sandbox policy step must run before the command.
+
+    FAR-1264: a node with a non-empty ``delivery_sentinel`` runs the step too
+    — that is what scopes the run-scoped one-PR-per-run ``gh`` guard to
+    sentinel-guarded nodes (e.g. Prompt-to-PR) even when ``read_only``,
+    ``git_credentials`` and the egress policy are all default. For such a
+    sentinel-only node the policy step installs ONLY the ``gh`` guard (every
+    enforcement step is skipped by ``apply_sandbox_policy``'s own branches),
+    and the call site treats its failure as best-effort — degrade to the
+    prompt-level guard, never wedge the dispatch.
+    """
+    return bool(delivery_sentinel) or _has_enforcement_sandbox_controls(
+        read_only=read_only,
+        git_credentials=git_credentials,
+        egress_policy=egress_policy,
+        egress_allowlist=egress_allowlist,
     )
 
 
@@ -8903,6 +8949,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             git_credentials=git_credentials,
             egress_policy=_resolved_egress_for_policy,
             egress_allowlist=_resolved_allowlist_for_policy,
+            # FAR-1264: a sentinel-guarded node runs the policy step for the
+            # one-PR-per-run gh guard even with every enforcement control
+            # default (Prompt-to-PR's shape).
+            delivery_sentinel=delivery_sentinel,
         ):
             # FAR-798: thread the node's validated ``allowed_hosts`` (host ->
             # per-host env-var name) into the sandbox policy so the multi-host
@@ -8918,16 +8968,48 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _policy_allowed_hosts = node_def.get("allowed_hosts") if git_credentials == "scoped" else None
             from modulo.settings import get_settings
 
-            await _apply_isolation_via_provider(
-                _sandbox_id,
-                org_id=org_id,
-                run_id=run_id,
+            # FAR-1264: when this invocation exists ONLY for the gh guard
+            # (no enforcement control set), its failure must NOT fail the run
+            # — degrade to the prompt-level one-PR-per-run guard, exactly as
+            # before this ticket (the guard install is best-effort by
+            # contract). When an enforcement control IS set, failures keep
+            # propagating unchanged (fail-closed — a node that asked for the
+            # read-only seal / scoped credentials / egress allowlist must
+            # never run without it).
+            _policy_enforces_controls = _has_enforcement_sandbox_controls(
                 read_only=read_only,
                 git_credentials=git_credentials,
                 egress_policy=_resolved_egress_for_policy,
-                egress_allowlist=_resolved_allowlist,
-                allowed_hosts=_policy_allowed_hosts,
+                egress_allowlist=_resolved_allowlist_for_policy,
             )
+            try:
+                await _apply_isolation_via_provider(
+                    _sandbox_id,
+                    org_id=org_id,
+                    run_id=run_id,
+                    read_only=read_only,
+                    git_credentials=git_credentials,
+                    egress_policy=_resolved_egress_for_policy,
+                    egress_allowlist=_resolved_allowlist,
+                    allowed_hosts=_policy_allowed_hosts,
+                    # FAR-1264: rides the per-invocation WorkspaceSpec to the
+                    # E2B policy call site (IsolationPolicy does not model it).
+                    delivery_sentinel=delivery_sentinel,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if _policy_enforces_controls:
+                    raise
+                _log.warning(
+                    "sandbox_policy.delivery_guard_install_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "detail": "gh one-PR-per-run guard not installed; degrading to the prompt-level guard",
+                    },
+                    exc_info=True,
+                )
 
         try:
             # FAR-306: per-channel stall detector. The heartbeat channel
