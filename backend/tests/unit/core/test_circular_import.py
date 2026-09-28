@@ -30,11 +30,19 @@ def test_direct_import_succeeds_in_fresh_interpreter(import_stmt: str) -> None:
     Uses subprocess to avoid any contamination from the test-runner's
     already-loaded module cache.
     """
+    # The bound guards against an import that HANGS (a genuine cycle), not
+    # against import latency. A cold fresh interpreter spends 35-55s simply
+    # importing modulo.core.pipeline_engine on this machine when it is
+    # otherwise idle, and well past 120s when other test workers are running,
+    # so the old 30s bound failed for slowness rather than for a circular
+    # import. Measured 2026-09-27 on unmodified main (35.7s) and on the
+    # FAR-1050 R6 worktree (45.2s / 52.6s / 55.8s idle; >120s under load) -
+    # every run exited 0.
     result = subprocess.run(  # noqa: S603 — testing our own import paths, not user input
         [sys.executable, "-c", import_stmt],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=300,
         check=False,
     )
     # Include stdout/stderr in the assertion message for easy debugging.

@@ -31,7 +31,6 @@ from modulo.core.pipeline_engine.node_runner import (
     ScriptInvalidOutputError,
     SupersededNodeError,
     _SandboxWatchdog,
-    _wait_command_with_idle_watchdog,
     make_connector_fn,
     make_sandbox_agent_fn,
 )
@@ -223,79 +222,39 @@ def test_compute_sandbox_cost_non_finite_total_returns_zero(monkeypatch: pytest.
 
 
 # ---------------------------------------------------------------------------
-# _fetch_sandbox_log_tail — parses E2B log payloads or fails open
+# _read_log_tail_via_provider - key resolution (FAR-1159 override -> provider)
 # ---------------------------------------------------------------------------
 
 
-def _fake_urlopen(payload: bytes) -> Any:
-    class _Resp:
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *args: object) -> bool:
-            return False
-
-        def read(self) -> bytes:
-            return payload
-
-    return _Resp()
-
-
-async def test_fetch_sandbox_log_tail_parses_preferred_levels(monkeypatch: pytest.MonkeyPatch):
-    payload = (
-        b'{"logEntries": ['
-        b'{"message": "error line", "level": "error"},'
-        b'{"message": "plain line", "level": "debug"},'
-        b'{"fields": "fields-only", "level": "warn"}'
-        b"]}"
-    )
-    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(payload))
-    monkeypatch.setenv("E2B_API_KEY", "k")
-    tail = await nr._fetch_sandbox_log_tail("sbx-1", limit=2)
-    # Preferred levels sort ahead; the tail of the union keeps the LAST two
-    # entries overall ("fields-only" + the non-preferred "plain line").
-    assert tail == "fields-only\nplain line"
-
-
-async def test_fetch_sandbox_log_tail_non_list_payload_returns_raw(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(b'{"other": 1}'))
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
-    tail = await nr._fetch_sandbox_log_tail("sbx-1")
-    assert tail == '{"other": 1}'
-
-
-async def test_fetch_sandbox_log_tail_invalid_json_returns_raw(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(b"not json"))
-    monkeypatch.setenv("E2B_API_KEY", "k")
-    tail = await nr._fetch_sandbox_log_tail("sbx-1")
-    assert tail == "not json"
-
-
-async def test_fetch_sandbox_log_tail_network_failure_returns_empty(monkeypatch: pytest.MonkeyPatch):
-    def _boom(req: Any, timeout: Any) -> Any:
-        raise OSError("network down")
-
-    monkeypatch.setattr("urllib.request.urlopen", _boom)
-    monkeypatch.setenv("E2B_API_KEY", "k")
-    tail = await nr._fetch_sandbox_log_tail("sbx-netfail")
-    assert not tail
-    assert not tail
-
-
-async def test_fetch_sandbox_log_tail_reads_e2b_override(monkeypatch: pytest.MonkeyPatch):
-    """FAR-1159 prove-the-fix: the log-tail fetch resolves MODULO_E2B_API_KEY
-    via the runtime-config bridge — an override reaches the X-API-KEY path
-    even with no env var set (fails without the bridge: early "" return)."""
+async def test_read_log_tail_via_provider_resolves_e2b_override(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1159 prove-the-fix: the log probe resolves MODULO_E2B_API_KEY via
+    the runtime-config bridge and hands it to the provider builder — an
+    override wins over the legacy env var (fails without the bridge: the
+    builder would receive the stale env key)."""
     from modulo.core.runtime_config.store import get_runtime_config_store
 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(b'{"other": 1}'))
+
+    captured: list[str] = []
+    tails: list[bytes] = []
+
+    class _FakeProvider:
+        async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
+            tails.append(b'{"other": 1}')
+            return tails[-1]
+
+    async def _fake_builder(api_key: str):
+        captured.append(api_key)
+        return _FakeProvider()
+
+    monkeypatch.setattr(nr, "_build_log_tail_provider", _fake_builder)
     store = get_runtime_config_store()
     store.set_override("MODULO_E2B_API_KEY", "hot-key")
     try:
-        tail = await nr._fetch_sandbox_log_tail("sbx-1")
+        tail = await nr._read_log_tail_via_provider("sbx-1")
         assert tail == '{"other": 1}'
+        assert captured == ["hot-key"]
     finally:
         store.clear_override("MODULO_E2B_API_KEY")
 
@@ -1600,29 +1559,6 @@ async def test_connector_node_write_intent_persist_reraises_cancellation(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# _wait_command_with_idle_watchdog — kill-failure branch
-# ---------------------------------------------------------------------------
-
-
-async def test_idle_watchdog_kill_failure_still_reports_stall(caplog):
-    handle = MagicMock()
-    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
-    handle.kill = AsyncMock(side_effect=RuntimeError("kill failed"))
-
-    with caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"):
-        result, reason = await _wait_command_with_idle_watchdog(
-            handle,
-            total_timeout=1.0,
-            idle_timeout=5.0,
-            last_activity=lambda: 0.0,
-            tick_interval=0.01,
-        )
-    assert result is None
-    assert "agent produced no output for 5s" in reason
-    assert any("idle_watchdog_kill_failed" in m for m in caplog.messages)
-
-
-# ---------------------------------------------------------------------------
 # _path_matches_any_glob
 # ---------------------------------------------------------------------------
 
@@ -1909,6 +1845,13 @@ def _watchdog(
         watch_globs=watch_globs or [],
     )
     effective_sandbox = sandbox if (sandbox is not None or not require_sandbox) else MagicMock()
+    # FAR-1050 R6: the watchdog reads through the RuntimeProvider ABC, so the
+    # mock needs a provider ref (a str) and the bridge must be driving it.
+    if effective_sandbox is not None:
+        effective_sandbox.sandbox_id = "sbx-watchdog"
+        from tests.unit._e2b_sandbox_bridge import current_bridge
+
+        current_bridge().attach(effective_sandbox)
     return _SandboxWatchdog(
         sandbox=effective_sandbox,
         stall=stall,
@@ -2112,13 +2055,17 @@ async def test_watchdog_probe_filesystem_touches_on_changed_stat():
     seeded = wd._stall._activity["filesystem"]
     # Probe 1 seeds the tracked state for the matching path (not "activity" —
     # a brand-new file only becomes activity when its stat CHANGES later).
+    # FAR-1050 R6: size is resolved per entry through the ABC's get_info prim,
+    # so the provider path's stat key is (mtime=None, size) — same shape the
+    # legacy entry produced, but sourced from get_info rather than the listing.
     sandbox.files.list = AsyncMock(return_value=[_FsEntry("/home/user/out/build.log")])
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=10))
     await wd.probe_filesystem()
     assert wd._stall._activity["filesystem"] == seeded
     assert list(wd._fs_state) == ["/home/user/out/build.log"]
-    # Probe 2 sees a changed mtime/size — real filesystem activity.
+    # Probe 2 sees a changed size — real filesystem activity.
     _Clock.t = 200.0
-    sandbox.files.list = AsyncMock(return_value=[_FsEntry("/home/user/out/build.log", mtime=2.0, size=99)])
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=99))
     await wd.probe_filesystem()
     assert wd._stall._activity["filesystem"] == 200.0
 
@@ -2130,6 +2077,7 @@ async def test_watchdog_probe_filesystem_object_with_files_attr():
 
     sandbox = MagicMock()
     sandbox.files.list = AsyncMock(return_value=_Listing())
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=10))
     wd = _watchdog(sandbox=sandbox, watch_globs=["*.log"])
     wd._fs_min_stat_interval = 0.0
     await wd.probe_filesystem()
@@ -2148,7 +2096,14 @@ async def test_watchdog_probe_filesystem_invalid_listing_is_quiet(caplog):
     wd._fs_min_stat_interval = 0.0
     with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"):
         await wd.probe_filesystem()
-    assert any("watch_fs_list_invalid" in m for m in caplog.messages)
+    # FAR-1050 R6: an unreadable listing now surfaces at the provider boundary
+    # (list_files), so it lands on the probe-failure token rather than the
+    # legacy in-place coercion token. FAR-909's invariant still holds — the
+    # static token keeps the exception.
+    assert any("watch_fs_probe_failed" in m for m in caplog.messages)
+    records = [r for r in caplog.records if "watch_fs_probe_failed" in r.getMessage()]
+    assert records and records[0].exc_info is not None
+    assert isinstance(records[0].exc_info[1], RuntimeError)
 
 
 async def test_watchdog_probe_filesystem_prunes_missing_and_touches():
@@ -2309,6 +2264,20 @@ def test_format_sandbox_provider_error_unserializable_dict_body_ignored():
     exc.response = {"detail": {1, 2}}
     msg = nr._format_sandbox_provider_error(exc, provider_exc_type=_ProviderError)
     assert msg == "400: bad"
+
+
+def test_format_sandbox_provider_error_no_probe_returns_message_text():
+    # FAR-1050 R6: the dispatch call site passes no ``provider_exc_type`` (it no
+    # longer holds an SDK exception), so the helper returns the message as-is.
+    exc = RuntimeError("400: bad timeout")
+    msg = nr._format_sandbox_provider_error(exc)
+    assert msg == "400: bad timeout"
+
+
+def test_format_sandbox_provider_error_truncates_to_max_error_msg():
+    exc = RuntimeError("x" * (nr._MAX_ERROR_MSG + 500))
+    msg = nr._format_sandbox_provider_error(exc)
+    assert len(msg) == nr._MAX_ERROR_MSG
 
 
 def test_build_sandbox_node_envelope_includes_truthy_stall_reason():
@@ -2913,8 +2882,11 @@ async def test_sandbox_create_returning_none_raises_invariant():
         result = await fn(_run_state())
     art = result["artifacts"][0]["output"]
     assert art["status"] == "failed"
-    assert art["error_type"] == "RuntimeError"
-    assert art["error_message"] == "Sandbox was not created before use"
+    # FAR-1050 R6: the post-create invariant is now the provider-path one —
+    # a create that yields no handle leaves no ref, and the dispatch fails
+    # closed instead of commanding a None sandbox.
+    assert art["error_type"] == "RuntimeProviderError"
+    assert "lost its runtime provider after create" in art["error_message"]
 
 
 def _script_node_def(**overrides: Any) -> dict[str, Any]:

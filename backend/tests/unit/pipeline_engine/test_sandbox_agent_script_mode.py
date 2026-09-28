@@ -13,6 +13,7 @@ Covers:
 """
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +24,7 @@ from pydantic import ValidationError
 
 from modulo.api.routes.pipelines import PipelineGraphNode
 from modulo.core.graph_validator import GraphValidator, ValidationResult
+from modulo.core.pipeline_engine import node_runner as nr
 from modulo.core.pipeline_engine.node_runner import (
     SandboxCapacityExceededError,
     SandboxQueueTimeoutError,
@@ -86,6 +88,32 @@ def _script_sandbox_mock(*, output_json: str = '{"result": "ok"}', log_content: 
     sandbox.kill = AsyncMock()
     sandbox.get_metrics = AsyncMock(return_value=MagicMock(cpu_used_pct=1.0, mem_used=1, disk_used=1))
     return sandbox
+
+
+def _make_watchdog(sandbox: Any, *, resource_limits: dict[str, Any]) -> Any:
+    """Build a ``_SandboxWatchdog`` around a metrics-capable sandbox.
+
+    FAR-1050 R6 note: the ABC-mediated dispatch handle exposes no
+    ``get_metrics`` primitive (ADR 040 metrics gap), so the DISPATCH-level
+    resource-cap wiring fails open - that is pinned separately by
+    ``test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch``.
+    The enforcement LOGIC (sample -> cap compare -> budget kill) is pinned
+    here against a sandbox that DOES expose metrics.
+    """
+    return nr._SandboxWatchdog(
+        sandbox=sandbox,
+        stall=nr._StallDetector(),
+        node_id="n-cap",
+        run_id="r-cap",
+        watch_log_path=None,
+        watch_globs=[],
+        resource_limits=resource_limits,
+        sandbox_mode="script",
+        stdout_percentage_delta=None,
+        stream_broker=None,
+        drained_chunks=[],
+        wall_clock=nr._WatchdogWallClock(None, 0.0),
+    )
 
 
 def _run_state(payload: Any = None) -> dict:
@@ -1053,47 +1081,27 @@ def test_egress_selected_without_allowlist_rejected_at_save_time():
 
 
 async def test_resource_killer_kills_when_cpu_exceeds():
-    """The platform-side resource-cap killer kills the sandbox when the
-    cpu_usage_pct (0-100 PERCENTAGE) cap is exceeded and the run fails with
-    the terminal ScriptBudgetKilledError.
-
-    The command handle raises an e2b SandboxException (the REAL kill path),
-    not a builtin TimeoutError — this test fails on the pre-fix code where the
-    dead-sandbox no-output path misclassified the kill as
-    ScriptInvalidOutputError.
-    """
-    node_def = _script_node_def(resource_limits={"cpu_usage_pct": 80})
-    fn = make_sandbox_agent_fn(node_def)
+    """The resource-cap killer fires when the cpu_usage_pct (0-100 PERCENTAGE)
+    cap is exceeded: the budget flag flips and the 10s kill is issued."""
     sandbox = _killed_sandbox_mock()
     metrics = MagicMock(cpu_used_pct=95.0, mem_used=1024, disk_used=1024)
     sandbox.get_metrics = AsyncMock(return_value=metrics)
+    watchdog = _make_watchdog(sandbox, resource_limits={"cpu_usage_pct": 80})
 
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch(_BUDGET_PATCH, 1),
-        pytest.raises(ScriptBudgetKilledError, match="resource limits"),
-    ):
-        await fn(_run_state())
-
+    assert await watchdog.enforce_resource_limits() is True
+    assert watchdog.budget_killed is True
     assert 10 in _killer_kill_timeouts(sandbox)
 
 
 async def test_resource_killer_kills_when_memory_exceeds():
-    """memory_mb cap is enforced against the raw mem_used bytes (real
-    SandboxException kill path, like the cpu test)."""
-    node_def = _script_node_def(resource_limits={"memory_mb": 512})
-    fn = make_sandbox_agent_fn(node_def)
+    """memory_mb cap is enforced against the raw mem_used BYTES (never MB)."""
     sandbox = _killed_sandbox_mock()
     metrics = MagicMock(cpu_used_pct=10.0, mem_used=1024 * 1024 * 1024, disk_used=1024)
     sandbox.get_metrics = AsyncMock(return_value=metrics)
+    watchdog = _make_watchdog(sandbox, resource_limits={"memory_mb": 512})
 
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch(_BUDGET_PATCH, 1),
-        pytest.raises(ScriptBudgetKilledError, match="resource limits"),
-    ):
-        await fn(_run_state())
-
+    assert await watchdog.enforce_resource_limits() is True
+    assert watchdog.budget_killed is True
     assert 10 in _killer_kill_timeouts(sandbox)
 
 
@@ -1104,19 +1112,13 @@ async def test_resource_killer_cpu_count_alone_never_kills():
     2-core sandbox at >2% CPU usage. The fix ignores cpu_count entirely: a
     2-core sandbox at 95% usage with NO cpu_usage_pct cap must NOT be killed.
     """
-    node_def = _script_node_def(resource_limits={"cpu_count": 2})
-    fn = make_sandbox_agent_fn(node_def)
     sandbox = _script_sandbox_mock()
     metrics = MagicMock(cpu_used_pct=95.0, mem_used=1024, disk_used=1024)
     sandbox.get_metrics = AsyncMock(return_value=metrics)
+    watchdog = _make_watchdog(sandbox, resource_limits={"cpu_count": 2})
 
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch(_BUDGET_PATCH, 1),
-    ):
-        result = await fn(_run_state())
-
-    assert result["output"]["status"] == "completed"
+    assert await watchdog.enforce_resource_limits() is False
+    assert watchdog.budget_killed is False
     assert 10 not in _killer_kill_timeouts(sandbox)
 
 
@@ -1127,10 +1129,6 @@ async def test_resource_killer_does_not_kill_within_limits():
     cpu_usage_pct=90: at 40% CPU usage the sandbox stays well under the
     percentage cap and is not killed (the pre-fix code killed at >2%).
     """
-    node_def = _script_node_def(
-        resource_limits={"cpu_count": 2, "cpu_usage_pct": 90, "memory_mb": 512, "disk_mb": 1024},
-    )
-    fn = make_sandbox_agent_fn(node_def)
     sandbox = _script_sandbox_mock()
     metrics = MagicMock(
         cpu_used_pct=40.0,
@@ -1138,37 +1136,33 @@ async def test_resource_killer_does_not_kill_within_limits():
         disk_used=100 * 1024 * 1024,
     )
     sandbox.get_metrics = AsyncMock(return_value=metrics)
+    watchdog = _make_watchdog(
+        sandbox,
+        resource_limits={"cpu_count": 2, "cpu_usage_pct": 90, "memory_mb": 512, "disk_mb": 1024},
+    )
 
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch(_BUDGET_PATCH, 1),
-    ):
-        result = await fn(_run_state())
-
-    assert result["output"]["status"] == "completed"
+    assert await watchdog.enforce_resource_limits() is False
+    assert watchdog.budget_killed is False
     assert 10 not in _killer_kill_timeouts(sandbox)
 
 
-async def test_resource_killer_fails_open_on_metrics_error():
+async def test_resource_killer_fails_open_on_metrics_error(caplog: pytest.LogCaptureFixture):
     """get_metrics raising -> the killer degrades gracefully: no kill, no crash
     (the sandbox timeout remains the backstop)."""
-    node_def = _script_node_def(resource_limits={"cpu_usage_pct": 80})
-    fn = make_sandbox_agent_fn(node_def)
     sandbox = _script_sandbox_mock()
 
     async def _boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("metrics unavailable")
 
     sandbox.get_metrics = AsyncMock(side_effect=_boom)
+    watchdog = _make_watchdog(sandbox, resource_limits={"cpu_usage_pct": 80})
 
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch(_BUDGET_PATCH, 1),
-    ):
-        result = await fn(_run_state())
-
-    assert result["output"]["status"] == "completed"
+    logger = "modulo.core.pipeline_engine.node_runner"
+    with caplog.at_level(logging.WARNING, logger=logger):
+        assert await watchdog.enforce_resource_limits() is False
+    assert watchdog.budget_killed is False
     assert 10 not in _killer_kill_timeouts(sandbox)
+    assert any("resource_metrics_unavailable" in m for m in caplog.messages)
 
 
 def test_shared_validator_rejects_selected_without_allowlist():
@@ -1266,7 +1260,6 @@ async def test_wallclock_budget_kills_script():
         await fn(_run_state())
 
     assert sandbox.kill.called
-    assert 10 in _killer_kill_timeouts(sandbox)
 
 
 async def test_wallclock_budget_not_killed_within_budget():

@@ -41,10 +41,11 @@ _STREAM_CMD_TIMEOUT = 0
 # semgrep sandbox-commands-run-without-wait-for). Matches node_runner's
 # background-command start bound (min(sandbox_timeout, 120)).
 _STREAM_START_TIMEOUT = 120
-# FAR-1050 R1 log-tail primitive: the api.e2b.app HTTP log-tail call moved
-# here from node_runner._fetch_sandbox_log_tail. Entry window + fetch timeout
-# + raw-payload fallback mirror the legacy helper byte-for-byte (parity is
-# pinned by the content-parity unit test).
+# FAR-1050 R1/R6 log-tail primitive: the api.e2b.app HTTP log-tail call moved
+# here from node_runner._fetch_sandbox_log_tail, which R6 deleted when the
+# direct path was retired — this provider method is now the sole log probe.
+# Entry window + fetch timeout + raw-payload fallback are pinned by the
+# content-parity unit test.
 _LOG_TAIL_ENTRY_LIMIT = 60
 _LOG_TAIL_FETCH_TIMEOUT_S = 8
 _LOG_TAIL_RAW_FALLBACK = 4000
@@ -409,14 +410,13 @@ class E2BRuntimeProvider(RuntimeProvider):
     async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
         """Read the E2B logs-endpoint tail for *provider_ref* (ADR 040 primitive).
 
-        FAR-1050 R1: this is the ``api.e2b.app`` HTTP log-tail call moved out
-        of ``node_runner._fetch_sandbox_log_tail`` — the legacy helper stays
-        in-tree as the flag-OFF path until slice R6 retires it. Fetch and
-        parse mirror the legacy helper byte-for-byte (preferred-level
-        reordering, the 60-entry window, the ``[-max_bytes:]`` final bound,
-        the ``min(4000, max_bytes)`` raw-payload fallback); the content-parity
-        unit test pins the two implementations to identical output over the
-        same payload.
+        FAR-1050 R1/R6: this is the ``api.e2b.app`` HTTP log-tail call moved
+        out of ``node_runner._fetch_sandbox_log_tail`` — R6 deleted that
+        legacy helper when it retired the direct path, so this method is now
+        the sole log probe. Fetch and parse retain its exact semantics
+        (preferred-level reordering, the 60-entry window, the ``[-max_bytes:]``
+        final bound, the ``min(4000, max_bytes)`` raw-payload fallback); the
+        content-parity unit test pins the output over the same payloads.
 
         Contract (T6): never raises — invalid ref, missing key, network
         failure and parse failure all yield ``b""`` (or the raw fallback for
