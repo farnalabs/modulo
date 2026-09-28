@@ -938,6 +938,34 @@ def test_lifecycle_actions_happy_and_missing(client: tuple[TestClient, AsyncMock
     assert resp.status_code == 404
 
 
+@pytest.mark.parametrize("action", ["archive", "unarchive"])
+def test_lifecycle_actions_refresh_flushed_row(client: tuple[TestClient, AsyncMock], action: str) -> None:
+    """The UPDATE flush expires ``updated_at``; the endpoint must refresh in-txn.
+
+    Regression (staging E2E): ``POST /pipelines/{id}/archive`` and ``/unarchive``
+    returned 422 "Data validation failed." because ``archive_pipeline`` /
+    ``unarchive_pipeline`` flush an UPDATE whose ``onupdate`` column
+    (``updated_at``) is then expired; reading it after commit made Pydantic's
+    attribute extraction raise outside the async greenlet, which
+    ``handle_db_errors`` maps to 422. Both endpoints now mirror
+    ``update_pipeline_endpoint``'s in-transaction ``session.refresh``.
+    """
+    http, session = client
+    crud = {"archive": "archive_pipeline", "unarchive": "unarchive_pipeline"}[action]
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}{crud}", new=AsyncMock(return_value=_make_pipeline())),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/{action}")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    session.refresh.assert_awaited()
+
+
 def test_restore_pipeline_write_none_maps_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with (

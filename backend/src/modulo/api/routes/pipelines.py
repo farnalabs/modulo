@@ -3098,6 +3098,14 @@ async def archive_pipeline_endpoint(
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             pipeline = await archive_pipeline(session, pipeline_id)
+            # Refresh the ORM row inside the transaction so the DB-computed
+            # `updated_at` (onupdate=func.current_timestamp()) is loaded while
+            # the transaction is active. The UPDATE flush expires it, and after
+            # commit Pydantic's attribute extraction raises trying to lazy-load
+            # it outside the async greenlet -> 422 silent-success. Mirrors
+            # update_pipeline_endpoint.
+            if pipeline is not None:
+                await session.refresh(pipeline)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
     if pipeline is None:
@@ -3120,6 +3128,11 @@ async def unarchive_pipeline_endpoint(
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             pipeline = await unarchive_pipeline(session, pipeline_id)
+            # See archive_pipeline_endpoint: refresh the flushed row inside the
+            # transaction so the DB-computed `updated_at` is loaded before the
+            # response is built (avoids the 422 silent-success).
+            if pipeline is not None:
+                await session.refresh(pipeline)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
     if pipeline is None:
