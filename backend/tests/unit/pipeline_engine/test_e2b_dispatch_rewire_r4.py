@@ -55,10 +55,13 @@ from modulo.core.pipeline_engine.node_runner import (
 )
 from modulo.core.runtime_provider import (
     ExecProcess,
+    ExecResult,
     ExecStreamChunk,
     ProvisionTimeoutError,
     RateLimitedError,
+    RuntimeProvider,
     RuntimeProviderError,
+    WorkspaceMetrics,
     WorkspaceSpec,
 )
 from modulo.settings import get_settings
@@ -1002,34 +1005,126 @@ def test_provider_mediated_handle_has_no_legacy_files_surface() -> None:
         _ = handle.files
 
 
-def test_provider_mediated_handle_has_no_metrics_surface() -> None:
-    """R4 follow-up: the ABC models no metrics primitive, so the mediated
-    handle deliberately exposes no ``get_metrics`` — the watchdog detects
-    that (it does not attribute-error into the generic branch)."""
-    handle = _ProviderMediatedHandle(MagicMock(), "sbx-handle")
-    assert not callable(getattr(handle, "get_metrics", None))
+class _MetricslessProvider(RuntimeProvider):
+    """Concrete provider that does NOT override ``get_metrics`` (FAR-1050 R6).
+
+    Stands in for any tier without a metrics substrate (local, Docker): the
+    ABC's typed default refusal is what the watchdog must fail open on.
+    """
+
+    provider_id = "no-metrics"
+
+    def __init__(self) -> None:
+        self.destroyed: list[str] = []
+        self.metric_refs: list[str] = []
+
+    async def create_workspace(self, spec: WorkspaceSpec) -> str:
+        return "ref"
+
+    async def exec_command(
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        cmd_timeout: int | None = None,
+    ) -> ExecResult:
+        raise AssertionError("exec_command must not be called in this test")
+
+    async def destroy_workspace(self, provider_ref: str) -> None:
+        self.destroyed.append(provider_ref)
+
+    async def get_workspace_status(self, provider_ref: str) -> str:
+        return "running"
 
 
-async def test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch(caplog: pytest.LogCaptureFixture) -> None:
-    """R4 follow-up (ADR 040 metrics gap): resource caps CANNOT be enforced on
-    the provider path, and the fail-open is explicit + observable — one clear
-    warning naming the gap, NOT the generic transient 'metrics unavailable'
-    traceback — and it fires once per dispatch, not once per poll tick."""
-    handle = _ProviderMediatedHandle(MagicMock(), "sbx-gap")
-    watchdog = nr._SandboxWatchdog(
+class _SampledProvider(_MetricslessProvider):
+    """Provider that reports a fixed metrics sample series through the ABC."""
+
+    def __init__(self, samples: list[WorkspaceMetrics]) -> None:
+        super().__init__()
+        self._samples = samples
+
+    async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:
+        self.metric_refs.append(provider_ref)
+        return self._samples
+
+
+def _resource_watchdog(handle: Any, *, cpu_cap: int = 50) -> Any:
+    """Script-mode watchdog with resource caps enabled over *handle*."""
+    return nr._SandboxWatchdog(
         sandbox=handle,
         stall=MagicMock(),
-        node_id="n-gap",
-        run_id="r-gap",
+        node_id="n-metrics",
+        run_id="r-metrics",
         watch_log_path=None,
         watch_globs=[],
-        resource_limits={"cpu_usage_pct": 50},
+        resource_limits={"cpu_usage_pct": cpu_cap},
         sandbox_mode="script",
         stdout_percentage_delta=None,
         stream_broker=None,
         drained_chunks=[],
         wall_clock=nr._WatchdogWallClock(None, 0.0),
     )
+
+
+async def test_provider_mediated_handle_exposes_get_metrics_via_abc() -> None:
+    """FAR-1050 R6: the mediated handle routes ``get_metrics`` through the ABC.
+
+    The ADR 040 metrics gap is closed — the handle no longer deliberately
+    omits the primitive, it delegates to ``provider.get_metrics(ref)`` so
+    the resource-cap killer has something to poll on the provider path.
+    """
+    provider = _SampledProvider([WorkspaceMetrics(cpu_used_pct=99.0)])
+    handle = _ProviderMediatedHandle(provider, "sbx-metrics")
+    assert callable(getattr(handle, "get_metrics", None))
+
+    samples = await handle.get_metrics()
+    assert provider.metric_refs == ["sbx-metrics"]
+    assert [s.cpu_used_pct for s in samples] == [99.0]
+
+
+async def test_watchdog_enforces_resource_caps_through_abc_metrics_primitive(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The gap is CLOSED: an over-cap sample through the ABC primitive kills.
+
+    Proves the whole provider-path chain end-to-end — handle ->
+    ``provider.get_metrics(ref)`` -> ``_budget_exceeded`` -> budget kill
+    (``destroy_workspace`` on the provider that created the workspace) —
+    with NO ``resource_caps_not_enforced_via_provider`` warning.
+    """
+    provider = _SampledProvider([WorkspaceMetrics(cpu_used_pct=1.0), WorkspaceMetrics(cpu_used_pct=99.0)])
+    watchdog = _resource_watchdog(_ProviderMediatedHandle(provider, "sbx-caps"))
+    logger = "modulo.core.pipeline_engine.node_runner"
+    with caplog.at_level(logging.WARNING, logger=logger):
+        assert await watchdog.enforce_resource_limits() is True
+    assert watchdog.budget_killed is True
+    assert provider.metric_refs == ["sbx-caps"]
+    assert provider.destroyed == ["sbx-caps"]
+    assert not any("resource_caps_not_enforced_via_provider" in r.getMessage() for r in caplog.records)
+
+
+async def test_watchdog_under_cap_sample_through_abc_does_not_kill() -> None:
+    """The comparison still discriminates: an under-cap sample is not a kill."""
+    provider = _SampledProvider([WorkspaceMetrics(cpu_used_pct=1.0)])
+    watchdog = _resource_watchdog(_ProviderMediatedHandle(provider, "sbx-caps"))
+    assert await watchdog.enforce_resource_limits() is False
+    assert watchdog.budget_killed is False
+    assert not provider.destroyed
+
+
+async def test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch(caplog: pytest.LogCaptureFixture) -> None:
+    """FAR-1050 R6: a provider WITHOUT the primitive still fails open loudly.
+
+    The ABC default's typed ``ProviderCapabilityUnsupportedError`` is
+    translated into the EXPLICIT, once-per-dispatch
+    ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning —
+    NOT the generic transient 'metrics unavailable' traceback an operator
+    would read as an SDK hiccup — the run never crashes, and the warning
+    fires once per dispatch rather than once per poll tick.
+    """
+    handle = _ProviderMediatedHandle(_MetricslessProvider(), "sbx-gap")
+    watchdog = _resource_watchdog(handle)
     logger = "modulo.core.pipeline_engine.node_runner"
     with caplog.at_level(logging.WARNING, logger=logger):
         assert await watchdog.enforce_resource_limits() is False
@@ -1039,6 +1134,7 @@ async def test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch(cap
     assert len(gap_records) == 1
     assert "NOT enforced" in gap_records[0].reason
     assert "ADR 040" in gap_records[0].reason
+    assert "does not implement get_metrics" in gap_records[0].reason
     assert not any("resource_metrics_unavailable" in r.getMessage() for r in caplog.records)
     assert watchdog.budget_killed is False
 
