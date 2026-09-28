@@ -6252,10 +6252,14 @@ async def _sandbox_acquire_dispatch_marker(
     ``via_provider`` (FAR-1050) is threaded to EVERY node-runner-owned marker
     write — the primary capacity-gate acquire below (R4 follow-up: the gate
     builds its own marker inside ``runner_capacity.build_dispatch_marker``,
-    which now accepts the routing state), the legacy best-effort fail-open write,
-    and the post-create ``_sandbox_store_dispatch_marker_sandbox`` rewrite —
-    so the routing state is on the marker from the first durable write onward,
-    not only after the create succeeds.
+    which now accepts the routing state), the best-effort fail-open write
+    (pre-D8 marker shape), and the post-create
+    ``_sandbox_store_dispatch_marker_sandbox`` rewrite — so the routing state
+    is on the marker from the first durable write onward, not only after the
+    create succeeds. The ``MODULO_E2B_VIA_PROVIDER`` flag this field once
+    reported was RETIRED by FAR-1050 R6 (PR #1033): the provider path is
+    unconditional, so ``via_provider`` now survives as a historical
+    attribution field only.
 
     Returns the attempt key on success, ``None`` when fenced (claim superseded
     or run not running — the caller MUST NOT create a sandbox). Raises
@@ -7436,10 +7440,13 @@ def _build_sandbox_node_envelope(
     FAR-1050 (ADR 040 "Flag and revert observability"): passing a non-empty
     ``provider`` stamps BOTH the resolved tier and the provider-routing
     state (``via_provider``) onto the envelope, which the P1b splitter folds
-    into ``node_telemetry_json`` verbatim — every run is then attributable to
-    legacy-vs-provider execution. Both keys are emitted together and on BOTH
-    routing states; callers that pass no tier (the Bundled Runner route) get
-    neither, so their envelope key set is unchanged.
+    into ``node_telemetry_json`` verbatim — every run is then attributable
+    to provider-mediated execution. Both keys are emitted together. The
+    ``MODULO_E2B_VIA_PROVIDER`` flag ``via_provider`` once reported was
+    RETIRED by FAR-1050 R6 (PR #1033) — the provider path is unconditional —
+    so the key is a historical attribution field; callers that pass no tier
+    (the Bundled Runner route) get neither, so their envelope key set is
+    unchanged.
     """
     inner: dict[str, Any] = {
         "status": output.status,
@@ -8863,9 +8870,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # ``sandbox.git_credentials.multi_host`` certifies a guarantee the
             # runtime never enforced (capability/enforcement mismatch). Only
             # relevant for scoped credentials; other scopes ignore it.
-            # Allowlist pre-resolution runs once, BEFORE the flag branch, so
-            # both paths enforce the identical resolved values (unchanged by
-            # FAR-1050 R3 — only the invocation seam is gated).
+            # Allowlist pre-resolution runs once, BEFORE the isolation call,
+            # so resolution and enforcement use the identical resolved values
+            # (unchanged by FAR-1050 R3 — only the invocation seam moved, onto
+            # ``apply_isolation``; R6 then retired the flag and deleted the
+            # legacy branch, leaving this single unconditional path).
             _resolved_allowlist = await _resolve_egress_allowlist(_resolved_allowlist_for_policy)
             _policy_allowed_hosts = node_def.get("allowed_hosts") if git_credentials == "scoped" else None
             from modulo.settings import get_settings
