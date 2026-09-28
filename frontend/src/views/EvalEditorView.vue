@@ -420,6 +420,9 @@ const gateSnapshot = reactive({
   action: 'warn' as 'warn' | 'block',
 })
 const gateError = ref(false)
+// Eval id whose gate write is pending a retry (set when phase 2 fails after a
+// create, where editingEvalId is still null — §3.3 retry mechanics).
+const gatePendingEvalId = ref<string | null>(null)
 const gateDeleteConfirming = ref(false)
 const gateDeleteConfirmBtnRef = ref<HTMLElement | null>(null)
 const evalGateActions = ref<Record<string, string>>({})
@@ -447,11 +450,6 @@ const canSave = computed(() => {
   )
 })
 
-const hasUnsavedChanges = computed(() => {
-  // Check if any eval form fields are dirty (original check not present — assume any editing state is dirty)
-  return editingEvalId.value !== null || form.name.trim() !== '' || policyGate.action !== gateSnapshot.action
-})
-
 function resetForm() {
   form.name = ''
   form.node_id = '__all__'
@@ -469,6 +467,7 @@ function resetForm() {
   gateSnapshot.action = 'warn'
   gateError.value = false
   gateDeleteConfirming.value = false
+  gatePendingEvalId.value = null
 }
 
 const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDataFetch(
@@ -544,27 +543,35 @@ async function loadGateBadges() {
 }
 
 async function fetchPolicyGate(evalId: string) {
+  gateError.value = false
+  gatePendingEvalId.value = null
+  let gate: { action?: string; id?: string; version?: number } | null = null
   try {
-    const { data } = await api.GET('/api/v1/evals/{eval_id}/policy-gate', {
+    const res = await api.GET('/api/v1/evals/{eval_id}/policy-gate', {
       params: { path: { eval_id: evalId } },
     })
-    if (data) {
-      const d = data as any
-      policyGate.action = d.action ?? 'warn'
-      policyGate.exists = true
-      policyGate.id = d.id ?? null
-      policyGate.version = d.version ?? 1
-      gateSnapshot.action = d.action ?? 'warn'
-    }
+    // openapi-fetch resolves non-2xx as { data: undefined, error } — it never
+    // throws, so the envelope error (404 etc.) must be handled here, not in a catch.
+    gate = (res.data as { action?: string; id?: string; version?: number } | null) ?? null
   } catch {
-    // 404 — no gate exists, use defaults
+    // Network-level failure only — treat as "no gate known".
+    gate = null
+  }
+  if (gate && typeof gate.action === 'string') {
+    policyGate.action = gate.action as 'warn' | 'block'
+    policyGate.exists = true
+    policyGate.id = gate.id ?? null
+    policyGate.version = gate.version ?? 1
+    gateSnapshot.action = gate.action as 'warn' | 'block'
+  } else {
+    // 404 / no gate exists — reset to defaults so a previously viewed eval's
+    // gate identity never leaks into this one (§3.2, criteria 13/24).
     policyGate.action = 'warn'
     policyGate.exists = false
     policyGate.id = null
     policyGate.version = 1
     gateSnapshot.action = 'warn'
   }
-  gateError.value = false
 }
 
 async function onPipelineChange() {
@@ -578,6 +585,9 @@ async function onPipelineChange() {
 async function saveEval() {
   if (!canSave.value) return
 
+  // Capture before any state mutation: on the create path editingEvalId is
+  // null, and savedEvalId (the new id) must not be read as "was editing".
+  const wasEditing = editingEvalId.value !== null
   saving.value = true
   formError.value = null
   formSuccess.value = null
@@ -615,55 +625,74 @@ async function saveEval() {
       const { data: created } = await api.POST('/api/v1/evals', { body })
       savedEvalId = (created as any)?.id ?? null
     }
-
-    // Phase 2: save the policy gate (if modified or new)
-    const gateModified = policyGate.action !== gateSnapshot.action || !policyGate.exists
-    if (gateModified && savedEvalId) {
-      try {
-        if (policyGate.exists && policyGate.id) {
-          // Update existing gate
-          const { data: updated } = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
-            params: { path: { eval_id: savedEvalId } },
-            body: { action: policyGate.action },
-          })
-          if (updated) {
-            const d = updated as any
-            policyGate.id = d.id
-            policyGate.version = d.version ?? policyGate.version + 1
-            gateSnapshot.action = policyGate.action
-          }
-        } else {
-          // Create new gate
-          const { data: created } = await api.POST('/api/v1/evals/{eval_id}/policy-gate', {
-            params: { path: { eval_id: savedEvalId } },
-            body: { action: policyGate.action },
-          })
-          if (created) {
-            const d = created as any
-            policyGate.id = d.id
-            policyGate.exists = true
-            policyGate.version = d.version ?? 1
-            gateSnapshot.action = policyGate.action
-          }
-        }
-      } catch {
-        // Gate save failed — eval still committed (§3.3 two-phase reporting)
-        gateError.value = true
-      }
-    }
-
-    // Reset and show success
-    const wasEditing = savedEvalId !== null
-    resetForm()
-    formSuccess.value = wasEditing
-      ? t('views.EvalEditorView.eval_updated')
-      : t('views.EvalEditorView.eval_created')
-    await loadEvals()
   } catch (e: unknown) {
     formError.value = formatApiError(e)
-  } finally {
     saving.value = false
+    return
   }
+
+  // Phase 2: save the policy gate (if modified or new). Two-phase reporting
+  // (§3.3): the eval half reports its own success even when the gate half
+  // fails, and the form is NOT reset so the retry stays available.
+  const gateModified = policyGate.action !== gateSnapshot.action || !policyGate.exists
+  if (gateModified && savedEvalId) {
+    let gateSaveFailed = false
+    try {
+      if (policyGate.exists && policyGate.id) {
+        // Update existing gate
+        const res = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
+          params: { path: { eval_id: savedEvalId } },
+          body: { action: policyGate.action },
+        })
+        // openapi-fetch resolves non-2xx as { data: undefined, error } — it
+        // never throws, so the envelope error must be checked here.
+        if (res.error || !res.data) {
+          gateSaveFailed = true
+        } else {
+          const d = res.data as any
+          policyGate.id = d.id ?? policyGate.id
+          policyGate.version = d.version ?? policyGate.version + 1
+          gateSnapshot.action = policyGate.action
+        }
+      } else {
+        // Create new gate
+        const res = await api.POST('/api/v1/evals/{eval_id}/policy-gate', {
+          params: { path: { eval_id: savedEvalId } },
+          body: { action: policyGate.action },
+        })
+        if (res.error || !res.data) {
+          gateSaveFailed = true
+        } else {
+          const d = res.data as any
+          policyGate.id = d.id ?? null
+          policyGate.exists = true
+          policyGate.version = d.version ?? 1
+          gateSnapshot.action = policyGate.action
+        }
+      }
+    } catch {
+      // Network-level failure — same two-phase reporting path.
+      gateSaveFailed = true
+    }
+    if (gateSaveFailed) {
+      gateError.value = true
+      gatePendingEvalId.value = savedEvalId
+      formSuccess.value = wasEditing
+        ? t('views.EvalEditorView.eval_updated')
+        : t('views.EvalEditorView.eval_created')
+      await loadEvals()
+      saving.value = false
+      return
+    }
+  }
+
+  // Reset and show success
+  resetForm()
+  formSuccess.value = wasEditing
+    ? t('views.EvalEditorView.eval_updated')
+    : t('views.EvalEditorView.eval_created')
+  await loadEvals()
+  saving.value = false
 }
 
 function startEdit(ev: EvalDefinition) {
@@ -715,9 +744,12 @@ async function deletePolicyGate() {
   if (!editingEvalId.value) return
   gateDeleteConfirming.value = false
   try {
-    await api.DELETE('/api/v1/evals/{eval_id}/policy-gate', {
+    const res = await api.DELETE('/api/v1/evals/{eval_id}/policy-gate', {
       params: { path: { eval_id: editingEvalId.value } },
     })
+    // openapi-fetch resolves non-2xx as { data: undefined, error } without
+    // throwing — surface the envelope error so the 404 branch below runs.
+    if (res.error) throw res.error
     policyGate.exists = false
     policyGate.id = null
     policyGate.action = 'warn'
@@ -742,21 +774,30 @@ async function deletePolicyGate() {
 }
 
 async function retryPolicyGate() {
-  if (!editingEvalId.value) return
+  // Retry target: the eval being edited, or — after a failed gate create on
+  // the create path, where editingEvalId is still null — the eval id created
+  // in phase 1 (§3.3).
+  const evalId = editingEvalId.value ?? gatePendingEvalId.value
+  if (!evalId) return
   try {
-    const { data } = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
-      params: { path: { eval_id: editingEvalId.value } },
+    // Always the update endpoint — even when the failed write was the create
+    // (spec: the retry re-issues the same action via the update route).
+    const res = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
+      params: { path: { eval_id: evalId } },
       body: { action: policyGate.action },
     })
-    if (data) {
-      const d = data as any
-      policyGate.id = d.id
-      policyGate.version = d.version ?? policyGate.version + 1
-      gateSnapshot.action = policyGate.action
-      gateError.value = false
-    }
+    // openapi-fetch resolves non-2xx as { data: undefined, error } — a failed
+    // retry keeps the error state available (§3.3 — no backoff/circuit breaker).
+    if (res.error || !res.data) return
+    const d = res.data as any
+    policyGate.id = d.id ?? policyGate.id
+    policyGate.exists = true
+    policyGate.version = d.version ?? policyGate.version + 1
+    gateSnapshot.action = policyGate.action
+    gateError.value = false
+    gatePendingEvalId.value = null
   } catch {
-    // Retry failed — keep error state available (§3.3 — no backoff/circuit breaker)
+    // Network-level failure — keep error state available (§3.3)
   }
 }
 
