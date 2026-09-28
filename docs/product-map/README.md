@@ -775,6 +775,39 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > delete-confirmation flow. The `feat-sso` manifest registry gained the shipped
 > behaviour line; the tracker gap is removed.
 
+> **Closed this walk (2026-09-28):** closed `feat-org`'s lingering
+> "org-settings UI-journey BDD scenarios stay `@awaiting-implementation`" gap
+> (`admin/org.md`). The five `ui/org_settings.feature` drafts (view page, rename
+> org, invite member, revoke API key, viewer denial) referenced eleven
+> `data-testid`s that exist NOWHERE in the frontend (verified 0/11 across
+> `frontend/src`; `/admin/org` ships a different surface — org profile, data
+> export, product-analytics + community-objects toggles, delete confirmation),
+> so they described a page that never shipped and could never execute. The stale
+> drafts were archived (file deleted, `scenarios()` registration + Playwright
+> steps removed from `steps/test_ui.py`, pin removed from
+> `PINNED_AWAITING_IMPLEMENTATION`) and `feat-org` was re-anchored to the REAL
+> org-management coverage: self-service org profile read/rename/delete +
+> admin-role gate (unit, `tests/unit/api/test_admin.py` — slug immutability +
+> operator/viewer 403), member invites (`system_admin_users.feature`),
+> API-key create/revoke + non-admin 403 (`auth/api_keys.feature`), viewer denial
+> (`viewmodel_current.feature`), org deletion BDD (`org_deletion.feature`). The
+> manifest `feat-org` deferral claiming the drafts were "covered by component
+> (vitest) and E2E suites" was stale and removed; the registry now carries the
+> accurate behaviour lines. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-28):** reconciled `feat-assistant`'s stale "Test
+> breadth" known gap (`configure/assistant.md`). The bullet claimed deeper unit
+> coverage for the permission round-trips "lives in
+> `backend/tests/unit/api/test_me_assistant_skills.py` only" — but the permission
+> round-trip helpers (`_default_tool_permission`, `_resolve_tool_permission`,
+> `_check_nogo`, `_tool_allowlist_disabled`, `_build_permission_request_payload`,
+> `_classify_ui_tool_permissions`, `clear_session_approvals_for_account`) and the
+> SSE stream/permission-response/reset routes are unit-covered across
+> `test_assistant_routes.py` (149 test symbols), with the admin config/skills
+> surface in `test_admin_assistant_routes.py` (56) and the user skills surface in
+> `test_me_assistant_skills.py`. The tracker now cites all three unit suites;
+> the gap bullet is re-worded to name the actual distribution.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

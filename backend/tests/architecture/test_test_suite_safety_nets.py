@@ -108,15 +108,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "View eval results for a completed run",
         }
     ),
-    "tests/bdd/features/ui/org_settings.feature": frozenset(
-        {
-            "Invite a new member",
-            "Non-admin cannot access settings",
-            "Revoke an API key",
-            "Update organisation name",
-            "View organisation settings page",
-        }
-    ),
     "tests/bdd/features/ui/pipeline_builder.feature": frozenset(
         {
             "Add an agent node to the canvas",

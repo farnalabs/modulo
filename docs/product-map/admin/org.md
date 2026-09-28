@@ -6,13 +6,18 @@ code:
   - backend/src/modulo/api/routes/org_settings.py
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
+  - backend/src/modulo/api/routes/admin.py
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
   - backend/tests/unit/api/test_admin_feature_flags.py
+  - backend/tests/unit/api/test_admin.py
 bdd:
-  - backend/tests/bdd/features/ui/org_settings.feature
   - backend/tests/bdd/features/triggers/pause.feature
+  - backend/tests/bdd/features/system_admin/system_admin_users.feature
+  - backend/tests/bdd/features/auth/api_keys.feature
+  - backend/tests/bdd/features/viewmodel/viewmodel_current.feature
+  - backend/tests/bdd/features/organisation/org_deletion.feature
 depends-on:
   - feat-teams
 status: covered
@@ -47,19 +52,49 @@ kill-switch, authorization enforcement).
       `backend/tests/unit/api/test_admin_feature_flags.py`)
 - [x] Frontend renders org settings at `/admin/org` with org delete confirmation
       and product-analytics toggle (`frontend/src/manifest.yaml` testids)
+- [x] Self-service org profile (`GET`/`PUT /api/v1/admin/org` in
+      `api/routes/admin.py`): admins read and rename the org (slug immutable —
+      `test_update_org_ignores_slug_changes`), delete it immediately, and
+      regenerate the org API key (`POST /org/regenerate-api-key`); every
+      endpoint is admin-gated (operator/viewer → 403,
+      `backend/tests/unit/api/test_admin.py`)
+- [x] Member invites into the org are BDD-executed against
+      `POST /api/v1/admin/orgs/{org_id}/users` (`system_admin_users.feature`:
+      duplicate-membership 409, cross-tenant local-account 409, invalid role /
+      weak password 422, missing org 404)
+- [x] API-key revocation and the non-admin 403 (admin-only minting) are
+      BDD-executed (`auth/api_keys.feature`: create 201, non-admin 403, revoke,
+      active-key-only listing, invalid-key rejection)
+- [x] Viewer access denial is BDD-executed at the org-context boundary
+      (`viewmodel/viewmodel_current.feature`: a viewer org role is refused)
 
 ## Known Gaps
 
-- The org-settings **UI-journey** BDD scenarios (`backend/tests/bdd/features/ui/org_settings.feature`)
-  stay `@awaiting-implementation` (pinned in
-  `PINNED_AWAITING_IMPLEMENTATION`): they describe frontend flows (viewing the
-  page, renaming the org, inviting a member, revoking an API key, viewer access
-  denial) that are exercised by the `AdminOrgSettingsView` component (vitest)
-  and the E2E journey suites, not by backend BDD. The page itself ships at
-  `/admin/org` and its rendered surface is documented in the manifest
-  elements inventory.
+None acknowledged: the org-management flows ship on the real REST surfaces cited
+above. The stale `ui/org_settings.feature` UI-journey drafts (view page, rename,
+invite, revoke, viewer-denial) were archived in the 2026-09-28 Improve
+Architecture walk — none of the eleven `data-testid`s they referenced
+(`org-name-input`, `member-list`, `add-member-button`, `invite-member-form`,
+`api-key-row`, `revoke-api-key`, `api-key-status`, etc.) exists anywhere in the
+frontend, so the scenarios described a page that never shipped and could never
+execute (they stayed pinned `@awaiting-implementation`). Each flow's real
+behaviour is covered by the citations above.
 
 ## QA History
+- 2026-09-28: **Improve Architecture product-map walk** —
+  closed the lingering `ui/org_settings.feature` gap. Archived the five
+  never-executing UI-journey drafts (verified: 0/11 referenced testids exist in
+  `frontend/src`; `/admin/org` ships a different surface — org profile, data
+  export, product-analytics + community-objects toggles, delete confirmation)
+  and re-anchored `feat-org` to the real org-management coverage: self-service
+  org profile read/rename/delete + admin role gate (unit, `test_admin.py`),
+  member invites (`system_admin_users.feature`), API-key create/revoke +
+  non-admin 403 (`auth/api_keys.feature`), viewer denial
+  (`viewmodel_current.feature`), and org deletion BDD
+  (`organisation/org_deletion.feature`). Removed the pinned scenarios from
+  `PINNED_AWAITING_IMPLEMENTATION` and the manifest deferral. The manifest
+  `feat-org` registry now has no deferral; the tracker's previous claim that the
+  drafts were "exercised by component (vitest) and E2E suites" was stale.
 - 2026-09-27: **Improve Architecture product-map walk** —
   reconciled the stale "org settings UI not yet built" Known Gap: the
   `/admin/org` UI ships (`AdminOrgSettingsView.vue`, org delete confirmation +
