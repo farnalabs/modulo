@@ -1536,6 +1536,8 @@ export default {
       "node_prefix": "node: {id}",
       "policyGate": {
         "heading": "Policy Gate",
+        "actionWarnLabel": "Warn",
+        "actionBlockLabel": "Block",
         "actionWarnDescription": "Log and continue — the gate records a warning but the pipeline run proceeds.",
         "actionBlockDescription": "Halt the run — the pipeline is stopped and the gate records a block decision.",
         "deleteConfirm": "Are you sure you want to delete this policy gate?",
@@ -1545,7 +1547,8 @@ export default {
         "badgeWarn": "warn",
         "badgeBlock": "block",
         "deleteAriaLabel": "Delete policy gate",
-        "retryAriaLabel": "Retry saving policy gate"
+        "retryAriaLabel": "Retry saving policy gate",
+        "unsavedChangesConfirm": "You have unsaved policy gate changes. Discard them?"
       }
     },
     "RunDetailView": {

@@ -133,7 +133,7 @@
                         data-test-id="policy-gate-action-warn"
                         class="accent-primary"
                       />
-                      <span>Warn</span>
+                      <span>{{ $t('views.EvalEditorView.policyGate.actionWarnLabel') }}</span>
                     </label>
                     <label class="flex items-center gap-2 text-sm">
                       <input
@@ -143,7 +143,7 @@
                         data-test-id="policy-gate-action-block"
                         class="accent-primary"
                       />
-                      <span>Block</span>
+                      <span>{{ $t('views.EvalEditorView.policyGate.actionBlockLabel') }}</span>
                     </label>
                   </div>
 
@@ -160,6 +160,7 @@
                       <button
                         type="button"
                         data-test-id="policy-gate-delete"
+                        ref="gateDeleteBtnRef"
                         :aria-label="$t('views.EvalEditorView.policyGate.deleteAriaLabel')"
                         class="inline-flex items-center gap-1 rounded border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
                         @click="gateDeleteConfirming = true"
@@ -168,7 +169,15 @@
                       </button>
                     </template>
                     <template v-else>
-                      <div class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs">
+                      <div
+                        ref="gateDialogRef"
+                        role="dialog"
+                        aria-modal="true"
+                        :aria-label="$t('views.EvalEditorView.policyGate.deleteConfirm')"
+                        data-test-id="policy-gate-confirm-dialog"
+                        class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                        @keydown="onGateDialogKeydown"
+                      >
                         <span>
                           {{ $t('views.EvalEditorView.policyGate.deleteConfirm') }}
                           <template v-if="policyGate.action === 'block'">
@@ -226,7 +235,7 @@
                   v-if="editingEvalId"
                   data-testid="eval-editor-cancel"
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                  @click="resetForm"
+                  @click="handleCancel"
                 >
                   {{ $t('common.cancel') }}
                 </button>
@@ -336,7 +345,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -424,7 +433,9 @@ const gateError = ref(false)
 // create, where editingEvalId is still null — §3.3 retry mechanics).
 const gatePendingEvalId = ref<string | null>(null)
 const gateDeleteConfirming = ref(false)
+const gateDeleteBtnRef = ref<HTMLElement | null>(null)
 const gateDeleteConfirmBtnRef = ref<HTMLElement | null>(null)
+const gateDialogRef = ref<HTMLElement | null>(null)
 const evalGateActions = ref<Record<string, string>>({})
 
 const configParseError = computed(() => {
@@ -450,6 +461,10 @@ const canSave = computed(() => {
   )
 })
 
+// §3.2 dirty-gate guard: the gate is dirty when its action differs from the
+// snapshot taken on edit-start (or from the default 'warn' when creating).
+const isGateDirty = computed(() => policyGate.action !== gateSnapshot.action)
+
 function resetForm() {
   form.name = ''
   form.node_id = '__all__'
@@ -467,6 +482,8 @@ function resetForm() {
   gateSnapshot.action = 'warn'
   gateError.value = false
   gateDeleteConfirming.value = false
+  gateDeleteBtnRef.value = null
+  gateDialogRef.value = null
   gatePendingEvalId.value = null
 }
 
@@ -696,6 +713,8 @@ async function saveEval() {
 }
 
 function startEdit(ev: EvalDefinition) {
+  // §3.2 dirty-gate guard: prompt when switching evals with unsaved gate changes
+  if (editingEvalId.value !== null && !confirmGateDirty()) return
   editingEvalId.value = ev.id
   form.name = ev.name
   form.node_id = ev.node_id ?? '__all__'
@@ -733,10 +752,56 @@ async function deleteEval(id: string) {
   }
 }
 
+// §3.3 focus trap for the delete-confirmation dialog
+function onGateDialogKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    cancelGateDelete()
+    return
+  }
+  if (e.key === 'Tab' && gateDialogRef.value) {
+    const focusable = gateDialogRef.value.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+  }
+}
+
+// §3.3 auto-focus the confirm button when the delete-confirmation dialog opens
+watch(gateDeleteConfirming, (confirming) => {
+  if (confirming) {
+    nextTick(() => gateDeleteConfirmBtnRef.value?.focus())
+  }
+})
+
+// §3.2 dirty-gate guard: returns true if the gate is dirty and the user should
+// be prompted before discarding. Returns false if not dirty (proceed freely).
+function confirmGateDirty(): boolean {
+  if (!isGateDirty.value) return true
+  return window.confirm(t('views.EvalEditorView.policyGate.unsavedChangesConfirm'))
+}
+
+function handleCancel() {
+  if (!confirmGateDirty()) return
+  resetForm()
+}
+
 function cancelGateDelete() {
   gateDeleteConfirming.value = false
   nextTick(() => {
-    gateDeleteConfirmBtnRef.value?.focus()
+    gateDeleteBtnRef.value?.focus()
   })
 }
 
@@ -796,6 +861,8 @@ async function retryPolicyGate() {
     gateSnapshot.action = policyGate.action
     gateError.value = false
     gatePendingEvalId.value = null
+    // §6.1 refresh the eval-list badge after a successful retry
+    await loadGateBadges()
   } catch {
     // Network-level failure — keep error state available (§3.3)
   }
