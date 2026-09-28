@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -23,9 +24,11 @@ from modulo.core.pipeline_engine.sandbox_mode import (
 from modulo.core.pipeline_engine.sandbox_policy import (
     apply_sandbox_policy,
     build_egress_selected_script,
+    build_gh_pr_guard_script,
     build_git_none_script,
     build_git_scoped_script,
     build_read_only_script,
+    gh_pr_guard_marker_path,
 )
 
 # ---------------------------------------------------------------------------
@@ -468,3 +471,292 @@ def test_derive_egress_selected_scoped() -> None:
     )
     # selected denies all egress at the boolean level (allow_internet_access=False).
     assert caps["sandbox.egress"] is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-1264: run-scoped one-PR-per-run gh guard (marker, step wiring, and an
+# end-to-end execution of the installed shim under sh)
+# ---------------------------------------------------------------------------
+
+
+def test_gh_pr_guard_marker_path_is_run_scoped() -> None:
+    """Two runs get two distinct markers, so a marker can never leak a
+    claimed state across runs even if a workspace outlived its run."""
+    run_a = gh_pr_guard_marker_path("11111111-2222-3333-4444-555555555555")
+    run_b = gh_pr_guard_marker_path("66666666-7777-8888-9999-000000000000")
+    assert run_a != run_b
+    assert run_a.startswith("/tmp/")
+    assert "11111111-2222-3333-4444-555555555555" in run_a
+    # No scope -> the stable fallback path (both None and "" mean "unscoped").
+    assert gh_pr_guard_marker_path(None) == gh_pr_guard_marker_path("")
+
+
+def test_gh_pr_guard_marker_path_sanitises_scope() -> None:
+    """The scope is embedded in a filesystem path and single-quoted into a
+    shell script — quotes, spaces and metacharacters must never survive."""
+    marker = gh_pr_guard_marker_path("run'$(evil)`; drop --")
+    for dangerous in ("'", '"', "`", "$", ";", "(", ")", " ", "|"):
+        assert dangerous not in marker, f"dangerous char {dangerous!r} survived sanitisation: {marker}"
+    assert marker.startswith("/tmp/")
+    assert marker.endswith(".marker")
+
+
+def test_gh_pr_guard_marker_path_falls_back_when_scope_sanitises_to_empty() -> None:
+    """A non-empty scope made entirely of characters the sanitiser rewrites to
+    ``_`` (``///`` -> ``___``) or strips (``...``) reduces to nothing: the path
+    must fall back to the stable unscoped marker, never emit a bare prefix."""
+    fallback = gh_pr_guard_marker_path(None)
+    assert gh_pr_guard_marker_path("///") == fallback
+    assert gh_pr_guard_marker_path("...") == fallback
+
+
+def test_gh_pr_guard_script_preserves_real_gh_and_embeds_marker() -> None:
+    """The install script must resolve the real gh BEFORE shadowing (no
+    self-recursion) and embed the run-scoped marker path."""
+    marker = gh_pr_guard_marker_path("scope-1")
+    script = build_gh_pr_guard_script(marker)
+    assert marker in script
+    # The real gh is copied aside to <path>.modulo-real before the shim
+    # replaces its path — the shim execs that, never itself (the script
+    # builds the name as ``$tgt.modulo-real`` with ``$tgt="$d/gh"``).
+    assert ".modulo-real" in script
+    assert "one-PR-per-run guard" in script
+    assert "mkdir" in script  # atomic marker claim
+    # Best-effort contract: a guarded failure must not abort the whole step
+    # silently, and an absent gh is "nothing to guard", not an error.
+    assert "cannot preserve real gh" in script
+    assert "no gh on PATH" in script
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_sentinel_only_runs_the_guard_step() -> None:
+    """A sentinel with every enforcement control default (Prompt-to-PR's
+    shape) runs EXACTLY one step: the gh-guard install."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=False,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+        delivery_sentinel="PR_CREATED",
+        run_scope="run-abc",
+    )
+    assert len(sandbox.commands.runs) == 1
+    assert ".modulo-real" in sandbox.commands.runs[0]
+    assert "run-abc" in sandbox.commands.runs[0]
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_without_sentinel_runs_no_guard_step() -> None:
+    """Regression: a node WITHOUT a sentinel gets the byte-identical
+    pre-FAR-1264 step list — no new step appears."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=True,
+        git_credentials="scoped",
+        egress_policy="selected",
+        egress_allowlist=[{"host": "api.example.com", "port": 443}],
+    )
+    assert len(sandbox.commands.runs) == 3
+    assert all(".modulo-real" not in script for script in sandbox.commands.runs)
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_guard_step_runs_before_read_only_seal() -> None:
+    """The guard install writes (system PATH dirs + /tmp), so it must run
+    BEFORE the read-only seal; git-credential steps stay first (unchanged)."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=True,
+        git_credentials="scoped",
+        egress_policy=None,
+        egress_allowlist=None,
+        delivery_sentinel="PR_CREATED",
+        run_scope="run-xyz",
+    )
+    # git scoped -> gh guard -> read-only seal.
+    assert len(sandbox.commands.runs) == 3
+    assert "github.com" in sandbox.commands.runs[0]
+    assert ".modulo-real" in sandbox.commands.runs[1]
+    assert "chmod" in sandbox.commands.runs[2]
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_guard_install_failure_is_best_effort() -> None:
+    """A failed gh-guard install must NEVER raise (unlike the enforcement
+    steps): the run proceeds exactly as before, degrading to the prompt-level
+    one-PR-per-run guard. Follow-on steps still run."""
+    # Guard-only node: the failing install is logged-and-continued, no raise.
+    guard_only = _FakeSandbox(fail_on={0})
+    await apply_sandbox_policy(
+        guard_only,
+        read_only=False,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+        delivery_sentinel="PR_CREATED",
+    )
+    assert not guard_only.commands.runs
+
+    # Guard + seal: the guard step fails at index 0, the seal still runs.
+    guard_and_seal = _FakeSandbox(fail_on={0})
+    await apply_sandbox_policy(
+        guard_and_seal,
+        read_only=True,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+        delivery_sentinel="PR_CREATED",
+    )
+    assert len(guard_and_seal.commands.runs) == 1
+    assert "chmod" in guard_and_seal.commands.runs[0]
+
+
+# --- End-to-end shim execution (the guard must actually DO it) -------------
+
+
+def _posixify(path: str) -> str:
+    """C:\\a\\b -> /c/a/b for Git Bash; a no-op on POSIX."""
+    if os.name != "nt":
+        return path
+    return "/" + path[0].lower() + path[2:].replace("\\", "/")
+
+
+def _sh_runner_argv() -> list[str]:
+    if os.name == "nt":
+        git_bash = r"C:\Program Files\Git\bin\bash.exe"
+        if not Path(git_bash).is_file():
+            pytest.skip("Git Bash not available on this Windows system")
+        return [git_bash]
+    return ["sh"]
+
+
+def _run_in_sh(body: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Write *body* as an LF shell file and execute it.
+
+    The script is passed as a FILE (never embedded in a -c argument) so
+    Windows argument quoting can never mangle the embedded heredocs/quotes,
+    and the PATH the scripts see is set INSIDE the script in POSIX form —
+    MSYS's Windows->posix PATH conversion can then not mangle it either.
+    """
+    runner = cwd / f"_runner_{uuid.uuid4().hex}.sh"
+    runner.write_text(body, encoding="utf-8", newline="\n")
+    return subprocess.run(  # noqa: S603 - executing our own generated scripts
+        [*_sh_runner_argv(), str(runner)],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+        timeout=60,
+        check=False,
+    )
+
+
+def _fake_gh(bindir: Path) -> Path:
+    """A stand-in real gh: appends its args to <its dir>/gh-calls.log."""
+    bindir.mkdir(parents=True, exist_ok=True)
+    gh = bindir / "gh"
+    gh.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/gh-calls.log"\nexit 0\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    gh.chmod(0o700)
+    return gh
+
+
+def _install_guard(bindir: Path, workdir: Path, marker: str) -> None:
+    posix_bin = _posixify(str(bindir))
+    install = workdir / "install.sh"
+    install.write_text(build_gh_pr_guard_script(marker), encoding="utf-8", newline="\n")
+    body = f"PATH={posix_bin}:/usr/bin:/bin\nexport PATH\nsh '{_posixify(str(install))}'\n"
+    result = _run_in_sh(body, cwd=workdir)
+    assert result.returncode == 0, f"guard install failed: {result.stdout}\n{result.stderr}"
+    assert (bindir / "gh.modulo-real").is_file(), "the real gh must be preserved before its path is shadowed"
+    assert "MODULO_GH_GUARD_EOF" not in result.stderr, "install heredoc must terminate cleanly"
+
+
+def _gh(bindir: Path, workdir: Path, command: str) -> subprocess.CompletedProcess[str]:
+    """Run *command* through ``sh -c '<command>'`` with ONLY the temp bindir
+    ahead of the system PATH.
+
+    This mirrors how node_runner executes the agent command
+    (``["sh", "-c", wrapped_command]``), so PATH resolution genuinely reaches
+    the shim — the mechanism the agent's bare ``gh`` invocations use.
+    """
+    posix_bin = _posixify(str(bindir))
+    body = f"PATH={posix_bin}:/usr/bin:/bin\nexport PATH\nsh -c '{command}'\n"
+    return _run_in_sh(body, cwd=workdir)
+
+
+def _gh_calls(bindir: Path) -> list[str]:
+    log = bindir / "gh-calls.log"
+    if not log.is_file():
+        return []
+    return log.read_text(encoding="utf-8").splitlines()
+
+
+def test_gh_pr_guard_first_create_passes_and_second_is_refused(tmp_path: Path) -> None:
+    """The acceptance criterion, executed: the first ``gh pr create``
+    delegates to the real gh unchanged (same args, same exit code); the
+    second is refused WITHOUT the real gh being called."""
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker)
+
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode == 0, f"first create must pass through: {first.stdout}\n{first.stderr}"
+
+    second = _gh(bindir, tmp_path, "gh pr create --title t2")
+    assert second.returncode != 0, "the second gh pr create must be refused with a non-zero exit"
+    assert "one-PR-per-run guard" in second.stderr
+    # Exactly ONE real-gh call, carrying the FIRST invocation's args verbatim.
+    assert _gh_calls(bindir) == ["pr create --title t"]
+    # The claim marker exists (checked through sh: on Windows Git Bash's /tmp
+    # is not Python's /tmp).
+    claim = _run_in_sh(f"test -d '{marker}' && echo claimed\n", cwd=tmp_path)
+    assert claim.stdout.strip() == "claimed"
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+def test_gh_pr_guard_detects_flag_prefixed_create_and_passes_others_through(tmp_path: Path) -> None:
+    """``gh --repo X pr create`` counts as the run's one create; every other
+    subcommand (and ``gh issue create``) passes through untouched."""
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker)
+
+    # Flag-prefixed create is DETECTED: it claims the marker...
+    flagged = _gh(bindir, tmp_path, "gh --repo o/r pr create --title t")
+    assert flagged.returncode == 0, flagged.stderr
+    # ...so a later plain create is refused (proving the first was counted).
+    plain = _gh(bindir, tmp_path, "gh pr create --title t2")
+    assert plain.returncode != 0
+    assert "one-PR-per-run guard" in plain.stderr
+
+    # Every other gh invocation passes straight through, in the same run.
+    for command in (
+        "gh pr list",
+        "gh pr status",
+        "gh pr list --json create",
+        "gh issue create --title x",
+        "gh --version",
+    ):
+        result = _gh(bindir, tmp_path, command)
+        assert result.returncode == 0, f"{command!r} must pass through untouched: {result.stderr}"
+
+    assert _gh_calls(bindir) == [
+        "--repo o/r pr create --title t",
+        "pr list",
+        "pr status",
+        "pr list --json create",
+        "issue create --title x",
+        "--version",
+    ]
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
