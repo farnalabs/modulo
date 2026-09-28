@@ -76,9 +76,12 @@ test.describe('Real-stack journeys: runs search + run detail record', { tag: '@r
       // and a parked manual node has executed nothing yet (the Execution
       // Trace section shows its empty state instead).
       await expect(page.getByTestId('hitl-gate-card')).toBeVisible({ timeout: 30_000 })
-      // ...the trigger actor records a real MANUAL trigger (persisted on
-      // the run row, rendered from the backend values)...
-      await expect(page.getByTestId('run-detail-trigger-actor')).toContainText(/manual/i)
+      // ...the trigger actor records the acting account for a real MANUAL
+      // trigger (persisted on the run row, rendered from the backend values).
+      // A manual run's trigger_actor is the acting account's email/display
+      // name — only trigger-driven runs use the trigger-type label (see
+      // _select_trigger_actor in backend/src/modulo/api/routes/runs.py).
+      await expect(page.getByTestId('run-detail-trigger-actor')).toContainText(env.credentials.admin.email)
       // ...and the input payload the run was ACTUALLY started with is
       // rendered (changes if the payload store drops the value).
       const inputPanel = page.getByTestId('run-detail-input-payload')
