@@ -4143,6 +4143,81 @@ elements:
       - testid: settings-mcp-key-created-done
         type: button
         dynamic_testid: false
+      - testid: settings-mcp-api-keys-restricted
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-restricted
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-register-oauth-client
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-list-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-empty
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-revoke-oauth-client
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-name
+        type: input
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-name-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-redirect-uris
+        type: textarea
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-redirect-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-redirect-invalid
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-scope-trigger-run
+        type: checkbox
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-scope-hitl-review
+        type: checkbox
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-scope-library-browse
+        type: checkbox
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-scopes-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-register-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-created-warning
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-client-id
+        type: input
+        dynamic_testid: false
+      - testid: settings-mcp-copy-oauth-client-id
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-copy-oauth-client-id-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-client-secret
+        type: input
+        dynamic_testid: false
+      - testid: settings-mcp-copy-oauth-client-secret
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-copy-oauth-client-secret-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-created-done
+        type: button
+        dynamic_testid: false
+      - testid: settings-mcp-oauth-revoke-error
+        type: element
+        dynamic_testid: false
     /settings/observability:
       - testid: feature-gate
         type: element
@@ -5090,7 +5165,7 @@ features:
             - "[x] MCP HITL review (2026-09-24): the real `review_hitl` tool drives the claim-token parse guard, the `_check_agent_tool_scope` role-hierarchy scope gate (a `runner` is denied `hitl:review` -> `insufficient_scope`), the HITLManager approve/reject decision dispatch, and the `list_pending_hitl` pending-gate surface — five `mcp/review_hitl.feature` scenarios execute in CI against the real handler functions with auth re-validation + DB/HITLManager seams patched (the legacy `/mcp/tools/call` HTTP surface is gone; the FastMCP invoke/dispatch layer is not exercised)"
             - "[x] MCP human-only gates (2026-09-24): the real `_check_human_only_gate` policy hook denies an API-key client every decision action (claim/approve/deliver_manual) on a human_only gate — the shared `human_only_denial` verdict (`human_only_gate` error carrying the MSG_HUMAN_ONLY_DENY browser-authentication detail) plus the FAR-634 `hitl.human_only_denied` denial audit; `list_pending_hitl` surfaces each pending gate's `human_only` flag (claim-stamped config preferred, snapshot-config fallback, fail-safe default True) so an agent can SEE which gates require a browser human; and decision audit attribution distinguishes client_type `browser` (REST browser principal) from client_type `mcp` (the `review_hitl` dispatch) — the three `mcp/human_only.feature` scenarios execute in CI against these real handler + policy seams"
             - "[x] MCP library browse (2026-09-25): the `search_library` tool is the read-only library-browse surface, on the read-only allowlist (`resource.read_only` viewer floor) in the centralized scope gate and gated at the handler by the real `_check_agent_tool_scope` chokepoint — an authenticated caller at or above viewer browses, and a node-level `capability_scope.allowed_tools` that excludes the tool is denied `insufficient_scope` before any DB read; the four `mcp/library_browse.feature` scenarios execute in CI against the real handler + scope-gate seams (auth re-validation + list/session seams patched), closing the last legacy `/mcp/tools/call` `@awaiting-implementation` draft"
-            - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI (one per line) and at least one of the three valid scopes (trigger:run, hitl:review, library:browse) inline, success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, and the whole section is gated to org role admin/operator with a restricted state driven by the list call's 403 so a viewer never breaks the surrounding MCP config / API key cards (SettingsMcpView.spec.ts)"
+            - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI tokenised on ANY whitespace (so two URIs pasted on one line separate correctly and match the backend's space-joined storage round-trip) where every entry must be an absolute http:// or https:// URI (localhost / 127.0.0.1 stay valid for local development) with duplicates de-duplicated and invalid entries named in an inline error, plus at least one of the three valid scopes (trigger:run, hitl:review, library:browse); the confirm button is never validity-disabled, so a submit always reaches the guard and surfaces every touched-field error; success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, both values are wiped from component state when the dialog closes (the footer Done handler and the Dialog hide event), and a rejected clipboard write (insecure plain-HTTP context, no navigator.clipboard) renders a visible copy-failed message telling the user to select the value and copy manually instead of console-only; the section is gated to org role admin/operator with a restricted state driven by the list call's 403, a fetch rejection or a non-array list body renders the inline section error rather than the 'no clients registered yet' empty state, and the API keys card degrades the same way - a 403 from GET /api/v1/api-keys (the identical admin|operator gate) renders a restricted API-keys card instead of failing the whole page, while non-403 API key failures stay fatal (SettingsMcpView.spec.ts)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered

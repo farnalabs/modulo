@@ -50,13 +50,23 @@
               <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_keys') }}</div>
               <div class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</div>
             </div>
-            <Button data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
+            <Button v-if="!apiKeysRestricted" data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
               {{ $t('views.SettingsMcpView.create_mcp_api_key') }}
             </Button>
           </div>
         </template>
         <template #content>
         <div>
+          <div
+            v-if="apiKeysRestricted"
+            class="rounded-lg border border-muted bg-muted/30 p-4 text-sm text-muted-foreground"
+            data-testid="settings-mcp-api-keys-restricted"
+            aria-live="polite"
+          >
+            {{ $t('views.SettingsMcpView.api_keys_restricted') }}
+          </div>
+
+          <template v-else>
           <p class="mb-3 text-xs text-muted-foreground" data-testid="settings-mcp-org-scope-note">
             {{ $t('views.SettingsMcpView.api_keys_act_org_wide_note') }}
           </p>
@@ -98,6 +108,7 @@
             </tbody>
           </table>
           </div>
+          </template>
           </div>
         </template>
       </Card>
@@ -259,7 +270,7 @@
       </div>
     </FormDialog>
 
-    <Dialog v-model:visible="keyCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @update:visible="onKeyCreatedDialogClose">
+    <Dialog v-model:visible="keyCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @hide="onKeyCreatedDialogClose">
       <template #header>
         <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_key_created') }}</div>
       </template>
@@ -292,7 +303,7 @@
         </div>
       </div>
       <template #footer>
-        <Button data-testid="settings-mcp-key-created-done" @click="keyCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
+        <Button data-testid="settings-mcp-key-created-done" @click="dismissKeyCreatedDialog">{{ $t('views.SettingsMcpView.done') }}</Button>
       </template>
     </Dialog>
 
@@ -315,7 +326,6 @@
       :title="$t('views.SettingsMcpView.register_oauth_client')"
       :description="$t('views.SettingsMcpView.register_oauth_client_description')"
       :confirmText="$t('views.SettingsMcpView.register_oauth_client')"
-      :confirmDisabled="!registerOauthValid"
       :loading="registeringOauth"
       @confirm="registerOauthClient"
     >
@@ -355,6 +365,12 @@
             data-testid="settings-mcp-oauth-redirect-error"
             aria-live="assertive"
           >{{ $t('views.SettingsMcpView.redirect_uris_required') }}</p>
+          <p
+            v-else-if="oauthRedirectTouched && oauthRedirectInvalid.length > 0"
+            class="mt-1 text-sm text-destructive"
+            data-testid="settings-mcp-oauth-redirect-invalid"
+            aria-live="assertive"
+          >{{ $t('views.SettingsMcpView.redirect_uris_invalid', { list: oauthRedirectInvalid.join(', ') }) }}</p>
         </div>
 
         <fieldset>
@@ -415,7 +431,7 @@
       </div>
     </FormDialog>
 
-    <Dialog v-model:visible="oauthCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @update:visible="onOauthCreatedDialogClose">
+    <Dialog v-model:visible="oauthCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @hide="onOauthCreatedDialogClose">
       <template #header>
         <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.oauth_client_created') }}</div>
       </template>
@@ -441,6 +457,12 @@
               {{ copiedField === 'oauth-client-id' ? $t('views.SettingsMcpView.copied') : $t('views.SettingsMcpView.copy') }}
             </Button>
           </div>
+          <p
+            v-if="copyFailedField === 'oauth-client-id'"
+            class="mt-1 text-sm text-destructive"
+            data-testid="settings-mcp-copy-oauth-client-id-error"
+            aria-live="assertive"
+          >{{ $t('views.SettingsMcpView.copy_failed_manual') }}</p>
         </div>
         <div>
           <p class="mb-1 text-sm font-medium">{{ $t('views.SettingsMcpView.client_secret') }}</p>
@@ -456,13 +478,19 @@
               {{ copiedField === 'oauth-client-secret' ? $t('views.SettingsMcpView.copied') : $t('views.SettingsMcpView.copy') }}
             </Button>
           </div>
+          <p
+            v-if="copyFailedField === 'oauth-client-secret'"
+            class="mt-1 text-sm text-destructive"
+            data-testid="settings-mcp-copy-oauth-client-secret-error"
+            aria-live="assertive"
+          >{{ $t('views.SettingsMcpView.copy_failed_manual') }}</p>
           <p v-if="!oauthSecretMasked" class="mt-1 text-xs text-muted-foreground">
             {{ $t('views.SettingsMcpView.oauth_secret_will_be_masked_in', { seconds: oauthSecretCountdown }) }}
           </p>
         </div>
       </div>
       <template #footer>
-        <Button data-testid="settings-mcp-oauth-created-done" @click="oauthCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
+        <Button data-testid="settings-mcp-oauth-created-done" @click="dismissOauthCreatedDialog">{{ $t('views.SettingsMcpView.done') }}</Button>
       </template>
     </Dialog>
 
@@ -508,9 +536,11 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
 import Select from '../components/shared/AppSelect.vue'
 import { useCurrentUser } from '../composables/useCurrentUser'
+import { useI18n } from 'vue-i18n'
 
 const planStore = usePlanStore()
 const { orgRole } = useCurrentUser()
+const { t } = useI18n()
 
 interface ApiKeyItem {
   id: string
@@ -527,6 +557,7 @@ interface McpPageData {
   apiKeys: ApiKeyItem[]
   oauthClients: OAuthClientItem[]
   oauthForbidden: boolean
+  apiKeysForbidden: boolean
   oauthListError: string | null
 }
 
@@ -551,39 +582,70 @@ function isForbiddenResult(resp: { error?: unknown; response?: { status?: number
 const { loading, error: loadError, data: mcpData, load: loadAll } = useDataFetch<McpPageData>(
   async () => {
     const [mcpResp, keysResp, oauthResp] = await Promise.all([
-      (api as any).GET('/api/v1/api-keys/mcp-config').catch(() => null),
-      (api as any).GET('/api/v1/api-keys').catch(() => null),
-      (api as any).GET('/api/v1/mcp/oauth/clients').catch(() => null),
+      (api as any).GET('/api/v1/api-keys/mcp-config').catch((e: unknown) => ({ error: e })),
+      (api as any).GET('/api/v1/api-keys').catch((e: unknown) => ({ error: e })),
+      (api as any).GET('/api/v1/mcp/oauth/clients').catch((e: unknown) => ({ error: e })),
     ])
     if (mcpResp.error) return { error: mcpResp.error }
-    if (keysResp.error) return { error: keysResp.error }
+
+    // The API key list carries the SAME admin|operator gate as the OAuth
+    // endpoints (`GET /api/v1/api-keys` raises 403 for any role below
+    // operator), so a 403 here is a RESTRICTED STATE for this card - not a
+    // page failure. Failing the whole page on it would make the OAuth
+    // restricted panel below unreachable in production and would take the MCP
+    // server status / snippet cards down with it. Any NON-403 failure keeps
+    // the pre-existing fatal behaviour.
+    let apiKeys: ApiKeyItem[] = []
+    let apiKeysForbidden = false
+    if (keysResp.error) {
+      if (isForbiddenResult(keysResp)) {
+        apiKeysForbidden = true
+      } else {
+        return { error: keysResp.error }
+      }
+    } else if (Array.isArray(keysResp.data)) {
+      apiKeys = keysResp.data as ApiKeyItem[]
+    }
+
     // The OAuth client list is deliberately NON-fatal: a 403 (viewer role) or
     // any other failure must not take down the MCP config / API key cards.
     const oauthClients: OAuthClientItem[] = []
     let oauthForbidden = false
     let oauthListError: string | null = null
-    if (oauthResp) {
-      if (oauthResp.error) {
-        if (isForbiddenResult(oauthResp)) {
-          oauthForbidden = true
-        } else {
-          oauthListError = formatApiError(oauthResp.error)
-        }
-      } else if (Array.isArray(oauthResp.data)) {
-        oauthClients.push(...(oauthResp.data as OAuthClientItem[]))
-      }
+    if (isForbiddenResult(oauthResp)) {
+      oauthForbidden = true
+    } else if (oauthResp.error) {
+      oauthListError = formatApiError(oauthResp.error)
+    } else if (Array.isArray(oauthResp.data)) {
+      oauthClients.push(...(oauthResp.data as OAuthClientItem[]))
+    } else {
+      // A rejection already arrives as `{ error }`; this arm covers a success
+      // body that is not the array the endpoint documents (malformed JSON
+      // degrades here too). Either way it is a FAILURE, never an empty
+      // registry - "No OAuth clients registered yet." would be a lie.
+      oauthListError = t('views.SettingsMcpView.oauth_list_unexpected_response')
     }
     return {
       data: {
         mcpUrl: mcpResp.data.mcp_url,
-        apiKeys: keysResp.data as ApiKeyItem[],
+        apiKeys,
         oauthClients,
         oauthForbidden,
+        apiKeysForbidden,
         oauthListError,
       },
     }
   },
-  { initialValue: { mcpUrl: '', apiKeys: [], oauthClients: [], oauthForbidden: false, oauthListError: null } }
+  {
+    initialValue: {
+      mcpUrl: '',
+      apiKeys: [],
+      oauthClients: [],
+      oauthForbidden: false,
+      apiKeysForbidden: false,
+      oauthListError: null,
+    },
+  },
 )
 
 const mcpUrl = computed(() => mcpData.value?.mcpUrl ?? '')
@@ -597,6 +659,10 @@ const oauthListError = computed(() => mcpData.value?.oauthListError ?? null)
 // JWT - it forces the same restricted state.
 const canManageOauth = computed(() => orgRole.value === 'admin' || orgRole.value === 'operator')
 const oauthRestricted = computed(() => !canManageOauth.value || (mcpData.value?.oauthForbidden ?? false))
+// The API key list carries the identical admin|operator gate, so that card
+// degrades the same way: a viewer (role gate, or a 403 from a stale JWT) still
+// gets the MCP server status + snippet cards instead of a dead page.
+const apiKeysRestricted = computed(() => !canManageOauth.value || (mcpData.value?.apiKeysForbidden ?? false))
 
 const createKeyDialogOpen = ref(false)
 const createKeyName = ref('')
@@ -641,6 +707,12 @@ const revokingOauth = ref(false)
 const revokeOauthError = ref<string | null>(null)
 
 const copiedField = ref<string | null>(null)
+// Set when a clipboard write REJECTED. `navigator.clipboard` only exists in a
+// secure context, so a self-hosted instance on plain HTTP can never copy - and
+// for the one-time credential dialogs the clipboard is the only way to keep
+// the value. A console warning alone would lose the credential silently, so
+// the failing field carries a visible "copy manually" message instead.
+const copyFailedField = ref<string | null>(null)
 let mcpCopyTimeout: ReturnType<typeof setTimeout> | null = null
 
 const selectedMcpClient = ref('opencode')
@@ -702,11 +774,27 @@ function startKeyMaskCountdown() {
   }, 1000)
 }
 
-function onKeyCreatedDialogClose(open: boolean) {
-  if (!open) {
-    clearKeyMaskTimer()
-    keyMasked.value = true
-  }
+/**
+ * Wipe the revealed API key from component memory on close - the value is
+ * only ever shown once, so it must not outlive the dialog (same convention as
+ * AdminUsersView's `dismissCredentialState`).
+ */
+function dismissKeyCredentialState() {
+  createdKeyValue.value = ''
+  createdKeyName.value = ''
+  keyMasked.value = true
+  keyMaskCountdown.value = 10
+  if (copyFailedField.value === 'key-value') copyFailedField.value = null
+}
+
+function onKeyCreatedDialogClose() {
+  clearKeyMaskTimer()
+  dismissKeyCredentialState()
+}
+
+function dismissKeyCreatedDialog() {
+  keyCreatedDialogOpen.value = false
+  onKeyCreatedDialogClose()
 }
 
 function openCreateKeyDialog() {
@@ -774,16 +862,50 @@ async function revokeKey() {
 
 // ─── OAuth client registration ─────────────────────────────────────────
 
-const oauthRedirectList = computed(() =>
-  oauthRedirectUris.value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0),
+/**
+ * Tokenise the textarea on ANY whitespace, not just newlines.
+ *
+ * The backend stores `" ".join(req.redirect_uris)` and reads back with
+ * `.split()`, so an entry containing an internal space would be persisted as
+ * ONE value and returned as TWO - the table would show something the user
+ * never typed and the OAuth flow could never match the original URI.
+ * Splitting on whitespace makes the round-trip lossless, and identical
+ * entries are de-duplicated (the server echoes them back verbatim).
+ */
+function parseRedirectUris(raw: string): string[] {
+  const seen = new Set<string>()
+  const entries: string[] = []
+  for (const entry of raw.split(/\s+/)) {
+    if (!entry || seen.has(entry)) continue
+    seen.add(entry)
+    entries.push(entry)
+  }
+  return entries
+}
+
+/**
+ * Redirect URIs must be absolute http(s) URIs. `new URL` rejects relative and
+ * malformed input outright; http://localhost / http://127.0.0.1 stay valid so
+ * local development keeps working.
+ */
+function isAbsoluteHttpUri(value: string): boolean {
+  try {
+    const protocol = new URL(value).protocol
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+const oauthRedirectList = computed(() => parseRedirectUris(oauthRedirectUris.value))
+const oauthRedirectInvalid = computed(() =>
+  oauthRedirectList.value.filter((entry) => !isAbsoluteHttpUri(entry)),
 )
 const registerOauthValid = computed(
   () =>
     oauthName.value.trim().length > 0 &&
     oauthRedirectList.value.length > 0 &&
+    oauthRedirectInvalid.value.length === 0 &&
     oauthScopes.value.length > 0,
 )
 
@@ -861,11 +983,38 @@ function startOauthSecretCountdown() {
   }, 1000)
 }
 
-function onOauthCreatedDialogClose(open: boolean) {
-  if (!open) {
-    clearOauthSecretTimer()
-    oauthSecretMasked.value = true
+/**
+ * Wipe the one-time OAuth credentials from component memory on close - the
+ * client secret cannot be retrieved again, so it must not linger for the
+ * component's lifetime (same convention as AdminUsersView's
+ * `dismissCredentialState`).
+ */
+function dismissOauthCredentialState() {
+  createdOauthClientId.value = ''
+  createdOauthClientSecret.value = ''
+  createdOauthClientName.value = ''
+  oauthSecretMasked.value = true
+  oauthSecretCountdown.value = 10
+  copyFailedField.value = null
+  if (copiedField.value === 'oauth-client-id' || copiedField.value === 'oauth-client-secret') {
+    copiedField.value = null
   }
+}
+
+/**
+ * Bound to the Dialog's `hide` event, which PrimeVue emits for EVERY close
+ * path (mask click, X, ESC, and the prop-driven close) - unlike
+ * `update:visible`, which never fires when the parent flips the v-model.
+ */
+function onOauthCreatedDialogClose() {
+  clearOauthSecretTimer()
+  dismissOauthCredentialState()
+}
+
+/** The footer "Done" button: close and wipe in one step, no event ordering games. */
+function dismissOauthCreatedDialog() {
+  oauthCreatedDialogOpen.value = false
+  onOauthCreatedDialogClose()
 }
 
 function confirmRevokeOauth(client: OAuthClientItem) {
@@ -904,6 +1053,7 @@ function copySnippet() {
 }
 
 async function copyToClipboard(text: string, field: string) {
+  copyFailedField.value = null
   try {
     await navigator.clipboard.writeText(text)
     copiedField.value = field
@@ -914,7 +1064,15 @@ async function copyToClipboard(text: string, field: string) {
       }
     }, 2000)
   } catch (e) {
+    // `navigator.clipboard` is undefined outside a secure context (a
+    // self-hosted instance on plain HTTP), so this is a realistic failure -
+    // and for the one-time credential dialogs the clipboard is the only way
+    // to keep the value. Surface it on the field itself, not just in the
+    // console, and leave the readonly input selectable so the value can be
+    // copied by hand.
     console.warn('Failed to copy MCP config', e)
+    copiedField.value = null
+    copyFailedField.value = field
   }
 }
 

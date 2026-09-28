@@ -95,9 +95,11 @@ async function mockOAuthClientsApi(page: Page, existing: RegisteredClient[]) {
 
 async function gotoMcpSettings(page: Page) {
   await page.goto('/settings/mcp')
-  await page
-    .waitForSelector('[data-loading="false"]', { timeout: 15000 })
-    .catch(() => {})
+  // The view renders no `data-loading` attribute, so gate on a real element
+  // that only appears once the page-level fetch has resolved and the API keys
+  // card has rendered (an absent selector fails fast instead of burning the
+  // whole timeout).
+  await page.getByTestId('settings-mcp-create-key').waitFor({ state: 'visible', timeout: 15000 })
 }
 
 test.describe('Settings MCP OAuth clients', { tag: '@regression' }, () => {
