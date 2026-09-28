@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -902,7 +903,10 @@ def test_gh_pr_guard_reinstall_repairs_a_preserved_but_unguarded_gh(tmp_path: Pa
     bindir = tmp_path / "bin"
     _fake_gh(bindir)
     # Partial state: the real gh was preserved but the shadow never happened.
-    (bindir / "gh.modulo-real").write_bytes((bindir / "gh").read_bytes())
+    # Mirror the install's ``cp -p`` (which preserves the executable bit) — a
+    # mode-stripped copy would make the shim's ``exec`` fail with EACCES on
+    # Linux, which is not the partial state this test models.
+    shutil.copy2(bindir / "gh", bindir / "gh.modulo-real")
     marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
     _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
     # _install_guard asserts exit 0 — the old rule exited 1 here.
