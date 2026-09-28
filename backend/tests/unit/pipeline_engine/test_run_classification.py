@@ -1030,6 +1030,38 @@ class TestFailureAndIdempotency:
         assert ok is False
         assert await _read_classification(engine, run_id) is None
 
+    async def test_persist_timeout_reports_distinct_failure_not_persist_failed(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """FAR-1050: the write bound firing is a genuine DB stall.
+
+        ``TimeoutError`` subclasses ``OSError``, so it must land in the
+        DISTINCT ``persist_timeout`` handler (logged at WARNING) rather than
+        the broad ``persist_failed`` traceback — and report ``False`` so the
+        caller falls back to the ``unclassified`` marker.
+        """
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await _seed_run(session, run_id, status="complete")
+
+        def _stall(coro: Any, *, timeout: float) -> Any:
+            coro.close()
+            raise TimeoutError
+
+        async with session.begin():
+            run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+            with (
+                caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.classify"),
+                patch("modulo.core.pipeline_engine.classify.asyncio.wait_for", side_effect=_stall),
+            ):
+                ok = await persist_classification(session, run, classify_run("complete", None))
+
+        assert ok is False
+        assert any("classification.persist_timeout" in m for m in caplog.messages)
+        assert not any("classification.persist_failed" in m for m in caplog.messages)
+
     async def test_persist_failure_never_leaves_record_missing(
         self,
         engine: AsyncEngine,

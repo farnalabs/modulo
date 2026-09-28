@@ -21,6 +21,7 @@ from modulo.core.runtime_provider import (
     IsolationPolicy,
     RuntimeProvider,
     WorkspaceFileInfo,
+    WorkspaceMetrics,
     WorkspaceSpec,
 )
 from modulo.core.runtime_provider.log_tail import combine_log_entries
@@ -53,6 +54,11 @@ _LOG_TAIL_RAW_FALLBACK = 4000
 # calls (SDK ``request_timeout`` + outer ``asyncio.wait_for``), mirroring
 # the house rule that every E2B SDK call sits under a wait_for.
 _FILE_IO_TIMEOUT = 30
+# FAR-1050 R6: bound on the ``sandbox.get_metrics`` poll (same house rule —
+# every E2B SDK call sits under a wait_for). The watchdog applies its own
+# outer bound on top; this inner bound keeps the provider primitive honest
+# for callers that do not.
+_METRICS_TIMEOUT = 10
 # FAR-1050 R5: egress vocabulary accepted on ``WorkspaceSpec.egress_policy``.
 # Two dialects feed this field (both reach the provider in production):
 #   - the CANONICAL dialect stamped by the flag-ON dispatch
@@ -124,6 +130,36 @@ class _StreamEnd:
 def _stream_error_message(exc: Exception) -> str:
     """Format an engine/proxy stream failure for ``ExecProcess.error`` (ADR 040)."""
     return f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
+def _metric_number(value: Any) -> float | None:
+    """Coerce an SDK metric field to float, or ``None`` when unusable.
+
+    bool is excluded (``True`` is not a measurement) and non-numeric /
+    absent fields become ``None`` — the ABC carrier reports "not
+    observable" rather than a number the killer would compare against.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _workspace_metrics(sample: Any) -> WorkspaceMetrics:
+    """Map an SDK ``SandboxMetrics`` sample onto the ABC carrier (FAR-1050 R6).
+
+    Sample semantics are preserved verbatim: ``cpu_used_pct`` stays a
+    percentage, byte counters stay bytes, and ``cpu_count`` stays a
+    core count (informational, never enforced as a threshold).
+    """
+    cpu_count = getattr(sample, "cpu_count", None)
+    return WorkspaceMetrics(
+        cpu_used_pct=_metric_number(getattr(sample, "cpu_used_pct", None)),
+        cpu_count=cpu_count if isinstance(cpu_count, int) and not isinstance(cpu_count, bool) else None,
+        mem_used=_metric_number(getattr(sample, "mem_used", None)),
+        mem_total=_metric_number(getattr(sample, "mem_total", None)),
+        disk_used=_metric_number(getattr(sample, "disk_used", None)),
+        disk_total=_metric_number(getattr(sample, "disk_total", None)),
+    )
 
 
 class E2BRuntimeProvider(RuntimeProvider):
@@ -550,6 +586,28 @@ class E2BRuntimeProvider(RuntimeProvider):
             size=int(getattr(info, "size", 0) or 0),
             is_dir=str(file_type) == "dir",
         )
+
+    # ------------------------------------------------------------------
+    # Resource-metrics primitive (FAR-1050 R6 — ADR 040 metrics gap)
+    # ------------------------------------------------------------------
+
+    async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:
+        """Poll the sandbox metrics endpoint (FAR-1050 R6 ABC primitive).
+
+        E2B's ``sandbox.get_metrics()`` returns a list of SDK
+        ``SandboxMetrics`` samples (oldest-first); each is mapped onto the
+        provider-neutral :class:`WorkspaceMetrics` carrier, preserving the
+        sample order so the caller can take the newest instantaneous
+        reading. Handle resolution mirrors :meth:`apply_isolation` /
+        the file-I/O primitives: the tracked handle when this provider
+        created the workspace, otherwise reconnect by ref.
+
+        Failures propagate (sandbox unreachable, poll timeout) — the
+        resource-cap killer owns the fail-open, never this primitive.
+        """
+        sandbox = await self._resolve_sandbox(provider_ref, "get_metrics")
+        samples = await asyncio.wait_for(sandbox.get_metrics(), timeout=_METRICS_TIMEOUT)
+        return [_workspace_metrics(sample) for sample in samples]
 
     async def _resolve_sandbox(self, provider_ref: str, operation: str) -> Any:
         """Return the sandbox handle for *provider_ref* (FAR-1050 R2a).
