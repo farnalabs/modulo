@@ -34,6 +34,7 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, NoReturn
 
@@ -122,7 +123,7 @@ from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, 
 from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
-from modulo.db.crud.hitl_review_config import resolve_hitl_review_config
+from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_window_for_gate
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
@@ -5514,6 +5515,33 @@ class PipelineExecutor:
                         exc_info=True,
                     )
                     gate_config = None
+                # FAR-1257: resolve the review-window chain (pipeline override >
+                # org default > instance/env default) ONCE at fire time and stamp
+                # the resulting ABSOLUTE deadline onto the claim row. The sweep's
+                # predicate then collapses to ``terminalize_at < now()`` for this
+                # row and never re-reads config. Same failure-isolated savepoint
+                # contract as the briefing/config stamps above: a resolution
+                # failure leaves ``terminalize_at`` NULL, which sends the row
+                # down the legacy ``expires_at + grace`` fallback — shipped
+                # behaviour, never a broken interrupt.
+                terminalize_at: datetime | None = None
+                try:
+                    async with session.begin_nested():
+                        window_seconds = await resolve_review_window_for_gate(
+                            session,
+                            pipeline_id=pipeline_id,
+                            org_id=org_id,
+                        )
+                        terminalize_at = datetime.now(UTC) + timedelta(seconds=window_seconds)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "hitl_review.window_resolution_failed",
+                        extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
+                        exc_info=True,
+                    )
+                    terminalize_at = None
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
@@ -5523,6 +5551,7 @@ class PipelineExecutor:
                     required_team_id=required_team_id,
                     context_json=gate_context,
                     gate_config_json=gate_config,
+                    terminalize_at=terminalize_at,
                 )
         return pipeline_name, coalesce_reused
 

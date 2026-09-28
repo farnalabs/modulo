@@ -283,13 +283,16 @@ _EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
 
 # ---------------------------------------------------------------------------
 # FAR-648 HITL-gate-expiry terminalizer. An ``awaiting_human`` run whose open
-# gate expired UNCLAIMED and UNDECIDED past the configurable grace (settings
-# ``hitl_review_cancel_grace_seconds``, default 60 min) is a zombie: nobody ever
-# claimed the gate, so a decision will never arrive, yet the run keeps holding
-# an org-level concurrency slot (the org gate counts human-waiting runs,
-# FAR-604 D1). It is terminalized ``cancelled`` — NOT ``failed``: the human
-# simply never answered, and classify.py buckets ``cancelled`` as
-# ``operator_or_hitl_cancelled`` (excluded from delivery streaks).
+# gate expired UNCLAIMED and UNDECIDED past its review deadline (FAR-1257:
+# the absolute ``hitl_claims.terminalize_at`` stamped at fire time, or for
+# legacy unstamped rows ``expires_at + settings.hitl_review_cancel_grace_seconds``,
+# default 60 min) is a zombie: nobody ever claimed the gate, so a decision will
+# never arrive, yet the run keeps holding an org-level concurrency slot (the
+# org gate counts human-waiting runs, FAR-604 D1). It is terminalized
+# ``cancelled`` — NOT ``failed``: the human simply never answered, and
+# classify.py buckets it as ``hitl_timeout`` (FAR-1257; the generic
+# ``operator_or_hitl_cancelled`` for any other cancel) — excluded from delivery
+# streaks either way.
 # ---------------------------------------------------------------------------
 _HITL_REVIEW_EXPIRED_ERROR_CODE = "hitl_review_expired"
 _HITL_REVIEW_EXPIRED_ERROR_DETAIL = "HITL review expired unanswered; run cancelled to release its concurrency slot."
@@ -5042,6 +5045,17 @@ async def _terminalize_expired_hitl_reviews(
     expired-unclaimed past the grace — a run with any CLAIMED or in-grace
     undecided gate still has live human work attached and is left alone.
 
+    FAR-1257 deadline: each claim carries EITHER an absolute ``terminalize_at``
+    stamped at fire time from the resolved review window (pipeline override >
+    org default > instance/env default) OR NULL for rows fired before that
+    column existed. The deadline predicate is therefore two-armed:
+    ``terminalize_at IS NOT NULL AND terminalize_at < now()`` for stamped rows,
+    else the legacy ``expires_at + grace_seconds`` arithmetic. Stamped rows
+    IGNORE the grace knob entirely (the absolute stamp IS the deadline); the
+    grace only ever applies to unstamped legacy rows, so shipped behaviour for
+    those is unchanged. The NOT-EXISTS arm mirrors the same two arms, so an
+    in-window stamped gate spares the run exactly like an in-grace legacy one.
+
     TOCTOU-safe by construction: there is no separate select — the single
     guarded UPDATE re-validates the whole predicate (source status, the
     cancel-wins guard, and the gate state) at execution time inside the org
@@ -5049,8 +5063,6 @@ async def _terminalize_expired_hitl_reviews(
     write no longer matches and the row is skipped (rowcount 0).
     ``cancellation_requested = false`` keeps CANCEL-WINS precedence intact:
     a cancellation-requested run is owned by the cancel path.
-    ``expires_at``/``account_id``/``decision`` already exist on
-    ``hitl_claims`` — DB-only, no migration.
 
     FAR-746 batch cap: *max_rows* bounds the UPDATE per tick (see
     :func:`_terminalize_mid_graph_wedges`); the predicate re-selects the
@@ -5071,14 +5083,23 @@ async def _terminalize_expired_hitl_reviews(
             "    AND hc.run_id = runs.id "
             "    AND hc.decision IS NULL "
             "    AND hc.account_id IS NULL "
-            "    AND hc.expires_at < now() - (:grace_seconds * interval '1 second')) "
+            "    AND ("
+            "      (hc.terminalize_at IS NOT NULL AND hc.terminalize_at < now()) "
+            "      OR (hc.terminalize_at IS NULL "
+            # Four closing parens: the ``- (:grace * interval)`` group, the
+            # ``OR (`` arm, the wrapping ``AND (`` two-arm group, and the
+            # ``EXISTS (`` itself. Real Postgres rejects a missing one with
+            # "syntax error at or near RETURNING" (FAR-1257 integration test).
+            "          AND hc.expires_at < now() - (:grace_seconds * interval '1 second')))) "
             "  AND NOT EXISTS ("
             "    SELECT 1 FROM hitl_claims hc2 "
             "    WHERE hc2.organisation_id = runs.organisation_id "
             "    AND hc2.run_id = runs.id "
             "    AND hc2.decision IS NULL "
             "    AND (hc2.account_id IS NOT NULL "
-            "         OR hc2.expires_at >= now() - (:grace_seconds * interval '1 second'))) "
+            "         OR (hc2.terminalize_at IS NOT NULL AND hc2.terminalize_at >= now()) "
+            "         OR (hc2.terminalize_at IS NULL "
+            "             AND hc2.expires_at >= now() - (:grace_seconds * interval '1 second')))) "
             "  LIMIT :max_rows) "
             "RETURNING id"
         ),
@@ -5492,10 +5513,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         fresh-heartbeat run with checkpoints is still caught once its heartbeat
         goes stale, while a LIVE run on its final claim is never killed.
       * FAR-648 gate-expiry: any ``awaiting_human`` row whose every undecided
-        gate is UNCLAIMED and past ``expires_at`` +
-        ``hitl_review_cancel_grace_seconds`` (default 60m) is terminalized
-        ``cancelled`` (``hitl_review_expired``) — a zombie holding an org-level
-        concurrency slot that no human will ever release.
+        gate is UNCLAIMED and past its review deadline (FAR-1257: the stamped
+        ``hitl_claims.terminalize_at``, or for legacy unstamped rows
+        ``expires_at`` + ``hitl_review_cancel_grace_seconds``, default 60m) is
+        terminalized ``cancelled`` (``hitl_review_expired``) — a zombie
+        holding an org-level concurrency slot that no human will ever release.
 
     On match: verify the Redis read, RE-CHECK ``q.job()`` AFTER the decision
     and immediately before enqueue (skip if a job now exists — a concurrent

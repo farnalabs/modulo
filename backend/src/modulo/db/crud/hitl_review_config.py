@@ -60,12 +60,147 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import get_run
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.settings import HITL_CLAIM_TTL_SECONDS, get_settings
 
 REVIEW_ID_PREFIX = "hitl_review_"
+
+# --- FAR-1257: the configurable HITL review window -------------------------
+#
+# The review window is how long a fired review may sit unclaimed/undecided
+# before the dispatcher_reconcile terminalizer cancels the run to release its
+# org concurrency slot. Precedence (resolved ONCE at fire time, then stamped as
+# an absolute ``hitl_claims.terminalize_at``):
+#
+#     pipeline override > org default (settings_json) > instance/env default
+#
+# The SAME envelope — 60s (1 min) .. 604800s (7 days) — is enforced at every
+# layer: this module (resolution), the API Pydantic fields, the org-settings
+# write route, and ``ck_pipelines_hitl_review_window`` (migration 0263).
+
+#: Lower bound of the shipped envelope (1 minute). Matches the API's ``ge=60``.
+HITL_REVIEW_WINDOW_MIN_SECONDS = 60
+#: Upper bound of the shipped envelope (7 days). Matches the API's ``le=604800``.
+HITL_REVIEW_WINDOW_MAX_SECONDS = 604800
+
+#: Key under which the org default lives in ``Organisation.settings_json``.
+ORG_HITL_REVIEW_WINDOW_KEY = "hitl_review_window_seconds"
+
+
+def _clamp_review_window(value: object) -> int | None:
+    """Clamp an int into the shipped envelope; non-int / bool → None.
+
+    ``bool`` is excluded explicitly because ``isinstance(True, int)`` is True —
+    a JSON ``true`` in ``settings_json`` must not silently become a 60s window.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return max(HITL_REVIEW_WINDOW_MIN_SECONDS, min(HITL_REVIEW_WINDOW_MAX_SECONDS, value))
+
+
+def _instance_default_review_window_seconds() -> int:
+    """The instance/env default: claim TTL + the cancel-grace env knob.
+
+    Reproduces the shipped arithmetic EXACTLY — a gate fires with
+    ``expires_at = now + HITL_CLAIM_TTL_SECONDS`` and the legacy terminalizer
+    collects it at ``expires_at + hitl_review_cancel_grace_seconds``, so the
+    fire-time equivalent window is ``HITL_CLAIM_TTL_SECONDS +
+    settings.hitl_review_cancel_grace_seconds`` (= 4500s / 75 min at the
+    shipped defaults). The env default itself is NOT changed by FAR-1257.
+
+    ``HITL_CLAIM_TTL_SECONDS`` is imported from ``modulo.settings``, NOT from
+    ``core.hitl_manager``: this module is in the DB layer, which the
+    import-linter contract ``db-does-not-import-core`` forbids from importing
+    ``modulo.core`` at all. Settings is a near-leaf both layers may read, so
+    the one TTL value still serves ``create_gate``'s ``expires_at`` and this
+    window without any possibility of drift.
+    """
+    return HITL_CLAIM_TTL_SECONDS + int(get_settings().hitl_review_cancel_grace_seconds)
+
+
+def resolve_hitl_review_window_seconds(
+    pipeline_override: int | None,
+    org_default: int | None,
+) -> int:
+    """Resolve the effective HITL review window (seconds) for one gate fire.
+
+    Precedence: ``pipeline_override`` > ``org_default`` > instance/env default.
+    Every candidate that is a usable int is clamped into the 60..604800
+    envelope, so the returned value is ALWAYS in-bounds — there is no "0 =
+    disabled" and no out-of-range window at any layer. Non-int candidates
+    (``None``, a JSON string/bool/dict, a malformed ``settings_json`` entry)
+    fall through to the next layer rather than poisoning the chain.
+
+    The instance default is clamped too: at the shipped grace (3600s) it is
+    4500s, comfortably in-bounds; only a maxed-out ``HITL_REVIEW_CANCEL_GRACE_SECONDS``
+    (604800) plus the 900s claim TTL would exceed 7 days, and clamping keeps
+    the envelope a hard guarantee rather than an aspiration.
+    """
+    for candidate in (pipeline_override, org_default):
+        clamped = _clamp_review_window(candidate)
+        if clamped is not None:
+            return clamped
+    clamped_default = _clamp_review_window(_instance_default_review_window_seconds())
+    if clamped_default is not None:
+        return clamped_default
+    return HITL_REVIEW_WINDOW_MIN_SECONDS
+
+
+def org_hitl_review_window(settings_json: Any) -> int | None:
+    """Read the org default out of ``Organisation.settings_json``, tolerantly.
+
+    Absent key, non-dict ``settings_json``, a bool/string/float/None value, or
+    anything else non-int → ``None`` (the caller falls through to the instance
+    default). In-range enforcement happens in
+    :func:`resolve_hitl_review_window_seconds`, so a hand-edited out-of-range
+    int is clamped rather than rejected.
+    """
+    if not isinstance(settings_json, dict):
+        return None
+    return _clamp_review_window(settings_json.get(ORG_HITL_REVIEW_WINDOW_KEY))
+
+
+async def read_org_hitl_review_window(session: AsyncSession, org_id: uuid.UUID) -> int | None:
+    """Read the org's ``hitl_review_window_seconds`` default (None when unset).
+
+    A projection query (one JSON column, no ORM materialisation). Callers have
+    already set the RLS org context; the explicit ``organisation_id`` filter is
+    defence in depth, matching this module's convention.
+    """
+    settings_json = (
+        await session.execute(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
+    ).scalar_one_or_none()
+    return org_hitl_review_window(settings_json)
+
+
+async def resolve_review_window_for_gate(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> int:
+    """Resolve the full chain (pipeline override > org default > default) once.
+
+    Called by the executor's interrupt handler at gate fire time; the result is
+    stamped as an absolute ``hitl_claims.terminalize_at`` so the sweep never
+    re-reads config. Both reads are single-row projections with explicit
+    ``organisation_id`` filters (defence in depth under the caller's RLS
+    context).
+    """
+    pipeline_override = (
+        await session.execute(
+            select(Pipeline.hitl_review_window_seconds)
+            .where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    org_default = await read_org_hitl_review_window(session, org_id)
+    return resolve_hitl_review_window_seconds(pipeline_override, org_default)
+
 
 #: FAR-609: every HITL gate defaults to ``human_only: true`` — fail-safe by
 #: construction, not only the high-risk paths. A gate config that omits the

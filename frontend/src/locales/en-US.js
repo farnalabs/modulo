@@ -1053,6 +1053,12 @@ export default {
       "max_autonomy_level": "Autonomy ceiling",
       "max_autonomy_level_inherit": "Inherit pipeline default",
       "max_autonomy_level_hint": "Hard cap on any agent autonomy recommendation. Recommendations can lower autonomy, but cannot raise it above this ceiling (or the pipeline default when inherited) unless you raise the ceiling here.",
+      "hitl_review_window_label": "HITL Window (s)",
+      "hitl_review_window_inherit": "org default",
+      "hitl_review_window_help": "Seconds an unanswered human review gate waits before the run is cancelled and its concurrency slot released. Allowed range 60 to 604800 seconds. Leave empty to clear the override and inherit the organisation default.",
+      "hitl_review_window_out_of_range": "The HITL review window must be a whole number of seconds between {min} and {max}.",
+      "hitl_review_window_update_failed": "Failed to update the HITL review window: {error}",
+      "ownerless_gate_advisory": "This gate is human-only and has no required team, and this pipeline has no owner. Nobody is assigned to review it, so it will time out at the review window and the run will be cancelled. Set a required team or a pipeline owner to avoid this.",
       "autonomy_manual_approval": "Manual approval",
       "autonomy_notify_on_complete": "Notify on complete",
       "autonomy_fully_autonomous": "Fully autonomous",
@@ -2171,7 +2177,25 @@ export default {
       "community_objects": "Community Library",
       "community_objects_description": "Control access to the community library — browse, install, and community-sourced agent execution.",
       "community_objects_toggle": "Community objects enabled",
-      "community_objects_toggle_hint": "When disabled, community library browsing, installation, and community-sourced agent execution are blocked."
+      "community_objects_toggle_hint": "When disabled, community library browsing, installation, and community-sourced agent execution are blocked.",
+      "hitl_review_window": "HITL review window",
+      "hitl_review_window_description": "How long a pipeline waits at an unanswered human review gate before the run is cancelled and its concurrency slot is released. Each pipeline may override this; a pipeline with no override uses the organisation default, and no organisation default means the instance default applies.",
+      "hitl_review_window_value": "Value",
+      "hitl_review_window_unit": "Unit",
+      "hitl_review_window_placeholder": "No org default",
+      "hitl_review_window_hint": "Allowed range: 60 to 604800 seconds (1 minute to 7 days). Leave the value empty to clear the organisation default and fall back to the instance default.",
+      "unit_seconds": "Seconds",
+      "unit_minutes": "Minutes",
+      "unit_hours": "Hours",
+      "unit_days": "Days",
+      "hitl_review_window_loading": "Loading review window...",
+      "hitl_review_window_retry": "Retry",
+      "hitl_review_window_load_failed": "Failed to load the HITL review window: {error}",
+      "hitl_review_window_save_failed": "Failed to save the HITL review window: {error}",
+      "hitl_review_window_out_of_range": "The review window must be between {min} and {max} seconds (1 minute to 7 days).",
+      "hitl_review_window_saved": "HITL review window saved.",
+      "hitl_review_window_status_default": "No organisation default. Pipelines without their own override inherit the instance default.",
+      "hitl_review_window_status_set": "Organisation default: {seconds} seconds."
     },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",
@@ -4069,6 +4093,7 @@ export default {
       "cancelled": "Node cancelled"
     },
     "run": { "superseded": "Run superseded" },
+    "hitl_review_expired": "HITL review expired",
     "connector": {
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
@@ -4131,6 +4156,7 @@ export default {
       "cancelled": "The node was cancelled before completion."
     },
     "run": { "superseded": "This run was superseded by a newer run." },
+    "hitl_review_expired": "The run sat unanswered at a human review gate past the review window and was cancelled.",
     "connector": {
       "invalid_key": "The connector key is invalid or missing.",
       "permission": "The connector does not have permission to access the resource.",
