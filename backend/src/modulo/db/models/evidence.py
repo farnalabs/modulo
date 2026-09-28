@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -67,7 +67,7 @@ class Evidence(Base, TimestampMixin):
     key: Mapped[str] = mapped_column(Text(), nullable=False)
     subject_type: Mapped[str] = mapped_column(Text(), nullable=False)
     subject_id: Mapped[str] = mapped_column(Text(), nullable=False)
-    value: Mapped[Any] = mapped_column(JSONB(), nullable=True)
+    value: Mapped[Any] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

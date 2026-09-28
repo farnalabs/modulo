@@ -105,7 +105,7 @@ def upgrade() -> None:
         sa.Column("key", sa.Text(), nullable=False),
         sa.Column("subject_type", sa.Text(), nullable=False),
         sa.Column("subject_id", sa.Text(), nullable=False),
-        sa.Column("value", JSONB(), nullable=True),
+        sa.Column("value", sa.JSON().with_variant(JSONB(), "postgresql"), nullable=True),
         sa.Column(
             "observed_at",
             sa.DateTime(timezone=True),
