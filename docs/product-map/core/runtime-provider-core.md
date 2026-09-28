@@ -29,7 +29,7 @@ unit-tests:
   - backend/tests/unit/core/runtime_provider/test_docker_endpoint_tls.py
   - backend/tests/unit/core/runtime_provider/test_far1128_cap_environments_dispatch.py
   - backend/tests/unit/runtime_provider/test_docker_provider.py
-  - backend/tests/unit/pipeline_engine/test_e2b_isolation_flag.py
+  - backend/tests/unit/pipeline_engine/test_e2b_isolation_provider.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
 bdd:
@@ -123,7 +123,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       nodes keep the fail-closed tier refusal. Unit-covered in
       `tests/unit/pipeline_engine/test_sandbox_policy.py` (shim executed
       end-to-end under `sh`: first create passes, second refused) and
-      `tests/unit/pipeline_engine/test_e2b_isolation_flag.py` (gating
+      `tests/unit/pipeline_engine/test_e2b_isolation_provider.py` (gating
       predicate + call-site routing/best-effort)
 - [x] File-I/O primitives (FAR-1050 R2a): `read_file` / `write_file` /
       `list_files` / `get_info` (+ the frozen `WorkspaceFileInfo` value object)
