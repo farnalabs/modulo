@@ -257,7 +257,11 @@ async def test_repair_lowers_the_default_onto_the_ceiling_and_preserves_behaviou
         after_with_rec = resolve_autonomy(str(row[0]), recommended).effective
         assert after_with_rec == before_with_rec, f"recommendation clamp changed: {before_with_rec} -> {after_with_rec}"
     finally:
+        # Restore unconditionally (both DDL statements are existence-gated, so
+        # this is a no-op when the body already failed past the drop). No assert
+        # inside ``finally``: an assert there would run during unwinding and
+        # mask the body's own failure.
         await _restore_constraint(db_engine)
-        assert await _constraint_validated(db_engine), "the CHECK must be restored and VALIDATEd"
         if pipeline_id is not None:
             await _cleanup(db_engine, pipeline_id)
+    assert await _constraint_validated(db_engine), "the CHECK must be restored and VALIDATEd after the repair"
