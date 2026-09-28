@@ -1113,6 +1113,40 @@ async def test_watchdog_under_cap_sample_through_abc_does_not_kill() -> None:
     assert not provider.destroyed
 
 
+class _NoMetricsSurfaceHandle:
+    """A sandbox handle with NO ``get_metrics`` surface at all (FAR-1050 R6 shape 1).
+
+    Stands in for any non-ABC handle the watchdog may be handed: with no
+    primitive to poll, the resource-cap killer must fail OPEN loudly (the
+    explicit, once-per-dispatch warning) and never attribute-error into the
+    generic branch.
+    """
+
+
+async def test_watchdog_missing_metrics_surface_fails_open_loudly(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1050 R6 shape 1: a handle with NO ``get_metrics`` fails open loudly.
+
+    The watchdog does not attribute-error on the missing primitive — it emits
+    the explicit, once-per-dispatch
+    ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning and
+    returns ``False``, so a measurement gap never kills the run.
+    """
+    watchdog = _resource_watchdog(_NoMetricsSurfaceHandle())
+    logger = "modulo.core.pipeline_engine.node_runner"
+    with caplog.at_level(logging.WARNING, logger=logger):
+        assert await watchdog.enforce_resource_limits() is False
+    gap_records = [
+        r for r in caplog.records if r.getMessage() == "sandbox_agent.resource_caps_not_enforced_via_provider"
+    ]
+    assert len(gap_records) == 1
+    assert "no get_metrics primitive" in gap_records[0].reason
+    assert "NOT enforced" in gap_records[0].reason
+    assert not any("resource_metrics_unavailable" in r.getMessage() for r in caplog.records)
+    assert watchdog.budget_killed is False
+
+
 async def test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch(caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1050 R6: a provider WITHOUT the primitive still fails open loudly.
 
