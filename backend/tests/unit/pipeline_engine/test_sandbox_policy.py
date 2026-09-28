@@ -9,10 +9,12 @@ derivable from validated + enforced config).
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +24,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     derive_sandbox_capabilities,
 )
 from modulo.core.pipeline_engine.sandbox_policy import (
+    _GH_PR_GUARD_FINGERPRINT,
     apply_sandbox_policy,
     build_egress_selected_script,
     build_gh_pr_guard_script,
@@ -615,6 +618,37 @@ async def test_apply_sandbox_policy_guard_install_failure_is_best_effort() -> No
     assert "chmod" in guard_and_seal.commands.runs[0]
 
 
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_guard_step_stderr_is_mirrored_into_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """XS: the "no gh on PATH / NOT platform-guarded" note exits 0 with only a
+    stderr payload, which the step result would otherwise discard — an
+    unguarded sentinel run must be observable in the policy log."""
+
+    class _StderrCommands:
+        async def run(self, script: str, *, user: str = "root", timeout: float = 60.0) -> SimpleNamespace:  # noqa: ASYNC109 - matches the e2b SDK signature
+            return SimpleNamespace(
+                stderr="modulo: gh guard: WARNING no gh on PATH; nothing to guard", stdout="", exit_code=0
+            )
+
+    class _StderrSandbox:
+        commands = _StderrCommands()
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.sandbox_policy"):
+        await apply_sandbox_policy(
+            _StderrSandbox(),
+            read_only=False,
+            git_credentials=None,
+            egress_policy=None,
+            egress_allowlist=None,
+            delivery_sentinel="PR_CREATED",
+            run_scope="run-log",
+        )
+    assert "gh_guard_install_reported" in caplog.text
+    assert "no gh on PATH" in caplog.text
+
+
 # --- End-to-end shim execution (the guard must actually DO it) -------------
 
 
@@ -649,22 +683,45 @@ def _run_in_sh(body: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         cwd=str(cwd),
-        timeout=60,
+        # M5: the guard script itself runs in well under a second, but a
+        # spawn/AV-IO stall on a loaded Windows box once pushed a run past 60s
+        # (TimeoutExpired, three runs). Generous bound: a timeout here is an
+        # environment stall, never a signal about the script's behaviour — the
+        # assertions below are the actual verdict.
+        timeout=240,
         check=False,
     )
 
 
-def _fake_gh(bindir: Path) -> Path:
-    """A stand-in real gh: appends its args to <its dir>/gh-calls.log."""
+def _fake_gh(bindir: Path, *, fail_next: bool = False) -> Path:
+    """A stand-in real gh: appends its args to <its dir>/gh-calls.log.
+
+    With ``fail_next=True`` it exits 1 on its FIRST invocation (consuming an
+    arming file) and succeeds afterwards — the M1 shape: a transient first
+    ``gh pr create`` failure (rate limit, empty diff, network flap) that must
+    NOT burn the run's only attempt. Without the arm file its behaviour is the
+    unchanged exit-0 baseline every other test relies on.
+    """
     bindir.mkdir(parents=True, exist_ok=True)
     gh = bindir / "gh"
     gh.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/gh-calls.log"\nexit 0\n',
+        "#!/bin/sh\n"
+        '_d="$(dirname "$0")"\n'
+        'printf \'%s\\n\' "$*" >> "$_d/gh-calls.log"\n'
+        'if [ -f "$_d/gh-fail-arm" ]; then rm -f "$_d/gh-fail-arm"; exit 1; fi\n'
+        "exit 0\n",
         encoding="utf-8",
         newline="\n",
     )
     gh.chmod(0o700)
+    if fail_next:
+        (bindir / "gh-fail-arm").write_text("", encoding="utf-8")
     return gh
+
+
+def _shim_text(bindir: Path) -> str:
+    """The INSTALLED ``gh`` path's contents (the shim, once guarded)."""
+    return (bindir / "gh").read_text(encoding="utf-8")
 
 
 def _install_guard(bindir: Path, workdir: Path, marker: str) -> None:
@@ -714,12 +771,151 @@ def test_gh_pr_guard_first_create_passes_and_second_is_refused(tmp_path: Path) -
     second = _gh(bindir, tmp_path, "gh pr create --title t2")
     assert second.returncode != 0, "the second gh pr create must be refused with a non-zero exit"
     assert "one-PR-per-run guard" in second.stderr
+    # M2: the refusal must be ACCURATE — it names what it refuses (a SECOND
+    # attempt in this run) and states the fact that makes the marker meaningful
+    # (an earlier create exited 0; with M1 only a successful create leaves a
+    # marker), never the old unconditional "second gh pr create in this
+    # sandbox run" wording that asserted a PR existed.
+    assert "refusing a second 'gh pr create' attempt in this run" in second.stderr
+    assert "exited 0" in second.stderr
+    assert "refusing second gh pr create in this sandbox run" not in second.stderr
     # Exactly ONE real-gh call, carrying the FIRST invocation's args verbatim.
     assert _gh_calls(bindir) == ["pr create --title t"]
     # The claim marker exists (checked through sh: on Windows Git Bash's /tmp
     # is not Python's /tmp).
     claim = _run_in_sh(f"test -d '{marker}' && echo claimed\n", cwd=tmp_path)
     assert claim.stdout.strip() == "claimed"
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+def test_gh_pr_guard_failed_first_create_releases_the_claim_for_a_retry(tmp_path: Path) -> None:
+    """M1: a FAILED first create must not burn the run's only attempt.
+
+    The shim claims with ``mkdir`` but holds the claim only while the real gh
+    is running: a non-zero exit releases it (``rmdir``) and passes the code
+    through, so the retry after a transient failure (rate limit, empty diff,
+    network) is ALLOWED. A marker left behind by a failure would refuse that
+    retry while reporting that a create had succeeded.
+    """
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir, fail_next=True)
+    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker)
+
+    # First create: the real gh runs, fails, and its exit code passes through.
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode != 0, f"the real gh's failure must pass through: {first.stdout}\n{first.stderr}"
+    # The claim was RELEASED — no marker survives a failed create.
+    claim = _run_in_sh(f"test -d '{marker}' && echo claimed\n", cwd=tmp_path)
+    assert not claim.stdout.strip(), f"a failed create must leave no claim marker: {claim.stdout}"
+
+    # Second create (the retry): ALLOWED — this is the whole point of M1.
+    second = _gh(bindir, tmp_path, "gh pr create --title t2")
+    assert second.returncode == 0, f"a retry after a failed create must be allowed: {second.stdout}\n{second.stderr}"
+    assert "one-PR-per-run guard" not in second.stderr
+
+    # BOTH attempts reached the real gh (the failure did not consume the slot).
+    assert _gh_calls(bindir) == ["pr create --title t", "pr create --title t2"]
+    # The retry's SUCCESS now holds the claim, so a third attempt is refused.
+    third = _gh(bindir, tmp_path, "gh pr create --title t3")
+    assert third.returncode != 0
+    assert "one-PR-per-run guard" in third.stderr
+    assert _gh_calls(bindir) == ["pr create --title t", "pr create --title t2"]
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+# --- M4: install idempotency ("real preserved" != "guard installed") -------
+
+
+def test_gh_pr_guard_reinstall_is_idempotent_for_the_same_run_scope(tmp_path: Path) -> None:
+    """M4: re-running the install on an ALREADY-guarded workspace must SUCCEED.
+
+    Under the old rule (``[ -f "$real" ] -> continue``) a second install found
+    the preserved real gh, skipped the only directory, guarded nothing, and
+    then reported "a gh exists but none could be guarded" (exit 1) — a false
+    failure on every reused workspace. A scope-matching shim now COUNTS as
+    guarded.
+    """
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker)
+    # _install_guard asserts exit 0 + the preserved real gh; a second run of
+    # the SAME install script must hold both.
+    _install_guard(bindir, tmp_path, marker)
+
+    shim = _shim_text(bindir)
+    assert _GH_PR_GUARD_FINGERPRINT in shim
+    assert f"MARKER='{marker}'" in shim
+    # The preserved copy is still the REAL gh, never a copy of the shim.
+    real = (bindir / "gh.modulo-real").read_text(encoding="utf-8")
+    assert _GH_PR_GUARD_FINGERPRINT not in real
+    # And the guard still works after the double install.
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode == 0, first.stderr
+    second = _gh(bindir, tmp_path, "gh pr create --title t2")
+    assert second.returncode != 0
+    assert "one-PR-per-run guard" in second.stderr
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+def test_gh_pr_guard_reinstall_rewrites_a_stale_run_scope(tmp_path: Path) -> None:
+    """M4: a shim carrying an OLD run scope must be REWRITTEN on re-install.
+
+    A stale-scope shim would claim a marker key to the previous run's scope —
+    on a reused workspace that stale claim blocks every future run. Detecting
+    the shim by its own fingerprint + embedded scope (not by the preserved
+    ``gh.modulo-real``, which outlives it) is what makes the rewrite happen.
+    """
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    stale = gh_pr_guard_marker_path("pytest-stale-scope")
+    fresh = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{stale}' '{fresh}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, stale)
+    assert f"MARKER='{stale}'" in _shim_text(bindir)
+
+    # Re-install with this run's scope: the stale shim is rewritten in place.
+    _install_guard(bindir, tmp_path, fresh)
+    shim = _shim_text(bindir)
+    assert _GH_PR_GUARD_FINGERPRINT in shim, "the rewritten file must still be our shim"
+    assert f"MARKER='{fresh}'" in shim, "the new run scope must be embedded"
+    assert f"MARKER='{stale}'" not in shim, "the stale run scope must be gone"
+    real = (bindir / "gh.modulo-real").read_text(encoding="utf-8")
+    assert _GH_PR_GUARD_FINGERPRINT not in real, "the rewrite must never clobber the preserved real gh"
+
+    # Functionally: the create claims THIS run's marker, not the stale one.
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode == 0, first.stderr
+    fresh_claim = _run_in_sh(f"test -d '{fresh}' && echo claimed\n", cwd=tmp_path)
+    assert fresh_claim.stdout.strip() == "claimed"
+    stale_claim = _run_in_sh(f"test -d '{stale}' && echo claimed\n", cwd=tmp_path)
+    assert not stale_claim.stdout.strip()
+    _run_in_sh(f"rm -rf '{stale}' '{fresh}'\n", cwd=tmp_path)
+
+
+def test_gh_pr_guard_reinstall_repairs_a_preserved_but_unguarded_gh(tmp_path: Path) -> None:
+    """M4: ``gh.modulo-real`` present but ``gh`` NOT a shim (partial install)
+    must be RE-PAIRED and reported as success, not as "none could be guarded"."""
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    # Partial state: the real gh was preserved but the shadow never happened.
+    (bindir / "gh.modulo-real").write_bytes((bindir / "gh").read_bytes())
+    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    # _install_guard asserts exit 0 — the old rule exited 1 here.
+    _install_guard(bindir, tmp_path, marker)
+
+    shim = _shim_text(bindir)
+    assert _GH_PR_GUARD_FINGERPRINT in shim
+    assert f"MARKER='{marker}'" in shim
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode == 0, first.stderr
+    second = _gh(bindir, tmp_path, "gh pr create --title t2")
+    assert second.returncode != 0
+    assert "one-PR-per-run guard" in second.stderr
     _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
 
 
