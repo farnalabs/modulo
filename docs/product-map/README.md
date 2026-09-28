@@ -808,6 +808,41 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `test_me_assistant_skills.py`. The tracker now cites all three unit suites;
 > the gap bullet is re-worded to name the actual distribution.
 
+> **Closed this walk (2026-09-28):** archived the five remaining stale
+> `ui/*.feature` UI-journey BDD drafts pinned `@awaiting-implementation` since
+> 2026-08 — they describe surfaces that could never execute. Following the
+> `ui/org_settings.feature` precedent, every testid the drafts' Playwright steps
+> depend on was verified to exist NOWHERE in the frontend (0 hits for
+> `theme-toggle`, `pipeline-canvas`, `agent-sidebar`, `agent-item`, `canvas-node`,
+> `canvas-edge`, `agent-config-panel`, `delete-node-button`, `approval-banner`,
+> `eval-result-item`, `eval-results-list`, `filter-failed`, `compare-run-checkbox`,
+> `compare-button`, `eval-comparison`, `node-output`, `log-viewer-tab`,
+> `log-entry`, `sensitive-value`, `run-status`, `node-status`), and the step
+> `Given` clauses navigated to fictional run ids (`/runs/run-completed-123`) no
+> backend could serve. The five files were deleted
+> (`theme_switching.feature`, `run_detail.feature`, `real_time_updates.feature`,
+> `pipeline_builder.feature`, `eval_dashboard.feature`) along with the wholly-
+> dead `steps/test_ui.py` step module, and the 22 scenarios were removed from
+> `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`). Each real
+> journey the drafts gestured at ships with REAL manifest-registered testids that
+> are already covered elsewhere: run-detail + HITL journeys by
+> `frontend/tests/e2e/journeys/run-cancel-journey.spec.ts`,
+> `run-hitl-audit.spec.ts`, `run-manual-output-io.spec.ts`,
+> `runs-filter-journey.spec.ts`; the pipeline editor by
+> `frontend/tests/e2e/pipeline-editor.spec.ts`; eval journeys by
+> `frontend/tests/e2e/evals.spec.ts`, `eval-pages-empty-states.spec.ts`,
+> `journeys/eval-journey.spec.ts`; real-time run events by
+> `frontend/tests/e2e/sse-crossworker-notification.spec.ts` plus the backend
+> `operations/websocket_reconnection.feature` and
+> `observability/active_run_observability.feature` (all executing BDD); theme
+> switching does not ship (there is no theme toggle; the static
+> `data-theme="agent"` CSS hook is locked by
+> `frontend/src/__tests__/agent-theme-audit.spec.ts`).
+> `_ORPHANED_BDD_FEATURES` stays empty and the new guard
+> `test_no_bdd_citations_for_fully_deselected_features` makes it an invariant
+> that a product-map `bdd:` citation always names at least one scenario CI
+> actually executes.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

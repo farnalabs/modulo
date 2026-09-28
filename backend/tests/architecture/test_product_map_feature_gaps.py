@@ -516,6 +516,31 @@ def test_no_unregistered_bdd_feature_files():
     )
 
 
+def _feature_scenarios_fully_deselected(feature: Path) -> bool:
+    """Return True when every scenario in a feature file is ``@awaiting-implementation``.
+
+    A fully-deselected file registers scenarios that pytest's ``-m 'not
+    awaiting-implementation'`` addopt skips, so the file contributes nothing to a
+    run no matter how many step modules call ``scenarios(...)`` for it. Files with
+    no scenarios (or at least one executing scenario) are not "fully deselected".
+    """
+    tags: set[str] = set()
+    total = 0
+    executing = 0
+    for raw in feature.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("@"):
+            tags = {t for t in line.split() if t.startswith("@")}
+            continue
+        if line.startswith(("Scenario Outline", "Scenario:")):
+            total += 1
+            if "@awaiting-implementation" not in tags:
+                executing += 1
+    return total > 0 and executing == 0
+
+
 #: Heading that opens a behaviour-tracker's currently-acknowledged gap list.
 _KNOWN_GAPS_HEADING = "## Known Gaps"
 _KNOWN_GAPS_CLAIM_START = re.compile(r"^- ", re.MULTILINE)
@@ -603,6 +628,48 @@ def test_no_stale_dead_bdd_claims():
         "stale 'dead BDD' claims: update the entry to cite them as executing "
         "coverage and drop the gap:\n"
         + "\n".join(f"  {entry} -> {', '.join(files)}" for entry, files in sorted(stale.items()))
+    )
+
+
+def test_no_bdd_citations_for_fully_deselected_features():
+    """No ``bdd:`` citation points at a feature file whose every scenario is deselected.
+
+    ``test_bdd_citations_are_registered_coverage`` proves a cited ``.feature``
+    file is *loaded* by a step module, but a file whose scenarios are all
+    ``@awaiting-implementation`` is deselected at collection time (pyproject
+    addopt ``-m 'not awaiting-implementation'``) and therefore never executes --
+    the product map claims BDD coverage for behaviour CI does not run. This was
+    exactly the stale ``ui/eval_dashboard.feature`` citation: registered via
+    ``steps/test_ui.py`` but with all four scenarios pinned since 2026-08, so
+    ``feat-evals`` advertised executing BDD coverage that never executed until the
+    drafts were archived (2026-09-28 Improve Architecture walk). A ``bdd:``
+    citation must name at least one executing scenario; fully-deselected drafts
+    belong nowhere in the graph and must be archived/re-anchored instead.
+    """
+    registered_coverage = {
+        (entry, ref)
+        for entry in _product_map_entry_paths()
+        for ref in _entry_frontmatter(entry).get("bdd") or []
+        if isinstance(ref, str) and ref.endswith(".feature")
+    }
+    deselected: dict[str, list[str]] = {}
+    for entry in _product_map_entry_paths():
+        frontmatter = _entry_frontmatter(entry)
+        for ref in frontmatter.get("bdd") or []:
+            if not isinstance(ref, str) or not ref.endswith(".feature"):
+                continue
+            resolved = (REPO_ROOT / ref).resolve()
+            if not resolved.is_relative_to(_BDD_ROOT.resolve()) or not resolved.is_file():
+                continue
+            if _feature_scenarios_fully_deselected(resolved):
+                deselected.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(ref)
+    assert not deselected, (
+        "bdd: citations that name a fully @awaiting-implementation-deselected "
+        ".feature file — every scenario is skipped by '-m not awaiting-implementation', "
+        "so the product map claims BDD coverage that never executes. Archive or "
+        "re-anchor the draft (and drop the bdd: citation, or un-deselect at least "
+        "one scenario) so the claim describes tests CI actually runs:\n"
+        + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(deselected.items()))
     )
 
 
