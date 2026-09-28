@@ -610,6 +610,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/hitl-review-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Get Hitl Review Window */
+        get: operations["admin_get_hitl_review_window_api_v1_admin_org_hitl_review_window_get"];
+        /** Admin Update Hitl Review Window */
+        put: operations["admin_update_hitl_review_window_api_v1_admin_org_hitl_review_window_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/org/work-item-agent-minting": {
         parameters: {
             query?: never;
@@ -13083,6 +13101,22 @@ export interface components {
             /** @description FAR-860: typed response contract. Absent/None = today's approve/reject behaviour (backward-compatible). kind='choice' declares agent-defined options; the human's answer is injected into run state as hitl_answer_<review_id> for downstream conditional edges. */
             response_contract?: components["schemas"]["HitlResponseContract"] | null;
         };
+        /**
+         * HitlReviewWindowResponse
+         * @description Public admin response for the org default HITL review window.
+         *
+         *     ``is_default`` marks the ABSENT-key case so the UI can render the effective
+         *     instance default rather than implying an explicit org setting exists.
+         */
+        HitlReviewWindowResponse: {
+            /** Hitl Review Window Seconds */
+            hitl_review_window_seconds?: number | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+        };
         /** HousekeepingCategory */
         HousekeepingCategory: {
             /** Category */
@@ -15064,6 +15098,11 @@ export interface components {
              * @default 300
              */
             node_timeout_seconds: number;
+            /**
+             * Hitl Review Window Seconds
+             * @description Per-pipeline HITL review window override (60-604800s = 1 min..7 days). How long a fired review may sit unclaimed/undecided before the run is cancelled to release its concurrency slot. Precedence: this value > the org default (settings) > the instance/env default. null = no override (inherit). Resolved once at gate fire time.
+             */
+            hitl_review_window_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;
@@ -15504,6 +15543,8 @@ export interface components {
             lock_wait_timeout_seconds: number;
             /** Node Timeout Seconds */
             node_timeout_seconds: number;
+            /** Hitl Review Window Seconds */
+            hitl_review_window_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults: {
                 [key: string]: unknown;
@@ -15620,6 +15661,11 @@ export interface components {
             lock_wait_timeout_seconds?: number | null;
             /** Node Timeout Seconds */
             node_timeout_seconds?: number | null;
+            /**
+             * Hitl Review Window Seconds
+             * @description Per-pipeline HITL review window override (60-604800s). Omit to leave unchanged; null clears the override (inherit the org/instance default).
+             */
+            hitl_review_window_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;
@@ -18548,6 +18594,11 @@ export interface components {
             /** Visibility */
             visibility?: string | null;
         };
+        /** UpdateHitlReviewWindowRequest */
+        UpdateHitlReviewWindowRequest: {
+            /** Hitl Review Window Seconds */
+            hitl_review_window_seconds?: number | null;
+        };
         /** UpdateOrgRequest */
         UpdateOrgRequest: {
             /** Name */
@@ -20765,6 +20816,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SandboxConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_hitl_review_window_api_v1_admin_org_hitl_review_window_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HitlReviewWindowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_hitl_review_window_api_v1_admin_org_hitl_review_window_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHitlReviewWindowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HitlReviewWindowResponse"];
                 };
             };
             /** @description Validation Error */

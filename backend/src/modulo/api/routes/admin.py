@@ -55,6 +55,7 @@ from modulo.core.runtime_config import (
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
+from modulo.db.crud.hitl_review_config import ORG_HITL_REVIEW_WINDOW_KEY
 from modulo.db.crud.invitations import (
     create_invitation,
     has_live_for_email,
@@ -3820,6 +3821,120 @@ async def admin_update_sandbox_concurrency(
         },
     )
     return SandboxConcurrencyResponse(sandbox_concurrency_limit=req.sandbox_concurrency_limit)
+
+
+# ── Org HITL Review Window (FAR-1257) ──────────────────────────────────────
+# Org self-service route: principal's own org only (never from path/body), so
+# cross-org writes are structurally impossible. The org default is the MIDDLE
+# layer of the review-window chain (pipeline override > org default >
+# instance/env default) and lives in ``Organisation.settings_json`` under
+# ``hitl_review_window_seconds`` — same substrate as sandbox_concurrency.
+# null clears the key (inherit the instance default); the terminalizer safety
+# net has NO per-org opt-out and no "0 = disabled".
+
+
+class HitlReviewWindowResponse(BaseModel):
+    """Public admin response for the org default HITL review window.
+
+    ``is_default`` marks the ABSENT-key case so the UI can render the effective
+    instance default rather than implying an explicit org setting exists.
+    """
+
+    hitl_review_window_seconds: int | None = None
+    is_default: bool = False
+
+
+class UpdateHitlReviewWindowRequest(BaseModel):
+    # Same shipped envelope as every other layer: 1 min .. 7 days. ``None``
+    # clears the org default (inherit instance/env); ``0`` is rejected — the
+    # safety net cannot be disabled.
+    hitl_review_window_seconds: int | None = Field(default=None, ge=60, le=604800)
+
+
+@router.get("/org/hitl-review-window")
+async def admin_get_hitl_review_window(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> HitlReviewWindowResponse:
+    async def _do_read() -> tuple[int | None, bool]:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            settings = dict(org.settings_json) if org is not None and org.settings_json else {}
+            # Tolerant read: a non-int/absent key is "no org default" (None),
+            # exactly like the resolution helper's view of the same key.
+            raw = settings.get(ORG_HITL_REVIEW_WINDOW_KEY)
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                return None, True
+            return raw, False
+
+    value, is_default = await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_read,
+        detail_admin="Only admin users can view the HITL review window",
+    )
+    return HitlReviewWindowResponse(hitl_review_window_seconds=value, is_default=is_default)
+
+
+@router.put("/org/hitl-review-window", status_code=status.HTTP_200_OK)
+async def admin_update_hitl_review_window(
+    req: UpdateHitlReviewWindowRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> HitlReviewWindowResponse:
+    async def _do_write() -> None:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            # FAR-589 D3b row-level lock (SELECT ... FOR UPDATE) so the
+            # read-modify-write of settings_json cannot drop a concurrent
+            # writer's change between the read and the flush. FAR-1025: opt out
+            # of the global soft-delete filter — a pending-deletion org is still
+            # operationally live during the confirmation window.
+            result = await session.execute(
+                include_soft_deleted(
+                    select(Organisation)
+                    .where(Organisation.id == current_user.organisation_id)
+                    .limit(1)
+                    .with_for_update()
+                )
+            )
+            org = result.scalar_one_or_none()
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+            # Merge, never replace: every OTHER settings_json key (license,
+            # retention, feature_overrides, sandbox_concurrency, ...) survives.
+            settings = dict(org.settings_json) if org.settings_json else {}
+            if req.hitl_review_window_seconds is None:
+                settings.pop(ORG_HITL_REVIEW_WINDOW_KEY, None)
+            else:
+                settings[ORG_HITL_REVIEW_WINDOW_KEY] = req.hitl_review_window_seconds
+            org.settings_json = settings
+            await session.flush()
+
+    await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_write,
+        detail_admin="Only admin users can update the HITL review window",
+    )
+    await _record_org_audit(
+        session,
+        current_user,
+        "org.hitl_review_window_updated",
+        {"hitl_review_window_seconds": req.hitl_review_window_seconds},
+    )
+    logger.info(
+        "hitl_review_window.updated",
+        extra={
+            "org_id": str(current_user.organisation_id),
+            "hitl_review_window_seconds": req.hitl_review_window_seconds,
+        },
+    )
+    return HitlReviewWindowResponse(
+        hitl_review_window_seconds=req.hitl_review_window_seconds,
+        is_default=req.hitl_review_window_seconds is None,
+    )
 
 
 # ── Org Work-Item Agent-Minting Flag (FAR-795 Slice A) ─────────────────────

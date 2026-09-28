@@ -448,6 +448,9 @@ def _build_bundle_from_pins(
             "graph_nodes_json": graph_nodes,
             "run_context_defaults": {},
             "node_timeout_seconds": 300,
+            # FAR-1257: no per-pipeline override on a synthesized collection
+            # install — the installed pipeline inherits the org/instance default.
+            "hitl_review_window_seconds": None,
             "retry_policy": {},
         },
         "agents": agents,

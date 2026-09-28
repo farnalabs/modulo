@@ -32,6 +32,7 @@ from modulo.core.pipeline_engine.classify import (
     REASON_COMPENSATION_FAILED,
     REASON_DELIVERED,
     REASON_DELIVERED_EMAIL,
+    REASON_HITL_TIMEOUT,
     REASON_NEEDS_HUMAN,
     REASON_NO_DELIVERY,
     REASON_NO_WORK,
@@ -539,6 +540,81 @@ class TestReasons:
     def test_work_intact_recorded_as_metadata(self) -> None:
         result = classify_run("complete", None, work_intact=True)
         assert result.work_intact is True
+
+
+class TestCancelledHitlTimeoutReason:
+    """FAR-1257: the review-window sweep's ``cancelled`` runs get their OWN
+    reason — still ``excluded``, never countable, but distinguishable from a
+    deliberate operator/HITL cancel. No new ``runs.status`` was added."""
+
+    def test_error_code_review_expired_emits_hitl_timeout(self) -> None:
+        result = classify_run("cancelled", "hitl_review_expired")
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason == REASON_HITL_TIMEOUT
+
+    def test_canonical_dotted_error_code_emits_hitl_timeout(self) -> None:
+        # The same fact in canonical spelling must classify identically.
+        result = classify_run("cancelled", "hitl.review_expired")
+        assert result.reason == REASON_HITL_TIMEOUT
+
+    def test_cancel_reason_alone_emits_hitl_timeout(self) -> None:
+        # A legacy row may carry only the FAR-1233 WHY stamp.
+        result = classify_run("cancelled", None, cancel_reason="hitl_review_expired")
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason == REASON_HITL_TIMEOUT
+
+    @pytest.mark.parametrize(
+        ("error_code", "cancel_reason"),
+        [
+            (None, None),
+            ("junk_error_code", None),
+            ("junk_error_code", "user_requested"),
+            (None, "agent_requested"),
+            # A sibling HITL code that is NOT the review-window timeout must
+            # not be bucketed as one (exact canonical-code match only).
+            ("hitl_review_missing", "hitl_review_missing"),
+        ],
+        ids=["no-stamps", "junk-error", "operator-cancel", "agent-cancel", "sibling-code"],
+    )
+    def test_other_cancels_keep_operator_or_hitl_cancelled(
+        self,
+        error_code: str | None,
+        cancel_reason: str | None,
+    ) -> None:
+        result = classify_run("cancelled", error_code, cancel_reason=cancel_reason)
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason == REASON_CANCELLED
+
+    def test_hitl_timeout_reason_is_distinct_from_the_generic_one(self) -> None:
+        assert REASON_HITL_TIMEOUT != REASON_CANCELLED
+        assert REASON_HITL_TIMEOUT == "hitl_timeout"
+
+    @pytest.mark.parametrize(
+        ("status", "error_code"),
+        [
+            ("router_no_match", "hitl_review_expired"),
+            ("budget_exceeded", "hitl_review_expired"),
+        ],
+        ids=["router", "budget"],
+    )
+    def test_other_excluded_statuses_keep_their_own_reasons(
+        self,
+        status: str,
+        error_code: str | None,
+    ) -> None:
+        """The timeout discrimination is scoped to ``cancelled`` only — it must
+        not leak into the router_no_match / budget_exceeded reasons (FAR-415)."""
+        result = classify_run(status, error_code)
+        expected = REASON_ROUTER_NO_MATCH if status == "router_no_match" else REASON_BUDGET_EXCEEDED
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason == expected
+
+    def test_countable_statuses_are_untouched_by_the_cancel_reason(self) -> None:
+        """``cancel_reason`` refines ONLY the cancelled branch; a failed run's
+        derived reason must not change."""
+        result = classify_run("failed", None, cancel_reason="hitl_review_expired")
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_DELIVERY
 
 
 # ---------------------------------------------------------------------------

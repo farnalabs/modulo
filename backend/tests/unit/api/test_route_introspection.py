@@ -145,6 +145,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("PUT", "/api/v1/admin/runs/retention"): "admin.py inline org_role==admin",
     ("PUT", "/api/v1/admin/org"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/sandbox-concurrency"): "admin.py inline _require_org_admin",
+    ("PUT", "/api/v1/admin/org/hitl-review-window"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/run-concurrency"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/work-item-agent-minting"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/community-objects"): "admin.py inline _require_org_admin",

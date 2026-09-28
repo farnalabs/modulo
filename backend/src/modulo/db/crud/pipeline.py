@@ -279,6 +279,7 @@ async def create_pipeline(
     max_concurrent_runs: int = 5,
     lock_wait_timeout_seconds: int = 300,
     node_timeout_seconds: int = 300,
+    hitl_review_window_seconds: int | None = None,
     run_context_defaults: dict[str, Any] | None = None,
     default_autonomy_level: str = "manual_approval",
     max_autonomy_level: str | None = None,
@@ -329,6 +330,7 @@ async def create_pipeline(
         max_concurrent_runs=max_concurrent_runs,
         lock_wait_timeout_seconds=lock_wait_timeout_seconds,
         node_timeout_seconds=node_timeout_seconds,
+        hitl_review_window_seconds=hitl_review_window_seconds,
         run_context_defaults=run_context_defaults or {},
         default_autonomy_level=default_autonomy_level,
         max_autonomy_level=max_autonomy_level,
@@ -698,6 +700,9 @@ class _CloneSourceSnapshot:
     max_concurrent_runs: int
     lock_wait_timeout_seconds: int
     node_timeout_seconds: int
+    # FAR-1257: nullable per-pipeline review-window override (NULL = inherit
+    # the org default, then the instance default).
+    hitl_review_window_seconds: int | None
     run_context_defaults: dict[str, Any]
     graph_nodes_json: list[dict[str, Any]]
     default_autonomy_level: str
@@ -836,6 +841,7 @@ async def _clone_pipeline_config(
         max_concurrent_runs=snapshot.max_concurrent_runs,
         lock_wait_timeout_seconds=snapshot.lock_wait_timeout_seconds,
         node_timeout_seconds=snapshot.node_timeout_seconds,
+        hitl_review_window_seconds=snapshot.hitl_review_window_seconds,
         run_context_defaults=copy.deepcopy(snapshot.run_context_defaults),
         # FAR-889: copying a stored snapshot replays its graph verbatim.  A
         # snapshot predating the guard may contain schema-less manual nodes, so
@@ -1123,6 +1129,9 @@ async def _read_clone_source_snapshot(
                 max_concurrent_runs=source.max_concurrent_runs,
                 lock_wait_timeout_seconds=source.lock_wait_timeout_seconds,
                 node_timeout_seconds=source.node_timeout_seconds,
+                # getattr: stand-in rows built by tests (and any pre-0263
+                # materialisation) may lack the column — treat as no override.
+                hitl_review_window_seconds=getattr(source, "hitl_review_window_seconds", None),
                 run_context_defaults=copy.deepcopy(source.run_context_defaults),
                 # FAR-889: raw source graph for the clone writer; carried
                 # verbatim so legacy schema-less manual nodes survive a copy

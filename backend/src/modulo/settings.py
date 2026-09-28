@@ -5,6 +5,7 @@ from collections.abc import Callable
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
+from typing import Final
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -108,6 +109,26 @@ def set_first_boot_guard(guard: Callable[[], None] | None) -> None:
     """
     global _first_boot_guard
     _first_boot_guard = guard
+
+
+# ---------------------------------------------------------------------------
+# FAR-1257 HITL review-window constants (module level, NOT Settings fields).
+#
+# This module is a near-leaf: it imports only ``modulo.db.url_utils``, so BOTH
+# the DB layer and core may import it. That is WHY the claim-TTL constant lives
+# here rather than in ``core.hitl_manager`` — the import-linter contract
+# ``db-does-not-import-core`` forbids ``db.crud.hitl_review_config`` from
+# reading ``core.hitl_manager``, and duplicating the 900 in two modules is
+# exactly the drift the fire-time window must not have (the resolved default
+# window is ``HITL_CLAIM_TTL_SECONDS + hitl_review_cancel_grace_seconds`` and
+# ``create_gate`` stamps ``expires_at`` from the same TTL). One source, both
+# directions.
+# ---------------------------------------------------------------------------
+
+#: The claim-TTL component of the default HITL review window, in seconds.
+#: ``core.hitl_manager`` derives its ``_DEFAULT_EXPIRY_MINUTES`` from this, so
+#: the fire-time window and the claim's ``expires_at`` can never diverge.
+HITL_CLAIM_TTL_SECONDS: Final[int] = 900  # 15 minutes — see Settings.hitl_review_cancel_grace_seconds
 
 
 class Settings(BaseSettings):
@@ -453,14 +474,28 @@ class Settings(BaseSettings):
     # an org-level concurrency slot. The dispatcher_reconcile sweep
     # terminalizes it ``cancelled`` (``hitl_review_expired``), releasing the
     # slot. Default 60 min — an unanswered gate that sat a full hour past its
-    # own TTL is dead work, not pending review. Park interplay (FAR-604 D2):
-    # this sweep and the park sweep share a byte-identical gate predicate, so
-    # whichever grace expires FIRST acts. At the defaults (60m < 24h)
-    # terminalization at expiry+60m always takes precedence and supersedes
-    # parking for the unclaimed-expired-gate class — the park sweep can never
-    # fire for that population (a parked run also still holds the org slot,
-    # which is WHY this terminalizer exists). Parking remains reachable only
-    # if an operator raises this ABOVE ``hitl_park_grace_seconds``.
+    # own TTL is dead work, not pending review.
+    #
+    # FAR-1257: this is now the INSTANCE/ENV layer of a three-level chain — a
+    # per-pipeline override (``pipelines.hitl_review_window_seconds``) and an
+    # org default (``Organisation.settings_json.hitl_review_window_seconds``)
+    # both win over it, resolved ONCE at gate fire time and stamped as an
+    # absolute ``hitl_claims.terminalize_at``. Stamped rows ignore this knob
+    # entirely; it still applies verbatim to legacy rows fired before the
+    # column existed. The env default is deliberately UNCHANGED (the resolved
+    # default with no overrides stays 4500s = 15min claim TTL + 60min grace).
+    #
+    # Park interplay (FAR-604 D2): the park sweep shares this gate predicate
+    # (open + unclaimed + undecided) but anchors its OWN deadline on the
+    # review deadline (FAR-1257 ``terminalize_at`` + a positive margin), so the
+    # terminalizing sweep above — which collects AT ``terminalize_at`` — always
+    # acts first. At the defaults the terminalizer (expiry+60m) therefore wins
+    # and supersedes parking for the unclaimed-expired-gate class — the park
+    # sweep can never fire for that population (a parked run also still holds
+    # the org slot, which is WHY this terminalizer exists). Raising this above
+    # ``hitl_park_grace_seconds`` no longer makes parking reachable for
+    # FAR-1257-stamped rows (the stamp, not this knob, sets their deadline);
+    # it still does for legacy unstamped rows.
     hitl_review_cancel_grace_seconds: int = Field(
         default=3600, alias="HITL_REVIEW_CANCEL_GRACE_SECONDS", ge=60, le=604800
     )
