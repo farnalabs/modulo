@@ -673,19 +673,48 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
-    // Stub window.confirm to reject the prompt.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    // Click cancel — the in-app dialog should appear.
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringContaining('unsaved policy gate changes')
-    )
-    // Form should NOT have been reset — the cancel was rejected.
+    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBe('dialog')
+    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(dialog.text()).toContain('unsaved policy gate changes')
+
+    // "Keep editing" keeps the form intact.
+    await wrapper.find('[data-test-id="dirty-confirm-stay"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(true)
     expect(blockChecked(wrapper)).toBe(true)
+  })
 
-    confirmSpy.mockRestore()
+  it('proceeds with cancel when the user clicks Discard (finding 4)', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    // Change the gate action to dirty it.
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+
+    // Click cancel — dialog appears.
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+
+    // "Discard" proceeds with the cancel.
+    await wrapper.find('[data-test-id="dirty-confirm-proceed"]').trigger('click')
+    await flush()
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    // Form was reset — cancel button is gone.
+    expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(false)
   })
 
   it('allows cancel when the gate is not dirty (finding 4)', async () => {
@@ -698,16 +727,12 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     // Gate was not changed — not dirty.
-    const confirmSpy = vi.spyOn(window, 'confirm')
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
-    await nextTick()
+    await flush()
 
-    // confirm should NOT have been called — the gate is not dirty.
-    expect(confirmSpy).not.toHaveBeenCalled()
-    // Form was reset.
+    // No dialog should appear — the form resets immediately.
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(false)
-
-    confirmSpy.mockRestore()
   })
 
   it('prompts on eval-switch when the gate action is dirty (finding 4)', async () => {
@@ -727,17 +752,113 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
-    // Stub window.confirm to reject.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    // Try to switch evals — dialog should appear.
     await openEditor(wrapper, 'eval-2')
 
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringContaining('unsaved policy gate changes')
-    )
+    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.text()).toContain('unsaved policy gate changes')
+
+    // "Keep editing" stays on eval-1.
+    await wrapper.find('[data-test-id="dirty-confirm-stay"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
     // Should still be on eval-1 (switch was rejected).
     expect(blockChecked(wrapper)).toBe(true)
+  })
 
-    confirmSpy.mockRestore()
+  it('proceeds with eval-switch when the user clicks Discard (finding 4)', async () => {
+    evalsList = [
+      evalItem({ id: 'eval-1', name: 'Eval 1' }),
+      evalItem({ id: 'eval-2', name: 'Eval 2' }),
+    ]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    gateResponses['eval-2'] = ok({ id: 'g2', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    // Change the gate action to dirty it.
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+
+    // Try to switch evals — dialog appears.
+    // Note: openEditor triggers startEdit which shows the dialog, but the switch
+    // happens after the dialog resolves. We need to resolve it asynchronously.
+    const switchPromise = openEditor(wrapper, 'eval-2')
+    await nextTick()
+
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+
+    // "Discard" proceeds with the switch.
+    await wrapper.find('[data-test-id="dirty-confirm-proceed"]').trigger('click')
+    await switchPromise
+
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    // Now on eval-2 — warn is checked (eval-2 has warn gate).
+    expect(warnChecked(wrapper)).toBe(true)
+  })
+
+  it('dismisses the dirty-confirm dialog on Escape key (finding 4)', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+
+    // Escape dismisses the dialog (resolves with false = stay).
+    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    // Form was NOT reset — the user chose to stay.
+    expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(true)
+    expect(blockChecked(wrapper)).toBe(true)
+  })
+
+  it('traps Tab focus within the dirty-confirm dialog (finding 4)', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+
+    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('role')).toBe('dialog')
+    expect(dialog.attributes('aria-modal')).toBe('true')
+
+    // Structural verification: the dialog has the keydown handler wired.
+    const source = readFileSync(
+      join(__dirname, '..', 'views', 'EvalEditorView.vue'),
+      'utf-8',
+    )
+    expect(source).toContain('onDirtyDialogKeydown')
+    expect(source).toContain("e.key === 'Tab'")
+    expect(source).toContain("e.key === 'Escape'")
+
+    // The dialog must have two focusable buttons (Discard and Keep editing).
+    const buttons = dialog.findAll('button')
+    expect(buttons.length).toBe(2)
   })
 
   // Finding 5: Badge refresh after a successful retry.

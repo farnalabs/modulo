@@ -226,6 +226,37 @@
                 </div>
               </div>
 
+              <!-- Dirty-gate confirm dialog -->
+              <div
+                v-if="dirtyConfirmVisible"
+                ref="dirtyConfirmDialogRef"
+                role="dialog"
+                aria-modal="true"
+                :aria-label="$t('views.EvalEditorView.policyGate.dirtyConfirmAriaLabel')"
+                data-test-id="dirty-confirm-dialog"
+                class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                @keydown="onDirtyDialogKeydown"
+              >
+                <span>{{ $t('views.EvalEditorView.policyGate.unsavedChangesConfirm') }}</span>
+                <button
+                  type="button"
+                  data-test-id="dirty-confirm-proceed"
+                  class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                  @click="resolveDirtyConfirm(true)"
+                  ref="dirtyConfirmProceedBtnRef"
+                >
+                  {{ $t('views.EvalEditorView.policyGate.dirtyConfirmProceed') }}
+                </button>
+                <button
+                  type="button"
+                  data-test-id="dirty-confirm-stay"
+                  class="rounded px-2 py-0.5 text-xs font-medium hover:bg-accent"
+                  @click="resolveDirtyConfirm(false)"
+                >
+                  {{ $t('views.EvalEditorView.policyGate.dirtyConfirmStay') }}
+                </button>
+              </div>
+
               <div class="flex items-center gap-2 pt-2">
               <Button :disabled="!canSave || saving" data-testid="eval-editor-save" @click="saveEval">
                 {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
@@ -438,6 +469,12 @@ const gateDeleteConfirmBtnRef = ref<HTMLElement | null>(null)
 const gateDialogRef = ref<HTMLElement | null>(null)
 const evalGateActions = ref<Record<string, string>>({})
 
+// §3.2 dirty-gate confirm dialog state
+const dirtyConfirmVisible = ref(false)
+const dirtyConfirmDialogRef = ref<HTMLElement | null>(null)
+const dirtyConfirmProceedBtnRef = ref<HTMLElement | null>(null)
+let dirtyConfirmResolve: ((value: boolean) => void) | null = null
+
 const configParseError = computed(() => {
   if (!form.config_json.trim()) return null
   try {
@@ -485,6 +522,12 @@ function resetForm() {
   gateDeleteBtnRef.value = null
   gateDialogRef.value = null
   gatePendingEvalId.value = null
+  // Reset dirty-gate confirm dialog (§3.2)
+  dirtyConfirmVisible.value = false
+  if (dirtyConfirmResolve) {
+    dirtyConfirmResolve(false)
+    dirtyConfirmResolve = null
+  }
 }
 
 const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDataFetch(
@@ -712,9 +755,9 @@ async function saveEval() {
   saving.value = false
 }
 
-function startEdit(ev: EvalDefinition) {
+async function startEdit(ev: EvalDefinition) {
   // §3.2 dirty-gate guard: prompt when switching evals with unsaved gate changes
-  if (editingEvalId.value !== null && !confirmGateDirty()) return
+  if (editingEvalId.value !== null && !(await confirmGateDirty())) return
   editingEvalId.value = ev.id
   form.name = ev.name
   form.node_id = ev.node_id ?? '__all__'
@@ -786,15 +829,59 @@ watch(gateDeleteConfirming, (confirming) => {
   }
 })
 
+// §3.2 auto-focus the proceed button when the dirty-confirm dialog opens
+watch(dirtyConfirmVisible, (visible) => {
+  if (visible) {
+    nextTick(() => dirtyConfirmProceedBtnRef.value?.focus())
+  }
+})
+
 // §3.2 dirty-gate guard: returns true if the gate is dirty and the user should
 // be prompted before discarding. Returns false if not dirty (proceed freely).
-function confirmGateDirty(): boolean {
+async function confirmGateDirty(): Promise<boolean> {
   if (!isGateDirty.value) return true
-  return window.confirm(t('views.EvalEditorView.policyGate.unsavedChangesConfirm'))
+  return new Promise<boolean>((resolve) => {
+    dirtyConfirmResolve = resolve
+    dirtyConfirmVisible.value = true
+  })
 }
 
-function handleCancel() {
-  if (!confirmGateDirty()) return
+function resolveDirtyConfirm(proceed: boolean) {
+  dirtyConfirmVisible.value = false
+  if (dirtyConfirmResolve) {
+    dirtyConfirmResolve(proceed)
+    dirtyConfirmResolve = null
+  }
+}
+
+function onDirtyDialogKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    resolveDirtyConfirm(false)
+    return
+  }
+  if (e.key === 'Tab' && dirtyConfirmDialogRef.value) {
+    const focusable = dirtyConfirmDialogRef.value.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+  }
+}
+
+async function handleCancel() {
+  if (!(await confirmGateDirty())) return
   resetForm()
 }
 

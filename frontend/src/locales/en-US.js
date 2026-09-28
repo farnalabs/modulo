@@ -1548,7 +1548,10 @@ export default {
         "badgeBlock": "block",
         "deleteAriaLabel": "Delete policy gate",
         "retryAriaLabel": "Retry saving policy gate",
-        "unsavedChangesConfirm": "You have unsaved policy gate changes. Discard them?"
+        "unsavedChangesConfirm": "You have unsaved policy gate changes. Discard them?",
+        "dirtyConfirmAriaLabel": "Unsaved changes confirmation",
+        "dirtyConfirmStay": "Keep editing",
+        "dirtyConfirmProceed": "Discard"
       }
     },
     "RunDetailView": {
