@@ -451,7 +451,7 @@ class Settings(BaseSettings):
     # open gate expired UNCLAIMED and UNDECIDED more than this window ago is a
     # zombie (nobody claimed it; a decision will never arrive) that still holds
     # an org-level concurrency slot. The dispatcher_reconcile sweep
-    # terminalizes it ``cancelled`` (``hitl_gate_expired``), releasing the
+    # terminalizes it ``cancelled`` (``hitl_review_expired``), releasing the
     # slot. Default 60 min — an unanswered gate that sat a full hour past its
     # own TTL is dead work, not pending review. Park interplay (FAR-604 D2):
     # this sweep and the park sweep share a byte-identical gate predicate, so
@@ -461,7 +461,9 @@ class Settings(BaseSettings):
     # fire for that population (a parked run also still holds the org slot,
     # which is WHY this terminalizer exists). Parking remains reachable only
     # if an operator raises this ABOVE ``hitl_park_grace_seconds``.
-    hitl_gate_cancel_grace_seconds: int = Field(default=3600, alias="HITL_GATE_CANCEL_GRACE_SECONDS", ge=60, le=604800)
+    hitl_review_cancel_grace_seconds: int = Field(
+        default=3600, alias="HITL_REVIEW_CANCEL_GRACE_SECONDS", ge=60, le=604800
+    )
     # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
     # least one node within this setup window or the execute_run zombie watchdog
     # fails it. Covers the pre-node hang window: checkpointer setup, graph
@@ -1141,6 +1143,28 @@ class Settings(BaseSettings):
     def stripe_enabled(self) -> bool:
         """True when both Stripe keys are configured (purchase fulfilment active)."""
         return bool(self.stripe_secret_key and self.stripe_webhook_secret)
+
+    @model_validator(mode="after")
+    def _fallback_hitl_cancel_grace_env(self) -> "Settings":
+        """FAR-1104 transition: fall back to deprecated env var if new one not set.
+
+        The new env var ``HITL_REVIEW_CANCEL_GRACE_SECONDS`` takes precedence.
+        If it is not set but the old ``HITL_GATE_CANCEL_GRACE_SECONDS`` is,
+        use the old value and emit a deprecation warning.
+        """
+        import os
+
+        new_val = os.environ.get("HITL_REVIEW_CANCEL_GRACE_SECONDS")
+        old_val = os.environ.get("HITL_GATE_CANCEL_GRACE_SECONDS")
+        if not new_val and old_val:
+            _log.warning(
+                "settings.deprecated_env_var — HITL_GATE_CANCEL_GRACE_SECONDS is deprecated. "
+                "Rename it to HITL_REVIEW_CANCEL_GRACE_SECONDS. Using old value: %s",
+                old_val,
+            )
+            # Pydantic has already set the default; override with the old value
+            object.__setattr__(self, "hitl_review_cancel_grace_seconds", int(old_val))
+        return self
 
 
 @lru_cache

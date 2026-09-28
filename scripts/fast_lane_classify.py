@@ -741,8 +741,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             env={**os.environ, **({"GH_TOKEN": gh_token} if gh_token else {})},
         )
         if result.returncode != 0:
+            stderr = result.stderr.strip()
+            # GitHub's pulls.diff endpoint returns HTTP 406 ("diff exceeded the
+            # maximum number of lines (20000)") for very large PRs, which made
+            # `gh pr diff` fail. A PR that large can never be class-A
+            # test-infra work, so report it ineligible (rc=1, neutral) rather
+            # than a classifier error (rc=2, red check).
+            if "exceeded the maximum number of lines" in stderr:
+                print(
+                    f"PR #{args.pr_number} is class-B — diff too large to classify "
+                    f"(>20000 lines) — not fast-lane eligible"
+                )
+                return 1
             print(
-                f"::error::fast-lane: could not fetch PR diff: {result.stderr.strip()}",
+                f"::error::fast-lane: could not fetch PR diff: {stderr}",
                 file=sys.stderr,
             )
             return 2

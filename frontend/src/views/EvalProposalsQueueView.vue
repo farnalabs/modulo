@@ -64,7 +64,7 @@
 
               <div class="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
                 <div>
-                  <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.gate') }}</span> <span class="font-mono text-xs">{{ shortId(p.gate_id) }}</span>
+                  <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.gate') }}</span> <span class="font-mono text-xs">{{ shortId(p.review_id) }}</span>
                 </div>
                 <div>
                   <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.node') }}</span>
@@ -123,7 +123,7 @@ import { formatDateShortWithTime } from '../lib/formatDate'
 interface EvalProposalItem {
   id: string
   run_id: string | null
-  gate_id: string
+  review_id: string
   rejected_by: string | null
   rejection_reason: string
   rejected_output: Record<string, unknown>

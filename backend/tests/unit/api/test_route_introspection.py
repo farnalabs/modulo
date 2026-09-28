@@ -315,12 +315,12 @@ def test_handle_db_errors_wrapper_active_on_regexposed_routes() -> None:
 
     expected = {
         "/api/v1/events",
-        "/api/v1/runs/{run_id}/hitl/{gate_id}/claim",
-        "/api/v1/runs/{run_id}/hitl/{gate_id}/approve",
-        "/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
-        "/api/v1/runs/{run_id}/hitl/{gate_id}/reject",
-        "/api/v1/runs/{run_id}/hitl/{gate_id}/deliver-manual",
-        "/api/v1/runs/{run_id}/manual/{gate_id}/submit",
+        "/api/v1/runs/{run_id}/hitl/{review_id}/claim",
+        "/api/v1/runs/{run_id}/hitl/{review_id}/approve",
+        "/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification",
+        "/api/v1/runs/{run_id}/hitl/{review_id}/reject",
+        "/api/v1/runs/{run_id}/hitl/{review_id}/deliver-manual",
+        "/api/v1/runs/{run_id}/manual/{review_id}/submit",
         "/api/v1/runs/{run_id}/hitl/pending",
         "/api/v1/hitl/pending",
     }

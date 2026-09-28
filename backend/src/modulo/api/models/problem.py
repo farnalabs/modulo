@@ -25,8 +25,8 @@ class ProblemType(enum.StrEnum):
     # discriminates the three claim-conflict modes by ``type`` (not by
     # substring-matching English prose), so a backend rewording can never
     # silently degrade the claim-failure UX.
-    HITL_GATE_ALREADY_CLAIMED = "hitl_gate_already_claimed"
-    HITL_GATE_ALREADY_DECIDED = "hitl_gate_already_decided"
+    HITL_REVIEW_ALREADY_CLAIMED = "hitl_review_already_claimed"
+    HITL_REVIEW_ALREADY_DECIDED = "hitl_review_already_decided"
     HITL_RUN_NOT_AWAITING = "hitl_run_not_awaiting"
     RATE_LIMITED = "rate_limited"
     FEATURE_REQUIRED = "feature_required"
@@ -48,8 +48,8 @@ _PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
     ProblemType.CONFLICT: {"status": 409, "title": "Conflict"},
     ProblemType.GONE: {"status": 410, "title": "Gone"},
     ProblemType.METHOD_NOT_ALLOWED: {"status": 405, "title": "Method Not Allowed"},
-    ProblemType.HITL_GATE_ALREADY_CLAIMED: {"status": 409, "title": "Conflict"},
-    ProblemType.HITL_GATE_ALREADY_DECIDED: {"status": 409, "title": "Conflict"},
+    ProblemType.HITL_REVIEW_ALREADY_CLAIMED: {"status": 409, "title": "Conflict"},
+    ProblemType.HITL_REVIEW_ALREADY_DECIDED: {"status": 409, "title": "Conflict"},
     ProblemType.HITL_RUN_NOT_AWAITING: {"status": 409, "title": "Conflict"},
     ProblemType.RATE_LIMITED: {"status": 429, "title": "Rate Limited"},
     ProblemType.FEATURE_REQUIRED: {"status": 402, "title": "Feature Not Available"},

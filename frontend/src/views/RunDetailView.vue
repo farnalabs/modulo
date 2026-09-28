@@ -95,17 +95,17 @@
 
       <!-- HITL Gate -->
       <!-- qa F4: a parked run still shows its open (claimable) gate — the status changed, the review did not. -->
-      <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
-        <h2 class="text-base font-semibold tracking-tight mb-4">{{ $t('views.RunDetailView.hitl_gate') }}</h2>
+      <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingReviews.length > 0" class="rounded-lg border bg-card p-6 mb-6">
+        <h2 class="text-base font-semibold tracking-tight mb-4">{{ $t('views.RunDetailView.hitl_review') }}</h2>
         <!-- Shared card (FAR-686): the component owns claim token, notes and
              approve/reject actions. The FAR-631 invariant is preserved by
              re-emitting decision messages to the hoisted hitlMessage below —
              the card (and its internal banner) may unmount when the run
              status flips, so the hoisted message is what survives. The card
              renders the FAR-613 decision briefing (description + context). -->
-        <HitlGateCard
-          v-for="gate in pendingGates"
-          :key="gate.gate_id"
+        <HitlReviewCard
+          v-for="gate in pendingReviews"
+          :key="gate.review_id"
           :gate="gate"
           @claimed="onHitlClaimed"
           @decided="onHitlDecided"
@@ -113,7 +113,7 @@
       </section>
 
       <!-- HITL action feedback. Hoisted outside the per-gate loop AND outside
-           the section gate (FAR-631): approve/reject empties pendingGates and
+           the section gate (FAR-631): approve/reject empties pendingReviews and
            flips the run status, unmounting the section — a message rendered
            inside it could never be seen. -->
       <div
@@ -847,7 +847,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
-import HitlGateCard from '../components/hitl/HitlGateCard.vue'
+import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
 import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
 import AnalyzeRunButton from '../components/runs/AnalyzeRunButton.vue'
 import { isAnalyzableFailure, type AnalyzeRunInfo } from '../components/runs/analyzeRun'
@@ -967,7 +967,7 @@ const rerunning = ref(false)
 const rerunError = ref<string | null>(null)
 const rerunConfirming = ref(false)
 const pipelineIdempotent = ref<boolean | null>(null)
-const pendingGates = ref<components['schemas']['GateResponse'][]>([])
+const pendingReviews = ref<components['schemas']['ReviewResponse'][]>([])
 const hitlLoading = ref(false)
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
 const liveOutput = ref<Record<string, string>>({})
@@ -1849,7 +1849,7 @@ function onRerunClick() {
   rerunConfirming.value = true
 }
 
-// FAR-631 invariant: approve/reject empties pendingGates and flips the run
+  // FAR-631 invariant: approve/reject empties pendingReviews and flips the run
 // status, unmounting the section — so the message emitted by the card is
 // hoisted into hitlMessage, rendered OUTSIDE the section (see template).
 let hitlMessageTimer: ReturnType<typeof setTimeout> | null = null
@@ -1868,7 +1868,7 @@ function onHitlClaimed(payload: { type: string; text: string }) {
 
 function onHitlDecided(payload: { type: string; text: string }) {
   hoistHitlMessage(payload)
-  pendingGates.value = []
+  pendingReviews.value = []
   if (run.value && (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked')) {
     run.value.status = 'running'
   }
@@ -2125,7 +2125,7 @@ function childRunBadgeClass(status: string | undefined): string {
   return statusBadgeClassFor(status)
 }
 
-async function fetchHitlGates(runId: string) {
+async function fetchHitlReviews(runId: string) {
   if (hitlLoading.value) return
   hitlLoading.value = true
   try {
@@ -2133,7 +2133,7 @@ async function fetchHitlGates(runId: string) {
       params: { path: { run_id: runId } },
     })
     if (data) {
-      pendingGates.value = ((data as any).gates || []) as components['schemas']['GateResponse'][]
+      pendingReviews.value = ((data as any).reviews || []) as components['schemas']['ReviewResponse'][]
     }
   } catch (e: unknown) {
     console.warn('Failed to load pending HITL gates', e)
@@ -2150,7 +2150,7 @@ async function fetchRunData(runId: string) {
     if (runData) {
       run.value = runData as unknown as RunResponse
       if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
-        fetchHitlGates(runId)
+        fetchHitlReviews(runId)
       }
     }
     const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
@@ -2247,7 +2247,7 @@ const { loading, error } = useDataFetch<RunFetchResult>(
       if (runData) {
         run.value = runData as unknown as RunResponse
         if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
-          fetchHitlGates(runId)
+          fetchHitlReviews(runId)
         }
       }
       if (ioData) runIO.value = ioData as unknown as RunIOResponse

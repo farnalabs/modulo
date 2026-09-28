@@ -55,13 +55,13 @@ def conditional_edge_has_default(default_target: str, ctx):
     ctx["default_target"] = default_target
 
 
-@given(parsers.parse('pipeline "{pipeline_name}" has a HITL gate at the edge from "{source}" to "{target}"'))
-def pipeline_has_hitl_gate(pipeline_name: str, source: str, target: str, ctx):
+@given(parsers.parse('pipeline "{pipeline_name}" has a HITL review at the edge from "{source}" to "{target}"'))
+def pipeline_has_hitl_review(pipeline_name: str, source: str, target: str, ctx):
     ctx["pipeline_name"] = pipeline_name
     ctx["hitl_source"] = source
     ctx["hitl_target"] = target
-    ctx["hitl_gate_config"] = {
-        "gate_id": f"hitl_gate_{source}_{target}",
+    ctx["hitl_review_config"] = {
+        "review_id": f"hitl_review_{source}_{target}",
         "label": f"Review {source} -> {target}",
         "description": f"HITL gate between {source} and {target}",
         "claim_expiry_minutes": 60,
@@ -153,14 +153,14 @@ def run_reaches_no_match(node_id: str, ctx):
 
 @when("a human rejects the gate")
 def human_rejects_gate(ctx):
-    gate_id = ctx.get("hitl_gate_config", {}).get("gate_id", f"hitl_gate_source_{ctx['hitl_target']}")
+    review_id = ctx.get("hitl_review_config", {}).get("review_id", f"hitl_review_source_{ctx['hitl_target']}")
     router = _make_gate_kickback_router(
         ctx["hitl_target"],
         ctx.get("reject_edge", {}).get("target", "fixup"),
-        gate_id=gate_id,
+        review_id=review_id,
     )
     # FAR-541: the decision is stamped with the gate it resolves.
-    state = {"_hitl_decision": {"action": "rejected", "gate_id": gate_id}}
+    state = {"_hitl_decision": {"action": "rejected", "review_id": review_id}}
     ctx["routed_target"] = router(state)
 
 
@@ -220,8 +220,8 @@ def run_routes_back_to(target: str, ctx):
     assert ctx["routed_target"] == target, f"Expected kick-back route to {target!r}, got {ctx['routed_target']!r}"
 
 
-@then("the eval triggers the HITL gate")
-def eval_triggers_hitl_gate(ctx):
+@then("the eval triggers the HITL review")
+def eval_triggers_hitl_review(ctx):
     assert ctx.get("eval_triggers_interrupt"), (
         f"Expected eval to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"
     )
@@ -248,8 +248,8 @@ def run_completes_after_both_branches(ctx):
     )
 
 
-@then("the eval does not trigger the HITL gate")
-def eval_does_not_trigger_hitl_gate(ctx):
+@then("the eval does not trigger the HITL review")
+def eval_does_not_trigger_hitl_review(ctx):
     assert not ctx.get("eval_triggers_interrupt"), (
         f"Expected eval NOT to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"
     )

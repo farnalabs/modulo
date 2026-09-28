@@ -980,7 +980,7 @@ _PR_TEMPLATE_EDGES = [
         "source_node_id": "hitl-gate",
         "target_node_id": "pr-poster",
         "edge_type": "normal",
-        "hitl_gate_config": {
+        "hitl_review_config": {
             "label": "Approve Review",
             "description": "Review the generated comments before posting to the PR.",
             "claim_expiry_minutes": 60,
@@ -1046,7 +1046,7 @@ _RELEASE_TEMPLATE_EDGES = [
         "source_node_id": "hitl-gate",
         "target_node_id": "tag-creator",
         "edge_type": "normal",
-        "hitl_gate_config": {
+        "hitl_review_config": {
             "label": "Approve Release",
             "description": "Review the release notes before tagging the release.",
             "claim_expiry_minutes": 60,
@@ -1124,7 +1124,7 @@ _INCIDENT_TEMPLATE_EDGES = [
         "source_node_id": "hitl-gate",
         "target_node_id": "postmortem-generator",
         "edge_type": "normal",
-        "hitl_gate_config": {
+        "hitl_review_config": {
             "label": "Verify Resolution",
             "description": "Confirm the incident is resolved before generating the postmortem.",
             "claim_expiry_minutes": 60,
@@ -1479,7 +1479,7 @@ _MODULO_PRIMITIVES.extend(
                         "source_node_id": "changelog-agent",
                         "target_node_id": "hitl-gate",
                         "edge_type": "normal",
-                        "hitl_gate_config": {
+                        "hitl_review_config": {
                             "label": "Approve Changelog",
                             "description": "Review the generated changelog before publishing.",
                             "claim_expiry_minutes": 60,
@@ -1600,7 +1600,7 @@ _MODULO_PRIMITIVES.extend(
                         "source_node_id": "release-notes-agent",
                         "target_node_id": "hitl-gate",
                         "edge_type": "normal",
-                        "hitl_gate_config": {
+                        "hitl_review_config": {
                             "label": "Approve Release Notes",
                             "description": "Review the release notes before publishing.",
                             "claim_expiry_minutes": 60,
@@ -1830,7 +1830,7 @@ _MODULO_PRIMITIVES.extend(
                         "source_node_id": "issue-triage-agent",
                         "target_node_id": "hitl-gate",
                         "edge_type": "normal",
-                        "hitl_gate_config": {
+                        "hitl_review_config": {
                             "label": "Approve Triage",
                             "description": "Review the triage report before applying labels to the issue.",
                             "claim_expiry_minutes": 60,
@@ -1969,7 +1969,7 @@ _MODULO_PRIMITIVES.extend(
                         "source_node_id": "license-checker-agent",
                         "target_node_id": "hitl-gate",
                         "edge_type": "normal",
-                        "hitl_gate_config": {
+                        "hitl_review_config": {
                             "label": "Approve License Report",
                             "description": "Review the license compliance report before finalizing.",
                             "claim_expiry_minutes": 60,

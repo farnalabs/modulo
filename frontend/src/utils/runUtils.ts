@@ -62,8 +62,8 @@ export function runStatusDescription(status: string | null | undefined, t: (key:
 const CANCEL_REASON_MESSAGE_KEYS: Record<string, string> = {
   user_requested: 'cancelReasons.user_requested',
   agent_requested: 'cancelReasons.agent_requested',
-  hitl_gate_expired: 'cancelReasons.hitl_gate_expired',
-  hitl_gate_missing: 'cancelReasons.hitl_gate_missing',
+  hitl_review_expired: 'cancelReasons.hitl_review_expired',
+  hitl_review_missing: 'cancelReasons.hitl_review_missing',
 }
 
 /**

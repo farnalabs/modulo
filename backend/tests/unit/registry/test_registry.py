@@ -192,13 +192,13 @@ class TestRegistryCRUD:
         results = list_registry_primitives(search="dogfood")
         assert len(results) == 2  # github-issue-input-schema (desc) + modulo-dogfood-pipeline (name)
 
-    def test_dogfood_registry_workflow_has_hitl_gate(self):
+    def test_dogfood_registry_workflow_has_hitl_review(self):
         entry = get_registry_primitive("modulo/modulo-dogfood-pipeline")
         assert entry is not None
         edges = entry.content_json["edges"]
         hitl_edge = edges[3]
-        assert "hitl_gate_config" in hitl_edge
-        assert hitl_edge["hitl_gate_config"]["gate_id"] == "review_before_pr"
+        assert "hitl_review_config" in hitl_edge
+        assert hitl_edge["hitl_review_config"]["review_id"] == "review_before_pr"
 
     def test_registry_total_count(self):
         results = list_registry_primitives()

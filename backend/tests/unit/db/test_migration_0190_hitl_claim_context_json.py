@@ -60,7 +60,7 @@ def _scaffold(conn: sa.Connection) -> None:
             "CREATE TABLE hitl_claims ("
             "id INTEGER PRIMARY KEY, "
             "run_id INTEGER NOT NULL, "
-            "gate_id TEXT NOT NULL, "
+            "review_id TEXT NOT NULL, "
             "decision_payload TEXT)"
         )
     )
@@ -82,7 +82,7 @@ def _table_columns(engine: sa.Engine, table_name: str) -> set[str]:
 
 def _insert_legacy_gate(conn: sa.Connection) -> None:
     """A gate row created BEFORE the upgrade — no context (pre-FAR-613)."""
-    conn.execute(sa.text("INSERT INTO hitl_claims (id, run_id, gate_id) VALUES (1, 10, 'hitl_gate_a_b')"))
+    conn.execute(sa.text("INSERT INTO hitl_claims (id, run_id, review_id) VALUES (1, 10, 'hitl_review_a_b')"))
 
 
 def _gate_context(engine: sa.Engine) -> str | None:
@@ -142,10 +142,10 @@ class TestRoundTrip0182:
         _run(sqlite_engine, _load_migration(), "upgrade")
         _run(sqlite_engine, _load_migration(), "downgrade")
         # Only the pre-upgrade columns remain; the row survives.
-        assert _table_columns(sqlite_engine, "hitl_claims") == {"id", "run_id", "gate_id", "decision_payload"}
+        assert _table_columns(sqlite_engine, "hitl_claims") == {"id", "run_id", "review_id", "decision_payload"}
         with sqlite_engine.connect() as conn:
-            gate_id = conn.execute(sa.text("SELECT gate_id FROM hitl_claims WHERE id = 1")).scalar_one()
-        assert gate_id == "hitl_gate_a_b"
+            review_id = conn.execute(sa.text("SELECT review_id FROM hitl_claims WHERE id = 1")).scalar_one()
+        assert review_id == "hitl_review_a_b"
 
     def test_second_upgrade_restores_context_json_column(self, sqlite_engine: sa.Engine) -> None:
         with sqlite_engine.begin() as conn:

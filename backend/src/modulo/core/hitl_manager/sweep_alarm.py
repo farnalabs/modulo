@@ -1,6 +1,6 @@
 """Approve-sweep anomaly alarm (FAR-611).
 
-On 2026-09-05 a single account claim+approved 22+ HITL gates across 5+
+On 2026-09-05 a single account claim+approved 22+ HITL reviews across 5+
 pipelines in ~80 seconds and nothing flagged it. This module runs the
 detection on every committed approve decision:
 

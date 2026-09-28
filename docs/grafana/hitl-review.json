@@ -27,7 +27,7 @@
         "name": "pipeline",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "$datasource" },
-        "query": "label_values(modulo_hitl_gates_total, pipeline_name)",
+        "query": "label_values(modulo_hitl_reviews_total, pipeline_name)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -44,13 +44,13 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\"}[$__interval])) by (pipeline_name)",
+          "expr": "sum(increase(modulo_hitl_reviews_total{pipeline_name=~\"$pipeline\"}[$__interval])) by (pipeline_name)",
           "legendFormat": "{{pipeline_name}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "gates",
+          "unit": "reviews",
           "custom": {
             "drawStyle": "bars",
             "barAlignment": 0,
@@ -104,7 +104,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\", hitl_status=\"approved\"}[$__interval])) / sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\"}[$__interval])) * 100",
+          "expr": "sum(increase(modulo_hitl_reviews_total{pipeline_name=~\"$pipeline\", hitl_status=\"approved\"}[$__interval])) / sum(increase(modulo_hitl_reviews_total{pipeline_name=~\"$pipeline\"}[$__interval])) * 100",
           "legendFormat": "Approval Rate"
         }
       ],
@@ -138,7 +138,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 6, "y": 8 },
       "targets": [
         {
-          "expr": "sum(modulo_hitl_gates_active{pipeline_name=~\"$pipeline\"})",
+          "expr": "sum(modulo_hitl_reviews_active{pipeline_name=~\"$pipeline\"})",
           "legendFormat": "Pending"
         }
       ],
@@ -171,17 +171,17 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
-          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\", hitl_status=\"approved\"}[$__interval])) by (pipeline_name)",
+          "expr": "sum(increase(modulo_hitl_reviews_total{pipeline_name=~\"$pipeline\", hitl_status=\"approved\"}[$__interval])) by (pipeline_name)",
           "legendFormat": "approved",
           "format": "table"
         },
         {
-          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\", hitl_status=\"rejected\"}[$__interval])) by (pipeline_name)",
+          "expr": "sum(increase(modulo_hitl_reviews_total{pipeline_name=~\"$pipeline\", hitl_status=\"rejected\"}[$__interval])) by (pipeline_name)",
           "legendFormat": "rejected",
           "format": "table"
         },
         {
-          "expr": "sum(increase(modulo_hitl_gates_total{pipeline_name=~\"$pipeline\"}[$__interval])) by (pipeline_name)",
+          "expr": "sum(increase(modulo_hitl_reviews_total{pipeline_name=~\"$pipeline\"}[$__interval])) by (pipeline_name)",
           "legendFormat": "total",
           "format": "table"
         },

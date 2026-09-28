@@ -7,7 +7,7 @@
 
 ## Problem
 
-HITL gates (`hitl_gate_config` on a pipeline edge, PRD §5/§7.x/§8.8) are the product's core safety control. The gate configuration itself is not protected – it can be silently weakened via edit, rollback, or cloning. `AuditEvent` records changes only after the fact.
+HITL reviews (`hitl_review_config` on a pipeline edge, PRD §5/§7.x/§8.8) are the product's core safety control. The gate configuration itself is not protected – it can be silently weakened via edit, rollback, or cloning. `AuditEvent` records changes only after the fact.
 
 ## Sequencing (new this iteration)
 
@@ -22,15 +22,15 @@ HITL gates (`hitl_gate_config` on a pipeline edge, PRD §5/§7.x/§8.8) are the 
 
 ### 1. Define "weakening" precisely (unchanged since v15 – stable across five consecutive prior iterations)
 
-Field-level, on an edge with a non-null `hitl_gate_config`:
+Field-level, on an edge with a non-null `hitl_review_config`:
 - `human_only: true → false`.
 - `required_team_id` changed to `null` or to any different team ID.
-- `condition` changed at all – regardless of `human_only` (verified: `node_runner.py:3928`'s `_hitl_gate` evaluates `condition`/`eval_condition` before `human_only` is ever consulted).
+- `condition` changed at all – regardless of `human_only` (verified: `node_runner.py:3928`'s `_hitl_review` evaluates `condition`/`eval_condition` before `human_only` is ever consulted).
 - `eval_condition` changed at all – same reasoning.
 
 `claim_expiry_minutes` is deliberately NOT a weakening-capable field: a shorter expiry is stricter, not weaker. On expiry the claim is reset and the run returns to `awaiting_human` (`expiry_job.py`) – it never releases the gate or auto-approves the run, so a decrease cannot reduce the HITL control's effect (review finding on §1; verified against `expiry_job.py` / `pipeline_execution.py` resume semantics).
 
-Structural: an edge that carried a non-null `hitl_gate_config` no longer carries an equivalent one, correlated by `(source_node_id, target_node_id, edge_type)` – the **server-derived topology tuple, never the client-supplied edge `id`** (closes a bypass found in iteration 17: correlating by client-supplied `id` lets a client submit a "new" id for the same topological edge and defeat the "preserve existing value" protection). Edge creation with no prior row is never weakening. The old edge's correlation key being entirely absent from the new edge set is treated identically to a config-downgrade on a surviving edge. Audit/denial messages name edges by this structural key, not DB `id`.
+Structural: an edge that carried a non-null `hitl_review_config` no longer carries an equivalent one, correlated by `(source_node_id, target_node_id, edge_type)` – the **server-derived topology tuple, never the client-supplied edge `id`** (closes a bypass found in iteration 17: correlating by client-supplied `id` lets a client submit a "new" id for the same topological edge and defeat the "preserve existing value" protection). Edge creation with no prior row is never weakening. The old edge's correlation key being entirely absent from the new edge set is treated identically to a config-downgrade on a surviving edge. Audit/denial messages name edges by this structural key, not DB `id`.
 
 For `rollback_to_snapshot`: a missing/`None` field in a historical snapshot is fail-closed (treated as weakening); only the audit reason code differs.
 
@@ -50,7 +50,7 @@ A shared diff primitive, `apply_gated_edge_diff(session, old_edges, new_edges, i
    `replace_pipeline_graph()`/`rollback_to_snapshot()` take an explicit `caller_type: Literal["rest", "mcp"]` parameter. When `caller_type == "mcp"`, `is_privileged` is hardcoded `False` **with no DB query attempted at all** – this is the entire MCP exclusion mechanism, and there is no other code path by which an MCP caller can be privileged. The MCP call site (`mcp_server.py:677`) passes `caller_type="mcp"` as a literal; a CI test (a `.semgrep/` rule, following this codebase's existing `pattern-either`/`metavariable-regex` idiom) asserts this argument is a literal, not a variable, at that specific call site.
    For `caller_type == "rest"`: the function queries the caller's live org role – via ADR-047's centralized `resolve_role_from_membership()` helper, not a duplicate helper this plan introduces – immediately after the row lock is acquired and before the graph mutation. **This check is always enforced, with no kill switch of any kind** (neither a dedicated HITL column nor ADR-047's general `authz_enforce`): per ADR-047 Decision 3, HITL weakening is one of the explicit non-liftable carve-outs (alongside org deletion), so this service-layer backstop simply never consults `authz_enforce` – it doesn't need `kill_switch_eligible=False` plumbed through, because this check doesn't route through `assert_org_role()`/`require_permission()` at all; it's a direct, unconditional comparison at the point of mutation, which is the strongest form of "non-liftable." **On a DB error during this query: fail-closed immediately, no retry** (iteration 17 found that retrying inside the same transaction after a DB error hits Postgres's aborted-transaction state, `25P02`, masking the real error – since acquiring the row lock itself already required a successful DB round-trip moments earlier, a further immediate failure here is more likely a real problem than a transient blip). Distinct reason code `role-check-db-error`; detection via a structured ERROR-level log line plus a counter increment (independent of the DB), with `Notifier.dispatch_event()` as best-effort secondary.
    **Route-layer permission, separately**: whatever REST endpoint fronts a weakening-capable graph edit should also carry an ordinary `require_permission("pipeline.graph.update")`-style check from ADR-047's registry for baseline access control (already delivered by the centralised-authorisation workstream) – this is unrelated to, and doesn't substitute for, the service-layer backstop above, which exists precisely because route-layer checks can be missed at a call site or bypassed by an internal caller. The two are complementary: route-layer for defense-in-depth breadth, service-layer for the one property (HITL-gate integrity) that must never depend on getting every call site's route-layer check right.
-6. **Missing-key semantics, correlation key clarified (iteration-17 finding, unchanged this iteration)**: the edge dict passed from the route layer into `replace_pipeline_graph()` carries `hitl_gate_config_present: bool` (from `"hitl_gate_config" in edge.model_fields_set`, checked before `model_dump`) alongside `hitl_gate_config: dict | None`. Correlation for the "preserve existing value" lookup uses the same server-derived `(source_node_id, target_node_id, edge_type)` tuple as §1/§2 – never the client-supplied edge `id`. For an edge whose topology key matches a pre-existing row: `hitl_gate_config_present=False` means preserve the existing stored value; `hitl_gate_config_present=True` means use the provided value verbatim, including explicit `null` as genuine removal. For an edge with no matching prior topology key (genuinely new): the presence flag just determines its initial value; nothing to preserve.
+6. **Missing-key semantics, correlation key clarified (iteration-17 finding, unchanged this iteration)**: the edge dict passed from the route layer into `replace_pipeline_graph()` carries `hitl_review_config_present: bool` (from `"hitl_review_config" in edge.model_fields_set`, checked before `model_dump`) alongside `hitl_review_config: dict | None`. Correlation for the "preserve existing value" lookup uses the same server-derived `(source_node_id, target_node_id, edge_type)` tuple as §1/§2 – never the client-supplied edge `id`. For an edge whose topology key matches a pre-existing row: `hitl_review_config_present=False` means preserve the existing stored value; `hitl_review_config_present=True` means use the provided value verbatim, including explicit `null` as genuine removal. For an edge with no matching prior topology key (genuinely new): the presence flag just determines its initial value; nothing to preserve.
 7. **`MutableDict.as_mutable(JSON)`** – defense-in-depth. `old_edges` passed into `apply_gated_edge_diff` MUST be a `copy.deepcopy` taken before any subsequent write on that session.
 8. **Denial UX**: name the specific edge(s) by structural correlation key, not DB `id`.
 9. **Shared audit-payload builder** recording `caller_type`, with a schema-parity test.
@@ -66,14 +66,14 @@ Four independent complete redesigns across iterations 9-12 were each found broke
 ### 5. Audit and alerting
 
 - Dedicated `AuditEvent` via `append_audit_event()`, same transaction as graph persistence.
-- Denied attempts audited: `hitl_gate_removal_denied`, reason-coded (insufficient-role / role-changed-reauth-required / role-check-db-error / correlation-key-mismatch / legacy-snapshot-ambiguous / mcp-weakening-not-permitted).
+- Denied attempts audited: `hitl_review_removal_denied`, reason-coded (insufficient-role / role-changed-reauth-required / role-check-db-error / correlation-key-mismatch / legacy-snapshot-ambiguous / mcp-weakening-not-permitted).
 - Counters for allowed/blocked, tagged by `weakening_type` and reason code.
 - **Notifier silent-loss bug fixed (found in iteration 16, unrelated to ADR-047)**: `_dispatch_inline()`'s `if not endpoints: return []` early return (`core/notifier/__init__.py:360-361`), which previously made in-app `Notification` creation unreachable whenever an org had zero webhook subscribers, is removed – webhook dispatch (a no-op zero-iteration loop when `endpoints` is empty) and in-app notification creation become two independent, always-executed steps. This is a small, general fix, not HITL-specific, but was found while building this plan's alerting and should ship with it (or earlier, as a standalone one-line fix, if that's faster – flagged in Recommendation #3 below).
 - New event types require explicit `event_mapper.py` `_EVENT_CONFIG` registration with `scope: "admin"`.
 
 ### 6. Frontend
 
-Inline confirmation, server-reject-and-explain naming affected edges. The frontend must send the `hitl_gate_config` key explicitly (with its real current value, or explicit `null` for a genuine removal) whenever the user views/touches that edge's gate config; omitting the key for untouched edges is safe by design given §3 item 6.
+Inline confirmation, server-reject-and-explain naming affected edges. The frontend must send the `hitl_review_config` key explicitly (with its real current value, or explicit `null` for a genuine removal) whenever the user views/touches that edge's gate config; omitting the key for untouched edges is safe by design given §3 item 6.
 
 ### 7. Testing
 
@@ -127,7 +127,7 @@ Inline confirmation, server-reject-and-explain naming affected edges. The fronte
 1. Frontend: confirmation dialog differs for admins vs. operators?
 2. Snapshot/graph-cache staleness – needs subsystem-owner input.
 3. Break-glass / emergency admin-recovery design – entire follow-up plan.
-4. Whether to backfill/disambiguate historical snapshots' ambiguous `hitl_gate_config` fields.
+4. Whether to backfill/disambiguate historical snapshots' ambiguous `hitl_review_config` fields.
 5. **Resolved at implementation**: no dedicated route-layer permission key for weakening is registered. The weakening-capable endpoints carry the operator baseline (`pipeline.graph.update`) at the route layer for defense-in-depth breadth, and the service-layer backstop (operator+ privileged under the row lock) is the load-bearing control. A dedicated admin-only route gate was tried during implementation but removed on review: it blocked the operator's primary graph-edit path (`PATCH /pipelines/{id}/graph` is the frontend's save endpoint) while equivalent weakening stayed reachable via `update_pipeline`/`convert_to_agent`/`revert_to_manual` – asymmetric, not uniformly admin-only. This plan's §3 item 5 route-layer wording (baseline access control) is the operative spec.
 
 ---

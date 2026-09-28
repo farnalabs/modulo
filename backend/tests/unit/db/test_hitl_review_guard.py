@@ -1,18 +1,18 @@
 """Unit tests for the HITL-gate weakening guard primitive
-(modulo.db.crud.hitl_gate_guard — hitl-gate-removal-guard-plan.md v19 §1/§3/§7)."""
+(modulo.db.crud.hitl_review_guard — hitl-gate-removal-guard-plan.md v19 §1/§3/§7)."""
 
 from __future__ import annotations
 
 import pytest
 
-from modulo.db.crud.hitl_gate_guard import (
+from modulo.db.crud.hitl_review_guard import (
     REASON_CORRELATION_KEY_MISMATCH,
     REASON_INSUFFICIENT_ROLE,
     REASON_LEGACY_SNAPSHOT_AMBIGUOUS,
     REASON_MCP_NOT_PERMITTED,
     DiffResult,
     EdgeWeakening,
-    HitlGateWeakeningDenied,
+    HitlReviewWeakeningDenied,
     apply_gated_edge_diff,
     build_gate_diff_payload,
     is_privileged_role,
@@ -28,8 +28,8 @@ def _old_edge(source: str, target: str, edge_type: str = "normal", cfg: dict | N
         "source_node_id": source,
         "target_node_id": target,
         "edge_type": edge_type,
-        "hitl_gate_config": cfg,
-        "hitl_gate_config_present": cfg is not None,
+        "hitl_review_config": cfg,
+        "hitl_review_config_present": cfg is not None,
     }
 
 
@@ -39,8 +39,8 @@ def _new_edge(source: str, target: str, edge_type: str = "normal", cfg: dict | N
         "target_node_id": target,
         "edge_type": edge_type,
     }
-    d["hitl_gate_config"] = cfg
-    d["hitl_gate_config_present"] = True
+    d["hitl_review_config"] = cfg
+    d["hitl_review_config_present"] = True
     return d
 
 
@@ -219,15 +219,15 @@ async def test_correlation_uses_topology_key_not_client_id() -> None:
         "source_node_id": "a",
         "target_node_id": "b",
         "edge_type": "normal",
-        "hitl_gate_config": _GATE,
+        "hitl_review_config": _GATE,
     }
     new_edge = {
         "id": "client-id-2",  # NEW client-supplied id, same topology
         "source_node_id": "a",
         "target_node_id": "b",
         "edge_type": "normal",
-        "hitl_gate_config": None,
-        "hitl_gate_config_present": True,
+        "hitl_review_config": None,
+        "hitl_review_config_present": True,
     }
     diff = await apply_gated_edge_diff(
         _SESSION,
@@ -246,7 +246,7 @@ async def test_correlation_uses_topology_key_not_client_id() -> None:
 
 
 async def test_presence_signal_false_preserves_existing_value() -> None:
-    """hitl_gate_config_present=False on a matching topology key means preserve
+    """hitl_review_config_present=False on a matching topology key means preserve
     the stored value — not weakening even with an explicit null value."""
     diff = await apply_gated_edge_diff(
         _SESSION,
@@ -256,8 +256,8 @@ async def test_presence_signal_false_preserves_existing_value() -> None:
                 "source_node_id": "a",
                 "target_node_id": "b",
                 "edge_type": "normal",
-                "hitl_gate_config": None,
-                "hitl_gate_config_present": False,
+                "hitl_review_config": None,
+                "hitl_review_config_present": False,
             }
         ],
         is_privileged=True,
@@ -267,7 +267,7 @@ async def test_presence_signal_false_preserves_existing_value() -> None:
 
 
 async def test_new_edge_with_omitted_key_is_preserved() -> None:
-    """An edge dict that omits the hitl_gate_config key entirely (untouched by
+    """An edge dict that omits the hitl_review_config key entirely (untouched by
     the client) defaults to preserve — no weakening."""
     diff = await apply_gated_edge_diff(
         _SESSION,
@@ -321,7 +321,7 @@ async def test_deepcopy_isolates_mutable_config_after_call() -> None:
         is_privileged=True,
         caller_type="rest",
     )
-    old_edges[0]["hitl_gate_config"]["human_only"] = False  # mutate after the fact
+    old_edges[0]["hitl_review_config"]["human_only"] = False  # mutate after the fact
     assert diff.weakened_edges[0].weakening_types == ["human_only"]
 
 
@@ -399,8 +399,8 @@ async def test_legacy_snapshot_missing_gate_is_fail_closed() -> None:
                 "source_node_id": "a",
                 "target_node_id": "b",
                 "edge_type": "normal",
-                "hitl_gate_config": None,
-                "hitl_gate_config_present": True,
+                "hitl_review_config": None,
+                "hitl_review_config_present": True,
             }
         ],
         is_privileged=False,
@@ -502,8 +502,8 @@ def test_denial_payload_names_edges_by_topology_key() -> None:
     assert edge["edge_type"] == "reject"
 
 
-def test_hitl_gate_weakening_denied_carries_payload() -> None:
-    exc = HitlGateWeakeningDenied(
+def test_hitl_review_weakening_denied_carries_payload() -> None:
+    exc = HitlReviewWeakeningDenied(
         reason_code=REASON_INSUFFICIENT_ROLE,
         correlation_keys=[("a", "b", "normal")],
         weakening_types=["human_only"],
@@ -832,7 +832,7 @@ def test_edge_only_payload_has_no_affected_nodes_key() -> None:
 
 
 def test_denial_detail_names_affected_node() -> None:
-    from modulo.db.crud.hitl_gate_guard import denial_detail
+    from modulo.db.crud.hitl_review_guard import denial_detail
 
     diff = DiffResult(
         weakened_edges=[],

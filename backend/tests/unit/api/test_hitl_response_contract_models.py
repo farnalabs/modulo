@@ -1,13 +1,13 @@
 """Unit tests for FAR-860 HITL response contract Pydantic models.
 
-Covers ``HitlResponseOption``, ``HitlResponseContract``, and ``HitlGateConfig``
+Covers ``HitlResponseOption``, ``HitlResponseContract``, and ``HitlReviewConfig``
 with ``response_contract`` field validation.
 """
 
 import pytest
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import HitlGateConfig, HitlResponseContract, HitlResponseOption
+from modulo.api.routes.pipelines import HitlResponseContract, HitlResponseOption, HitlReviewConfig
 from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH
 
 _VALID_DESCRIPTION = "A" * HITL_DESCRIPTION_MIN_LENGTH
@@ -73,7 +73,7 @@ class TestHitlResponseContract:
             HitlResponseContract(kind="unknown")
 
 
-class TestHitlGateConfig:
+class TestHitlReviewConfig:
     def _base_config(self) -> dict:
         return {
             "label": "Review",
@@ -82,18 +82,18 @@ class TestHitlGateConfig:
         }
 
     def test_no_response_contract(self):
-        cfg = HitlGateConfig(**self._base_config())
+        cfg = HitlReviewConfig(**self._base_config())
         assert cfg.response_contract is None
 
     def test_approval_response_contract(self):
-        cfg = HitlGateConfig(
+        cfg = HitlReviewConfig(
             **self._base_config(),
             response_contract=HitlResponseContract(kind="approval"),
         )
         assert cfg.response_contract.kind == "approval"
 
     def test_choice_response_contract(self):
-        cfg = HitlGateConfig(
+        cfg = HitlReviewConfig(
             **self._base_config(),
             response_contract=HitlResponseContract(
                 kind="choice",

@@ -226,7 +226,7 @@ def validate_autonomy_ceiling(
         raise ValueError(msg)
 
 
-def should_skip_hitl_gate(autonomy: AutonomyLevel) -> bool:
+def should_skip_hitl_review(autonomy: AutonomyLevel) -> bool:
     """Return True if the HITL gate should be bypassed at runtime.
 
     Resolution happens per-gate at RUNTIME (each gate re-reads the current

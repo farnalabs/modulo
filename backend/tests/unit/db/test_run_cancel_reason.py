@@ -31,8 +31,8 @@ import pytest
 from modulo.db.crud.run import request_cancellation
 from modulo.db.models.run import (
     CANCEL_REASON_AGENT_REQUESTED,
-    CANCEL_REASON_HITL_GATE_EXPIRED,
-    CANCEL_REASON_HITL_GATE_MISSING,
+    CANCEL_REASON_HITL_REVIEW_EXPIRED,
+    CANCEL_REASON_HITL_REVIEW_MISSING,
     CANCEL_REASON_USER_REQUESTED,
     CANCEL_REASON_VALUES,
     CANCELLED_BY_SYSTEM,
@@ -108,8 +108,8 @@ class TestCancelReasonVocabulary:
         constants = (
             CANCEL_REASON_USER_REQUESTED,
             CANCEL_REASON_AGENT_REQUESTED,
-            CANCEL_REASON_HITL_GATE_EXPIRED,
-            CANCEL_REASON_HITL_GATE_MISSING,
+            CANCEL_REASON_HITL_REVIEW_EXPIRED,
+            CANCEL_REASON_HITL_REVIEW_MISSING,
         )
         for reason in constants:
             assert reason in CANCEL_REASON_VALUES, f"{reason!r} missing from CANCEL_REASON_VALUES"

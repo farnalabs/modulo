@@ -116,6 +116,11 @@ test.describe('Real-stack journeys: in-app notifications', { tag: '@regression' 
       await expect(card.getByRole('link', { name: /view run/i })).toHaveAttribute('href', `/runs/${run.run_id}`)
 
       // Dismiss for self through the dialog; the card leaves the panel.
+      // NotificationCard keeps its action controls out of the layout until the
+      // card is hovered (`.notification-actions` is display:none outside
+      // :hover/:focus-within), and getByRole does not match a display:none
+      // element — hover the card first so the control enters the a11y tree.
+      await card.hover()
       await card.getByRole('button', { name: /dismiss this notification/i }).click()
       await page.getByRole('button', { name: 'Dismiss', exact: true }).click()
       await expect(card).toHaveCount(0, { timeout: 30_000 })

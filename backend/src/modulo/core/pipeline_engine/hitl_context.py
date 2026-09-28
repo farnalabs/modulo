@@ -44,7 +44,7 @@ the builder re-bounds it defensively. User-authored save-time fields
 bounded but not redacted: they were authored through the validated save path,
 not produced by agent/connector output.
 
-The capture is FAILURE-ISOLATED by contract: :func:`build_hitl_gate_context`
+The capture is FAILURE-ISOLATED by contract: :func:`build_hitl_review_context`
 never raises (any internal error logs and yields ``None`` context) so a
 briefing defect can never block or fail the interrupt itself.
 """
@@ -62,12 +62,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
-from modulo.db.crud.hitl_gate_config import (
+from modulo.db.crud.hitl_review_config import (
     config_from_graph,
     config_from_hitl_nodes,
     edge_source_or_target,
-    make_gate_id,
-    parse_hitl_gate_id,
+    make_review_id,
+    parse_hitl_review_id,
 )
 from modulo.db.crud.run import get_run
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -83,7 +83,7 @@ _ARTIFACT_MAX_ENTRIES = 5
 #: Deterministic cap for the bundle's single-string fields (``description``,
 #: ``condition``, ``reason``, the matched condition value). The edge-config
 #: contract already caps description at 2000 and condition at 500
-#: (api.routes.pipelines HitlGateConfig); this is the capture-side backstop
+#: (api.routes.pipelines HitlReviewConfig); this is the capture-side backstop
 #: for node-level ``hitl_config`` descriptions (GraphValidator enforces only
 #: the minimum) and LLM-derived ``reason`` values, which have no upstream bound.
 _TEXT_FIELD_MAX_CHARS = 2000
@@ -113,7 +113,7 @@ TRIGGER_NODE = "node"
 TRIGGER_UNKNOWN = "unknown"
 
 
-class HitlGateConditionResult(TypedDict, total=False):
+class HitlReviewConditionResult(TypedDict, total=False):
     """The matched condition value as PRIMARY briefing evidence (FAR-688)."""
 
     #: The expression that was evaluated (fire-time truth).
@@ -124,7 +124,7 @@ class HitlGateConditionResult(TypedDict, total=False):
     evaluated_at_node: str | None
 
 
-class HitlGateContext(TypedDict, total=False):
+class HitlReviewContext(TypedDict, total=False):
     """The ``hitl_claims.context_json`` briefing bundle (FAR-613/FAR-688/FAR-859/FAR-860).
 
     ``total=False``: legacy bundles persisted before a key existed simply omit
@@ -133,7 +133,7 @@ class HitlGateContext(TypedDict, total=False):
 
     description: str | None
     condition: str | None
-    condition_result: HitlGateConditionResult | None
+    condition_result: HitlReviewConditionResult | None
     trigger: str
     source_node_id: str | None
     source_node_label: str | None
@@ -309,11 +309,11 @@ def _output_reason(output: Any) -> str:
     return REASON_ABSENT
 
 
-async def build_hitl_gate_context(
+async def build_hitl_review_context(
     session: AsyncSession,
     *,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     org_id: uuid.UUID,
     pipeline_name: str | None,
     completed_node_outputs: dict[str, Any] | None,
@@ -321,7 +321,7 @@ async def build_hitl_gate_context(
     subject: str | None = None,
     subject_parent: dict[str, Any] | None = None,
     subject_leaf_key: str | None = None,
-) -> HitlGateContext | None:
+) -> HitlReviewContext | None:
     """Build the fire-time briefing bundle for a HITL gate, or ``None``.
 
     Reads the run's snapshot graph (the graph the run actually executes) to
@@ -343,7 +343,7 @@ async def build_hitl_gate_context(
         return await _build_context_inner(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             pipeline_name=pipeline_name,
             completed_node_outputs=completed_node_outputs,
@@ -356,8 +356,8 @@ async def build_hitl_gate_context(
         raise
     except Exception:
         _log.warning(
-            "hitl_gate.context_capture_failed",
-            extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+            "hitl_review.context_capture_failed",
+            extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
             exc_info=True,
         )
         return None
@@ -367,7 +367,7 @@ async def _build_context_inner(
     session: AsyncSession,
     *,
     run_id: uuid.UUID,
-    gate_id: str,
+    review_id: str,
     org_id: uuid.UUID,
     pipeline_name: str | None,
     completed_node_outputs: dict[str, Any] | None,
@@ -375,7 +375,7 @@ async def _build_context_inner(
     subject: str | None,
     subject_parent: dict[str, Any] | None,
     subject_leaf_key: str | None,
-) -> HitlGateContext | None:
+) -> HitlReviewContext | None:
     run = await get_run(session, run_id, organisation_id=org_id)
     if run is None:
         return None
@@ -392,7 +392,7 @@ async def _build_context_inner(
         if isinstance(snapshot, dict):
             graph_json = snapshot
 
-    parsed = parse_hitl_gate_id(gate_id)
+    parsed = parse_hitl_review_id(review_id)
     source_node_id = parsed[0] if parsed else None
 
     # Resolve the gate config + trigger kind from the snapshot graph. Node
@@ -401,11 +401,11 @@ async def _build_context_inner(
     trigger: str | None = None
     config: dict[str, Any] | None = None
     if graph_json is not None:
-        config = config_from_graph(graph_json, gate_id)
+        config = config_from_graph(graph_json, review_id)
         if config is not None:
             trigger = TRIGGER_CONDITION
         else:
-            config = config_from_hitl_nodes(graph_json, gate_id)
+            config = config_from_hitl_nodes(graph_json, review_id)
             if config is not None:
                 trigger = TRIGGER_NODE
     if trigger is None:
@@ -437,7 +437,7 @@ async def _build_context_inner(
     # from a JMESPath condition), and a non-dict member is tolerated as no
     # evidence. The payload's expression/value are capture-side redacted +
     # bounded; the builder re-bounds defensively.
-    condition_evidence: HitlGateConditionResult | None = None
+    condition_evidence: HitlReviewConditionResult | None = None
     if isinstance(condition_result, dict):
         expression = _bound_text(condition_result.get("expression")) or condition
         value = _bound_text(condition_result.get("value"))
@@ -454,7 +454,7 @@ async def _build_context_inner(
         node_output = (completed_node_outputs or {}).get(source_node_id or "")
         if node_output is not None:
             reason = _output_reason(node_output)[:_TEXT_FIELD_MAX_CHARS]
-            artifacts.append(_artifact_entry(source_node_id or gate_id, node_output))
+            artifacts.append(_artifact_entry(source_node_id or review_id, node_output))
     else:
         referenced = extract_condition_node_ids(condition)
         if not referenced and source_node_id:
@@ -495,7 +495,7 @@ async def _build_context_inner(
     # reject routes to reject_target (when set).
     consequences: dict[str, Any] | None = None
     if graph_json is not None:
-        consequences = _resolve_consequences(graph_json, gate_id, config, source_node_id)
+        consequences = _resolve_consequences(graph_json, review_id, config, source_node_id)
 
     # FAR-860: capture the response_contract from the gate config so the
     # UI can render agent-defined options from the briefing without
@@ -531,7 +531,7 @@ async def _build_context_inner(
 
 def _resolve_consequences(
     graph_json: dict[str, Any],
-    gate_id: str,
+    review_id: str,
     config: dict[str, Any] | None,
     source_node_id: str | None,
 ) -> dict[str, Any] | None:
@@ -545,16 +545,16 @@ def _resolve_consequences(
     approve_target: str | None = None
     reject_target: str | None = None
 
-    # Approve: find the edge whose topology-derived gate_id matches and
-    # extract its target.  Uses make_gate_id (topology-based) — the same
+    # Approve: find the edge whose topology-derived review_id matches and
+    # extract its target.  Uses make_review_id (topology-based) — the same
     # derivation the executor stamps at fire time — NOT the config's
-    # gate_id field, which is injected only in compiled graphs.
+    # review_id field, which is injected only in compiled graphs.
     for edge in graph_json.get("edges", []):
         if not isinstance(edge, dict):
             continue
         source = edge_source_or_target(edge, "source")
         target = edge_source_or_target(edge, "target")
-        if source is not None and target is not None and make_gate_id(source, target) == gate_id:
+        if source is not None and target is not None and make_review_id(source, target) == review_id:
             approve_target = str(target)
             break
 
@@ -611,9 +611,9 @@ __all__ = (
     "TRIGGER_NODE",
     "TRIGGER_UNKNOWN",
     "TRUNCATION_MARKER",
-    "HitlGateConditionResult",
-    "HitlGateContext",
-    "build_hitl_gate_context",
+    "HitlReviewConditionResult",
+    "HitlReviewContext",
+    "build_hitl_review_context",
     "extract_condition_node_ids",
     "serialize_value",
     "slice_with_marker",

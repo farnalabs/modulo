@@ -41,7 +41,7 @@ from modulo.core.pipeline_engine.eval_persist_order import (
 
 run_id = uuid.uuid4()
 org_id = uuid.uuid4()
-gate_id = uuid.uuid4()
+review_id = uuid.uuid4()
 
 _MODULE_LOGGER = "modulo.core.pipeline_engine.eval_persist_order"
 
@@ -50,7 +50,7 @@ def _snapshot(with_result: bool = True, *, matching_node: bool = True) -> EvalPo
     node_id = uuid.uuid4()
     return EvalPolicySnapshot(
         policy_gate=PolicyGateView(
-            id=gate_id,
+            id=review_id,
             organisation_id=org_id,
             version=1,
             node_id=node_id,
@@ -215,7 +215,7 @@ class TestDecisionRecordPersistSuccessPath:
             config={"pattern": "pass", "field": "text"},
             failure_behaviour="warn",
             node_id=str(uuid.uuid4()),
-            policy_gate_id=gate_id,
+            policy_gate_id=review_id,
             policy_gate_version=1,
             policy_gate_node_id=None,
         )
@@ -327,7 +327,7 @@ class TestFailOpenStructuredLog:
         assert len(records) == 1
         record = records[0]
         assert record.failure_class == "transient"
-        assert record.policy_gate_id == str(gate_id)
+        assert record.policy_gate_id == str(review_id)
         assert record.run_id == str(run_id)
         assert record.resolved_action == "continue"
 
@@ -382,7 +382,7 @@ class TestFailOpenDoesNotBlockContinue:
             config={"pattern": "pass", "field": "text"},
             failure_behaviour="warn",
             node_id=str(uuid.uuid4()),
-            policy_gate_id=gate_id,
+            policy_gate_id=review_id,
             policy_gate_version=1,
             policy_gate_node_id=uuid.uuid4(),
         )

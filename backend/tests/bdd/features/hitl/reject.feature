@@ -1,6 +1,6 @@
 Feature: HITL Reject
   As an approver
-  I want to reject a run waiting at a HITL gate
+  I want to reject a run waiting at a HITL review
   So that the run stops and is marked as rejected
 
   Background:

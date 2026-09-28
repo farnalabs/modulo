@@ -248,7 +248,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-17):** closed `feat-hitl`'s "No executing BDD
 > surface for modify-then-approve, `human_only` refusal, or overdue warnings"
 > gap (`hitl/hitl-gates.md`). Registered the new `gate_policies.feature` into
-> the executing BDD suite (`steps/test_hitl_gate_policies.py`), driving the
+> the executing BDD suite (`steps/test_hitl_review_policies.py`), driving the
 > real `/approve-with-modification` route (200 + modified output in the resume
 > payload, 422 without a claim token, 410 with an expired one), the real REST
 > `human_only` denial verdict (API-key principal on a human_only gate → 403),
@@ -660,7 +660,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > (`claim_token_required`), the real `_check_agent_tool_scope` role-hierarchy
 > scope gate (a `runner` is denied `hitl:review` → `insufficient_scope`), the
 > real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
-> decision dispatch (`approved` / `rejected` + `gate_id`), and the real
+> decision dispatch (`approved` / `rejected` + `review_id`), and the real
 > pending-gate serialisation with the shared gate description resolver —
 > network-free and DB-free with only the auth re-validation and DB/HITLManager
 > seams patched. Removed the five scenarios from
@@ -723,7 +723,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > stamped by the MCP `_dispatch_hitl_action`. Product improvement closing the
 > wire gap the scenario describes: `list_pending_hitl` now surfaces each
 > pending gate's `human_only` flag via the new shared batched resolver
-> (`db/crud/hitl_gate_config.resolve_gate_human_only_map` — claim-stamped
+> (`db/crud/hitl_review_config.resolve_gate_human_only_map` — claim-stamped
 > fire-time config preferred, snapshot-config fallback, fail-safe
 > `DEFAULT_HUMAN_ONLY`), so an MCP agent can see which gates REQUIRE a browser
 > human before it attempts an action. Removed the three scenarios from
@@ -748,6 +748,21 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > conflict detection with the real `suggest_import_name` producing
 > "PRD to Tickets (imported)". Removed the five scenarios from
 > `PINNED_AWAITING_IMPLEMENTATION`; `_ORPHANED_BDD_FEATURES` stays empty.
+
+> **Closed this walk (2026-09-27):** completed the reverse testid-coverage
+> guard (`OWNED_PAGES` in `test_product_map_consistency.py`) across every
+> manifest route. `/admin/trigger-events` — the FAR-1255 org-wide trigger event
+> log page shipped 2026-09-26 — was the last route not mapped to its owning
+> view (`SettingsTriggerEventLogView.vue`); its six documented elements
+> (`settings-trigger-event-log-*`) were registered but unguarded, so a newly
+> shipped testid on the page could silently stay invisible to Assistant's docs
+> indexer / `/api/v1/manifest`. It is now mapped and the guard covers 100% of
+> manifest routes. Reconciled `feat-org`'s stale "org settings UI not yet
+> built" Known Gap (`docs/product-map/admin/org.md`): the `/admin/org` UI ships
+> and its surface is manifest-documented, so the remaining gap is re-scoped to
+> the `@awaiting-implementation` UI-journey BDD scenarios and the manifest
+> `feat-org` registry gained the shipped UI behaviour + scoped deferral.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

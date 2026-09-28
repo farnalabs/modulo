@@ -50,10 +50,25 @@ kill-switch, authorization enforcement).
 
 ## Known Gaps
 
-- BDD scenarios for org settings UI are tagged `@awaiting-implementation` (UI not
-  yet built for the org-settings route).
+- The org-settings **UI-journey** BDD scenarios (`backend/tests/bdd/features/ui/org_settings.feature`)
+  stay `@awaiting-implementation` (pinned in
+  `PINNED_AWAITING_IMPLEMENTATION`): they describe frontend flows (viewing the
+  page, renaming the org, inviting a member, revoking an API key, viewer access
+  denial) that are exercised by the `AdminOrgSettingsView` component (vitest)
+  and the E2E journey suites, not by backend BDD. The page itself ships at
+  `/admin/org` and its rendered surface is documented in the manifest
+  elements inventory.
 
 ## QA History
+- 2026-09-27: **Improve Architecture product-map walk** —
+  reconciled the stale "org settings UI not yet built" Known Gap: the
+  `/admin/org` UI ships (`AdminOrgSettingsView.vue`, org delete confirmation +
+  product-analytics / community-objects toggles + the product-analytics error
+  strip) and its surface is guarded in the manifest; the remaining gap was
+  re-scoped to the `@awaiting-implementation` UI-journey BDD scenarios, which
+  describe frontend flows covered by component + E2E suites rather than backend
+  BDD. Manifest `feat-org` gained the shipped UI behaviour line and the scoped
+  deferral.
 - 2026-09-25: **Improve Architecture product-map walk** —
   closed the feat-org "governance and audit partially wired" gap: the admin
   feature-flag endpoints (`PUT /{flag}` toggle, `PUT`/`DELETE /{flag}/org-override`)

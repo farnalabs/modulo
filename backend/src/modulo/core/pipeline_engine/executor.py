@@ -101,7 +101,7 @@ from modulo.core.pipeline_engine.evidence import (
     run_evidence_probe,
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
-from modulo.core.pipeline_engine.hitl_context import HitlGateContext, build_hitl_gate_context
+from modulo.core.pipeline_engine.hitl_context import HitlReviewContext, build_hitl_review_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
@@ -122,7 +122,7 @@ from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, 
 from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
-from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
+from modulo.db.crud.hitl_review_config import resolve_hitl_review_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
@@ -944,7 +944,7 @@ def _graph_is_interactive(graph_json: dict[str, Any] | None) -> bool:
     A checkpoint is only useful for a run that can PAUSE and RESUME. Two graph
     shapes make a pipeline interactive, matching exactly the LangGraph paths
     that call ``interrupt()`` (node_runner):
-      - an edge carrying ``hitl_gate_config`` (a HITL gate is inserted between
+      - an edge carrying ``hitl_review_config`` (a HITL gate is inserted between
         source and target and interrupts for human approval / review), and
       - a node with ``node_type == "manual"`` (a manual-input node that
         interrupts and waits for human output).
@@ -964,10 +964,10 @@ def _graph_is_interactive(graph_json: dict[str, Any] | None) -> bool:
         isinstance(node, dict) and str(node.get("node_type", "")).strip() in _INTERACTIVE_NODE_TYPES
         for node in graph_json.get("nodes", []) or []
     )
-    any_hitl_gate_edge = any(
-        isinstance(edge, dict) and edge.get("hitl_gate_config") for edge in graph_json.get("edges", []) or []
+    any_hitl_review_edge = any(
+        isinstance(edge, dict) and edge.get("hitl_review_config") for edge in graph_json.get("edges", []) or []
     )
-    return any_interactive_node or any_hitl_gate_edge
+    return any_interactive_node or any_hitl_review_edge
 
 
 def _resolved_node_timeouts(graph_json: dict[str, Any] | None, default_seconds: int) -> dict[str, int]:
@@ -5389,7 +5389,7 @@ class PipelineExecutor:
         *,
         org_id: uuid.UUID,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         pipeline_id: uuid.UUID,
         required_team_id: uuid.UUID | None,
         completed_node_outputs: dict[str, Any] | None = None,
@@ -5435,7 +5435,7 @@ class PipelineExecutor:
             outcome = await evaluate_gate_coalescing(
                 session,
                 run_id=run_id,
-                gate_id=gate_id,
+                review_id=review_id,
                 pipeline_id=pipeline_id,
                 org_id=org_id,
             )
@@ -5455,22 +5455,22 @@ class PipelineExecutor:
                     raise
                 except Exception:
                     _log.warning(
-                        "hitl_gate.pipeline_name_lookup_failed",
+                        "hitl_review.pipeline_name_lookup_failed",
                         extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
                         exc_info=True,
                     )
                 # FAR-613: capture the decision briefing at fire time.
                 # Failure-isolated — a briefing defect must never block the
-                # interrupt (build_hitl_gate_context never raises; context is
+                # interrupt (build_hitl_review_context never raises; context is
                 # None on capture failure). The savepoint is what keeps a
                 # DB-level capture error from poisoning the shared transaction.
-                gate_context: HitlGateContext | None = None
+                gate_context: HitlReviewContext | None = None
                 try:
                     async with session.begin_nested():
-                        gate_context = await build_hitl_gate_context(
+                        gate_context = await build_hitl_review_context(
                             session,
                             run_id=run_id,
-                            gate_id=gate_id,
+                            review_id=review_id,
                             org_id=org_id,
                             pipeline_name=pipeline_name,
                             completed_node_outputs=completed_node_outputs,
@@ -5483,12 +5483,12 @@ class PipelineExecutor:
                     raise
                 except Exception:
                     _log.warning(
-                        "hitl_gate.context_capture_failed",
-                        extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                        "hitl_review.context_capture_failed",
+                        extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
                         exc_info=True,
                     )
                     gate_context = None
-                # FAR-634: resolve the fired gate's hitl_gate_config and stamp
+                # FAR-634: resolve the fired gate's hitl_review_config and stamp
                 # it on the claim row so the human_only resolver reads it in
                 # ONE claim-row lookup at decision time instead of the
                 # snapshot/live walk. Same failure-isolated savepoint contract
@@ -5499,25 +5499,25 @@ class PipelineExecutor:
                 gate_config: dict[str, Any] | None = None
                 try:
                     async with session.begin_nested():
-                        gate_config = await resolve_hitl_gate_config(
+                        gate_config = await resolve_hitl_review_config(
                             session,
                             run_id=run_id,
-                            gate_id=gate_id,
+                            review_id=review_id,
                             org_id=org_id,
                         )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     _log.warning(
-                        "hitl_gate.config_stamp_failed",
-                        extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                        "hitl_review.config_stamp_failed",
+                        extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
                         exc_info=True,
                     )
                     gate_config = None
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
-                    gate_id=gate_id,
+                    review_id=review_id,
                     pipeline_id=pipeline_id,
                     org_id=org_id,
                     required_team_id=required_team_id,
@@ -5543,7 +5543,7 @@ class PipelineExecutor:
         normalizes so ``finalize_cost``'s merge leaves the stored set untouched.
         """
         gate_payload = _interrupt_gate_payload(interrupts)
-        gate_id = gate_payload.get("gate_id", "")
+        review_id = gate_payload.get("review_id", "")
         required_team_id = _interrupt_required_team_id(gate_payload)
         condition_result = _interrupt_condition_result(gate_payload)
         subject = _interrupt_subject(gate_payload)
@@ -5578,7 +5578,7 @@ class PipelineExecutor:
             pipeline_name, coalesce_reused = await self._create_interrupt_gate(
                 org_id=org_id,
                 run_id=run_id,
-                gate_id=gate_id,
+                review_id=review_id,
                 pipeline_id=pipeline_id,
                 required_team_id=required_team_id,
                 completed_node_outputs=ctx.completed_node_outputs,
@@ -5590,11 +5590,11 @@ class PipelineExecutor:
             if coalesce_reused:
                 detail = (
                     "HITL gate coalesced (FAR-604 D4): an open gate already covers this work item "
-                    f"(unchanged payload hash); the existing gate decides. run={run_id} gate={gate_id}"
+                    f"(unchanged payload hash); the existing gate decides. run={run_id} gate={review_id}"
                 )
                 _log.info(
                     "pipeline.gate_coalesced",
-                    extra={"run_id": str(run_id), "gate_id": gate_id, "pipeline_id": str(pipeline_id)},
+                    extra={"run_id": str(run_id), "review_id": review_id, "pipeline_id": str(pipeline_id)},
                 )
                 return _terminal_failure(broker, "failed", "executor_superseded", detail, node_token_usage)
             broker.publish(
@@ -5607,14 +5607,14 @@ class PipelineExecutor:
             await self._dispatch_hitl_awaiting(
                 org_id=org_id,
                 run_id=run_id,
-                gate_id=gate_id,
+                review_id=review_id,
                 pipeline_name=pipeline_name,
                 team_id=required_team_id,
             )
             return "awaiting_human", None, None, node_token_usage or None
 
         _log.warning(
-            "hitl_gate.cannot_create",
+            "hitl_review.cannot_create",
             extra={"run_id": str(run_id), "pipeline_id": str(pipeline_id), "org_id": str(org_id)},
         )
         broker.publish("run_failed", {"error": "gate_creation_failed", "detail": "Pipeline or org ID is None"})
@@ -5630,7 +5630,7 @@ class PipelineExecutor:
         *,
         org_id: uuid.UUID,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         pipeline_name: str | None,
         team_id: uuid.UUID | None,
     ) -> None:
@@ -5648,7 +5648,7 @@ class PipelineExecutor:
             return
         payload: dict[str, Any] = {
             "run_id": str(run_id),
-            "gate_id": gate_id,
+            "review_id": review_id,
             "team_id": str(team_id) if team_id else None,
         }
         if pipeline_name is not None:
@@ -5665,8 +5665,8 @@ class PipelineExecutor:
             raise
         except Exception:
             _log.exception(
-                "hitl_gate.awaiting_notification_failed",
-                extra={"run_id": str(run_id), "org_id": str(org_id), "gate_id": gate_id},
+                "hitl_review.awaiting_notification_failed",
+                extra={"run_id": str(run_id), "org_id": str(org_id), "review_id": review_id},
             )
 
     async def _handle_chain_end_event(

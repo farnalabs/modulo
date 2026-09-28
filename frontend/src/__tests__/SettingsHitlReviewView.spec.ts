@@ -15,11 +15,11 @@ vi.mock('../lib/api/schema', () => ({}))
 
 import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { useHitlGateState, resetHitlGateState } from '../composables/useHitlGateState'
+import { useHitlReviewState, resetHitlReviewState } from '../composables/useHitlReviewState'
 
 const PENDING_GATE = {
   run_id: '550e8400-e29b-41d4-a716-446655440000',
-  gate_id: 'approval-gate-1',
+  review_id: 'approval-gate-1',
   pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
   claimed_by: null,
   claimed_at: null,
@@ -38,10 +38,10 @@ function claimedGate(overrides: Record<string, unknown> = {}) {
   }
 }
 
-const GATES_URL = '/api/v1/hitl/gates'
+const GATES_URL = '/api/v1/hitl/reviews'
 const PAGE_SIZE = 25
 
-/** The /hitl/gates envelope (FAR-692): items/total/page/page_size. */
+/** The /hitl/reviews envelope (FAR-692): items/total/page/page_size. */
 function gatesResponse(gates: unknown[], overrides: Record<string, unknown> = {}) {
   return {
     data: { items: gates, total: gates.length, page: 1, page_size: PAGE_SIZE, ...overrides },
@@ -64,7 +64,7 @@ function mockGetWithGates(gates: unknown[]) {
 function pendingGateRow() {
   return {
     run_id: '550e8400-e29b-41d4-a716-446655440000',
-    gate_id: 'approval-gate-1',
+    review_id: 'approval-gate-1',
     pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
     claimed_by: null,
     claimed_at: null,
@@ -100,7 +100,7 @@ describe('SettingsHitlReviewView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => {
@@ -173,7 +173,7 @@ describe('SettingsHitlReviewView', () => {
           PENDING_GATE,
           {
             run_id: '550e8400-e29b-41d4-a716-446655440002',
-            gate_id: 'deploy-gate-1',
+            review_id: 'deploy-gate-1',
             pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
             claimed_by: null,
             claimed_at: null,
@@ -318,7 +318,7 @@ describe('SettingsHitlReviewView', () => {
   })
 
   it('serves the status filter from the server-side status param (FAR-692)', async () => {
-    // The status filter maps to GET /hitl/gates' `status` query param — the
+    // The status filter maps to GET /hitl/reviews' `status` query param — the
     // server does the filtering, so the mock honours the requested param:
     // undecided (default) serves both gates, 'claimed' only the claimed one.
     const { api } = await import('../lib/api/client')
@@ -326,7 +326,7 @@ describe('SettingsHitlReviewView', () => {
     const deployPending = {
       ...PENDING_GATE,
       run_id: '550e8400-e29b-41d4-a716-446655440002',
-      gate_id: 'deploy-gate-1',
+      review_id: 'deploy-gate-1',
       pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
     }
     ;(api.GET as any).mockImplementation((url: string, options: Record<string, any> = {}) => {
@@ -435,7 +435,7 @@ describe('SettingsHitlReviewView', () => {
       data: null,
       error: problemDetail(
         "Gate 'approval-gate-1' on run 550e8400-e29b-41d4-a716-446655440000 is already claimed",
-        'urn:problem:modulo:hitl_gate_already_claimed',
+        'urn:problem:modulo:hitl_review_already_claimed',
       ),
     })
 
@@ -462,7 +462,7 @@ describe('SettingsHitlReviewView', () => {
       data: null,
       error: problemDetail(
         "Gate 'approval-gate-1' on run 550e8400-e29b-41d4-a716-446655440000 already has a decision",
-        'urn:problem:modulo:hitl_gate_already_decided',
+        'urn:problem:modulo:hitl_review_already_decided',
       ),
     })
 
@@ -570,7 +570,7 @@ describe('SettingsHitlReviewView', () => {
     ;(api.POST as any).mockResolvedValue({
       data: {
         run_id: '550e8400-e29b-41d4-a716-446655440000',
-        gate_id: 'approval-gate-1',
+        review_id: 'approval-gate-1',
         claim_token: 'tok-123',
         expires_at: '2025-06-30T10:15:00Z',
       },
@@ -599,7 +599,7 @@ describe('SettingsHitlReviewView', () => {
         return Promise.resolve(gatesResponse([
           {
             run_id: '550e8400-e29b-41d4-a716-446655440000',
-            gate_id: 'approval-gate-1',
+            review_id: 'approval-gate-1',
             pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
             claimed_by: null,
             claimed_at: null,
@@ -646,7 +646,7 @@ describe('SettingsHitlReviewView', () => {
     ;(api.GET as any).mockResolvedValue(gatesResponse([
       {
         run_id: '550e8400-e29b-41d4-a716-446655440000',
-        gate_id: 'approval-gate-1',
+        review_id: 'approval-gate-1',
         pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
         claimed_by: null,
         claimed_at: null,
@@ -671,7 +671,7 @@ describe('SettingsHitlReviewView', () => {
     expect(fallback.exists()).toBe(true)
     expect(fallback.text()).toContain('No description provided for this gate')
     // The gate stays claimable ÔÇö the legacy briefing never breaks the flow.
-    // The claim control is the shared HitlGateCard's `hitl-gate-claim` button.
+    // The claim control is the shared HitlReviewCard's `hitl-gate-claim` button.
     expect(wrapper!.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
   })
 
@@ -749,7 +749,7 @@ describe('SettingsHitlReviewView', () => {
     const pageTwoGate = {
       ...pendingGateRow(),
       run_id: '550e8400-e29b-41d4-a716-446655440002',
-      gate_id: 'deploy-gate-1',
+      review_id: 'deploy-gate-1',
       pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
     }
     ;(api.GET as any).mockImplementation((url: string, options: Record<string, any> = {}) => {
@@ -815,7 +815,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders a decided gate through the shared card: decision banner, no actions (FAR-692)', async () => {
     // The history view lists decided gates; they render through the SAME
-    // HitlGateCard — its status computed shows the decision banner and no
+    // HitlReviewCard — its status computed shows the decision banner and no
     // claim/approve/reject controls (no duplicated decision rendering).
     const { api } = await import('../lib/api/client')
     const approvedGate = {
@@ -1175,7 +1175,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('shows a checkbox per row and a select-all checkbox in the column header', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, gate_id: 'deploy-gate-1' }]))
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1' }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1193,7 +1193,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('select-all toggles all row checkboxes', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, gate_id: 'deploy-gate-1' }]))
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1' }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1237,7 +1237,7 @@ describe('SettingsHitlReviewView', () => {
   it('bulk claim claims each selected unclaimed gate and reports outcomes', async () => {
     const { api } = await import('../lib/api/client')
     const gate1 = PENDING_GATE
-    const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', gate_id: 'deploy-gate-1' }
+    const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1' }
     ;(api.GET as any).mockResolvedValue(gatesResponse([gate1, gate2]))
     let claimCount = 0
     ;(api.POST as any).mockImplementation((url: string) => {
@@ -1246,7 +1246,7 @@ describe('SettingsHitlReviewView', () => {
         if (claimCount === 1) {
           return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
         }
-        return Promise.resolve({ data: null, error: { type: 'urn:problem:modulo:hitl_gate_already_claimed', title: 'Conflict', status: 409, detail: 'already claimed' } })
+        return Promise.resolve({ data: null, error: { type: 'urn:problem:modulo:hitl_review_already_claimed', title: 'Conflict', status: 409, detail: 'already claimed' } })
       }
       return Promise.resolve({ data: { ok: true }, error: undefined })
     })
@@ -1276,7 +1276,7 @@ describe('SettingsHitlReviewView', () => {
   it('bulk reject sends a shared reason to each selected claimed gate', async () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
-    const claimed2 = { ...claimed, gate_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
+    const claimed2 = { ...claimed, review_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
     ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
@@ -1289,10 +1289,10 @@ describe('SettingsHitlReviewView', () => {
     })
 
     // Pre-populate the gate state store with tokens so bulk reject can proceed
-    resetHitlGateState()
-    const gs1 = useHitlGateState(claimed.run_id, claimed.gate_id)
+    resetHitlReviewState()
+    const gs1 = useHitlReviewState(claimed.run_id, claimed.review_id)
     gs1.setClaimToken('tok-bulk-1')
-    const gs2 = useHitlGateState(claimed2.run_id, claimed2.gate_id)
+    const gs2 = useHitlReviewState(claimed2.run_id, claimed2.review_id)
     gs2.setClaimToken('tok-bulk-2')
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -1330,7 +1330,7 @@ describe('SettingsHitlReviewView', () => {
   it('bulk reject reports partial failure when some gates fail', async () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
-    const claimed2 = { ...claimed, gate_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
+    const claimed2 = { ...claimed, review_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
     ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
     let rejectCount = 0
     ;(api.POST as any).mockImplementation((url: string) => {
@@ -1342,16 +1342,16 @@ describe('SettingsHitlReviewView', () => {
         if (rejectCount === 1) {
           return Promise.resolve({ data: { ok: true }, error: undefined })
         }
-        return Promise.resolve({ data: null, error: { type: 'urn:problem:modulo:hitl_gate_already_decided', title: 'Conflict', status: 409, detail: 'already decided' } })
+        return Promise.resolve({ data: null, error: { type: 'urn:problem:modulo:hitl_review_already_decided', title: 'Conflict', status: 409, detail: 'already decided' } })
       }
       return Promise.resolve({ data: null, error: undefined })
     })
 
     // Pre-populate the gate state store with tokens so bulk reject can proceed
-    resetHitlGateState()
-    const gs1 = useHitlGateState(claimed.run_id, claimed.gate_id)
+    resetHitlReviewState()
+    const gs1 = useHitlReviewState(claimed.run_id, claimed.review_id)
     gs1.setClaimToken('tok-bulk-1')
-    const gs2 = useHitlGateState(claimed2.run_id, claimed2.gate_id)
+    const gs2 = useHitlReviewState(claimed2.run_id, claimed2.review_id)
     gs2.setClaimToken('tok-bulk-2')
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -1384,7 +1384,7 @@ describe('SettingsHitlReviewView', () => {
   it('keeps the outcome report visible when every bulk reject succeeds and the gates leave the list', async () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
-    const claimed2 = { ...claimed, gate_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
+    const claimed2 = { ...claimed, review_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
     // First fetch lists the two claimed gates; the post-action refetch returns
     // an empty list because the successfully-rejected gates left the queue.
     let getCount = 0
@@ -1406,9 +1406,9 @@ describe('SettingsHitlReviewView', () => {
     })
 
     // Pre-populate the gate state store with tokens so bulk reject can proceed
-    resetHitlGateState()
-    useHitlGateState(claimed.run_id, claimed.gate_id).setClaimToken('tok-bulk-1')
-    useHitlGateState(claimed2.run_id, claimed2.gate_id).setClaimToken('tok-bulk-2')
+    resetHitlReviewState()
+    useHitlReviewState(claimed.run_id, claimed.review_id).setClaimToken('tok-bulk-1')
+    useHitlReviewState(claimed2.run_id, claimed2.review_id).setClaimToken('tok-bulk-2')
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1475,7 +1475,7 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client')
     const approvedGate = {
       ...PENDING_GATE,
-      gate_id: 'approved-gate',
+      review_id: 'approved-gate',
       claimed_by: 'reviewer@team',
       decision: 'approved',
       decision_at: '2025-06-30T11:00:00Z',
@@ -1617,7 +1617,7 @@ describe('SettingsHitlReviewView — goToPage guards', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -1687,7 +1687,7 @@ describe('SettingsHitlReviewView — statusBadgeClass fallback', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -1717,7 +1717,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -1725,7 +1725,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
   it('hides gates whose created_at is before the dateFrom filter', async () => {
     const { api } = await import('../lib/api/client')
     const earlyGate = { ...PENDING_GATE, created_at: '2025-01-01T10:00:00Z' }
-    const lateGate = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', gate_id: 'deploy-gate-1', created_at: '2025-06-30T10:00:00Z' }
+    const lateGate = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1', created_at: '2025-06-30T10:00:00Z' }
     ;(api.GET as any).mockResolvedValue(gatesResponse([earlyGate, lateGate]))
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -1746,7 +1746,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
   it('hides gates whose created_at is after the dateTo filter', async () => {
     const { api } = await import('../lib/api/client')
     const earlyGate = { ...PENDING_GATE, created_at: '2025-01-01T10:00:00Z' }
-    const lateGate = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', gate_id: 'deploy-gate-1', created_at: '2025-06-30T10:00:00Z' }
+    const lateGate = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1', created_at: '2025-06-30T10:00:00Z' }
     ;(api.GET as any).mockResolvedValue(gatesResponse([earlyGate, lateGate]))
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -1844,7 +1844,7 @@ describe('SettingsHitlReviewView — bulk claim skip claimed-by-other', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -1889,7 +1889,7 @@ describe('SettingsHitlReviewView — bulk reject skip-pending', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -1929,7 +1929,7 @@ describe('SettingsHitlReviewView — bulk reject skip-claimed-by-other', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -1970,7 +1970,7 @@ describe('SettingsHitlReviewView — dismissBulkOutcomes', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -2013,7 +2013,7 @@ describe('SettingsHitlReviewView — gateDescriptionSnippet branches', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -2109,7 +2109,7 @@ describe('SettingsHitlReviewView — claim failure banner timer', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
     vi.useFakeTimers()
   })
 
@@ -2163,7 +2163,7 @@ describe('SettingsHitlReviewView — onClaimFailed re-fetch failure', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -2214,7 +2214,7 @@ describe('SettingsHitlReviewView — bulk reject catch path', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -2230,8 +2230,8 @@ describe('SettingsHitlReviewView — bulk reject catch path', () => {
       return Promise.resolve({ data: null, error: undefined })
     })
 
-    resetHitlGateState()
-    useHitlGateState(mine.run_id, mine.gate_id).setClaimToken('tok-bulk-1')
+    resetHitlReviewState()
+    useHitlReviewState(mine.run_id, mine.review_id).setClaimToken('tok-bulk-1')
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -2264,7 +2264,7 @@ describe('SettingsHitlReviewView — bulk claim catch path', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -2303,7 +2303,7 @@ describe('SettingsHitlReviewView — pipeline filter and search', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })
@@ -2311,7 +2311,7 @@ describe('SettingsHitlReviewView — pipeline filter and search', () => {
   it('pipeline filter hides non-matching gates', async () => {
     const { api } = await import('../lib/api/client')
     const gate1 = { ...PENDING_GATE, pipeline_name: 'Alpha' }
-    const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', gate_id: 'deploy-gate-1', pipeline_name: 'Beta' }
+    const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1', pipeline_name: 'Beta' }
     ;(api.GET as any).mockResolvedValue(gatesResponse([gate1, gate2]))
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -2361,7 +2361,7 @@ describe('SettingsHitlReviewView — pipeline filter and search', () => {
 
   it('search hides non-matching gates', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, gate_id: 'deploy-gate-1', pipeline_name: 'Beta' }]))
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1', pipeline_name: 'Beta' }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -2385,7 +2385,7 @@ describe('SettingsHitlReviewView — matchesSearch by name', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => { wrapper?.unmount(); wrapper = null })

@@ -39,7 +39,7 @@ class TestCreateGateEmailHook:
             gate = await HITLManager().create_gate(
                 _session_for_create(),
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 pipeline_id=_PIPELINE,
                 org_id=_ORG,
             )
@@ -54,7 +54,7 @@ class TestCreateGateEmailHook:
             gate = await HITLManager().create_gate(
                 _session_for_create(existing),
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 pipeline_id=_PIPELINE,
                 org_id=_ORG,
             )
@@ -69,7 +69,7 @@ class TestCreateGateEmailHook:
             gate = await HITLManager().create_gate(
                 _session_for_create(),
                 run_id=_RUN,
-                gate_id=_GATE,
+                review_id=_GATE,
                 pipeline_id=_PIPELINE,
                 org_id=_ORG,
             )

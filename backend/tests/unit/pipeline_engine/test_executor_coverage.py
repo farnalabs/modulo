@@ -422,14 +422,14 @@ def test_streamed_interrupts_no_interrupt():
 
 def test_streamed_interrupts_list_of_interrupts():
     """List of interrupts is returned as tuple."""
-    interrupt_obj = Interrupt(value={"gate_id": "g1"})
+    interrupt_obj = Interrupt(value={"review_id": "g1"})
     result = _streamed_interrupts({"event": "on_chain_stream", "data": {"chunk": {"__interrupt__": [interrupt_obj]}}})
     assert result == (interrupt_obj,)
 
 
 def test_streamed_interrupts_single_interrupt():
     """Single interrupt (not a list) is wrapped in a tuple."""
-    interrupt_obj = Interrupt(value={"gate_id": "g1"})
+    interrupt_obj = Interrupt(value={"review_id": "g1"})
     result = _streamed_interrupts({"event": "on_chain_stream", "data": {"chunk": {"__interrupt__": interrupt_obj}}})
     assert result == (interrupt_obj,)
 
@@ -451,8 +451,8 @@ def test_streamed_interrupts_none_data():
 
 def test_streamed_interrupts_tuple_of_interrupts():
     """Tuple of interrupts is returned as-is."""
-    i1 = Interrupt(value={"gate_id": "g1"})
-    i2 = Interrupt(value={"gate_id": "g2"})
+    i1 = Interrupt(value={"review_id": "g1"})
+    i2 = Interrupt(value={"review_id": "g2"})
     result = _streamed_interrupts({"event": "on_chain_stream", "data": {"chunk": {"__interrupt__": (i1, i2)}}})
     assert result == (i1, i2)
 
@@ -593,8 +593,8 @@ def test_graph_is_interactive_true_for_manual_node():
     assert _graph_is_interactive(graph) is True
 
 
-def test_graph_is_interactive_true_for_hitl_gate_edge():
-    graph = {"nodes": [], "edges": [{"hitl_gate_config": {"label": "approve"}}]}
+def test_graph_is_interactive_true_for_hitl_review_edge():
+    graph = {"nodes": [], "edges": [{"hitl_review_config": {"label": "approve"}}]}
     assert _graph_is_interactive(graph) is True
 
 
@@ -1373,9 +1373,9 @@ def test_interrupt_gate_payload_empty_interrupts():
 
 
 def test_interrupt_gate_payload_with_value_dict():
-    i = Interrupt(value={"gate_id": "g1", "required_team_id": str(uuid.uuid4())})
+    i = Interrupt(value={"review_id": "g1", "required_team_id": str(uuid.uuid4())})
     result = _interrupt_gate_payload([i])
-    assert result["gate_id"] == "g1"
+    assert result["review_id"] == "g1"
 
 
 def test_interrupt_gate_payload_non_dict_value():

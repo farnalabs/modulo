@@ -138,11 +138,11 @@ def test_initial_schema_includes_forward_compatible_fields() -> None:
         "source_node_id",
         "target_node_id",
         "edge_type",
-        "hitl_gate_config",
+        "hitl_review_config",
     } <= set(tables["pipeline_edges"].c.keys())
     assert {
         "run_id",
-        "gate_id",
+        "review_id",
         "pipeline_id",
         "account_id",
         "claimed_at",

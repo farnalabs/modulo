@@ -30,7 +30,7 @@ Feature: Stale JWT Team Membership Revocation
     Then the response respects the old role until token refresh
     But this is a documented acceptable gap of up to 15 minutes
 
-  Scenario: HITL gate bypasses stale JWT with DB-live check
+  Scenario: HITL review bypasses stale JWT with DB-live check
     Given I am authenticated as an admin in org "acme"
     And a team "engineering" exists
     And user "alice" is a member of team "engineering" with role "operator"
@@ -39,4 +39,4 @@ Feature: Stale JWT Team Membership Revocation
     But user "alice" still holds a valid JWT
     When user "alice" attempts to claim gate "gate-1" on run "run-1"
     Then the response status is 403
-    And the HITL gate enforcement uses a DB-live membership check
+    And the HITL review enforcement uses a DB-live membership check

@@ -5,7 +5,7 @@ Feature: Pipeline Error Recovery
 
   Scenario: NodeInterrupt transitions to awaiting_human
     Given a running pipeline "deploy-service"
-    When a HITL gate raises NodeInterrupt
+    When a HITL review raises NodeInterrupt
     Then the run status becomes "awaiting_human"
 
   Scenario: Unhandled exception marks run failed
@@ -66,7 +66,7 @@ Feature: Pipeline Error Recovery
     And the error_code is "node_timeout"
 
   Scenario: Conditional gate skips on falsy condition
-    Given a running pipeline with a conditional HITL gate
+    Given a running pipeline with a conditional HITL review
     And the gate condition evaluates to false
     When the run reaches the gate
     Then the gate is skipped

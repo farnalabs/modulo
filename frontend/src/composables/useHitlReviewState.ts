@@ -1,6 +1,6 @@
 import { computed, reactive } from 'vue'
 
-export interface HitlGateSessionState {
+export interface HitlReviewSessionState {
   claimToken: string | null
   notes: string
   editingSubject: boolean
@@ -11,25 +11,25 @@ export interface HitlGateSessionState {
 
 // Module-scoped on purpose (FAR-686): the HITL review page's 30s auto-refresh
 // and its filter refetches flip the page-level `loading` flag, unmounting every
-// HitlGateCard in the list. Per-gate claim tokens and review notes must outlive
+// HitlReviewCard in the list. Per-gate claim tokens and review notes must outlive
 // those component instances within the SPA session; a full page reload
 // intentionally drops them — the card's re-claim path covers that case.
-const gateStates = reactive(new Map<string, HitlGateSessionState>())
+const reviewStates = reactive(new Map<string, HitlReviewSessionState>())
 
-function ensureEntry(key: string): HitlGateSessionState {
-  const existing = gateStates.get(key)
+function ensureEntry(key: string): HitlReviewSessionState {
+  const existing = reviewStates.get(key)
   if (existing) return existing
-  gateStates.set(key, reactive<HitlGateSessionState>({ claimToken: null, notes: '', editingSubject: false, modifiedSubject: '', selectedOption: null }))
-  return gateStates.get(key) as HitlGateSessionState
+  reviewStates.set(key, reactive<HitlReviewSessionState>({ claimToken: null, notes: '', editingSubject: false, modifiedSubject: '', selectedOption: null }))
+  return reviewStates.get(key) as HitlReviewSessionState
 }
 
-export function useHitlGateState(runId: string, gateId: string) {
+export function useHitlReviewState(runId: string, gateId: string) {
   const key = `${runId}:${gateId}`
 
-  const claimToken = computed<string | null>(() => gateStates.get(key)?.claimToken ?? null)
+  const claimToken = computed<string | null>(() => reviewStates.get(key)?.claimToken ?? null)
 
   const notes = computed<string>({
-    get: () => gateStates.get(key)?.notes ?? '',
+    get: () => reviewStates.get(key)?.notes ?? '',
     set: (value: string) => {
       ensureEntry(key).notes = value
     },
@@ -40,18 +40,18 @@ export function useHitlGateState(runId: string, gateId: string) {
   }
 
   function clear(): void {
-    gateStates.delete(key)
+    reviewStates.delete(key)
   }
 
   const editingSubject = computed<boolean>({
-    get: () => gateStates.get(key)?.editingSubject ?? false,
+    get: () => reviewStates.get(key)?.editingSubject ?? false,
     set: (value: boolean) => {
       ensureEntry(key).editingSubject = value
     },
   })
 
   const modifiedSubject = computed<string>({
-    get: () => gateStates.get(key)?.modifiedSubject ?? '',
+    get: () => reviewStates.get(key)?.modifiedSubject ?? '',
     set: (value: string) => {
       ensureEntry(key).modifiedSubject = value
     },
@@ -66,7 +66,7 @@ export function useHitlGateState(runId: string, gateId: string) {
   }
 
   const selectedOption = computed<string | null>({
-    get: () => gateStates.get(key)?.selectedOption ?? null,
+    get: () => reviewStates.get(key)?.selectedOption ?? null,
     set: (value: string | null) => {
       ensureEntry(key).selectedOption = value
     },
@@ -76,6 +76,6 @@ export function useHitlGateState(runId: string, gateId: string) {
 }
 
 /** Drop every persisted gate session — simulates a fresh browser session. */
-export function resetHitlGateState(): void {
-  gateStates.clear()
+export function resetHitlReviewState(): void {
+  reviewStates.clear()
 }

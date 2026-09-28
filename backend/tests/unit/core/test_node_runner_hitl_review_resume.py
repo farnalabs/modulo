@@ -1,4 +1,4 @@
-"""Unit tests for the HITL gate resume seam (``_hitl_gate_resume_result``).
+"""Unit tests for the HITL gate resume seam (``_hitl_review_resume_result``).
 
 FAR-541: the gate node must fail closed on an action-less decision AND on a
 decision not stamped for THIS gate. Only recognized actions stamped with the
@@ -24,16 +24,16 @@ import pytest
 
 import modulo.core.pipeline_engine.node_runner as nr
 
-_GATE_ID = "gate_a_b"
-_FOREIGN_GATE_ID = "gate_c_d"
+_REVIEW_ID = "gate_a_b"
+_FOREIGN_REVIEW_ID = "gate_c_d"
 
 
 def _resume(decision: Any) -> tuple[bool, dict[str, Any] | None]:
-    return nr._hitl_gate_resume_result(
+    return nr._hitl_review_resume_result(
         decision,
-        _GATE_ID,
+        _REVIEW_ID,
         state={},
-        hitl_gate_config={},
+        hitl_review_config={},
         session_factory=None,
         org_id=None,
     )
@@ -59,14 +59,14 @@ async def test_empty_dict_decision_fails_closed() -> None:
 
 async def test_unknown_action_fails_closed() -> None:
     """An unrecognized action value is ignored, never treated as an approval."""
-    resumed, result = await _resume({"action": "weird", "gate_id": _GATE_ID})
+    resumed, result = await _resume({"action": "weird", "review_id": _REVIEW_ID})
     assert resumed is False
     assert result is None
 
 
 async def test_missing_action_fails_closed() -> None:
     """A dict without an ``action`` member carries no human verdict."""
-    resumed, result = await _resume({"notes": "just notes", "gate_id": _GATE_ID})
+    resumed, result = await _resume({"notes": "just notes", "review_id": _REVIEW_ID})
     assert resumed is False
     assert result is None
 
@@ -80,13 +80,13 @@ async def test_non_dict_decision_fails_closed() -> None:
 
 
 async def test_malformed_decision_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
-    """The fail-closed branch emits ``hitl_gate.malformed_decision_ignored``
+    """The fail-closed branch emits ``hitl_review.malformed_decision_ignored``
     with the gate id and the decision's type/action (never payload content)."""
     with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
-        await _resume({"action": "weird", "gate_id": _GATE_ID, "secret_payload": "do-not-log"})
-    records = [r for r in caplog.records if r.getMessage() == "hitl_gate.malformed_decision_ignored"]
+        await _resume({"action": "weird", "review_id": _REVIEW_ID, "secret_payload": "do-not-log"})
+    records = [r for r in caplog.records if r.getMessage() == "hitl_review.malformed_decision_ignored"]
     assert len(records) == 1
-    assert records[0].gate_id == _GATE_ID
+    assert records[0].review_id == _REVIEW_ID
     assert records[0].decision_type == "dict"
     assert records[0].action == "weird"
 
@@ -99,7 +99,7 @@ async def test_foreign_stamped_decision_does_not_resume() -> None:
     DIFFERENT gate (decided at gate A, replayed at gate B by a stale-state
     resume) must NOT resolve gate B — decisions are per-RUN but consumers are
     per-gate, and ``_hitl_decision`` is never cleared from state."""
-    resumed, result = await _resume({"action": "approved", "gate_id": _FOREIGN_GATE_ID})
+    resumed, result = await _resume({"action": "approved", "review_id": _FOREIGN_REVIEW_ID})
     assert resumed is False
     assert result is None
 
@@ -108,7 +108,7 @@ async def test_foreign_rejected_decision_does_not_resume() -> None:
     """A foreign REJECTION is equally inert — it must not kick gate B to its
     reject target nor dispatch a reject correction for a decision B never
     received."""
-    resumed, result = await _resume({"action": "rejected", "gate_id": _FOREIGN_GATE_ID, "reason": "gate A"})
+    resumed, result = await _resume({"action": "rejected", "review_id": _FOREIGN_REVIEW_ID, "reason": "gate A"})
     assert resumed is False
     assert result is None
 
@@ -123,14 +123,16 @@ async def test_unstamped_decision_does_not_resume() -> None:
 
 
 async def test_foreign_decision_logs_warning_without_payload(caplog: pytest.LogCaptureFixture) -> None:
-    """``hitl_gate.foreign_decision_ignored`` carries the gate id and the
+    """``hitl_review.foreign_decision_ignored`` carries the gate id and the
     decision's stamped gate id ONLY — never payload content."""
     with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
-        await _resume({"action": "approved", "gate_id": _FOREIGN_GATE_ID, "notes": "do-not-log-me", "output": {"x": 1}})
-    records = [r for r in caplog.records if r.getMessage() == "hitl_gate.foreign_decision_ignored"]
+        await _resume(
+            {"action": "approved", "review_id": _FOREIGN_REVIEW_ID, "notes": "do-not-log-me", "output": {"x": 1}}
+        )
+    records = [r for r in caplog.records if r.getMessage() == "hitl_review.foreign_decision_ignored"]
     assert len(records) == 1
-    assert records[0].gate_id == _GATE_ID
-    assert records[0].decision_gate_id == _FOREIGN_GATE_ID
+    assert records[0].review_id == _REVIEW_ID
+    assert records[0].decision_review_id == _FOREIGN_REVIEW_ID
     assert "do-not-log-me" not in caplog.text
     assert "output" not in caplog.text
 
@@ -139,11 +141,11 @@ async def test_foreign_decision_logs_warning_without_payload(caplog: pytest.LogC
 
 
 async def test_approved_decision_resumes() -> None:
-    resumed, result = await _resume({"action": "approved", "gate_id": _GATE_ID})
+    resumed, result = await _resume({"action": "approved", "review_id": _REVIEW_ID})
     assert resumed is True
     assert result is not None
     artifact = result["artifacts"][0]
-    assert artifact["node_id"] == _GATE_ID
+    assert artifact["node_id"] == _REVIEW_ID
     assert artifact["result"] == "approved"
 
 
@@ -151,14 +153,14 @@ async def test_approved_with_modification_resumes_with_output() -> None:
     """The approve-with-modification API submits ``approved`` plus
     ``modified_output`` — the modification flows into the run output."""
     modified = {"pr_title": "human edited"}
-    resumed, result = await _resume({"action": "approved", "gate_id": _GATE_ID, "modified_output": modified})
+    resumed, result = await _resume({"action": "approved", "review_id": _REVIEW_ID, "modified_output": modified})
     assert resumed is True
     assert result is not None
     assert result["output"] == modified
 
 
 async def test_rejected_decision_resumes() -> None:
-    resumed, result = await _resume({"action": "rejected", "gate_id": _GATE_ID, "reason": "not good enough"})
+    resumed, result = await _resume({"action": "rejected", "review_id": _REVIEW_ID, "reason": "not good enough"})
     assert resumed is True
     assert result is not None
     assert result["artifacts"][0]["result"] == "rejected"
@@ -166,7 +168,7 @@ async def test_rejected_decision_resumes() -> None:
 
 async def test_deliver_manual_decision_resumes() -> None:
     manual_output = {"answer": 42}
-    resumed, result = await _resume({"action": "deliver_manual", "gate_id": _GATE_ID, "output": manual_output})
+    resumed, result = await _resume({"action": "deliver_manual", "review_id": _REVIEW_ID, "output": manual_output})
     assert resumed is True
     assert result is not None
     assert result["artifacts"][0]["result"] == "delivered_manual"

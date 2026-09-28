@@ -89,9 +89,9 @@ from modulo.core.team_visibility import (
 )
 from modulo.db.crud import guardrail_config as _guardrail_config
 from modulo.db.crud.composite_template import create_composite_template
-from modulo.db.crud.hitl_gate_guard import (
+from modulo.db.crud.hitl_review_guard import (
     GuardrailBindingStripDenied,
-    HitlGateWeakeningDenied,
+    HitlReviewWeakeningDenied,
     denial_http_status,
 )
 from modulo.db.crud.pipeline import (
@@ -243,8 +243,8 @@ async def _get_pipeline_or_404(session: AsyncSession, pipeline_id: uuid.UUID) ->
 class GraphEdgeData:
     """Serialised edge payload shared by every graph-write call site.
 
-    ``hitl_gate_config_present`` records whether the caller explicitly supplied a
-    ``hitl_gate_config`` so the service layer can distinguish "gate removed" from
+    ``hitl_review_config_present`` records whether the caller explicitly supplied a
+    ``hitl_review_config`` so the service layer can distinguish "gate removed" from
     "gate not mentioned".
     """
 
@@ -253,8 +253,8 @@ class GraphEdgeData:
     target_node_id: uuid.UUID
     edge_type: str
     condition_expression: str | None
-    hitl_gate_config: dict[str, Any] | None
-    hitl_gate_config_present: bool
+    hitl_review_config: dict[str, Any] | None
+    hitl_review_config_present: bool
     source_port: str = "out"
     target_port: str = "in"
 
@@ -267,8 +267,10 @@ def _edge_to_data(edge: PipelineGraphEdge) -> GraphEdgeData:
         target_node_id=edge.target_node_id,
         edge_type=edge.edge_type,
         condition_expression=edge.condition_expression,
-        hitl_gate_config=(edge.hitl_gate_config.model_dump(mode="json") if edge.hitl_gate_config is not None else None),
-        hitl_gate_config_present="hitl_gate_config" in edge.model_fields_set,
+        hitl_review_config=(
+            edge.hitl_review_config.model_dump(mode="json") if edge.hitl_review_config is not None else None
+        ),
+        hitl_review_config_present="hitl_review_config" in edge.model_fields_set,
         source_port=edge.source_port,
         target_port=edge.target_port,
     )
@@ -281,8 +283,8 @@ def _edge_data_to_dict(edge: GraphEdgeData) -> dict[str, Any]:
         "target_node_id": edge.target_node_id,
         "edge_type": edge.edge_type,
         "condition_expression": edge.condition_expression,
-        "hitl_gate_config": edge.hitl_gate_config,
-        "hitl_gate_config_present": edge.hitl_gate_config_present,
+        "hitl_review_config": edge.hitl_review_config,
+        "hitl_review_config_present": edge.hitl_review_config_present,
         "source_port": edge.source_port,
         "target_port": edge.target_port,
     }
@@ -295,7 +297,7 @@ def _edge_data_to_validator(edge: GraphEdgeData) -> dict[str, Any]:
         "target": str(edge.target_node_id),
         "type": edge.edge_type,
         "condition_expression": edge.condition_expression,
-        "hitl_gate_config": edge.hitl_gate_config,
+        "hitl_review_config": edge.hitl_review_config,
         "source_port": edge.source_port,
         "target_port": edge.target_port,
     }
@@ -304,16 +306,16 @@ def _edge_data_to_validator(edge: GraphEdgeData) -> dict[str, Any]:
 def _reject_graph_validation_issues(issues: list[Any]) -> None:
     """Raise 422 for graph-save issues that must block authoring.
 
-    ``HITL_GATE_DESCRIPTION_REQUIRED`` (FAR-613) is hard-blocking on this
+    ``HITL_REVIEW_DESCRIPTION_REQUIRED`` (FAR-613) is hard-blocking on this
     path: a node's ``hitl_config`` is an unvalidated ``dict[str, Any]`` that
-    bypasses the edge-level ``HitlGateConfig`` Pydantic contract, so the
+    bypasses the edge-level ``HitlReviewConfig`` Pydantic contract, so the
     validator issue is the ONLY save-time gate for node-level gate
     descriptions. It is raised inside ``session.begin()`` so the already-run
     graph write rolls back with the rejection — without it the node-level
     check would be advisory-only and the save would succeed.
     """
     for issue in issues:
-        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED", "HITL_GATE_DESCRIPTION_REQUIRED"):
+        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED", "HITL_REVIEW_DESCRIPTION_REQUIRED"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=issue.message,
@@ -355,13 +357,13 @@ def _edge_field(edge: Any, name: str, default: Any = None) -> Any:
     return getattr(edge, name, default)
 
 
-async def _deny_hitl_gate(
+async def _deny_hitl_review(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
     account_id: uuid.UUID,
     pipeline_id: uuid.UUID,
-    exc: HitlGateWeakeningDenied,
+    exc: HitlReviewWeakeningDenied,
     request_id: str | None = None,
 ) -> None:
     """Append the denial audit event and translate to HTTP (hitl-gate-removal-guard-plan.md v19 §5).
@@ -390,7 +392,7 @@ async def _deny_hitl_gate(
             await append_audit_event(
                 session,
                 org_id=org_id,
-                event_type="hitl_gate_removal_denied",
+                event_type="hitl_review_removal_denied",
                 actor_user_id=account_id,
                 resource_type="pipeline",
                 resource_id=pipeline_id,
@@ -449,17 +451,17 @@ async def _handle_graph_write_denials(
     *,
     principal: TenantPrincipal,
     pipeline_id: uuid.UUID,
-    exc: HitlGateWeakeningDenied | GuardrailBindingStripDenied,
+    exc: HitlReviewWeakeningDenied | GuardrailBindingStripDenied,
 ) -> None:
     """Translate a graph-write denial into its HTTP response.
 
-    ``HitlGateWeakeningDenied`` is audited then re-raised as HTTP by
-    ``_deny_hitl_gate``; ``GuardrailBindingStripDenied`` maps directly to its
+    ``HitlReviewWeakeningDenied`` is audited then re-raised as HTTP by
+    ``_deny_hitl_review``; ``GuardrailBindingStripDenied`` maps directly to its
     denial status. Shared by the graph-replace, pipeline-update, snapshot-
     rollback, and node-conversion save paths.
     """
-    if isinstance(exc, HitlGateWeakeningDenied):
-        await _deny_hitl_gate(
+    if isinstance(exc, HitlReviewWeakeningDenied):
+        await _deny_hitl_review(
             session,
             org_id=principal.organisation_id,
             account_id=principal.account_id,
@@ -1488,7 +1490,7 @@ class HitlResponseOption(BaseModel):
 
 
 class HitlResponseContract(BaseModel):
-    """FAR-860: typed response contract for a HITL gate.
+    """FAR-860: typed response contract for a HITL review.
 
     ``kind: approval`` = today's behaviour (approve/reject) — the default
     and backward-compatible; an absent contract behaves identically.
@@ -1510,7 +1512,7 @@ class HitlResponseContract(BaseModel):
         return self
 
 
-class HitlGateConfig(BaseModel):
+class HitlReviewConfig(BaseModel):
     label: str = Field(min_length=1, max_length=255)
     description: str = Field(max_length=2000)
     reject_target: uuid.UUID | None = None
@@ -1553,13 +1555,13 @@ class HitlGateConfig(BaseModel):
         description="FAR-860: typed response contract. Absent/None = today's "
         "approve/reject behaviour (backward-compatible). kind='choice' declares "
         "agent-defined options; the human's answer is injected into run state "
-        "as hitl_answer_<gate_id> for downstream conditional edges.",
+        "as hitl_answer_<review_id> for downstream conditional edges.",
     )
 
     @field_validator("description")
     @classmethod
     def _description_must_explain_why(cls, v: str, info: ValidationInfo) -> str:
-        """FAR-613: a HITL gate must explain WHY a human must decide on it.
+        """FAR-613: a HITL review must explain WHY a human must decide on it.
 
         The description is the reviewer's decision briefing (surfaces in the
         approve/reject UI and MCP gate resources). A description that is empty
@@ -1591,7 +1593,7 @@ class PipelineGraphEdge(BaseModel):
     source_node_id: uuid.UUID
     target_node_id: uuid.UUID
     edge_type: str = Field(pattern="^(normal|reject|conditional|loop)$")
-    hitl_gate_config: HitlGateConfig | None = None
+    hitl_review_config: HitlReviewConfig | None = None
     condition_expression: str | None = Field(
         default=None,
         max_length=500,
@@ -1895,12 +1897,12 @@ def _graph_response(
                 )
             )
             try:
-                # Preserve all stored fields (hitl_gate_config,
+                # Preserve all stored fields (hitl_review_config,
                 # condition_expression, etc.) — same approach as the node
                 # fallback: filter to model-declared fields, coerce only the
                 # IDs, and model_construct the rest.  Must work for dicts AND
                 # attribute objects (ORM rows): a legacy edge whose
-                # hitl_gate_config fails the current schema is still evidence
+                # hitl_review_config fails the current schema is still evidence
                 # worth preserving rather than silently dropping.
                 if isinstance(edge_dict, dict):
                     fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
@@ -2619,7 +2621,7 @@ async def replace_pipeline_graph_endpoint(
                     connector_bindings=connector_bindings,
                     model_backend_pins=model_backend_pins,
                 )
-    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied) as exc:
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
             session,
             principal=principal,
@@ -2878,7 +2880,7 @@ async def _apply_graph_update(
     await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
     # FAR-681 QA gate parity: the dedicated graph endpoint runs
     # _validate_graph_save after the write, rejecting GUARDRAIL_CAP_EXCEEDED,
-    # REDACT_CORRECT_BLOCKED and HITL_GATE_DESCRIPTION_REQUIRED with 422 (the
+    # REDACT_CORRECT_BLOCKED and HITL_REVIEW_DESCRIPTION_REQUIRED with 422 (the
     # rejection rolls the write back). The apply path (graph_json inside a
     # PATCH update payload) must enforce the IDENTICAL gates — without this
     # call a declarative apply could save a graph the authoring UI rejects.
@@ -3008,7 +3010,7 @@ async def update_pipeline_endpoint(
             # autobegin=False raises InvalidRequestError -> 422 silent-success.
             if pipeline is not None:
                 await session.refresh(pipeline)
-    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied) as exc:
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
             session,
             principal=principal,
@@ -3350,7 +3352,7 @@ async def save_as_composite_endpoint(
                     "target_node_id": str(edge.target_node_id),
                     "edge_type": edge.edge_type,
                     "condition_expression": edge.condition_expression,
-                    "hitl_gate_config": edge.hitl_gate_config,
+                    "hitl_review_config": edge.hitl_review_config,
                 }
                 for edge in all_edges_raw.scalars().all()
                 if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str
@@ -3759,7 +3761,7 @@ async def rollback_snapshot_endpoint(
                 caller_type="rest",
                 is_guardrail_admin=_is_guardrail_admin(principal),
             )
-    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied) as exc:
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
             session,
             principal=principal,
@@ -3949,14 +3951,14 @@ async def _finalize_locked_graph_save(
 ) -> None:
     """Translate a locked-graph save error into the correct HTTP response.
 
-    ``HitlGateWeakeningDenied`` is recorded (the guarded write already rolled
+    ``HitlReviewWeakeningDenied`` is recorded (the guarded write already rolled
     back) and control returns to the caller, which then raises the 404
     saved-graph response. The other errors are translated directly into an
     ``HTTPException``. Shared by the convert-to-agent and revert-to-manual
     endpoints, which only differ in how they prepare ``nodes``/``edges``.
     """
-    if isinstance(exc, HitlGateWeakeningDenied):
-        await _deny_hitl_gate(
+    if isinstance(exc, HitlReviewWeakeningDenied):
+        await _deny_hitl_review(
             session,
             org_id=principal.organisation_id,
             account_id=principal.account_id,
@@ -4081,7 +4083,7 @@ async def convert_node_to_agent_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
-    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
@@ -4174,7 +4176,7 @@ async def revert_node_to_manual_endpoint(
                 nodes=nodes,
                 edges=edges,
             )
-    except (HitlGateWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
@@ -4202,8 +4204,10 @@ def _edge_to_dict(e: Any) -> dict[str, Any]:
         "target_node_id": str(e.target_node_id),
         "edge_type": e.edge_type,
         "condition_expression": getattr(e, "condition_expression", None),
-        "hitl_gate_config": dict(e.hitl_gate_config) if isinstance(e.hitl_gate_config, dict) else e.hitl_gate_config,
-        "hitl_gate_config_present": True,
+        "hitl_review_config": (
+            dict(e.hitl_review_config) if isinstance(e.hitl_review_config, dict) else e.hitl_review_config
+        ),
+        "hitl_review_config_present": True,
         "source_port": getattr(e, "source_port", "out"),
         "target_port": getattr(e, "target_port", "in"),
     }

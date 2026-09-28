@@ -19,7 +19,7 @@ Claim expiry resets a held claim back to unclaimed when `expires_at < NOW()`.
 HITLManager records decisions but does not block them based on the flag.
 
 v1 upgrade: claim_token is now a short-lived JWT (15-min TTL) scoped to
-run_id + gate_id + client_id, signed with SECRET_KEY. Opaque tokens from the
+run_id + review_id + client_id, signed with SECRET_KEY. Opaque tokens from the
 alpha are still accepted for backwards compatibility.
 """
 
@@ -49,7 +49,7 @@ from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, HITL_CLAIMABLE_RU
 from modulo.db.models.team_membership import TeamMembership
 
 if TYPE_CHECKING:
-    from modulo.core.pipeline_engine.hitl_context import HitlGateContext
+    from modulo.core.pipeline_engine.hitl_context import HitlReviewContext
 
 _log = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ _TEAM_CLAIM_ROLES: tuple[str, ...] = ("runner", "operator")
 
 # Explicit overdue-threshold default (FAR-602). A gate config that lacks
 # ``overdue_threshold_minutes`` flows as ``None`` today: the interrupt payload
-# (``node_runner.make_hitl_gate_node``) carries ``hitl_config.get(...)`` and
+# (``node_runner.make_hitl_review_node``) carries ``hitl_config.get(...)`` and
 # the awaiting-human event reaches the UI without a threshold. The backend's
 # overdue tooling in THIS module (``list_overdue``/``count_overdue``) has
 # always used 30 minutes as its bare-literal default — named here so the
@@ -97,17 +97,17 @@ class HITLError(Exception):
 
 
 class GateNotFoundError(HITLError, KeyError):
-    def __init__(self, run_id: uuid.UUID, gate_id: str) -> None:
-        super().__init__(f"run={run_id} gate={gate_id}")
+    def __init__(self, run_id: uuid.UUID, review_id: str) -> None:
+        super().__init__(f"run={run_id} gate={review_id}")
         self.run_id = run_id
-        self.gate_id = gate_id
+        self.review_id = review_id
 
 
 class AlreadyClaimedError(HITLError, RuntimeError):
-    def __init__(self, run_id: uuid.UUID, gate_id: str) -> None:
-        super().__init__(f"Gate {gate_id!r} on run {run_id} is already claimed")
+    def __init__(self, run_id: uuid.UUID, review_id: str) -> None:
+        super().__init__(f"Gate {review_id!r} on run {run_id} is already claimed")
         self.run_id = run_id
-        self.gate_id = gate_id
+        self.review_id = review_id
 
 
 class ClaimTokenInvalidError(HITLError, PermissionError):
@@ -121,17 +121,17 @@ class ClaimTokenExpiredError(HITLError, PermissionError):
 
 
 class GateAlreadyDecidedError(HITLError, RuntimeError):
-    def __init__(self, run_id: uuid.UUID, gate_id: str) -> None:
-        super().__init__(f"Gate {gate_id!r} on run {run_id} already has a decision")
+    def __init__(self, run_id: uuid.UUID, review_id: str) -> None:
+        super().__init__(f"Gate {review_id!r} on run {run_id} already has a decision")
 
 
 class NotTeamMemberError(HITLError, PermissionError):
-    def __init__(self, run_id: uuid.UUID, gate_id: str, team_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    def __init__(self, run_id: uuid.UUID, review_id: str, team_id: uuid.UUID, user_id: uuid.UUID) -> None:
         super().__init__(
-            f"User {user_id} is not a member of team {team_id} required by gate {gate_id!r} on run {run_id}"
+            f"User {user_id} is not a member of team {team_id} required by gate {review_id!r} on run {run_id}"
         )
         self.run_id = run_id
-        self.gate_id = gate_id
+        self.review_id = review_id
         self.team_id = team_id
         self.user_id = user_id
 
@@ -156,8 +156,8 @@ class RunNotAwaitingError(HITLError, RuntimeError):
 class GateVanishedError(HITLError, RuntimeError):
     """Claim acquired/decided but the gate row disappeared before we could read it."""
 
-    def __init__(self, run_id: uuid.UUID, gate_id: str, operation: str) -> None:
-        super().__init__(f"Gate {gate_id!r} on run {run_id} {operation} but row vanished")
+    def __init__(self, run_id: uuid.UUID, review_id: str, operation: str) -> None:
+        super().__init__(f"Gate {review_id!r} on run {run_id} {operation} but row vanished")
 
 
 class DecisionPayloadError(HITLError, ValueError):
@@ -202,11 +202,11 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         pipeline_id: uuid.UUID,
         org_id: uuid.UUID,
         required_team_id: uuid.UUID | None = None,
-        context_json: HitlGateContext | dict[str, Any] | None = None,
+        context_json: HitlReviewContext | dict[str, Any] | None = None,
         gate_config_json: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Insert a new unclaimed gate row. Idempotent if called again for same key.
@@ -215,29 +215,29 @@ class HITLManager:
         by the executor's interrupt handler - the resolved gate description,
         condition, trigger kind, source node, bounded artifact excerpts, and
         the raising output's reason. Typed by
-        ``hitl_context.HitlGateContext`` (FAR-688); open dicts are accepted
+        ``hitl_context.HitlReviewContext`` (FAR-688); open dicts are accepted
         for legacy/foreign callers. Persisted on the claim row so the
         reviewer's briefing reflects the graph state at FIRE time. An
         idempotent re-entry (existing row) leaves the original context
         untouched - a replay must never overwrite the first fire's briefing.
 
-        ``gate_config_json`` (FAR-634) is the resolved ``hitl_gate_config``
+        ``gate_config_json`` (FAR-634) is the resolved ``hitl_review_config``
         stamped by the executor at fire time so the human_only resolver reads
         it in one claim-row lookup instead of the snapshot/live walk (legacy
         rows without a stamp keep the walk as fallback). Same idempotent
         contract as ``context_json``: a replay never overwrites the first
         fire's stamp.
         """
-        # Check for existing row first (unique constraint: run_id + gate_id).
+        # Check for existing row first (unique constraint: run_id + review_id).
         # Race: a concurrent caller may insert between our check and flush.
         # Handle IntegrityError gracefully by fetching the existing row.
-        existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+        existing = await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
         if existing is not None:
             return existing
         gate = HitlClaim(
             organisation_id=org_id,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             pipeline_id=pipeline_id,
             required_team_id=required_team_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=_DEFAULT_EXPIRY_MINUTES),
@@ -249,9 +249,9 @@ class HITLManager:
             async with session.begin_nested():
                 await session.flush()
         except IntegrityError:
-            existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+            existing = await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
             if existing is None:
-                raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}") from None
+                raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={review_id}") from None
             return existing
         # FAR-602: the gate just fired — fire-and-forget the user-configurable
         # email alerts. Scheduling must never delay the interrupt (pure task
@@ -268,7 +268,7 @@ class HITLManager:
                 org_id=org_id,
                 pipeline_id=pipeline_id,
                 run_id=run_id,
-                gate_label=(gate_config_json or {}).get("label") or gate_id,
+                gate_label=(gate_config_json or {}).get("label") or review_id,
                 briefing=context_json,
             )
         except Exception as exc:
@@ -277,7 +277,7 @@ class HITLManager:
             _log.warning(
                 "hitl_manager.gate_email_schedule_failed: %s",
                 exc,
-                extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
             )
         return gate
 
@@ -290,7 +290,7 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
         claimant_id: uuid.UUID,
         expiry_minutes: int = _DEFAULT_EXPIRY_MINUTES,
@@ -299,7 +299,7 @@ class HITLManager:
         """Atomically claim the gate.  Raises AlreadyClaimedError if held.
 
         If ``secret_key`` was provided at construction, the claim token is
-        a signed JWT scoped to (run_id, gate_id, claimant_id).  Otherwise
+        a signed JWT scoped to (run_id, review_id, claimant_id).  Otherwise
         an opaque random string is used (alpha backwards compat).
 
         If the gate has a ``required_team_id``, the claimant must be a
@@ -319,17 +319,17 @@ class HITLManager:
 
         # Pre-check: gate must exist, not already decided, and claimant must
         # be a team member if the gate is team-scoped.
-        gate_check = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+        gate_check = await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
         if gate_check is None:
-            raise GateNotFoundError(run_id, gate_id)
+            raise GateNotFoundError(run_id, review_id)
         if gate_check.decision is not None:
-            raise GateAlreadyDecidedError(run_id, gate_id)
+            raise GateAlreadyDecidedError(run_id, review_id)
         # Same-account re-claim (FAR-686): a reviewer who reloaded the page
         # lost their claim token (it lives only in frontend state). Allow the
         # SAME account to re-claim (re-issuing a fresh token); raise only when
         # ANOTHER account holds the claim.
         if gate_check.account_id is not None and gate_check.account_id != claimant_id:
-            raise AlreadyClaimedError(run_id, gate_id)
+            raise AlreadyClaimedError(run_id, review_id)
         # FAR-612: the run itself must be waiting for a human (or parked on a
         # human decision). An undecided gate on any other status is data rot
         # (e.g. orphaned rows left by the since-fixed auto-approve bug) --
@@ -348,7 +348,7 @@ class HITLManager:
         run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
         run = run_result.scalar_one_or_none()
         if run is None:
-            raise GateNotFoundError(run_id, gate_id)
+            raise GateNotFoundError(run_id, review_id)
         # FAR-645: the fresh/cross-account set is single-sourced on
         # HITL_CLAIMABLE_RUN_STATUSES -- the same set the atomic UPDATE's
         # EXISTS predicate below enforces, so the pre-check cannot drift from
@@ -365,11 +365,11 @@ class HITLManager:
             )
             locked_gate = locked_result.scalar_one_or_none()
             if locked_gate is None:
-                raise GateNotFoundError(run_id, gate_id)
+                raise GateNotFoundError(run_id, review_id)
             if locked_gate.decision is not None:
-                raise GateAlreadyDecidedError(run_id, gate_id)
+                raise GateAlreadyDecidedError(run_id, review_id)
             if locked_gate.account_id is not None and locked_gate.account_id != claimant_id:
-                raise AlreadyClaimedError(run_id, gate_id)
+                raise AlreadyClaimedError(run_id, review_id)
             tm_result = await session.execute(
                 select(TeamMembership).where(
                     TeamMembership.team_id == gate_check.required_team_id,
@@ -381,7 +381,7 @@ class HITLManager:
             if tm_result.scalar_one_or_none() is None:
                 raise NotTeamMemberError(
                     run_id=run_id,
-                    gate_id=gate_id,
+                    review_id=review_id,
                     team_id=gate_check.required_team_id,
                     user_id=claimant_id,
                 )
@@ -392,7 +392,7 @@ class HITLManager:
                 str(claimant_id),
                 self._secret_key,
                 run_id=str(run_id),
-                gate_id=gate_id,
+                review_id=review_id,
                 client_id=str(claimant_id),
                 expiry_minutes=expiry_minutes,
             )
@@ -409,7 +409,7 @@ class HITLManager:
             update(HitlClaim)
             .where(
                 HitlClaim.run_id == run_id,
-                HitlClaim.gate_id == gate_id,
+                HitlClaim.review_id == review_id,
                 HitlClaim.organisation_id == org_id,
                 # Unclaimed OR held by the same account (re-claim re-issues a
                 # fresh token and resets the overdue-notification clock — the
@@ -467,20 +467,20 @@ class HITLManager:
             race_gate_result = await session.execute(
                 select(HitlClaim).where(
                     HitlClaim.run_id == run_id,
-                    HitlClaim.gate_id == gate_id,
+                    HitlClaim.review_id == review_id,
                     HitlClaim.organisation_id == org_id,
                 )
             )
             race_gate = race_gate_result.scalar_one_or_none()
             if race_gate is None:
-                raise GateNotFoundError(run_id, gate_id)
+                raise GateNotFoundError(run_id, review_id)
             if race_gate.decision is not None:
-                raise GateAlreadyDecidedError(run_id, gate_id)
-            raise AlreadyClaimedError(run_id, gate_id)
+                raise GateAlreadyDecidedError(run_id, review_id)
+            raise AlreadyClaimedError(run_id, review_id)
 
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
         if gate is None:
-            raise GateVanishedError(run_id, gate_id, "claimed")
+            raise GateVanishedError(run_id, review_id, "claimed")
 
         # Re-verify team membership — the check above ran before the atomic
         # UPDATE, creating a TOCTOU window where the user could have been
@@ -503,7 +503,7 @@ class HITLManager:
                 )
                 raise NotTeamMemberError(
                     run_id=run_id,
-                    gate_id=gate_id,
+                    review_id=review_id,
                     team_id=gate_check.required_team_id,
                     user_id=claimant_id,
                 )
@@ -514,7 +514,7 @@ class HITLManager:
         # (the savepoint rollback undoes only the audit write).
         claim_payload: dict[str, Any] = {
             "pipeline_run_id": str(run_id),
-            "node_id": gate_id,
+            "node_id": review_id,
             "team_id": str(gate_check.required_team_id) if gate_check.required_team_id else None,
             "expiry_minutes": expiry_minutes,
         }
@@ -537,7 +537,7 @@ class HITLManager:
         except Exception:
             _log.warning(
                 "hitl_manager.claim_audit_failed",
-                extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
             )
 
         return gate
@@ -551,7 +551,7 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
         claim_token: str,
         modified_output: dict[str, Any],
@@ -585,7 +585,7 @@ class HITLManager:
         gate = await self._decide(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_APPROVED,
@@ -623,7 +623,7 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
         claim_token: str,
         actor_id: uuid.UUID | None = None,
@@ -652,7 +652,7 @@ class HITLManager:
         gate = await self._decide(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_APPROVED,
@@ -681,7 +681,7 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
         claim_token: str,
         actor_id: uuid.UUID | None = None,
@@ -708,7 +708,7 @@ class HITLManager:
         gate = await self._decide(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_REJECTED,
@@ -734,7 +734,7 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
         claim_token: str,
         output: dict[str, Any],
@@ -770,7 +770,7 @@ class HITLManager:
         gate = await self._decide(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_DELIVER_MANUAL,
@@ -811,7 +811,7 @@ class HITLManager:
         session: AsyncSession,
         org_id: uuid.UUID,
     ) -> list[dict[str, Any]]:
-        """Reset claims whose TTL has passed. Returns list of {run_id, gate_id} expired."""
+        """Reset claims whose TTL has passed. Returns list of {run_id, review_id} expired."""
         now = datetime.now(UTC)
         stmt = (
             update(HitlClaim)
@@ -822,10 +822,10 @@ class HITLManager:
                 HitlClaim.decision.is_(None),
             )
             .values(account_id=None, claimed_at=None, claim_token=None, expires_at=now)
-            .returning(HitlClaim.run_id, HitlClaim.gate_id)
+            .returning(HitlClaim.run_id, HitlClaim.review_id)
         )
         rows = (await session.execute(stmt)).all()
-        return [{"run_id": r.run_id, "gate_id": r.gate_id} for r in rows]
+        return [{"run_id": r.run_id, "review_id": r.review_id} for r in rows]
 
     # ------------------------------------------------------------------
     # Read
@@ -836,10 +836,10 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
     ) -> HitlClaim | None:
-        return await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+        return await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
 
     async def list_pending(
         self,
@@ -898,7 +898,7 @@ class HITLManager:
         return [
             {
                 "run_id": g.run_id,
-                "gate_id": g.gate_id,
+                "review_id": g.review_id,
                 "claimed_by": g.account_id,
                 "claimed_at": g.claimed_at,
                 "minutes_overdue": int((now - g.claimed_at).total_seconds() / 60),
@@ -939,13 +939,13 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
     ) -> HitlClaim | None:
         result = await session.execute(
             select(HitlClaim).where(
                 HitlClaim.run_id == run_id,
-                HitlClaim.gate_id == gate_id,
+                HitlClaim.review_id == review_id,
                 HitlClaim.organisation_id == org_id,
             )
         )
@@ -956,7 +956,7 @@ class HITLManager:
         session: AsyncSession,
         *,
         run_id: uuid.UUID,
-        gate_id: str,
+        review_id: str,
         org_id: uuid.UUID,
         claim_token: str,
         decision: str,
@@ -971,10 +971,10 @@ class HITLManager:
         alarm's detection reads this column instead of the audit chain.
 
         Decision-payload contract (FAR-541 iteration 3): the persisted payload
-        shape is ``{"action": <verdict>, "gate_id": <this row's gate id>}``
+        shape is ``{"action": <verdict>, "review_id": <this row's gate id>}``
         plus any per-action members (``output``/``modified_output``/``reason``/
         ``notes``). ``_decide`` is the single stamp authority: a payload
-        WITHOUT a ``gate_id`` is stamped with this row's gate id here; a
+        WITHOUT a ``review_id`` is stamped with this row's gate id here; a
         payload already stamped for a DIFFERENT gate raises
         ``DecisionPayloadError`` (a foreign-stamped decision is never
         persisted). Call-site stamps (API routes / MCP) remain — they feed the
@@ -984,7 +984,7 @@ class HITLManager:
         here:
 
         * HITL gate nodes: ``approved`` / ``rejected`` / ``deliver_manual``
-        * manual nodes: the node's own id as ``gate_id`` + ``output``
+        * manual nodes: the node's own id as ``review_id`` + ``output``
         * conformance overrides: ``approved`` / ``deliver_manual`` / ``skip`` /
           ``replay`` (the latter two are stamped by the recover-node route)
 
@@ -999,22 +999,22 @@ class HITLManager:
         # the direct executor.resume injection — is untouched. A non-dict
         # payload skips stamping here and is rejected by the validator below.
         if decision_payload is None:
-            decision_payload = {"action": decision, "gate_id": gate_id}
-        elif isinstance(decision_payload, dict) and decision_payload.get("gate_id") is None:
-            decision_payload = {**decision_payload, "gate_id": gate_id}
+            decision_payload = {"action": decision, "review_id": review_id}
+        elif isinstance(decision_payload, dict) and decision_payload.get("review_id") is None:
+            decision_payload = {**decision_payload, "review_id": review_id}
 
         # Validate the resume payload shape at write (B1): it must be a dict
         # and any output/modified_output members must be dicts. Oversized
         # payloads are refused with a clear 422 so the human's verdict is never
         # silently truncated or auto-approved as an empty dict on recovery.
-        self._validate_decision_payload(decision_payload, gate_id=gate_id)
+        self._validate_decision_payload(decision_payload, review_id=review_id)
 
         # Validate JWT signature and scope before attempting the SQL UPDATE.
         # Expiry is checked separately via the SQL WHERE clause (expires_at > now)
         # so that the DB remains the authoritative source of truth for TTL.
         if self._secret_key and self._looks_like_jwt(claim_token):
             try:
-                _decode_claim_jwt(claim_token, self._secret_key, run_id=str(run_id), gate_id=gate_id)
+                _decode_claim_jwt(claim_token, self._secret_key, run_id=str(run_id), review_id=review_id)
             except ExpiredSignatureError as err:
                 raise ClaimTokenExpiredError from err
             except JWTError as err:
@@ -1024,7 +1024,7 @@ class HITLManager:
             update(HitlClaim)
             .where(
                 HitlClaim.run_id == run_id,
-                HitlClaim.gate_id == gate_id,
+                HitlClaim.review_id == review_id,
                 HitlClaim.organisation_id == org_id,
                 HitlClaim.decision.is_(None),
                 HitlClaim.claim_token == claim_token,
@@ -1045,11 +1045,11 @@ class HITLManager:
         result = await session.execute(stmt)
         claim_id = result.scalar_one_or_none()
         if claim_id is None:
-            existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+            existing = await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
             if existing is None:
-                raise GateNotFoundError(run_id, gate_id)
+                raise GateNotFoundError(run_id, review_id)
             if existing.decision is not None:
-                raise GateAlreadyDecidedError(run_id, gate_id)
+                raise GateAlreadyDecidedError(run_id, review_id)
             if existing.claim_token is None:
                 raise ClaimTokenExpiredError
             if existing.claim_token != claim_token:
@@ -1068,7 +1068,7 @@ class HITLManager:
         await unpark_parked_run(session, run_id=run_id, org_id=org_id)
         gate = await session.get(HitlClaim, claim_id, populate_existing=True)
         if gate is None:
-            raise GateVanishedError(run_id, gate_id, "decided")
+            raise GateVanishedError(run_id, review_id, "decided")
         return gate
 
     @staticmethod
@@ -1077,14 +1077,14 @@ class HITLManager:
         return token.count(".") == 2
 
     @staticmethod
-    def _validate_decision_payload(payload: dict[str, Any] | None, *, gate_id: str | None = None) -> None:
+    def _validate_decision_payload(payload: dict[str, Any] | None, *, review_id: str | None = None) -> None:
         """Validate the resume payload shape at write (B1).
 
         Rules:
         - ``None`` is allowed (legacy/payload-less decisions).
         - A non-dict payload is rejected (a gate must never be recovered with
           a corrupted decision).
-        - FAR-541 (iteration 3): when *gate_id* is given and the payload is
+        - FAR-541 (iteration 3): when *review_id* is given and the payload is
           stamped for a DIFFERENT gate, it is rejected — a foreign-stamped
           decision must never be persisted (``_decide`` stamps missing stamps
           itself; only a MISMATCH reaches this check).
@@ -1097,11 +1097,11 @@ class HITLManager:
             return
         if not isinstance(payload, dict):
             raise DecisionPayloadError("decision_payload must be a JSON object")
-        if gate_id is not None:
-            stamped = payload.get("gate_id")
-            if stamped is not None and str(stamped) != str(gate_id):
+        if review_id is not None:
+            stamped = payload.get("review_id")
+            if stamped is not None and str(stamped) != str(review_id):
                 raise DecisionPayloadError(
-                    f"decision_payload is stamped for gate {stamped!r}, not the target gate {gate_id!r}"
+                    f"decision_payload is stamped for gate {stamped!r}, not the target gate {review_id!r}"
                 )
         for key in ("output", "modified_output"):
             value = payload.get(key)
@@ -1130,7 +1130,7 @@ class HITLManager:
         answer = extra.pop("answer", None)
         payload: dict[str, Any] = {
             "pipeline_run_id": str(gate.run_id),
-            "node_id": gate.gate_id,
+            "node_id": gate.review_id,
             "decision": gate.decision,
             "team_id": str(gate.required_team_id) if gate.required_team_id else None,
         }

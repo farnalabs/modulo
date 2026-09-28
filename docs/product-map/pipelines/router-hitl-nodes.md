@@ -80,7 +80,7 @@ registry (`feat-router`).
 ## Known Gaps
 
 - **Edge-gate HITL remains compile-supported** — the legacy edge-level
-  `hitl_gate_config` is deliberately not removed; the `hitl` node lowers onto
+  `hitl_review_config` is deliberately not removed; the `hitl` node lowers onto
   it (ADR 050, backward-compatible). (The prior "No BDD feature scenarios"
   gap was closed 2026-09-17 by `router_nodes.feature` — Router authoring,
   first-match-wins/default/classifier routing semantics, and the

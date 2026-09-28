@@ -174,14 +174,14 @@ class HitlReviewUser(BaseLoadUser):
                 return
 
             gate = gates[0]
-            gate_id = gate["gate_id"]
-            claim_token = claim_hitl(self.client, self.token, run_id, gate_id, base_url=BASE_URL)
+            review_id = gate["review_id"]
+            claim_token = claim_hitl(self.client, self.token, run_id, review_id, base_url=BASE_URL)
 
             if random.random() < 0.8:
-                approve_hitl(self.client, self.token, run_id, gate_id, claim_token, base_url=BASE_URL)
+                approve_hitl(self.client, self.token, run_id, review_id, claim_token, base_url=BASE_URL)
                 _fire_event("hitl", "hitl_approve", start)
             else:
-                reject_hitl(self.client, self.token, run_id, gate_id, claim_token, base_url=BASE_URL)
+                reject_hitl(self.client, self.token, run_id, review_id, claim_token, base_url=BASE_URL)
                 _fire_event("hitl", "hitl_reject", start)
         except Exception as exc:
             _fire_event("hitl", "hitl_review_cycle", start, exception=exc)

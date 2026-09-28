@@ -993,7 +993,7 @@ async def test_reject_correction_inner_dispatches():
     kwargs = dispatch.await_args.kwargs
     assert kwargs["node_id"] == "node-1"
     assert kwargs["rejection_reason"] == "bad"
-    assert kwargs["gate_id"] == "gate-1"
+    assert kwargs["review_id"] == "gate-1"
 
 
 async def test_reject_correction_inner_reraises_cancellation():

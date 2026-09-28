@@ -38,7 +38,7 @@ telemetry emits gate-outcome events for observability.
       pipeline default, with a safe manual-approval fallback when unset or invalid
 - [x] Autonomy telemetry emits the expected gate-outcome event payload; failures are
       fail-open and a missing session factory is a no-op
-- [x] `should_skip_hitl_gate` / `should_notify_on_complete` derive from the effective
+- [x] `should_skip_hitl_review` / `should_notify_on_complete` derive from the effective
       autonomy level
 
 ## Known Gaps

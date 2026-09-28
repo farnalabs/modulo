@@ -73,19 +73,19 @@ async def _insert_eval(engine, org_id, pipe_id, acc_id, node_id, eval_type="rege
 
 
 async def _insert_gate(engine, org_id, eval_id, node_id, action="warn"):
-    gate_id = uuid.uuid4()
+    review_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
                 "action, version) VALUES (:id, :oid, :eid, :nid, :a, 1)"
             ),
-            {"id": str(gate_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "a": action},
+            {"id": str(review_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "a": action},
         )
-    return gate_id
+    return review_id
 
 
-async def _insert_decision(engine, org_id, gate_id, eval_id):
+async def _insert_decision(engine, org_id, review_id, eval_id):
     decision_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
@@ -93,7 +93,7 @@ async def _insert_decision(engine, org_id, gate_id, eval_id):
                 "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
                 "VALUES (:id, :oid, :pgid, :eid)"
             ),
-            {"id": str(decision_id), "oid": str(org_id), "pgid": str(gate_id), "eid": str(eval_id)},
+            {"id": str(decision_id), "oid": str(org_id), "pgid": str(review_id), "eid": str(eval_id)},
         )
     return decision_id
 
@@ -118,11 +118,11 @@ class TestC4PartialUniqueIndex:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         node_id = uuid.uuid4()
         eval_id = await _insert_eval(db_engine, org_id, pipe_id, acc_id, node_id)
-        gate_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
+        review_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
         async with db_engine.begin() as conn:
             await conn.execute(
                 text("UPDATE policy_gates SET deleted_at = now() WHERE id = :gid"),
-                {"gid": str(gate_id)},
+                {"gid": str(review_id)},
             )
         new_gate = await _insert_gate(db_engine, org_id, eval_id, node_id)
         assert new_gate is not None
@@ -266,19 +266,19 @@ class TestC13FkDeleteActions:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         node_id = uuid.uuid4()
         eval_id = await _insert_eval(db_engine, org_id, pipe_id, acc_id, node_id)
-        gate_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
-        await _insert_decision(db_engine, org_id, gate_id, eval_id)
+        review_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
+        await _insert_decision(db_engine, org_id, review_id, eval_id)
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
-                await conn.execute(text("DELETE FROM policy_gates WHERE id = :gid"), {"gid": str(gate_id)})
+                await conn.execute(text("DELETE FROM policy_gates WHERE id = :gid"), {"gid": str(review_id)})
 
     @pytest.mark.asyncio
     async def test_delete_eval_rejected_when_decision_exists(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         node_id = uuid.uuid4()
         eval_id = await _insert_eval(db_engine, org_id, pipe_id, acc_id, node_id)
-        gate_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
-        await _insert_decision(db_engine, org_id, gate_id, eval_id)
+        review_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
+        await _insert_decision(db_engine, org_id, review_id, eval_id)
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
                 await conn.execute(text("DELETE FROM evals WHERE id = :eid"), {"eid": str(eval_id)})
@@ -309,11 +309,11 @@ class TestC15aPreVersionRawIntegration:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         node_id = uuid.uuid4()
         eval_id = await _insert_eval(db_engine, org_id, pipe_id, acc_id, node_id)
-        gate_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
+        review_id = await _insert_gate(db_engine, org_id, eval_id, node_id)
         async with db_engine.connect() as conn:
             result = await conn.execute(
                 text("SELECT pre_version_raw FROM policy_gates WHERE id = :gid"),
-                {"gid": str(gate_id)},
+                {"gid": str(review_id)},
             )
             row = result.fetchone()
         assert row is not None

@@ -40,7 +40,7 @@ def _make_settings(**overrides: Any) -> MagicMock:
         "saq_reenqueue_window": 5,
         "saq_job_heartbeat": 30,
         "saq_claimed_nodeless_minutes": 15,
-        "hitl_gate_cancel_grace_seconds": 3600,
+        "hitl_review_cancel_grace_seconds": 3600,
         "dispatcher_reconcile_budget_seconds": 95,
         "dispatcher_reconcile_terminalize_max_per_tick": 25,
         "dispatcher_reconcile_facts_max_per_tick": 25,
@@ -105,7 +105,7 @@ class TestDispatcherReconcileRowBudget:
             claim_cap=3,
             stale_window=90,
             capacity_redispatch_seconds=60,
-            hitl_gate_cancel_grace_seconds=3600,
+            hitl_review_cancel_grace_seconds=3600,
         )
         with (
             patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids),
@@ -153,7 +153,7 @@ class TestDispatcherReconcileRowBudget:
             claim_cap=3,
             stale_window=90,
             capacity_redispatch_seconds=60,
-            hitl_gate_cancel_grace_seconds=3600,
+            hitl_review_cancel_grace_seconds=3600,
         )
         with (
             patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids),

@@ -66,7 +66,7 @@ async def _load_pipeline_and_edges(
             "source": str(edge.source_node_id),
             "target": str(edge.target_node_id),
             "type": edge.edge_type,
-            "hitl_gate_config": copy.deepcopy(edge.hitl_gate_config),
+            "hitl_review_config": copy.deepcopy(edge.hitl_review_config),
             "condition_expression": edge.condition_expression,
         }
         for edge in edges

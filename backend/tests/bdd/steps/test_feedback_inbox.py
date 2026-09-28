@@ -60,7 +60,7 @@ def _make_record(**overrides: object) -> MagicMock:
     r.id = overrides.get("id", uuid.uuid4())
     r.run_id = overrides.get("run_id", _RUN_ID)
     r.account_id = overrides.get("account_id", _ACCOUNT_ID)
-    r.gate_id = overrides.get("gate_id", "gate-1")
+    r.review_id = overrides.get("review_id", "gate-1")
     r.rejection_reason = overrides.get("rejection_reason", "Wrong output")
     r.rejected_output = overrides.get("rejected_output", {"result": "bad"})
     r.producing_node_id = overrides.get("producing_node_id", "node-b")

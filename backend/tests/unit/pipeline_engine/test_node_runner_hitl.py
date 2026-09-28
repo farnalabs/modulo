@@ -11,12 +11,12 @@ from langgraph.errors import GraphInterrupt
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
 from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
 from modulo.core.pipeline_engine.node_runner import (
-    _build_hitl_gate_artifact,
+    _build_hitl_review_artifact,
     _evaluate_eval_condition,
-    _hitl_gate_autonomy_result,
-    _hitl_gate_condition_evaluate,
+    _hitl_review_autonomy_result,
+    _hitl_review_condition_evaluate,
     _resolve_subject_parent_and_key,
-    make_hitl_gate_fn,
+    make_hitl_review_fn,
     make_manual_node_fn,
 )
 
@@ -33,12 +33,12 @@ def _interrupt_without_graph_runtime_autouse(_interrupt_without_graph_runtime: N
 # ---------------------------------------------------------------------------
 
 
-async def test_hitl_gate_first_call_raises_interrupt():
-    gate_config = {"gate_id": "review-step", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_first_call_raises_interrupt():
+    gate_config = {"review_id": "review-step", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
-        await node_fn({"artifacts": [], "_hitl_gates": []})
+        await node_fn({"artifacts": [], "_hitl_reviews": []})
 
     # GraphInterrupt(value) stores value in args as [Interrupt(value, ...)].
     interrupt_list = exc_info.value.args[0]
@@ -46,34 +46,34 @@ async def test_hitl_gate_first_call_raises_interrupt():
     actual = interrupt_list[0]
     value = actual.value if hasattr(actual, "value") else actual
     assert isinstance(value, dict)
-    assert value["gate_id"] == "review-step"
+    assert value["review_id"] == "review-step"
 
 
-async def test_hitl_gate_first_call_stores_gate_config_in_state():
-    gate_config = {"gate_id": "review-step"}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_first_call_stores_gate_config_in_state():
+    gate_config = {"review_id": "review-step"}
+    node_fn = make_hitl_review_fn(gate_config)
 
-    state: dict[str, Any] = {"artifacts": [], "_hitl_gates": []}
+    state: dict[str, Any] = {"artifacts": [], "_hitl_reviews": []}
     with pytest.raises(GraphInterrupt):
         await node_fn(state)
 
     # State mutations before the raise should be persisted.
-    assert len(state["_hitl_gates"]) == 1
-    assert state["_hitl_gates"][0]["gate_id"] == "review-step"
+    assert len(state["_hitl_reviews"]) == 1
+    assert state["_hitl_reviews"][0]["review_id"] == "review-step"
 
 
-async def test_hitl_gate_first_call_preserves_existing_hitl_gates():
-    gate_config = {"gate_id": "second-gate"}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_first_call_preserves_existing_hitl_reviews():
+    gate_config = {"review_id": "second-gate"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     state: dict[str, Any] = {
         "artifacts": [],
-        "_hitl_gates": [{"gate_id": "first-gate"}],
+        "_hitl_reviews": [{"review_id": "first-gate"}],
     }
     with pytest.raises(GraphInterrupt):
         await node_fn(state)
 
-    assert len(state["_hitl_gates"]) == 2
+    assert len(state["_hitl_reviews"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -81,27 +81,27 @@ async def test_hitl_gate_first_call_preserves_existing_hitl_gates():
 # ---------------------------------------------------------------------------
 
 
-async def test_hitl_gate_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
+async def test_hitl_review_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner.interrupt",
-        lambda _payload: {"action": "approved", "gate_id": "review-step", "notes": "Command resume"},
+        lambda _payload: {"action": "approved", "review_id": "review-step", "notes": "Command resume"},
     )
-    node_fn = make_hitl_gate_fn({"gate_id": "review-step"})
+    node_fn = make_hitl_review_fn({"review_id": "review-step"})
 
-    result = await node_fn({"artifacts": [], "_hitl_gates": []})
+    result = await node_fn({"artifacts": [], "_hitl_reviews": []})
 
     assert result["artifacts"][0]["result"] == "approved"
     assert result["artifacts"][0]["human_data"]["notes"] == "Command resume"
 
 
-async def test_hitl_gate_resume_with_approved():
-    gate_config = {"gate_id": "review-step"}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_resume_with_approved():
+    gate_config = {"review_id": "review-step"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "approved", "gate_id": "review-step", "notes": "Looks good"},
+            "_hitl_decision": {"action": "approved", "review_id": "review-step", "notes": "Looks good"},
         }
     )
 
@@ -109,35 +109,35 @@ async def test_hitl_gate_resume_with_approved():
     assert result["artifacts"][0]["result"] == "approved"
     assert result["artifacts"][0]["human_data"] == {
         "action": "approved",
-        "gate_id": "review-step",
+        "review_id": "review-step",
         "notes": "Looks good",
     }
 
 
-async def test_hitl_gate_resume_with_rejected():
-    gate_config = {"gate_id": "review-step"}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_resume_with_rejected():
+    gate_config = {"review_id": "review-step"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "rejected", "gate_id": "review-step", "reason": "Not good enough"},
+            "_hitl_decision": {"action": "rejected", "review_id": "review-step", "reason": "Not good enough"},
         }
     )
 
     assert result["artifacts"][0]["result"] == "rejected"
 
 
-async def test_hitl_gate_resume_preserves_existing_artifacts():
+async def test_hitl_review_resume_preserves_existing_artifacts():
     """Gate returns delta artifacts on resume; accumulator handles merge."""
-    gate_config = {"gate_id": "review-step"}
+    gate_config = {"review_id": "review-step"}
     prior_artifact = {"node_id": "prior-node", "status": "executed"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
             "artifacts": [prior_artifact],
-            "_hitl_decision": {"action": "approved", "gate_id": "review-step"},
+            "_hitl_decision": {"action": "approved", "review_id": "review-step"},
         }
     )
 
@@ -156,7 +156,7 @@ async def test_manual_node_first_call_raises_interrupt():
     node_fn = make_manual_node_fn(node_def)
 
     with pytest.raises(GraphInterrupt) as exc_info:
-        await node_fn({"artifacts": [], "_hitl_gates": []})
+        await node_fn({"artifacts": [], "_hitl_reviews": []})
 
     interrupt_list = exc_info.value.args[0]
     assert len(interrupt_list) > 0
@@ -175,7 +175,7 @@ async def test_manual_node_first_call_raises_interrupt():
 async def test_manual_node_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner.interrupt",
-        lambda _payload: {"gate_id": "manual-step", "output": {"answer": "provided"}},
+        lambda _payload: {"review_id": "manual-step", "output": {"answer": "provided"}},
     )
     node_fn = make_manual_node_fn({"id": "manual-step", "manual_prompt": "Provide output"})
 
@@ -191,7 +191,7 @@ async def test_manual_node_resume_with_output():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "manual_output", "gate_id": "manual-node-1", "output": {"title": "Test"}},
+            "_hitl_decision": {"action": "manual_output", "review_id": "manual-node-1", "output": {"title": "Test"}},
         }
     )
 
@@ -214,7 +214,7 @@ async def test_manual_node_resume_validates_required_fields():
                 "artifacts": [],
                 "_hitl_decision": {
                     "action": "manual_output",
-                    "gate_id": "manual-node-2",
+                    "review_id": "manual-node-2",
                     "output": {"title": "Only title"},
                 },
             }
@@ -228,7 +228,7 @@ async def test_manual_node_resume_without_schema_passes_any_data():
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "manual_output", "gate_id": "manual-node-3", "output": {"anything": 42}},
+            "_hitl_decision": {"action": "manual_output", "review_id": "manual-node-3", "output": {"anything": 42}},
         }
     )
 
@@ -240,9 +240,9 @@ async def test_manual_node_resume_without_schema_passes_any_data():
 # ---------------------------------------------------------------------------
 
 
-async def test_hitl_gate_fully_autonomous_skips_gate():
-    gate_config = {"gate_id": "auto-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_fully_autonomous_skips_gate():
+    gate_config = {"review_id": "auto-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -258,9 +258,9 @@ async def test_hitl_gate_fully_autonomous_skips_gate():
     assert result["artifacts"][0]["autonomy"] == "fully_autonomous"
 
 
-async def test_hitl_gate_notify_on_complete_auto_approves():
-    gate_config = {"gate_id": "notify-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_notify_on_complete_auto_approves():
+    gate_config = {"review_id": "notify-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -276,19 +276,19 @@ async def test_hitl_gate_notify_on_complete_auto_approves():
     assert result["artifacts"][0]["autonomy"] == "notify_on_complete"
 
 
-async def test_hitl_gate_run_context_recommendation_cannot_escalate_without_ceiling():
+async def test_hitl_review_run_context_recommendation_cannot_escalate_without_ceiling():
     """FAR-1163 S0 — prove-the-fix: a context-setter writing
     ``fully_autonomous`` on a ``manual_approval`` pipeline with NO ceiling
     clamps to ``manual_approval`` and the gate FIRES. The old behaviour
     (gate skipped) was the escalation hole."""
-    gate_config = {"gate_id": "rec-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "rec-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "run_context": {
                     "_pipeline_default_autonomy": "manual_approval",
                     "autonomy_recommendation": "fully_autonomous",
@@ -297,17 +297,17 @@ async def test_hitl_gate_run_context_recommendation_cannot_escalate_without_ceil
         )
 
     payload = exc_info.value.args[0][0].value
-    assert payload["gate_id"] == "rec-gate"
+    assert payload["review_id"] == "rec-gate"
     assert payload["autonomy_level"] == "manual_approval"
     assert payload["human_only"] is False
 
 
-async def test_hitl_gate_ceiling_allows_recommendation_to_raise():
+async def test_hitl_review_ceiling_allows_recommendation_to_raise():
     """With ``_pipeline_max_autonomy`` pinned at ``fully_autonomous``, the
     same recommendation is allowed to raise and the gate skips — the ceiling,
     not the default, is now the limit on escalation."""
-    gate_config = {"gate_id": "rec-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "rec-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -324,15 +324,15 @@ async def test_hitl_gate_ceiling_allows_recommendation_to_raise():
     assert result["artifacts"][0]["autonomy"] == "fully_autonomous"
 
 
-async def test_hitl_gate_human_only_overrides_fully_autonomous():
-    gate_config = {"gate_id": "human-override", "human_only": True}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_human_only_overrides_fully_autonomous():
+    gate_config = {"review_id": "human-override", "human_only": True}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "run_context": {
                     "_pipeline_default_autonomy": "fully_autonomous",
                 },
@@ -340,22 +340,22 @@ async def test_hitl_gate_human_only_overrides_fully_autonomous():
         )
 
     interrupt_list = exc_info.value.args[0]
-    assert interrupt_list[0].value["gate_id"] == "human-override"
+    assert interrupt_list[0].value["review_id"] == "human-override"
     assert interrupt_list[0].value["autonomy_level"] == "fully_autonomous"
     assert interrupt_list[0].value["human_only"] is True
 
 
-async def test_hitl_gate_missing_human_only_defaults_true_overrides_fully_autonomous():
+async def test_hitl_review_missing_human_only_defaults_true_overrides_fully_autonomous():
     """FAR-609: a gate config WITHOUT ``human_only`` is human-only — the
     gate always interrupts, even under full autonomy."""
-    gate_config = {"gate_id": "legacy-gate"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "legacy-gate"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "run_context": {
                     "_pipeline_default_autonomy": "fully_autonomous",
                 },
@@ -363,19 +363,19 @@ async def test_hitl_gate_missing_human_only_defaults_true_overrides_fully_autono
         )
 
     interrupt_list = exc_info.value.args[0]
-    assert interrupt_list[0].value["gate_id"] == "legacy-gate"
+    assert interrupt_list[0].value["review_id"] == "legacy-gate"
     assert interrupt_list[0].value["human_only"] is True
 
 
-async def test_hitl_gate_manual_approval_raises_interrupt():
-    gate_config = {"gate_id": "manual-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_manual_approval_raises_interrupt():
+    gate_config = {"review_id": "manual-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "run_context": {
                     "_pipeline_default_autonomy": "manual_approval",
                 },
@@ -383,46 +383,46 @@ async def test_hitl_gate_manual_approval_raises_interrupt():
         )
 
     interrupt_value = exc_info.value.args[0][0].value
-    assert interrupt_value["gate_id"] == "manual-gate"
+    assert interrupt_value["review_id"] == "manual-gate"
     assert interrupt_value["autonomy_level"] == "manual_approval"
     assert interrupt_value["human_only"] is False
 
 
-async def test_hitl_gate_no_run_context_falls_back_to_manual_approval():
-    gate_config = {"gate_id": "no-ctx-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_no_run_context_falls_back_to_manual_approval():
+    gate_config = {"review_id": "no-ctx-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
             }
         )
 
     # No run_context at all = safe fallback to manual_approval → interrupt raised.
 
 
-async def test_hitl_gate_skipped_does_not_record_hitl_gate_state():
-    gate_config = {"gate_id": "skip-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+async def test_hitl_review_skipped_does_not_record_hitl_review_state():
+    gate_config = {"review_id": "skip-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     state: dict[str, Any] = {
         "artifacts": [],
-        "_hitl_gates": [],
+        "_hitl_reviews": [],
         "run_context": {"_pipeline_default_autonomy": "fully_autonomous"},
     }
     result = await node_fn(state)
 
-    # The gate was skipped, so _hitl_gates should NOT have been mutated.
-    assert not state.get("_hitl_gates", [])
+    # The gate was skipped, so _hitl_reviews should NOT have been mutated.
+    assert not state.get("_hitl_reviews", [])
     assert result["artifacts"][0]["status"] == "skipped"
 
 
-async def test_hitl_gate_notify_on_complete_preserves_artifacts():
+async def test_hitl_review_notify_on_complete_preserves_artifacts():
     prior_artifact = {"node_id": "prior", "status": "executed"}
-    gate_config = {"gate_id": "notify-preserve", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "notify-preserve", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -443,34 +443,34 @@ async def test_hitl_gate_notify_on_complete_preserves_artifacts():
 
 async def test_condition_truthy_proceeds_to_interrupt():
     """Condition returns a truthy value → gate normal interrupt."""
-    gate_config = {"gate_id": "cond-gate", "condition": "score > `0.5`"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "score > `0.5`"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "score": 0.8,
             }
         )
 
     interrupt_list = exc_info.value.args[0]
-    assert interrupt_list[0].value["gate_id"] == "cond-gate"
+    assert interrupt_list[0].value["review_id"] == "cond-gate"
 
 
 async def test_condition_fire_carries_matched_value_in_interrupt_payload():
     """FAR-688: on the fire (truthy) path the MATCHED value rides in the
     interrupt payload as ``condition_result`` {expression, value} — the
     briefing capture's PRIMARY evidence instead of a regex guess."""
-    gate_config = {"gate_id": "cond-gate", "condition": "output.review"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "output.review"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "output": {"review": {"score": 0.9, "summary": "looks good"}},
             }
         )
@@ -484,11 +484,11 @@ async def test_condition_fire_carries_matched_value_in_interrupt_payload():
 async def test_condition_fire_serialises_a_boolean_match():
     """A comparison condition matches to a boolean — the serialised value
     records it deterministically."""
-    gate_config = {"gate_id": "cond-gate", "condition": "score > `0.5`"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "score > `0.5`"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
-        await node_fn({"artifacts": [], "_hitl_gates": [], "score": 0.8})
+        await node_fn({"artifacts": [], "_hitl_reviews": [], "score": 0.8})
 
     condition_result = exc_info.value.args[0][0].value["condition_result"]
     assert condition_result["expression"] == "score > `0.5`"
@@ -497,11 +497,11 @@ async def test_condition_fire_serialises_a_boolean_match():
 
 async def test_condition_without_condition_carries_null_condition_result():
     """A gate with no condition fires with ``condition_result=None``."""
-    gate_config = {"gate_id": "plain-gate"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "plain-gate"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
-        await node_fn({"artifacts": [], "_hitl_gates": []})
+        await node_fn({"artifacts": [], "_hitl_reviews": []})
 
     assert exc_info.value.args[0][0].value["condition_result"] is None
 
@@ -510,14 +510,14 @@ async def test_condition_fire_value_is_redacted_and_bounded():
     """FAR-188: the matched value is derived from run state (node outputs),
     so it is redacted before it can enter persistence (the checkpointer
     persists interrupt payloads) and bounded."""
-    gate_config = {"gate_id": "cond-gate", "condition": "output.token"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "output.token"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "output": {"token": f"deployed with ghp_{'a' * 30} embedded"},
             }
         )
@@ -529,8 +529,8 @@ async def test_condition_fire_value_is_redacted_and_bounded():
 
 async def test_condition_falsy_skips_gate():
     """Condition returns a falsy value → gate is skipped, no interrupt."""
-    gate_config = {"gate_id": "cond-gate", "condition": "score > `0.5`"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "score > `0.5`"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -546,8 +546,8 @@ async def test_condition_falsy_skips_gate():
 
 async def test_condition_empty_string_is_falsy():
     """Condition returns an empty string → gate is skipped."""
-    gate_config = {"gate_id": "cond-gate", "condition": "msg"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "msg"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -561,8 +561,8 @@ async def test_condition_empty_string_is_falsy():
 
 async def test_condition_none_is_falsy():
     """Condition returns null → gate is skipped."""
-    gate_config = {"gate_id": "cond-gate", "condition": "missing"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "missing"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -576,22 +576,22 @@ async def test_condition_none_is_falsy():
 
 async def test_condition_absent_defaults_to_interrupt():
     """No condition field → normal interrupt (backward compatible)."""
-    gate_config = {"gate_id": "no-cond-gate", "human_only": False}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "no-cond-gate", "human_only": False}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
             }
         )
 
 
 async def test_condition_zero_number_is_falsy():
     """Condition returns number 0 → gate is skipped."""
-    gate_config = {"gate_id": "cond-gate", "condition": "count"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "count"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
@@ -605,14 +605,14 @@ async def test_condition_zero_number_is_falsy():
 
 async def test_condition_nonzero_number_is_truthy():
     """Condition returns a non-zero number → interrupt proceeds."""
-    gate_config = {"gate_id": "cond-gate", "condition": "count"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "count"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "count": 42,
             }
         )
@@ -620,14 +620,14 @@ async def test_condition_nonzero_number_is_truthy():
 
 async def test_condition_true_bool_is_truthy():
     """Condition returns true boolean → interrupt proceeds."""
-    gate_config = {"gate_id": "cond-gate", "condition": "ready == `true`"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "cond-gate", "condition": "ready == `true`"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "ready": True,
             }
         )
@@ -640,7 +640,7 @@ async def test_condition_true_bool_is_truthy():
 
 async def test_eval_block_fails_raises_eval_blocked_error():
     """Eval with failure_behaviour='block' that fails → EvalBlockedError."""
-    gate_config = {"gate_id": "eval-gate"}
+    gate_config = {"review_id": "eval-gate"}
     eval_def = EvalDefinition(
         id=uuid4(),
         org_id=uuid4(),
@@ -649,13 +649,13 @@ async def test_eval_block_fails_raises_eval_blocked_error():
         config={"pattern": "high", "field": "level"},
         failure_behaviour="block",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     with pytest.raises(EvalBlockedError, match="check_score"):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "low",
             }
         )
@@ -663,7 +663,7 @@ async def test_eval_block_fails_raises_eval_blocked_error():
 
 async def test_eval_warn_fails_still_interrupts():
     """Eval with failure_behaviour='warn' that fails → interrupt still occurs."""
-    gate_config = {"gate_id": "eval-gate"}
+    gate_config = {"review_id": "eval-gate"}
     eval_def = EvalDefinition(
         id=uuid4(),
         org_id=uuid4(),
@@ -672,13 +672,13 @@ async def test_eval_warn_fails_still_interrupts():
         config={"pattern": "high", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "low",
             }
         )
@@ -686,7 +686,7 @@ async def test_eval_warn_fails_still_interrupts():
 
 async def test_eval_all_pass_proceeds_to_interrupt():
     """All evals pass → interrupt occurs normally."""
-    gate_config = {"gate_id": "eval-gate"}
+    gate_config = {"review_id": "eval-gate"}
     eval_def = EvalDefinition(
         id=uuid4(),
         org_id=uuid4(),
@@ -695,13 +695,13 @@ async def test_eval_all_pass_proceeds_to_interrupt():
         config={"pattern": "high", "field": "level"},
         failure_behaviour="block",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "high",
             }
         )
@@ -709,28 +709,28 @@ async def test_eval_all_pass_proceeds_to_interrupt():
 
 async def test_no_eval_definitions_proceeds_to_interrupt():
     """No eval_definitions passed → normal interrupt."""
-    gate_config = {"gate_id": "eval-gate"}
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=None)
+    gate_config = {"review_id": "eval-gate"}
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=None)
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
             }
         )
 
 
 async def test_empty_eval_definitions_proceeds_to_interrupt():
     """Empty eval_definitions list → normal interrupt."""
-    gate_config = {"gate_id": "eval-gate"}
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[])
+    gate_config = {"review_id": "eval-gate"}
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[])
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
             }
         )
 
@@ -743,7 +743,7 @@ async def test_empty_eval_definitions_proceeds_to_interrupt():
 async def test_eval_condition_below_threshold_triggers_interrupt():
     """Eval-reference condition: score < threshold (operator lt) → interrupt."""
     gate_config = {
-        "gate_id": "eval-cond-gate",
+        "review_id": "eval-cond-gate",
         "eval_condition": {"eval_name": "quality-check", "threshold": 0.8, "operator": "lt"},
     }
     eval_def = EvalDefinition(
@@ -754,25 +754,25 @@ async def test_eval_condition_below_threshold_triggers_interrupt():
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "fail",
             }
         )
 
     interrupt_list = exc_info.value.args[0]
-    assert interrupt_list[0].value["gate_id"] == "eval-cond-gate"
+    assert interrupt_list[0].value["review_id"] == "eval-cond-gate"
 
 
 async def test_eval_condition_at_threshold_skips_gate():
     """Eval-reference condition: score >= threshold (operator lt) → gate skipped."""
     gate_config = {
-        "gate_id": "eval-cond-gate",
+        "review_id": "eval-cond-gate",
         "eval_condition": {"eval_name": "quality-check", "threshold": 0.8, "operator": "lt"},
     }
     eval_def = EvalDefinition(
@@ -783,7 +783,7 @@ async def test_eval_condition_at_threshold_skips_gate():
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     result = await node_fn(
         {
@@ -799,7 +799,7 @@ async def test_eval_condition_at_threshold_skips_gate():
 async def test_eval_condition_with_gt_operator():
     """Eval-reference condition with gt: score > threshold → gate fires."""
     gate_config = {
-        "gate_id": "eval-cond-gt",
+        "review_id": "eval-cond-gt",
         "eval_condition": {"eval_name": "anomaly-check", "threshold": 0.5, "operator": "gt"},
     }
     eval_def = EvalDefinition(
@@ -810,13 +810,13 @@ async def test_eval_condition_with_gt_operator():
         config={"pattern": "anomaly", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "anomaly detected",
             }
         )
@@ -825,30 +825,30 @@ async def test_eval_condition_with_gt_operator():
 async def test_eval_condition_no_eval_definition_skips_check():
     """No eval definitions means eval_condition has nothing to check — gate passes through."""
     gate_config = {
-        "gate_id": "eval-cond-absent",
+        "review_id": "eval-cond-absent",
         "eval_condition": {"eval_name": "missing-eval", "threshold": 0.8, "operator": "lt"},
     }
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[])
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
             }
         )
 
 
 async def test_eval_condition_none_skips_check():
     """eval_condition absent → no condition check, normal interrupt."""
-    gate_config = {"gate_id": "no-eval-cond"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "no-eval-cond"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
             }
         )
 
@@ -856,7 +856,7 @@ async def test_eval_condition_none_skips_check():
 async def test_eval_condition_score_equal_threshold_with_eq():
     """eval_condition with operator eq: score == threshold → gate fires."""
     gate_config = {
-        "gate_id": "eval-cond-eq",
+        "review_id": "eval-cond-eq",
         "eval_condition": {"eval_name": "exact-check", "threshold": 1.0, "operator": "eq"},
     }
     eval_def = EvalDefinition(
@@ -867,13 +867,13 @@ async def test_eval_condition_score_equal_threshold_with_eq():
         config={"pattern": "perfect", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "perfect",
             }
         )
@@ -882,7 +882,7 @@ async def test_eval_condition_score_equal_threshold_with_eq():
 async def test_eval_condition_resume_skips_condition_and_eval():
     """On resume with _hitl_decision, eval_condition is not checked."""
     gate_config = {
-        "gate_id": "resume-eval-cond",
+        "review_id": "resume-eval-cond",
         "eval_condition": {"eval_name": "quality", "threshold": 0.8, "operator": "lt"},
     }
     eval_def = EvalDefinition(
@@ -893,13 +893,13 @@ async def test_eval_condition_resume_skips_condition_and_eval():
         config={"pattern": "pass", "field": "x"},
         failure_behaviour="block",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     result = await node_fn(
         {
             "artifacts": [],
             "x": "fail",
-            "_hitl_decision": {"action": "approved", "gate_id": "resume-eval-cond"},
+            "_hitl_decision": {"action": "approved", "review_id": "resume-eval-cond"},
         }
     )
 
@@ -914,7 +914,7 @@ async def test_eval_condition_resume_skips_condition_and_eval():
 
 async def test_condition_falsy_skips_eval_and_gate():
     """Condition falsy → gate skipped, evals NOT run (no EvalBlockedError)."""
-    gate_config = {"gate_id": "cond-eval-gate", "condition": "score > `0.5`"}
+    gate_config = {"review_id": "cond-eval-gate", "condition": "score > `0.5`"}
     eval_def = EvalDefinition(
         id=uuid4(),
         org_id=uuid4(),
@@ -923,7 +923,7 @@ async def test_condition_falsy_skips_eval_and_gate():
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="block",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     # Condition is falsy (score=0.2), so evals are not run and no interrupt.
     result = await node_fn(
@@ -939,7 +939,7 @@ async def test_condition_falsy_skips_eval_and_gate():
 
 async def test_resume_skips_condition_and_eval():
     """On resume, _hitl_decision is checked before condition/evals."""
-    gate_config = {"gate_id": "resume-gate", "condition": "score > `0.5`"}
+    gate_config = {"review_id": "resume-gate", "condition": "score > `0.5`"}
     eval_def = EvalDefinition(
         id=uuid4(),
         org_id=uuid4(),
@@ -948,7 +948,7 @@ async def test_resume_skips_condition_and_eval():
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="block",
     )
-    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+    node_fn = make_hitl_review_fn(gate_config, eval_definitions=[eval_def])
 
     # Resume with _hitl_decision present — condition and evals are skipped.
     result = await node_fn(
@@ -956,7 +956,7 @@ async def test_resume_skips_condition_and_eval():
             "artifacts": [],
             "score": 0.2,
             "level": "fail",
-            "_hitl_decision": {"action": "approved", "gate_id": "resume-gate"},
+            "_hitl_decision": {"action": "approved", "review_id": "resume-gate"},
         }
     )
 
@@ -970,16 +970,16 @@ async def test_resume_skips_condition_and_eval():
 # ---------------------------------------------------------------------------
 
 
-async def test_hitl_gate_resume_with_deliver_manual():
+async def test_hitl_review_resume_with_deliver_manual():
     """deliver_manual returns manual_output in state and correct result."""
-    gate_config = {"gate_id": "review-step"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "review-step"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     manual_output = {"summary": "Manually provided", "approved": True}
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "deliver_manual", "gate_id": "review-step", "output": manual_output},
+            "_hitl_decision": {"action": "deliver_manual", "review_id": "review-step", "output": manual_output},
         }
     )
 
@@ -989,20 +989,20 @@ async def test_hitl_gate_resume_with_deliver_manual():
     assert result["output"] == manual_output
     assert result["artifacts"][0]["human_data"] == {
         "action": "deliver_manual",
-        "gate_id": "review-step",
+        "review_id": "review-step",
         "output": manual_output,
     }
 
 
-async def test_hitl_gate_resume_with_deliver_manual_empty_output():
+async def test_hitl_review_resume_with_deliver_manual_empty_output():
     """deliver_manual with empty output returns empty dict, not a crash."""
-    gate_config = {"gate_id": "review-step"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "review-step"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "deliver_manual", "gate_id": "review-step", "output": {}},
+            "_hitl_decision": {"action": "deliver_manual", "review_id": "review-step", "output": {}},
         }
     )
 
@@ -1016,16 +1016,16 @@ async def test_hitl_gate_resume_with_deliver_manual_empty_output():
 # ---------------------------------------------------------------------------
 
 
-async def test_hitl_gate_resume_with_modified_output_writes_output_key():
+async def test_hitl_review_resume_with_modified_output_writes_output_key():
     """When _hitl_decision contains modified_output, it is written to state as `output`."""
-    gate_config = {"gate_id": "modify-gate"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "modify-gate"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     modified = {"summary": "Human-edited output", "approved": True}
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "approved", "gate_id": "modify-gate", "modified_output": modified},
+            "_hitl_decision": {"action": "approved", "review_id": "modify-gate", "modified_output": modified},
         }
     )
 
@@ -1034,15 +1034,15 @@ async def test_hitl_gate_resume_with_modified_output_writes_output_key():
     assert result["artifacts"][0]["human_data"]["modified_output"] == modified
 
 
-async def test_hitl_gate_resume_without_modified_output_skips_output_key():
+async def test_hitl_review_resume_without_modified_output_skips_output_key():
     """Regular approval without modified_output does NOT write an `output` key."""
-    gate_config = {"gate_id": "plain-approve"}
-    node_fn = make_hitl_gate_fn(gate_config)
+    gate_config = {"review_id": "plain-approve"}
+    node_fn = make_hitl_review_fn(gate_config)
 
     result = await node_fn(
         {
             "artifacts": [],
-            "_hitl_decision": {"action": "approved", "gate_id": "plain-approve", "notes": "Looks good"},
+            "_hitl_decision": {"action": "approved", "review_id": "plain-approve", "notes": "Looks good"},
         }
     )
 
@@ -1150,7 +1150,7 @@ async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.Monkey
     monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
     monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
 
-    gate_config = {"gate_id": "persist-gate"}
+    gate_config = {"review_id": "persist-gate"}
     eval_def = EvalDefinition(
         id=eval_id,
         org_id=org_id,
@@ -1160,7 +1160,7 @@ async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.Monkey
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(
+    node_fn = make_hitl_review_fn(
         gate_config,
         eval_definitions=[eval_def],
         session_factory=_fake_factory,
@@ -1171,7 +1171,7 @@ async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.Monkey
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "_run_id": run_id,
                 "level": "fail",
             }
@@ -1218,8 +1218,8 @@ async def test_eval_before_interrupt_persist_failure_does_not_block_interrupt(mo
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(
-        {"gate_id": "persist-fail-gate"},
+    node_fn = make_hitl_review_fn(
+        {"review_id": "persist-fail-gate"},
         eval_definitions=[eval_def],
         session_factory=_boom_factory,
         org_id=org_id,
@@ -1229,7 +1229,7 @@ async def test_eval_before_interrupt_persist_failure_does_not_block_interrupt(mo
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "_run_id": run_id,
                 "level": "fail",
             }
@@ -1259,8 +1259,8 @@ async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: p
         config={"pattern": "pass", "field": "level"},
         failure_behaviour="warn",
     )
-    node_fn = make_hitl_gate_fn(
-        {"gate_id": "no-runid-gate"},
+    node_fn = make_hitl_review_fn(
+        {"review_id": "no-runid-gate"},
         eval_definitions=[eval_def],
         session_factory=_fake_factory,
         org_id=org_id,
@@ -1270,7 +1270,7 @@ async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: p
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "level": "fail",
             }
         )
@@ -1324,7 +1324,7 @@ def _completed_sandbox_gate_state(contract_output: dict[str, Any]) -> dict[str, 
             "wall_clock_time_ms": 5,
             "cost_estimate_usd": 0.01,
         },
-        "_hitl_gates": [],
+        "_hitl_reviews": [],
         "run_context": {},
     }
 
@@ -1333,8 +1333,8 @@ async def test_gate_eval_validates_source_contract_output_for_sandbox_agent():
     """A source sandbox_agent whose artifact ``output_json`` carries pr_url +
     changed_files PASSES the pr_url-requiring eval (the merged-state ``output``
     telemetry alone would fail it)."""
-    node_fn = make_hitl_gate_fn(
-        {"gate_id": "eval-gate"},
+    node_fn = make_hitl_review_fn(
+        {"review_id": "eval-gate"},
         eval_definitions=[_pr_review_eval_def()],
         node_type_map={"reviewer": "sandbox_agent"},
     )
@@ -1350,8 +1350,8 @@ async def test_gate_eval_validates_source_contract_output_for_sandbox_agent():
 async def test_gate_eval_blocks_on_contract_output_missing_pr_url():
     """Same graph, but the source's contract output lacks pr_url/changed_files
     → the block eval fails with EvalBlockedError (not an interrupt)."""
-    node_fn = make_hitl_gate_fn(
-        {"gate_id": "eval-gate"},
+    node_fn = make_hitl_review_fn(
+        {"review_id": "eval-gate"},
         eval_definitions=[_pr_review_eval_def()],
         node_type_map={"reviewer": "sandbox_agent"},
     )
@@ -1364,8 +1364,8 @@ async def test_gate_eval_without_type_map_keeps_whole_state_target():
     """No node_type_map → the gate evaluates the whole state as before (the
     telemetry-only merged state fails the pr_url schema, documenting the
     pre-fix behaviour)."""
-    node_fn = make_hitl_gate_fn(
-        {"gate_id": "eval-gate"},
+    node_fn = make_hitl_review_fn(
+        {"review_id": "eval-gate"},
         eval_definitions=[_pr_review_eval_def()],
     )
 
@@ -1382,8 +1382,8 @@ async def test_gate_eval_uses_sources_own_output_for_agent_in_fanout():
     ``output``. In a parallel fan-out the merged ``state["output"]`` is
     last-write-wins and can belong to a sibling — the gate must take the
     source's own output from its matched artifact, not the merged key."""
-    node_fn = make_hitl_gate_fn(
-        {"gate_id": "eval-gate"},
+    node_fn = make_hitl_review_fn(
+        {"review_id": "eval-gate"},
         eval_definitions=[_pr_review_eval_def()],
         node_type_map={"reviewer": "agent"},
     )
@@ -1404,7 +1404,7 @@ async def test_gate_eval_uses_sources_own_output_for_agent_in_fanout():
             },
         ],
         "output": {"status": "completed", "summary": "sibling wrote files"},
-        "_hitl_gates": [],
+        "_hitl_reviews": [],
         "run_context": {},
     }
 
@@ -1417,8 +1417,8 @@ async def test_gate_eval_ignores_sibling_artifact_in_parallel_fanout():
     position. Parallel fan-out concatenates artifacts in completion order, so a
     sibling's artifact can land last — it must NEVER be mistaken for the
     source's contract output."""
-    node_fn = make_hitl_gate_fn(
-        {"gate_id": "eval-gate"},
+    node_fn = make_hitl_review_fn(
+        {"review_id": "eval-gate"},
         eval_definitions=[_pr_review_eval_def()],
         node_type_map={"reviewer": "sandbox_agent"},
     )
@@ -1450,7 +1450,7 @@ async def test_gate_eval_ignores_sibling_artifact_in_parallel_fanout():
             },
         ],
         "output": {"status": "completed", "summary": "reviewed", "wall_clock_time_ms": 5, "cost_estimate_usd": 0.01},
-        "_hitl_gates": [],
+        "_hitl_reviews": [],
         "run_context": {},
     }
 
@@ -1463,34 +1463,34 @@ async def test_gate_eval_ignores_sibling_artifact_in_parallel_fanout():
 # ---------------------------------------------------------------------------
 
 
-class TestBuildHitlGateArtifact:
+class TestBuildHitlReviewArtifact:
     def test_builds_standard_envelope(self) -> None:
-        artifact = _build_hitl_gate_artifact("review-step", "condition_skipped")
+        artifact = _build_hitl_review_artifact("review-step", "condition_skipped")
         assert artifact == {"artifacts": [{"node_id": "review-step", "status": "condition_skipped"}]}
 
     def test_merges_extra_keys_into_artifact_entry(self) -> None:
-        artifact = _build_hitl_gate_artifact("g1", "skipped", autonomy="fully_autonomous", condition_result=False)
+        artifact = _build_hitl_review_artifact("g1", "skipped", autonomy="fully_autonomous", condition_result=False)
         assert artifact["artifacts"] == [
             {"node_id": "g1", "status": "skipped", "autonomy": "fully_autonomous", "condition_result": False}
         ]
 
 
-class TestHitlGateConditionEvaluate:
+class TestHitlReviewConditionEvaluate:
     """FAR-688: ``(skip_artifact, condition_result)`` — the truthy path
     returns the matched-value payload instead of dropping it."""
 
     def test_returns_none_none_when_no_condition_configured(self) -> None:
-        assert _hitl_gate_condition_evaluate("g1", None, {}) == (None, None)
+        assert _hitl_review_condition_evaluate("g1", None, {}) == (None, None)
 
     def test_returns_payload_when_condition_is_truthy(self) -> None:
         state = {"config": {"flag": True, "score": 5}}
-        skip, result = _hitl_gate_condition_evaluate("g1", "config.score", state)
+        skip, result = _hitl_review_condition_evaluate("g1", "config.score", state)
         assert skip is None
         assert result == {"expression": "config.score", "value": "5"}
 
     def test_returns_skip_artifact_when_condition_is_falsy(self) -> None:
         state = {"config": {"flag": False, "score": 0}}
-        skip, result = _hitl_gate_condition_evaluate("g1", "config.flag", state)
+        skip, result = _hitl_review_condition_evaluate("g1", "config.flag", state)
         assert result is None
         assert skip == {
             "artifacts": [
@@ -1505,7 +1505,7 @@ class TestHitlGateConditionEvaluate:
 
     def test_returns_skip_artifact_for_null_result(self) -> None:
         """A JMESPath that matches nothing resolves to None — treated as falsy."""
-        skip, result = _hitl_gate_condition_evaluate("g1", "config.missing", {"config": {}})
+        skip, result = _hitl_review_condition_evaluate("g1", "config.missing", {"config": {}})
         assert result is None
         assert skip is not None
         assert skip["artifacts"][0]["status"] == "condition_skipped"
@@ -1513,7 +1513,7 @@ class TestHitlGateConditionEvaluate:
 
     def test_matched_value_is_redacted_and_bounded(self) -> None:
         leaked = {"token": f"ghp_{'a' * 30}"}
-        _skip, result = _hitl_gate_condition_evaluate("g1", "config.leak", {"config": {"leak": leaked}})
+        _skip, result = _hitl_review_condition_evaluate("g1", "config.leak", {"config": {"leak": leaked}})
         assert result is not None
         assert "ghp_" not in result["value"]
         assert "<redacted>" in result["value"]
@@ -1524,7 +1524,7 @@ class TestHitlGateConditionEvaluate:
         cap, so the payload's expression member is bounded too (the checkpointer
         persists interrupt payloads)."""
         long_expression = "'" + "x" * 3000 + "'"
-        _skip, result = _hitl_gate_condition_evaluate("g1", long_expression, {"config": {}})
+        _skip, result = _hitl_review_condition_evaluate("g1", long_expression, {"config": {}})
         assert result is not None
         assert result["expression"].startswith("'xxx")
         assert result["expression"].endswith(TRUNCATION_MARKER)
@@ -1532,33 +1532,33 @@ class TestHitlGateConditionEvaluate:
 
     def test_invalid_jmespath_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match=r"Invalid HITL gate condition expression: foo\["):
-            _hitl_gate_condition_evaluate("g1", "foo[", {})
+            _hitl_review_condition_evaluate("g1", "foo[", {})
 
 
-class TestHitlGateAutonomyResult:
+class TestHitlReviewAutonomyResult:
     def test_fully_autonomous_returns_skipped_artifact(self) -> None:
         state = {"run_context": {"_pipeline_default_autonomy": "fully_autonomous"}}
-        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        resolution, result = _hitl_review_autonomy_result("g1", state, human_only=False)
         assert resolution.effective.value == "fully_autonomous"
         assert resolution.clamped is False
         assert result == {"artifacts": [{"node_id": "g1", "status": "skipped", "autonomy": "fully_autonomous"}]}
 
     def test_notify_on_complete_returns_auto_approved_artifact(self) -> None:
         state = {"run_context": {"_pipeline_default_autonomy": "notify_on_complete"}}
-        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        resolution, result = _hitl_review_autonomy_result("g1", state, human_only=False)
         assert resolution.effective.value == "notify_on_complete"
         assert result == {"artifacts": [{"node_id": "g1", "status": "auto_approved", "autonomy": "notify_on_complete"}]}
 
     def test_manual_approval_returns_no_artifact(self) -> None:
         state = {"run_context": {"_pipeline_default_autonomy": "manual_approval"}}
-        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        resolution, result = _hitl_review_autonomy_result("g1", state, human_only=False)
         assert resolution.effective.value == "manual_approval"
         assert result is None
 
     def test_human_only_overrides_autonomy_skip(self) -> None:
         """human_only gates always interrupt even at fully_autonomous."""
         state = {"run_context": {"_pipeline_default_autonomy": "fully_autonomous"}}
-        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=True)
+        resolution, result = _hitl_review_autonomy_result("g1", state, human_only=True)
         assert resolution.effective.value == "fully_autonomous"
         assert result is None
 
@@ -1571,7 +1571,7 @@ class TestHitlGateAutonomyResult:
                 "autonomy_recommendation": "fully_autonomous",
             }
         }
-        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=True)
+        resolution, result = _hitl_review_autonomy_result("g1", state, human_only=True)
         assert resolution.effective.value == "manual_approval"
         assert resolution.clamped is True
         assert result is None
@@ -1584,7 +1584,7 @@ class TestHitlGateAutonomyResult:
                 "autonomy_recommendation": "fully_autonomous",
             }
         }
-        resolution, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        resolution, result = _hitl_review_autonomy_result("g1", state, human_only=False)
         assert resolution.effective.value == "notify_on_complete"
         assert resolution.requested is not None
         assert resolution.requested.value == "fully_autonomous"
@@ -1599,17 +1599,17 @@ class TestHitlGateAutonomyResult:
 # ---------------------------------------------------------------------------
 
 
-async def test_hitl_gate_emits_clamp_telemetry_on_auto_approve_path(
+async def test_hitl_review_emits_clamp_telemetry_on_auto_approve_path(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Clamped raise that lands on the auto_approved path still records the
-    clamp with requested/effective/ceiling/gate_id."""
+    clamp with requested/effective/ceiling/review_id."""
     clamp_mock = AsyncMock()
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
         clamp_mock,
     )
-    node_fn = make_hitl_gate_fn({"gate_id": "clamp-notify", "human_only": False})
+    node_fn = make_hitl_review_fn({"review_id": "clamp-notify", "human_only": False})
 
     result = await node_fn(
         {
@@ -1629,14 +1629,14 @@ async def test_hitl_gate_emits_clamp_telemetry_on_auto_approve_path(
     assert result["artifacts"][0]["status"] == "auto_approved"
     clamp_mock.assert_awaited_once()
     kwargs = clamp_mock.await_args.kwargs
-    assert kwargs["gate_id"] == "clamp-notify"
+    assert kwargs["review_id"] == "clamp-notify"
     assert kwargs["requested"] == "fully_autonomous"
     assert kwargs["effective"] == "notify_on_complete"
     assert kwargs["ceiling"] == "notify_on_complete"
     assert kwargs["pipeline_id"] == "pipe-1"
 
 
-async def test_hitl_gate_emits_clamp_telemetry_on_fired_path(
+async def test_hitl_review_emits_clamp_telemetry_on_fired_path(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """The fired (interrupt) path records the clamp in ADDITION to the
@@ -1646,13 +1646,13 @@ async def test_hitl_gate_emits_clamp_telemetry_on_fired_path(
         "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
         clamp_mock,
     )
-    node_fn = make_hitl_gate_fn({"gate_id": "clamp-fired", "human_only": False})
+    node_fn = make_hitl_review_fn({"review_id": "clamp-fired", "human_only": False})
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "_pipeline_id": "pipe-1",
                 "run_context": {
                     "_pipeline_default_autonomy": "manual_approval",
@@ -1663,14 +1663,14 @@ async def test_hitl_gate_emits_clamp_telemetry_on_fired_path(
 
     clamp_mock.assert_awaited_once()
     kwargs = clamp_mock.await_args.kwargs
-    assert kwargs["gate_id"] == "clamp-fired"
+    assert kwargs["review_id"] == "clamp-fired"
     assert kwargs["requested"] == "fully_autonomous"
     assert kwargs["effective"] == "manual_approval"
     assert kwargs["ceiling"] == "manual_approval"
     assert kwargs["pipeline_id"] == "pipe-1"
 
 
-async def test_hitl_gate_no_clamp_emits_no_clamp_telemetry(
+async def test_hitl_review_no_clamp_emits_no_clamp_telemetry(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """No recommendation (or a lowering one) means no clamp event."""
@@ -1679,7 +1679,7 @@ async def test_hitl_gate_no_clamp_emits_no_clamp_telemetry(
         "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
         clamp_mock,
     )
-    node_fn = make_hitl_gate_fn({"gate_id": "no-clamp", "human_only": False})
+    node_fn = make_hitl_review_fn({"review_id": "no-clamp", "human_only": False})
 
     result = await node_fn(
         {
@@ -1692,7 +1692,7 @@ async def test_hitl_gate_no_clamp_emits_no_clamp_telemetry(
     clamp_mock.assert_not_awaited()
 
 
-async def test_hitl_gate_autonomy_telemetry_forwards_pipeline_id_on_skip_path(
+async def test_hitl_review_autonomy_telemetry_forwards_pipeline_id_on_skip_path(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """FAR-1163: the skip/auto-approve level-applied event must carry the
@@ -1703,7 +1703,7 @@ async def test_hitl_gate_autonomy_telemetry_forwards_pipeline_id_on_skip_path(
         "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
         telemetry_mock,
     )
-    node_fn = make_hitl_gate_fn({"gate_id": "telemetry-skip", "human_only": False})
+    node_fn = make_hitl_review_fn({"review_id": "telemetry-skip", "human_only": False})
 
     result = await node_fn(
         {
@@ -1721,7 +1721,7 @@ async def test_hitl_gate_autonomy_telemetry_forwards_pipeline_id_on_skip_path(
     assert kwargs["pipeline_id"] == "pipe-1"
 
 
-async def test_hitl_gate_autonomy_telemetry_forwards_pipeline_id_on_fired_path(
+async def test_hitl_review_autonomy_telemetry_forwards_pipeline_id_on_fired_path(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """The fired (interrupt) level-applied event forwards ``_pipeline_id`` too."""
@@ -1730,13 +1730,13 @@ async def test_hitl_gate_autonomy_telemetry_forwards_pipeline_id_on_fired_path(
         "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
         telemetry_mock,
     )
-    node_fn = make_hitl_gate_fn({"gate_id": "telemetry-fired", "human_only": False})
+    node_fn = make_hitl_review_fn({"review_id": "telemetry-fired", "human_only": False})
 
     with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
-                "_hitl_gates": [],
+                "_hitl_reviews": [],
                 "_pipeline_id": "pipe-1",
                 "_run_id": "run-1",
                 "run_context": {"_pipeline_default_autonomy": "manual_approval"},

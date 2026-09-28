@@ -756,7 +756,7 @@ def test_run_response_error_detail_none_when_run_succeeded(client: TestClient) -
 
 def test_run_response_exposes_cancel_reason_and_actor(client: TestClient) -> None:
     """The detail response carries WHY/WHO the run was cancelled."""
-    run = _make_run(status="cancelled", cancel_reason="hitl_gate_expired", cancelled_by="system")
+    run = _make_run(status="cancelled", cancel_reason="hitl_review_expired", cancelled_by="system")
     with (
         patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
@@ -765,7 +765,7 @@ def test_run_response_exposes_cancel_reason_and_actor(client: TestClient) -> Non
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["cancel_reason"] == "hitl_gate_expired"
+    assert body["cancel_reason"] == "hitl_review_expired"
     assert body["cancelled_by"] == "system"
 
 
@@ -2061,11 +2061,11 @@ def test_recover_node_refuses_gate_node_prefix_with_422(client: TestClient) -> N
     """FAR-541: the recover-node resume dispatches {"action": "skip"/"replay"}
     — that is NOT a gate decision, and the gate consumer now fails closed on
     unstamped decisions (the resume would bounce the run back to
-    awaiting_human). A HITL gate target (``hitl_gate_<source>_<target>``) is
+    awaiting_human). A HITL gate target (``hitl_review_<source>_<target>``) is
     refused up front with an explicit 422."""
     with patch("modulo.api.routes.runs.set_rls_org"):
         resp = client.post(
-            f"/api/v1/runs/{_RUN_ID}/nodes/hitl_gate_source_target/recover",
+            f"/api/v1/runs/{_RUN_ID}/nodes/hitl_review_source_target/recover",
             json={"input_data": {"answer": 42}},
         )
 
@@ -2075,11 +2075,11 @@ def test_recover_node_refuses_gate_node_prefix_with_422(client: TestClient) -> N
 
 def test_recover_node_refuses_pending_gate_target_with_422(client: TestClient, mock_session: AsyncMock) -> None:
     """FAR-541 (iteration 3, FIX 3): when the run is parked at an undecided
-    claim row keyed ``hitl_gate_*`` (a real HITL gate — regardless of which
+    claim row keyed ``hitl_review_*`` (a real HITL gate — regardless of which
     node the operator targeted), recovery is refused with an explicit 422 —
     gate decisions must go through the HITL approve/reject endpoints."""
     gate_result = MagicMock()
-    gate_result.scalars.return_value.all.return_value = ["hitl_gate_a_b"]
+    gate_result.scalars.return_value.all.return_value = ["hitl_review_a_b"]
     mock_session.execute = AsyncMock(return_value=gate_result)
     with patch("modulo.api.routes.runs.set_rls_org"):
         resp = client.post(
@@ -2099,7 +2099,7 @@ def test_recover_node_refuses_pending_gate_target_with_422(client: TestClient, m
 def test_recover_node_stamps_manual_target_from_undecided_row(client: TestClient, mock_session: AsyncMock) -> None:
     """FAR-541 (iteration 3, FIX 3): when the run is parked at an undecided
     manual-node claim row (keyed by the NODE id — the interrupt payload stamps
-    ``gate_id: node_id``), the recovery payload is STAMPED with that row's gate
+    ``review_id: node_id``), the recovery payload is STAMPED with that row's gate
     id so the manual node's consumer (stamp == node id) accepts the resume."""
     run = _make_run(status="awaiting_human")
     undecided = MagicMock()
@@ -2123,7 +2123,7 @@ def test_recover_node_stamps_manual_target_from_undecided_row(client: TestClient
     assert resp.json()["action"] == "replay"
     assert mock_dispatch.await_args.kwargs["resume_data"] == {
         "action": "replay",
-        "gate_id": "manual-node-1",
+        "review_id": "manual-node-1",
         "output": {"answer": 42},
     }
 
@@ -2155,7 +2155,7 @@ def test_recover_node_stamps_conformance_target_from_undecided_row(client: TestC
     assert resp.json()["action"] == "skip"
     assert mock_dispatch.await_args.kwargs["resume_data"] == {
         "action": "skip",
-        "gate_id": "guardrail_conformance_g1",
+        "review_id": "guardrail_conformance_g1",
         "output": None,
     }
 
@@ -2185,7 +2185,7 @@ def test_recover_node_without_undecided_row_dispatches_unstamped(client: TestCli
     assert resp.status_code == 200
     dispatched = mock_dispatch.await_args.kwargs["resume_data"]
     assert dispatched == {"action": "replay", "output": {"answer": 42}}
-    assert "gate_id" not in dispatched
+    assert "review_id" not in dispatched
 
 
 def test_recover_node_prefers_matching_node_row_over_stale_undecided_rows(
@@ -2216,7 +2216,7 @@ def test_recover_node_prefers_matching_node_row_over_stale_undecided_rows(
         )
 
     assert resp.status_code == 200
-    assert mock_dispatch.await_args.kwargs["resume_data"]["gate_id"] == "manual-node-1"
+    assert mock_dispatch.await_args.kwargs["resume_data"]["review_id"] == "manual-node-1"
 
 
 def test_recover_node_without_matching_row_picks_deterministically(client: TestClient, mock_session: AsyncMock) -> None:
@@ -2246,7 +2246,7 @@ def test_recover_node_without_matching_row_picks_deterministically(client: TestC
         )
 
     assert resp.status_code == 200
-    assert mock_dispatch.await_args.kwargs["resume_data"]["gate_id"] == "fresh-guardrail-row"
+    assert mock_dispatch.await_args.kwargs["resume_data"]["review_id"] == "fresh-guardrail-row"
 
 
 def test_recover_node_undecided_rows_query_orders_matching_then_newest(
@@ -2276,7 +2276,7 @@ def test_recover_node_undecided_rows_query_orders_matching_then_newest(
     stmt = mock_session.execute.await_args_list[0].args[0]
     compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
     order_by = compiled.rsplit("ORDER BY", maxsplit=1)[-1]
-    assert "gate_id = 'manual-node-1' DESC" in order_by
+    assert "review_id = 'manual-node-1' DESC" in order_by
     assert "claimed_at DESC NULLS LAST" in order_by
     assert "id DESC" in order_by
 

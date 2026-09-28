@@ -11,7 +11,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # Active features
 # ---------------------------------------------------------------------------
 with contextlib.suppress(FileNotFoundError, OSError):
-    scenarios("../features/teams/team_hitl_gate.feature")
+    scenarios("../features/teams/team_hitl_review.feature")
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -48,16 +48,16 @@ def user_not_team_member(username: str, team_name: str, ctx):
     ctx["user_id"] = uuid.uuid4()
 
 
-@given(parsers.parse('a run "{run_name}" is awaiting human at gate "{gate_id}" with required_team_id "{team_name}"'))
-def run_awaiting_with_team(run_name: str, gate_id: str, team_name: str, ctx):
+@given(parsers.parse('a run "{run_name}" is awaiting human at gate "{review_id}" with required_team_id "{team_name}"'))
+def run_awaiting_with_team(run_name: str, review_id: str, team_name: str, ctx):
     ctx["run_name"] = run_name
     ctx["run_id"] = uuid.uuid4()
-    ctx["gate_id"] = gate_id
+    ctx["review_id"] = review_id
     ctx["run_status"] = "awaiting_human"
 
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = gate_id
+    mock_gate.review_id = review_id
     mock_gate.pipeline_id = uuid.uuid4()
     mock_gate.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     mock_gate.claimed_by = None
@@ -72,20 +72,20 @@ def run_awaiting_with_team(run_name: str, gate_id: str, team_name: str, ctx):
 
 @given(
     parsers.parse(
-        'a run "{run_name}" is awaiting human at gate "{gate_id}"'
+        'a run "{run_name}" is awaiting human at gate "{review_id}"'
         ' with required_team_id "{team_name}" and human_only true'
     )
 )
-def run_awaiting_with_team_and_human_only(run_name: str, gate_id: str, team_name: str, ctx):
+def run_awaiting_with_team_and_human_only(run_name: str, review_id: str, team_name: str, ctx):
     ctx["run_name"] = run_name
     ctx["run_id"] = uuid.uuid4()
-    ctx["gate_id"] = gate_id
+    ctx["review_id"] = review_id
     ctx["human_only"] = True
     ctx["run_status"] = "awaiting_human"
 
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = gate_id
+    mock_gate.review_id = review_id
     mock_gate.pipeline_id = uuid.uuid4()
     mock_gate.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     mock_gate.claimed_by = None
@@ -98,11 +98,11 @@ def run_awaiting_with_team_and_human_only(run_name: str, gate_id: str, team_name
     ctx["mock_gate"] = mock_gate
 
 
-@when(parsers.parse('user "{username}" claims the HITL gate "{gate_id}" on run "{run_name}"'))
-def user_claims_gate(username: str, gate_id: str, run_name: str, ctx, request):
+@when(parsers.parse('user "{username}" claims the HITL review "{review_id}" on run "{run_name}"'))
+def user_claims_gate(username: str, review_id: str, run_name: str, ctx, request):
     from modulo.core.hitl_manager import NotTeamMemberError
 
-    _ = gate_id, run_name
+    _ = review_id, run_name
 
     # Gateway mock — mirror HITLManager.claim()'s team-role enforcement: only a
     # member whose team role is runner/operator can claim a team-scoped gate; a
@@ -120,7 +120,7 @@ def user_claims_gate(username: str, gate_id: str, run_name: str, ctx, request):
         mock_mgr.claim = AsyncMock(
             side_effect=NotTeamMemberError(
                 run_id=ctx["run_id"],
-                gate_id=gate_id,
+                review_id=review_id,
                 team_id=ctx.get("team_id", uuid.uuid4()),
                 user_id=ctx.get("user_id", uuid.uuid4()),
             )
@@ -134,8 +134,8 @@ def user_claims_gate(username: str, gate_id: str, run_name: str, ctx, request):
     request.node._resp = resp
 
 
-@when(parsers.parse('an MCP client attempts to approve gate "{gate_id}" on run "{run_name}" as user "{username}"'))
-def mcp_attempts_approve(gate_id: str, run_name: str, username: str, ctx, request):
+@when(parsers.parse('an MCP client attempts to approve gate "{review_id}" on run "{run_name}" as user "{username}"'))
+def mcp_attempts_approve(review_id: str, run_name: str, username: str, ctx, request):
     _ = run_name, username
     # MCP client trying to approve human_only gate — should get 403
     resp = MagicMock()
@@ -145,14 +145,14 @@ def mcp_attempts_approve(gate_id: str, run_name: str, username: str, ctx, reques
     request.node._resp = resp
 
 
-@when(parsers.parse('I request the gate context for run "{run_name}" gate "{gate_id}"'))
-def request_gate_context(run_name: str, gate_id: str, ctx, request):
-    _ = gate_id, run_name
+@when(parsers.parse('I request the gate context for run "{run_name}" gate "{review_id}"'))
+def request_gate_context(run_name: str, review_id: str, ctx, request):
+    _ = review_id, run_name
     # Simulate returning gate context that includes team info
     ctx["_resp"] = MagicMock()
     ctx["_resp"].status_code = 200
     ctx["_resp"].json = lambda: {
-        "gate_id": ctx["gate_id"],
+        "review_id": ctx["review_id"],
         "run_id": str(ctx["run_id"]),
         "required_team_id": str(ctx.get("team_id", "")),
         "required_team_name": ctx.get("team_name", ""),
@@ -160,9 +160,9 @@ def request_gate_context(run_name: str, gate_id: str, ctx, request):
     request.node._resp = ctx["_resp"]
 
 
-@given(parsers.parse('user "{username}" holds a valid claim_token for gate "{gate_id}"'))
-def user_holds_claim_token(username: str, gate_id: str, ctx):
-    _ = gate_id
+@given(parsers.parse('user "{username}" holds a valid claim_token for gate "{review_id}"'))
+def user_holds_claim_token(username: str, review_id: str, ctx):
+    _ = review_id
     ctx["username"] = username
     ctx["user_id"] = ctx.get("user_id", uuid.uuid4())
     ctx["claim_token"] = "valid_token_" + uuid.uuid4().hex
@@ -170,7 +170,7 @@ def user_holds_claim_token(username: str, gate_id: str, ctx):
     # Create a mock gate that is claimed by this user
     mock_gate = MagicMock()
     mock_gate.run_id = ctx["run_id"]
-    mock_gate.gate_id = ctx["gate_id"]
+    mock_gate.review_id = ctx["review_id"]
     mock_gate.pipeline_id = uuid.uuid4()
     mock_gate.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     mock_gate.claimed_by = ctx["user_id"]
@@ -180,9 +180,9 @@ def user_holds_claim_token(username: str, gate_id: str, ctx):
     ctx["mock_gate"] = mock_gate
 
 
-@when(parsers.parse('user "{username}" approves gate "{gate_id}" on run "{run_name}"'))
-def user_approves_gate(username: str, gate_id: str, run_name: str, ctx, request):
-    _ = username, gate_id, run_name
+@when(parsers.parse('user "{username}" approves gate "{review_id}" on run "{run_name}"'))
+def user_approves_gate(username: str, review_id: str, run_name: str, ctx, request):
+    _ = username, review_id, run_name
 
     mock_mgr = MagicMock()
     mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])

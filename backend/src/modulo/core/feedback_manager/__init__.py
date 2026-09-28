@@ -135,11 +135,11 @@ async def dispatch_reject_correction(
     node_id: str,
     node_input: dict[str, Any],
     rejection_reason: str,
-    gate_id: str,
+    review_id: str,
 ) -> dict[str, Any] | None:
     """FAR-210 follow-up: dispatch the single-node correction on a HITL reject.
 
-    Invoked from the HITL reject path (``node_runner._hitl_gate``) when the gate
+    Invoked from the HITL reject path (``node_runner._hitl_review``) when the gate
     config declares a ``correction_target``. This is the AUTOMATED reject→
     correction edge: instead of only kicking back to the plain ``reject_target``,
     the blocked node's input is corrected through the RESTRICTED single-node
@@ -160,7 +160,7 @@ async def dispatch_reject_correction(
                 node_id=node_id,
                 node_input=node_input,
                 rejection_reason=rejection_reason,
-                gate_id=gate_id,
+                review_id=review_id,
             )
     except asyncio.CancelledError:
         raise
@@ -180,7 +180,7 @@ async def _dispatch_reject_correction_in_session(
     node_id: str,
     node_input: dict[str, Any],
     rejection_reason: str,
-    gate_id: str,
+    review_id: str,
 ) -> dict[str, Any] | None:
     """Run the reject→correction dispatch inside one session/transaction.
 
@@ -212,7 +212,7 @@ async def _dispatch_reject_correction_in_session(
         org_id=org_id,
         run_id=run_id,
         node_id=node_id,
-        gate_id=gate_id,
+        review_id=review_id,
         account_id=run.account_id,
         rejection_reason=rejection_reason,
         rejected_output=node_input,
@@ -274,7 +274,7 @@ class FeedbackManager:
     async def create_feedback_record(
         self,
         run_id: UUID,
-        gate_id: str,
+        review_id: str,
         account_id: UUID,
         rejection_reason: str,
         rejected_output: dict[str, Any],
@@ -287,7 +287,7 @@ class FeedbackManager:
         record = FeedbackRecord(
             organisation_id=self._org_id,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             account_id=account_id,
             rejection_reason=stripped_reason,
             rejected_output=rejected_output,

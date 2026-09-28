@@ -99,11 +99,11 @@ class RunSummary(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class PendingHitlGate(BaseModel):
+class PendingHitlReview(BaseModel):
     id: uuid.UUID
     run_id: uuid.UUID
     pipeline_id: uuid.UUID
-    gate_id: str
+    review_id: str
     claimed_by: uuid.UUID | None
     expires_at: datetime | None
     required_team_id: uuid.UUID | None = None
@@ -170,7 +170,7 @@ class ViewModelCurrent(BaseModel):
     pipelines_total: int
     recent_runs: list[RunSummary]
     runs_total: int
-    pending_hitl_gates: list[PendingHitlGate]
+    pending_hitl_reviews: list[PendingHitlReview]
     views: list[ViewInfo] | None = None
     current_view: ViewInfo | None = None
     is_system_admin: bool = False
@@ -331,11 +331,11 @@ async def viewmodel_current(
 
                 pending_hitl_result = await session.execute(hitl_query)
                 pending_hitl = [
-                    PendingHitlGate(
+                    PendingHitlReview(
                         id=h.id,
                         run_id=h.run_id,
                         pipeline_id=h.pipeline_id,
-                        gate_id=h.gate_id,
+                        review_id=h.review_id,
                         claimed_by=h.account_id,
                         expires_at=h.expires_at,
                         required_team_id=h.required_team_id,
@@ -415,7 +415,7 @@ async def viewmodel_current(
         pipelines_total=pipelines_page.total if pipelines_page else 0,
         recent_runs=[RunSummary.model_validate(r) for r in (runs_page.items if runs_page else [])],
         runs_total=runs_page.total if runs_page else 0,
-        pending_hitl_gates=[PendingHitlGate.model_validate(h) for h in pending_hitl],
+        pending_hitl_reviews=[PendingHitlReview.model_validate(h) for h in pending_hitl],
         views=all_views,
         current_view=current_view,
         is_system_admin=current_user.is_system_admin,

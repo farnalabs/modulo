@@ -523,7 +523,7 @@
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
                   </div></template>
           <template #edge-default="edgeProps">
-            <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
+            <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
             </div>
             <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
@@ -995,7 +995,7 @@
         </dl>
         <hr class="my-4 border-t" />
         <div class="flex items-center justify-between">
-          <h3 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.hitl_gate') }}</h3>
+          <h3 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.hitl_review') }}</h3>
           <label for="pipelineeditorview-field-15" class="inline-flex cursor-pointer items-center">
             <input id="pipelineeditorview-field-15"
               v-model="edgeForm.hitl_enabled"
@@ -1817,7 +1817,7 @@ function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitl
   }
   for (const edge of edges) {
     if (!edge || typeof edge !== 'object') continue
-    const config = edge.hitl_gate_config
+    const config = edge.hitl_review_config
     if (!config || typeof config !== 'object') continue
     // A node-level gate's config is injected onto its outgoing edges at
     // compile time; the persisted definition carries it on the NODE, and
@@ -1827,7 +1827,7 @@ function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitl
     const source = shortId(String(edge.source_node_id ?? edge.source ?? '?'))
     const target = shortId(String(edge.target_node_id ?? edge.target ?? '?'))
     const fallbackKey = `${source}->${target}`
-    issues.push({ key: `edge:${edge.id ?? fallbackKey}`, kind: 'edge', label: `${source} → ${target}` })
+    issues.push({ key: `edge:${edge.id ?? fallbackKey}`, kind: 'edge', label: `${source} ? ${target}` })
   }
   return issues
 }
@@ -2121,7 +2121,7 @@ function convertBackendEdge(e: any, i: number): any {
     animated: isLoop,
     style,
     data: {
-      hitl_gate_config: e.hitl_gate_config || null,
+      hitl_review_config: e.hitl_review_config || null,
       edge_type: e.edge_type || 'normal',
       condition_expression: e.condition_expression || null,
       max_iterations: e.max_iterations || 0,
@@ -2227,7 +2227,7 @@ function populateEdgeForm(edge: any) {
   edgeForm.condition_expression = edge.condition_expression || ''
   edgeForm.max_iterations = edge.max_iterations || 0
   edgeForm.routing_label = edge.routing_label || ''
-  const hc = edge.hitl_gate_config
+  const hc = edge.hitl_review_config
   if (hc) {
     edgeForm.hitl_enabled = true
     edgeForm.label = hc.label || ''
@@ -2258,15 +2258,15 @@ function populateEdgeForm(edge: any) {
   }
 }
 
-function buildHitlGateConfig(): any {
+function buildHitlReviewConfig(): any {
   if (!edgeForm.hitl_enabled) return null
   const config: any = {
     label: edgeForm.label || t('views.PipelineEditorView.review_gate'),
     description: edgeForm.description || '',
-    reject_target: selectedEdgeData.value?.hitl_gate_config?.reject_target || null,
+    reject_target: selectedEdgeData.value?.hitl_review_config?.reject_target || null,
     claim_expiry_minutes: edgeForm.claim_expiry_minutes || 15,
     human_only: edgeForm.human_only || false,
-    required_team_id: selectedEdgeData.value?.hitl_gate_config?.required_team_id || null,
+    required_team_id: selectedEdgeData.value?.hitl_review_config?.required_team_id || null,
   }
   if (edgeForm.condition_type === 'jmespath' && edgeForm.condition) {
     config.condition = edgeForm.condition
@@ -2304,7 +2304,7 @@ async function saveEdgeConfig() {
         condition_expression: edgeForm.condition_expression || null,
         max_iterations: edgeForm.edge_type === 'loop' ? (edgeForm.max_iterations || 0) : undefined,
         routing_label: edgeForm.edge_type === 'llm' ? (edgeForm.routing_label || undefined) : undefined,
-        hitl_gate_config: buildHitlGateConfig(),
+        hitl_review_config: buildHitlReviewConfig(),
         source_port: e.source_port || 'out',
         target_port: e.target_port || 'in',
       }
@@ -2315,7 +2315,7 @@ async function saveEdgeConfig() {
       target_node_id: e.target_node_id,
       edge_type: e.edge_type || 'normal',
       condition_expression: e.condition_expression || null,
-      hitl_gate_config: e.hitl_gate_config || null,
+      hitl_review_config: e.hitl_review_config || null,
       source_port: e.source_port || 'out',
       target_port: e.target_port || 'in',
     }
@@ -2672,7 +2672,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onRunDialogKeydown)
 })
 
-// Sandbox command authoring → graph-save payload. The graph save REPLACES
+// Sandbox command authoring ? graph-save payload. The graph save REPLACES
 // graph_nodes_json wholesale, so every command field must be serialised here
 // or it is wiped. Mirrors the backend contract (routes/pipelines.py +
 // sandbox_mode): sandbox_agent nodes carry ONLY the agent_commands list
@@ -2767,7 +2767,7 @@ async function saveGraph() {
           condition_expression: e.condition_expression || null,
           max_iterations: e.edge_type === 'loop' ? (e.max_iterations || 0) : undefined,
           routing_label: e.edge_type === 'llm' ? (e.routing_label || undefined) : undefined,
-          hitl_gate_config: e.hitl_gate_config || null,
+          hitl_review_config: e.hitl_review_config || null,
           source_port: e.source_port || 'out',
           target_port: e.target_port || 'in',
         })),

@@ -128,7 +128,7 @@ def _compile_graph(ctx: dict[str, Any]) -> None:
     with (
         patch("modulo.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
         patch("modulo.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_gate_fn", MagicMock()),
+        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
     ):
         try:
             ctx["_compiled"] = build_graph_from_json(graph_json)

@@ -18,7 +18,7 @@ def _edge(**overrides) -> dict:
         "source": str(uuid.uuid4()),
         "target": str(uuid.uuid4()),
         "type": "normal",
-        "hitl_gate_config": {"eval_condition": {"eval_name": "quality", "threshold": 0.8, "operator": "gte"}},
+        "hitl_review_config": {"eval_condition": {"eval_name": "quality", "threshold": 0.8, "operator": "gte"}},
     }
     edge.update(overrides)
     return edge
@@ -36,24 +36,24 @@ def _check(edge: dict) -> ValidationResult:
 
 
 def test_no_hitl_config_skipped():
-    """Edges without hitl_gate_config are not checked."""
-    result = _check(_edge(hitl_gate_config=None))
+    """Edges without hitl_review_config are not checked."""
+    result = _check(_edge(hitl_review_config=None))
     assert not result.issues
 
 
 def test_no_eval_condition_skipped():
-    """hitl_gate_config without eval_condition is not checked."""
-    result = _check(_edge(hitl_gate_config={"claim_timeout_seconds": 900}))
+    """hitl_review_config without eval_condition is not checked."""
+    result = _check(_edge(hitl_review_config={"claim_timeout_seconds": 900}))
     assert not result.issues
 
 
 def test_non_dict_hitl_config_skipped():
-    result = _check(_edge(hitl_gate_config="not-a-dict"))
+    result = _check(_edge(hitl_review_config="not-a-dict"))
     assert not result.issues
 
 
 def test_non_dict_eval_condition_skipped():
-    result = _check(_edge(hitl_gate_config={"eval_condition": "fast"}))
+    result = _check(_edge(hitl_review_config={"eval_condition": "fast"}))
     assert not result.issues
 
 
@@ -63,19 +63,19 @@ def test_non_dict_eval_condition_skipped():
 
 
 def test_missing_eval_name_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"threshold": 0.8, "operator": "gte"}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"threshold": 0.8, "operator": "gte"}}))
     assert "HITL_EVAL_CONDITION_MISSING_NAME" in _codes(result)
     assert not result.is_valid
 
 
 def test_empty_eval_name_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "  ", "threshold": 0.8}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"eval_name": "  ", "threshold": 0.8}}))
     assert "HITL_EVAL_CONDITION_MISSING_NAME" in _codes(result)
 
 
 def test_missing_name_reports_source_node():
     source = str(uuid.uuid4())
-    result = _check(_edge(source=source, hitl_gate_config={"eval_condition": {"threshold": 0.8}}))
+    result = _check(_edge(source=source, hitl_review_config={"eval_condition": {"threshold": 0.8}}))
     issue = next(i for i in result.issues if i.code == "HITL_EVAL_CONDITION_MISSING_NAME")
     assert issue.node_id == source
     assert source in issue.message
@@ -87,17 +87,17 @@ def test_missing_name_reports_source_node():
 
 
 def test_threshold_none_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": None}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": None}}))
     assert "HITL_EVAL_CONDITION_INVALID_THRESHOLD" in _codes(result)
 
 
 def test_threshold_bool_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": True}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": True}}))
     assert "HITL_EVAL_CONDITION_INVALID_THRESHOLD" in _codes(result)
 
 
 def test_threshold_string_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": "0.8"}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": "0.8"}}))
     assert "HITL_EVAL_CONDITION_INVALID_THRESHOLD" in _codes(result)
 
 
@@ -107,19 +107,19 @@ def test_threshold_string_is_error():
 
 
 def test_threshold_above_range_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": 1.5}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": 1.5}}))
     assert "HITL_EVAL_CONDITION_THRESHOLD_RANGE" in _codes(result)
 
 
 def test_threshold_below_range_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": -0.1}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": -0.1}}))
     assert "HITL_EVAL_CONDITION_THRESHOLD_RANGE" in _codes(result)
 
 
 def test_threshold_boundaries_valid():
     for threshold in (0.0, 1.0):
         result = _check(
-            _edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": threshold, "operator": "gte"}})
+            _edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": threshold, "operator": "gte"}})
         )
         assert result.is_valid
 
@@ -130,24 +130,28 @@ def test_threshold_boundaries_valid():
 
 
 def test_invalid_operator_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": 0.5, "operator": "=="}}))
+    result = _check(
+        _edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": 0.5, "operator": "=="}})
+    )
     assert "HITL_EVAL_CONDITION_INVALID_OPERATOR" in _codes(result)
 
 
 def test_missing_operator_is_error():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": 0.5}}))
+    result = _check(_edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": 0.5}}))
     assert "HITL_EVAL_CONDITION_INVALID_OPERATOR" in _codes(result)
 
 
 def test_valid_operators_accepted():
     for op in ("lt", "gt", "lte", "gte", "eq", "neq"):
         cond = {"eval_name": "q", "threshold": 0.5, "operator": op}
-        result = _check(_edge(hitl_gate_config={"eval_condition": cond}))
+        result = _check(_edge(hitl_review_config={"eval_condition": cond}))
         assert result.is_valid, op
 
 
 def test_invalid_operator_message_lists_valid_ops():
-    result = _check(_edge(hitl_gate_config={"eval_condition": {"eval_name": "q", "threshold": 0.5, "operator": "=="}}))
+    result = _check(
+        _edge(hitl_review_config={"eval_condition": {"eval_name": "q", "threshold": 0.5, "operator": "=="}})
+    )
     issue = next(i for i in result.issues if i.code == "HITL_EVAL_CONDITION_INVALID_OPERATOR")
     assert "gte" in issue.message
 

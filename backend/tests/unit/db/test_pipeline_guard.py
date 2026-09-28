@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
-from modulo.db.crud.hitl_gate_guard import (
+from modulo.db.crud.hitl_review_guard import (
     REASON_CORRELATION_KEY_MISMATCH,
     REASON_INSUFFICIENT_ROLE,
     REASON_LEGACY_SNAPSHOT_AMBIGUOUS,
@@ -19,7 +19,7 @@ from modulo.db.crud.hitl_gate_guard import (
     REASON_ROLE_CHANGED,
     REASON_ROLE_CHECK_DB_ERROR,
     DiffResult,
-    HitlGateWeakeningDenied,
+    HitlReviewWeakeningDenied,
 )
 from modulo.db.crud.pipeline import _edge_to_plain_dict, replace_pipeline_graph
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
@@ -58,7 +58,7 @@ class _EdgeRow:
         self.source_node_id = uuid.UUID(source)
         self.target_node_id = uuid.UUID(target)
         self.edge_type = edge_type
-        self.hitl_gate_config = copy.deepcopy(cfg)
+        self.hitl_review_config = copy.deepcopy(cfg)
         self.condition_expression = None
         self.source_port = None
         self.target_port = None
@@ -135,8 +135,8 @@ def _weakening_edges(old_cfg: dict, new_cfg: dict) -> tuple[list[_EdgeRow], list
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": new_cfg,
-            "hitl_gate_config_present": True,
+            "hitl_review_config": new_cfg,
+            "hitl_review_config_present": True,
         }
     ]
     return old, new
@@ -154,7 +154,7 @@ async def test_replace_pipeline_graph_guard_runs_before_delete(monkeypatch: pyte
     audit = AsyncMock()
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -185,7 +185,7 @@ async def test_rollback_to_snapshot_guard_runs_before_delete(monkeypatch: pytest
         AsyncMock(return_value=_SnapshotRow({"nodes": [], "edges": []})),
     )
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await rollback_to_snapshot(
             session,
             pipeline.id,
@@ -253,7 +253,7 @@ async def test_fail_closed_no_retry_on_role_query_db_error(monkeypatch: pytest.M
 
     monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -278,7 +278,7 @@ async def test_missing_membership_denies_with_role_changed(monkeypatch: pytest.M
 
     monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -313,7 +313,7 @@ async def test_non_liftable_regardless_of_authz_enforce(monkeypatch: pytest.Monk
 
         monkeypatch.setattr("modulo.db.settings_resolver.resolve_authz_enforce", _fail_switch)
 
-        with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+        with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
             await replace_pipeline_graph(
                 session,
                 pipeline_id=pipeline.id,
@@ -342,7 +342,7 @@ async def test_mcp_caller_type_is_always_denied_even_when_privileged(
     audit = AsyncMock()
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -366,8 +366,8 @@ async def test_mcp_non_weakening_write_is_allowed(monkeypatch: pytest.MonkeyPatc
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": None,
-            "hitl_gate_config_present": True,
+            "hitl_review_config": None,
+            "hitl_review_config_present": True,
         }
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
@@ -394,7 +394,7 @@ async def test_mcp_non_weakening_write_is_allowed(monkeypatch: pytest.MonkeyPatc
 
 async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-privileged weakening is denied; the same write with privilege is
-    allowed and emits the hitl_gate_removed audit event."""
+    allowed and emits the hitl_review_removed audit event."""
     old, new = _weakening_edges(dict(_GATE), {**_GATE, "human_only": False})
     audit = AsyncMock()
 
@@ -402,7 +402,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
     pipeline = _PipelineRow()
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
-    with pytest.raises(HitlGateWeakeningDenied):
+    with pytest.raises(HitlReviewWeakeningDenied):
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -435,7 +435,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
     assert result is not None
     audit.assert_awaited_once()
     call_kwargs = audit.call_args.kwargs
-    assert call_kwargs["event_type"] == "hitl_gate_removed"
+    assert call_kwargs["event_type"] == "hitl_review_removed"
     assert call_kwargs["payload_json"]["caller_type"] == "rest"
     assert call_kwargs["payload_json"]["denied"] is False
     assert call_kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == ["human_only"]
@@ -464,7 +464,7 @@ async def test_replace_denies_node_level_hitl_config_weakening_for_non_privilege
     audit = AsyncMock()
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -538,7 +538,7 @@ async def test_replace_denies_hitl_node_removal_for_non_privileged(
     audit = AsyncMock()
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -615,7 +615,7 @@ async def test_live_role_demotion_denies_even_when_route_flag_privileged(monkeyp
 
     monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -689,7 +689,7 @@ async def test_edge_deletion_denied_with_correlation_key_mismatch(monkeypatch: p
     audit = AsyncMock()
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -704,12 +704,12 @@ async def test_edge_deletion_denied_with_correlation_key_mismatch(monkeypatch: p
 
 
 # ---------------------------------------------------------------------------
-# Preserve-write: an omitted hitl_gate_config key must NOT wipe the stored gate
+# Preserve-write: an omitted hitl_review_config key must NOT wipe the stored gate
 # ---------------------------------------------------------------------------
 
 
 async def test_replace_preserves_gate_when_config_key_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Writing new edges that OMIT the hitl_gate_config key on an existing gated
+    """Writing new edges that OMIT the hitl_review_config key on an existing gated
     edge preserves the stored gate (guard contract: omission = preserve). No
     weakening, no audit, no denial."""
     pipeline = _PipelineRow()
@@ -720,7 +720,7 @@ async def test_replace_preserves_gate_when_config_key_omitted(monkeypatch: pytes
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            # hitl_gate_config key deliberately omitted (untouched edge)
+            # hitl_review_config key deliberately omitted (untouched edge)
         }
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
@@ -739,12 +739,12 @@ async def test_replace_preserves_gate_when_config_key_omitted(monkeypatch: pytes
     assert result is not None
     persisted = result[1]
     assert len(persisted) == 1
-    assert persisted[0].hitl_gate_config == _GATE, "omitted key must preserve the stored gate, not write None"
+    assert persisted[0].hitl_review_config == _GATE, "omitted key must preserve the stored gate, not write None"
     audit.assert_not_awaited()
 
 
 async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    """hitl_gate_config_present=False on a matching topology key also preserves
+    """hitl_review_config_present=False on a matching topology key also preserves
     the stored gate even when the dict carries an explicit null value."""
     pipeline = _PipelineRow()
     old = [_EdgeRow(cfg=dict(_GATE))]
@@ -754,8 +754,8 @@ async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pyte
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": None,
-            "hitl_gate_config_present": False,
+            "hitl_review_config": None,
+            "hitl_review_config_present": False,
         }
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
@@ -773,7 +773,7 @@ async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pyte
     )
     assert result is not None
     persisted = result[1]
-    assert persisted[0].hitl_gate_config == _GATE
+    assert persisted[0].hitl_review_config == _GATE
     audit.assert_not_awaited()
 
 
@@ -805,12 +805,12 @@ async def test_replace_omitted_key_on_new_edge_still_writes_none(monkeypatch: py
     )
     assert result is not None
     persisted = result[1]
-    assert persisted[0].hitl_gate_config is None
+    assert persisted[0].hitl_review_config is None
     audit.assert_not_awaited()
 
 
 async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An EXPLICIT hitl_gate_config: None (present) on a gated edge is a genuine
+    """An EXPLICIT hitl_review_config: None (present) on a gated edge is a genuine
     removal — non-privileged callers are still denied."""
     pipeline = _PipelineRow()
     old = [_EdgeRow(cfg=dict(_GATE))]
@@ -820,15 +820,15 @@ async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": None,
-            "hitl_gate_config_present": True,
+            "hitl_review_config": None,
+            "hitl_review_config_present": True,
         }
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -843,7 +843,7 @@ async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch
 
 
 async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An EXPLICIT hitl_gate_config: None is a genuine removal — a privileged
+    """An EXPLICIT hitl_review_config: None is a genuine removal — a privileged
     caller's write persists None (not the old gate) and the allowed-weakening
     audit fires."""
     pipeline = _PipelineRow()
@@ -854,8 +854,8 @@ async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pyt
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": None,
-            "hitl_gate_config_present": True,
+            "hitl_review_config": None,
+            "hitl_review_config_present": True,
         }
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
@@ -873,9 +873,9 @@ async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pyt
     )
     assert result is not None
     persisted = result[1]
-    assert persisted[0].hitl_gate_config is None
+    assert persisted[0].hitl_review_config is None
     audit.assert_awaited_once()
-    assert audit.call_args.kwargs["event_type"] == "hitl_gate_removed"
+    assert audit.call_args.kwargs["event_type"] == "hitl_review_removed"
     assert audit.call_args.kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == ["structural:gate_removed"]
 
 
@@ -890,15 +890,15 @@ async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.Mo
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": None,
-            "hitl_gate_config_present": True,
+            "hitl_review_config": None,
+            "hitl_review_config_present": True,
         }
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
     audit = AsyncMock()
     monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
 
-    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+    with pytest.raises(HitlReviewWeakeningDenied) as excinfo:
         await replace_pipeline_graph(
             session,
             pipeline_id=pipeline.id,
@@ -913,8 +913,8 @@ async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.Mo
 
 
 async def test_replace_present_false_with_config_on_new_edge_ignores_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Contradictory input (hitl_gate_config_present=False alongside a non-null
-    hitl_gate_config) on a brand-new edge is ignored by the write path, matching
+    """Contradictory input (hitl_review_config_present=False alongside a non-null
+    hitl_review_config) on a brand-new edge is ignored by the write path, matching
     the guard which treats present=False as omission. The provided value must
     NOT be persisted via the no-old-value fallback."""
     pipeline = _PipelineRow()
@@ -925,8 +925,8 @@ async def test_replace_present_false_with_config_on_new_edge_ignores_value(monke
             "source_node_id": _NODE_A,
             "target_node_id": _NODE_B,
             "edge_type": "normal",
-            "hitl_gate_config": dict(_GATE),
-            "hitl_gate_config_present": False,
+            "hitl_review_config": dict(_GATE),
+            "hitl_review_config_present": False,
         }
     ]
     session = _build_session(_pipeline_result(pipeline), _edges_result(old))
@@ -944,7 +944,7 @@ async def test_replace_present_false_with_config_on_new_edge_ignores_value(monke
     )
     assert result is not None
     persisted = result[1]
-    assert persisted[0].hitl_gate_config is None, "present=False must ignore the provided gate value"
+    assert persisted[0].hitl_review_config is None, "present=False must ignore the provided gate value"
     audit.assert_not_awaited()
 
 
@@ -971,7 +971,7 @@ async def test_replace_pipeline_graph_denies_guardrail_binding_strip_for_nonadmi
     """A NON-ADMIN replacing the graph and removing a guardrail-bound node is
     denied (FAR-309 PR A review service-layer guard). The strip guard runs
     under the row lock, before any delete/insert."""
-    from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+    from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
     pipeline = _PipelineRow()
     bound_node = "00000000-0000-0000-0000-0000000000c1"
@@ -1046,7 +1046,7 @@ async def test_replace_pipeline_graph_denies_guardrail_strip_via_live_role(
     """The service-layer guard re-reads the caller's live role under the lock:
     a caller whose route flag claims admin but whose live membership is NOT
     admin is denied (fail-closed on a stale admin claim)."""
-    from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+    from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
     pipeline = _PipelineRow()
     bound_node = "00000000-0000-0000-0000-0000000000c1"
@@ -1084,7 +1084,7 @@ async def test_rollback_to_snapshot_denies_guardrail_binding_strip_for_nonadmin(
 ) -> None:
     """A NON-ADMIN rolling back to a snapshot whose graph LACKS a currently
     guardrail-bound node is denied (FAR-309 PR A review service-layer guard)."""
-    from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+    from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
     pipeline = _PipelineRow()
     bound_node = "00000000-0000-0000-0000-0000000000c1"
@@ -1178,8 +1178,8 @@ async def test_replace_pipeline_graph_persists_condition_expression(
         "target_node_id": _NODE_B,
         "edge_type": "conditional",
         "condition_expression": expr,
-        "hitl_gate_config": None,
-        "hitl_gate_config_present": True,
+        "hitl_review_config": None,
+        "hitl_review_config_present": True,
     }
     pipeline = _PipelineRow()
     session = _build_session(_pipeline_result(pipeline), _edges_result([]))

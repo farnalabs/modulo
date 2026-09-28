@@ -1336,7 +1336,7 @@ async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
 
 async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — FAR-604 D2 HITL park-on-expiry sweep (every 5 min).
-    Parks runs whose open HITL gate expired unanswered past the grace window
+    Parks runs whose open HITL review expired unanswered past the grace window
     (``HITL_PARK_GRACE_SECONDS``, default 24h): the run leaves
     ``awaiting_human`` for the non-terminal ``hitl_parked`` status — the
     status itself is the parked signal (qa F13; the gate row stays untouched,

@@ -9,14 +9,14 @@ vi.mock('../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
-import HitlGateCard from '../components/hitl/HitlGateCard.vue'
-import type { HitlGate } from '../components/hitl/HitlGateCard.vue'
-import { resetHitlGateState } from '../composables/useHitlGateState'
+import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
+import type { HitlReview } from '../components/hitl/HitlReviewCard.vue'
+import { resetHitlReviewState } from '../composables/useHitlReviewState'
 
-function gate(overrides: Partial<HitlGate> = {}): HitlGate {
+function gate(overrides: Partial<HitlReview> = {}): HitlReview {
   return {
     run_id: '550e8400-e29b-41d4-a716-446655440000',
-    gate_id: 'approval-gate-1',
+    review_id: 'approval-gate-1',
     pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
     pipeline_name: 'Reviewer Pipeline',
     label: 'Review the deploy plan',
@@ -29,14 +29,14 @@ function gate(overrides: Partial<HitlGate> = {}): HitlGate {
   }
 }
 
-describe('HitlGateCard', () => {
+describe('HitlReviewCard', () => {
   let wrapper: VueWrapper | null = null
 
   beforeEach(() => {
     vi.clearAllMocks()
     // Module-scoped gate state outlives component instances by design — each
     // test must start from a fresh browser session.
-    resetHitlGateState()
+    resetHitlReviewState()
   })
 
   afterEach(() => {
@@ -45,7 +45,7 @@ describe('HitlGateCard', () => {
   })
 
   it('shows the claim button for a pending gate', () => {
-    wrapper = mount(HitlGateCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
     expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
@@ -57,15 +57,15 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    wrapper = mount(HitlGateCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
 
-    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/claim')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/claim')
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      params: { path: { run_id: gate().run_id, review_id: 'approval-gate-1' } },
       body: { expiry_minutes: 15 },
     })
 
@@ -85,7 +85,7 @@ describe('HitlGateCard', () => {
       data: null,
       error: { detail: 'gate_already_claimed' },
     })
-    wrapper = mount(HitlGateCard, { props: { gate: gate({ claimed_by: 'other@team' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ claimed_by: 'other@team' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
     // Another reviewer holds the claim: no fresh claim, only the recovery path.
     expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(false)
@@ -110,7 +110,7 @@ describe('HitlGateCard', () => {
       }
       return Promise.resolve({ data: { ok: true }, error: undefined })
     })
-    wrapper = mount(HitlGateCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
@@ -118,10 +118,10 @@ describe('HitlGateCard', () => {
     await wrapper.find('[data-testid="hitl-gate-approve"]').trigger('click')
     await flushPromises()
 
-    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/approve')
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      params: { path: { run_id: gate().run_id, review_id: 'approval-gate-1' } },
       body: { claim_token: 'tok-1', notes: 'looks good' },
     })
 
@@ -138,17 +138,17 @@ describe('HitlGateCard', () => {
       }
       return Promise.resolve({ data: { ok: true }, error: undefined })
     })
-    wrapper = mount(HitlGateCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await wrapper.find('[data-testid="hitl-gate-reject"]').trigger('click')
     await flushPromises()
 
-    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/reject')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/reject')
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      params: { path: { run_id: gate().run_id, review_id: 'approval-gate-1' } },
       body: { claim_token: 'tok-1', reason: 'Rejected by reviewer' },
     })
 
@@ -158,24 +158,24 @@ describe('HitlGateCard', () => {
   })
 
   it('renders the approved decision banner for an approved gate', () => {
-    wrapper = mount(HitlGateCard, { props: { gate: gate({ decision: 'approved', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'approved', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
     expect(wrapper.text()).toContain('Gate was approved. The pipeline has resumed.')
     expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
   })
 
   it('renders the rejected decision banner for a rejected gate', () => {
-    wrapper = mount(HitlGateCard, { props: { gate: gate({ decision: 'rejected', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
     expect(wrapper.text()).toContain('Gate was rejected. The pipeline was routed to the reject target.')
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
   })
 
   it('omits the run link by default and renders it with showRunLink', async () => {
-    wrapper = mount(HitlGateCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
     expect(wrapper.find('[data-testid="hitl-gate-run-link"]').exists()).toBe(false)
     wrapper.unmount()
 
-    wrapper = mount(HitlGateCard, { props: { gate: gate(), showRunLink: true }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate(), showRunLink: true }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
     const runLink = wrapper.find('[data-testid="hitl-gate-run-link"]')
     expect(runLink.exists()).toBe(true)
     expect(runLink.attributes('href')).toBe('/runs/550e8400-e29b-41d4-a716-446655440000')
@@ -190,12 +190,12 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-persist', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    const mountOptions = (gateProps: HitlGate) => ({
+    const mountOptions = (gateProps: HitlReview) => ({
       props: { gate: gateProps },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
 
-    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    wrapper = mount(HitlReviewCard, mountOptions(gate()))
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await wrapper.find('[data-testid="hitl-gate-notes"]').setValue('notes typed before unmount')
@@ -205,7 +205,7 @@ describe('HitlGateCard', () => {
     firstInstance.unmount()
 
     // Remount as the auto-refresh would: same gate, now claimed_by on the server.
-    wrapper = mount(HitlGateCard, mountOptions(gate({ claimed_by: 'reviewer@team' })))
+    wrapper = mount(HitlReviewCard, mountOptions(gate({ claimed_by: 'reviewer@team' })))
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
@@ -228,20 +228,20 @@ describe('HitlGateCard', () => {
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     }
 
-    wrapper = mount(HitlGateCard, mountOptions)
+    wrapper = mount(HitlReviewCard, mountOptions)
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     wrapper.unmount()
     wrapper = null
 
-    wrapper = mount(HitlGateCard, mountOptions)
+    wrapper = mount(HitlReviewCard, mountOptions)
     expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
   })
 
   it('prefers the server-resolved claimant display name over the raw UUID (FAR-691)', () => {
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({ claimed_by: '999e8400-e29b-41d4-a716-446655440009', claimed_by_name: 'Alice Reviewer' }),
       },
@@ -261,24 +261,24 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-stale', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    const { useHitlGateState } = await import('../composables/useHitlGateState')
-    const mountOptions = (gateProps: HitlGate) => ({
+    const { useHitlReviewState } = await import('../composables/useHitlReviewState')
+    const mountOptions = (gateProps: HitlReview) => ({
       props: { gate: gateProps },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
 
-    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    wrapper = mount(HitlReviewCard, mountOptions(gate()))
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     wrapper.unmount()
     wrapper = null
 
     wrapper = mount(
-      HitlGateCard,
+      HitlReviewCard,
       mountOptions(gate({ claimed_by: '999e8400-e29b-41d4-a716-446655440009', claimed_by_me: false })),
     )
 
-    const state = useHitlGateState(gate().run_id, 'approval-gate-1')
+    const state = useHitlReviewState(gate().run_id, 'approval-gate-1')
     expect(state.claimToken.value).toBeNull()
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
@@ -296,19 +296,19 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-mine', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    const mountOptions = (gateProps: HitlGate) => ({
+    const mountOptions = (gateProps: HitlReview) => ({
       props: { gate: gateProps },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
 
-    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    wrapper = mount(HitlReviewCard, mountOptions(gate()))
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     wrapper.unmount()
     wrapper = null
 
     // Remount as a post-claim refetch would: the server stamps claimed_by_me=true.
-    wrapper = mount(HitlGateCard, mountOptions(gate({ claimed_by: 'reviewer@team', claimed_by_me: true })))
+    wrapper = mount(HitlReviewCard, mountOptions(gate({ claimed_by: 'reviewer@team', claimed_by_me: true })))
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-claim-token"]').text()).toContain('tok-mine')
@@ -324,18 +324,18 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-absent', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    const mountOptions = (gateProps: HitlGate) => ({
+    const mountOptions = (gateProps: HitlReview) => ({
       props: { gate: gateProps },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
 
-    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    wrapper = mount(HitlReviewCard, mountOptions(gate()))
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     wrapper.unmount()
     wrapper = null
 
-    wrapper = mount(HitlGateCard, mountOptions(gate({ claimed_by: 'reviewer@team' })))
+    wrapper = mount(HitlReviewCard, mountOptions(gate({ claimed_by: 'reviewer@team' })))
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="hitl-gate-claim-token"]').text()).toContain('tok-absent')
@@ -348,7 +348,7 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({
           context: {
@@ -374,7 +374,7 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate(),
       },
@@ -390,7 +390,7 @@ describe('HitlGateCard', () => {
   })
 
   it('hides the edit subject button when gate is pending', () => {
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({ context: { subject: '{"body":"Review this comment."}' } }),
       },
@@ -410,7 +410,7 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({
           context: {
@@ -442,7 +442,7 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({
           context: {
@@ -476,7 +476,7 @@ describe('HitlGateCard', () => {
       }
       return Promise.resolve({ data: { ok: true }, error: undefined })
     })
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({
           context: {
@@ -500,11 +500,11 @@ describe('HitlGateCard', () => {
     await flushPromises()
 
     const post = (api.POST as any).mock.calls.find(
-      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
+      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification',
     )
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      params: { path: { run_id: gate().run_id, review_id: 'approval-gate-1' } },
       body: {
         claim_token: 'tok-1',
         modified_output: { body: 'Updated comment.', priority: 'high' },
@@ -523,7 +523,7 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({
           context: {
@@ -555,7 +555,7 @@ describe('HitlGateCard', () => {
       data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
       error: undefined,
     })
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({ context: { subject: 'Review this comment.' } }),
       },
@@ -573,7 +573,7 @@ describe('HitlGateCard', () => {
 
   // FAR-860: kind:choice gates render agent-defined options and submit the
   // reviewer's selection as the approve answer.
-  function choiceGate(context: Record<string, unknown> = {}): HitlGate {
+  function choiceGate(context: Record<string, unknown> = {}): HitlReview {
     return gate({
       context: {
         response_contract: {
@@ -600,7 +600,7 @@ describe('HitlGateCard', () => {
 
   it('requires an option selection before a choice gate can be approved (FAR-860)', async () => {
     await mockClaimThenDecide()
-    wrapper = mount(HitlGateCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
     // Nothing renders while the gate is still pending.
     expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
@@ -626,7 +626,7 @@ describe('HitlGateCard', () => {
 
   it('submits the selected option as the approve answer (FAR-860)', async () => {
     await mockClaimThenDecide()
-    wrapper = mount(HitlGateCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
@@ -635,17 +635,17 @@ describe('HitlGateCard', () => {
     await flushPromises()
 
     const { api } = await import('../lib/api/client')
-    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve')
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/approve')
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      params: { path: { run_id: gate().run_id, review_id: 'approval-gate-1' } },
       body: { claim_token: 'tok-1', notes: null, answer: { kind: 'choice', option_id: 'hold' } },
     })
   })
 
   it('submits the selected option as the answer on approve-with-modification (FAR-907)', async () => {
     await mockClaimThenDecide()
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: gate({
           context: {
@@ -683,11 +683,11 @@ describe('HitlGateCard', () => {
 
     const { api } = await import('../lib/api/client')
     const post = (api.POST as any).mock.calls.find(
-      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
+      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification',
     )
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      params: { path: { run_id: gate().run_id, review_id: 'approval-gate-1' } },
       body: {
         claim_token: 'tok-1',
         modified_output: { body: 'Updated comment.', priority: 'high' },
@@ -699,7 +699,7 @@ describe('HitlGateCard', () => {
 
   it('navigates the choice radiogroup with arrow keys and a roving tabindex (FAR-860)', async () => {
     await mockClaimThenDecide()
-    wrapper = mount(HitlGateCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    wrapper = mount(HitlReviewCard, { props: { gate: choiceGate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
@@ -721,7 +721,7 @@ describe('HitlGateCard', () => {
 
   it('renders a visible fallback when a choice gate ships no options (FAR-860)', async () => {
     await mockClaimThenDecide()
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: { gate: gate({ context: { response_contract: { kind: 'choice', options: [] } } }) },
       global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
@@ -738,7 +738,7 @@ describe('HitlGateCard', () => {
   })
 
   it('restores the selected option across a remount and drops it when the gate reverts to pending (FAR-860)', async () => {
-    const { useHitlGateState } = await import('../composables/useHitlGateState')
+    const { useHitlReviewState } = await import('../composables/useHitlReviewState')
     await mockClaimThenDecide()
     const context = {
       response_contract: {
@@ -749,9 +749,9 @@ describe('HitlGateCard', () => {
         ],
       },
     }
-    const mountOptions = (gateProps: HitlGate) => ({ props: { gate: gateProps }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    const mountOptions = (gateProps: HitlReview) => ({ props: { gate: gateProps }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
 
-    wrapper = mount(HitlGateCard, mountOptions(gate({ context })))
+    wrapper = mount(HitlReviewCard, mountOptions(gate({ context })))
     await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await wrapper.find('[data-testid="hitl-gate-option-ship"]').trigger('click')
@@ -761,7 +761,7 @@ describe('HitlGateCard', () => {
     const firstInstance = wrapper
     wrapper = null
     firstInstance.unmount()
-    wrapper = mount(HitlGateCard, mountOptions(gate({ context, claimed_by: 'reviewer@team' })))
+    wrapper = mount(HitlReviewCard, mountOptions(gate({ context, claimed_by: 'reviewer@team' })))
     expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').attributes('aria-checked')).toBe('true')
     expect((wrapper.find('[data-testid="hitl-gate-approve"]').element as HTMLButtonElement).disabled).toBe(false)
 
@@ -770,8 +770,8 @@ describe('HitlGateCard', () => {
     const secondInstance = wrapper
     wrapper = null
     secondInstance.unmount()
-    wrapper = mount(HitlGateCard, mountOptions(gate({ context })))
-    const state = useHitlGateState(gate().run_id, 'approval-gate-1')
+    wrapper = mount(HitlReviewCard, mountOptions(gate({ context })))
+    const state = useHitlReviewState(gate().run_id, 'approval-gate-1')
     expect(state.selectedOption.value).toBeNull()
     expect(wrapper.find('[data-testid="hitl-gate-choice-options"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
@@ -782,7 +782,7 @@ describe('HitlGateCard', () => {
   // until one is picked and the answer is included in the wire body.
   it('requires a selection before Save & approve and sends the answer with the modification (FAR-907)', async () => {
     await mockClaimThenDecide()
-    wrapper = mount(HitlGateCard, {
+    wrapper = mount(HitlReviewCard, {
       props: {
         gate: choiceGate({
           subject: '{"body":"Review this comment."}',
@@ -810,11 +810,11 @@ describe('HitlGateCard', () => {
 
     const { api } = await import('../lib/api/client')
     const post = (api.POST as any).mock.calls.find(
-      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification',
+      (c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification',
     )
     expect(post).toBeTruthy()
     expect((post as unknown[])[1]).toEqual({
-      params: { path: { run_id: gate().run_id, gate_id: 'approval-gate-1' } },
+      params: { path: { run_id: gate().run_id, review_id: 'approval-gate-1' } },
       body: {
         claim_token: 'tok-1',
         modified_output: { body: 'Updated comment.', priority: 'high' },

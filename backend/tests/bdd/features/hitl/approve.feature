@@ -1,6 +1,6 @@
 Feature: HITL Approve
   As an approver
-  I want to approve a run waiting at a HITL gate
+  I want to approve a run waiting at a HITL review
   So that execution proceeds past the gate
 
   Background:

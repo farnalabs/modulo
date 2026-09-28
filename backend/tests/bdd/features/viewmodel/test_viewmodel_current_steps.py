@@ -102,7 +102,7 @@ def _make_hitl(pipeline_id: uuid.UUID) -> MagicMock:
     hitl.id = uuid.uuid4()
     hitl.run_id = uuid.uuid4()
     hitl.pipeline_id = pipeline_id
-    hitl.gate_id = "approval_gate"
+    hitl.review_id = "approval_gate"
     hitl.account_id = uuid.uuid4()
     hitl.expires_at = _NOW
     hitl.required_team_id = None
@@ -392,10 +392,10 @@ def _then_pipelines_and_runs(name: str, count: str, request) -> None:
 def _then_pending_hitl(count: str, request) -> None:
     count = int(count)
     body = request.node._resp.json()
-    gates = body["pending_hitl_gates"]
+    gates = body["pending_hitl_reviews"]
     assert len(gates) == count, f"Expected {count} pending gate(s), got {len(gates)}"
     if gates:
-        assert gates[0]["gate_id"] == "approval_gate"
+        assert gates[0]["review_id"] == "approval_gate"
 
 
 @then(parsers.parse('the response includes a saved view named "{name}"'))

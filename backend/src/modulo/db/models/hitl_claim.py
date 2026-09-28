@@ -10,7 +10,7 @@ from modulo.db.models.base import OrgScoped
 
 class HitlClaim(OrgScoped):
     __tablename__ = "hitl_claims"
-    __table_args__ = (UniqueConstraint("run_id", "gate_id", name="uq_hitl_claims_run_gate"),)
+    __table_args__ = (UniqueConstraint("run_id", "review_id", name="uq_hitl_claims_run_review"),)
 
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
@@ -18,7 +18,7 @@ class HitlClaim(OrgScoped):
     required_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
     )
-    gate_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    review_id: Mapped[str] = mapped_column(String(255), nullable=False)
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("pipelines.id", ondelete="CASCADE"),
@@ -66,9 +66,9 @@ class HitlClaim(OrgScoped):
     # "no description" fallback). jsonb in the parallel migration; generic
     # JSON keeps SQLite/MariaDB parity (same pattern as decision_payload).
     context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
-    # FAR-634: the resolved ``hitl_gate_config``, stamped by the executor's
+    # FAR-634: the resolved ``hitl_review_config``, stamped by the executor's
     # interrupt handler at fire time. The human_only resolver
-    # (``db.crud.hitl_gate_config.resolve_hitl_gate_config``) reads this FIRST
+    # (``db.crud.hitl_review_config.resolve_hitl_review_config``) reads this FIRST
     # (one claim-row lookup instead of the snapshot/live-edge walk), falling
     # back to the walk for legacy rows that fired before this column existed.
     # Nullable: legacy gates carry NULL and the resolver walk covers them; a

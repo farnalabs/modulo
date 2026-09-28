@@ -40,7 +40,7 @@ class TestFeedbackFlowUnit:
 
         record = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="gate-1",
+            review_id="gate-1",
             account_id=test_user,
             rejection_reason="Output quality insufficient",
             rejected_output={"result": "poor quality text"},
@@ -64,7 +64,7 @@ class TestFeedbackFlowUnit:
         mgr = FeedbackManager(rls_session, test_org)
         created = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="gate-2",
+            review_id="gate-2",
             account_id=test_user,
             rejection_reason="Bad",
             rejected_output={},
@@ -97,7 +97,7 @@ class TestFeedbackFlowUnit:
         for i in range(3):
             await mgr.create_feedback_record(
                 run_id=run_id,
-                gate_id=f"gate-{i}",
+                review_id=f"gate-{i}",
                 account_id=test_user,
                 rejection_reason=f"Reason {i}",
                 rejected_output={},
@@ -131,7 +131,7 @@ class TestFeedbackFlowUnit:
         mgr = FeedbackManager(rls_session, test_org)
         record = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="gate-1",
+            review_id="gate-1",
             account_id=test_user,
             rejection_reason="Needs correction",
             rejected_output={},
@@ -168,7 +168,7 @@ class TestFeedbackFlowUnit:
         mgr = FeedbackManager(rls_session, test_org)
         record = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="gate-1",
+            review_id="gate-1",
             account_id=test_user,
             rejection_reason="Fix it",
             rejected_output={},
@@ -191,7 +191,7 @@ class TestFeedbackFlowUnit:
 
         record = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="gate-review",
+            review_id="gate-review",
             account_id=test_user,
             rejection_reason="Manual review required",
             rejected_output={"doc": "needs human edit"},
@@ -213,7 +213,7 @@ class TestFeedbackFlowUnit:
 
         record = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="gate-auto",
+            review_id="gate-auto",
             account_id=test_user,
             rejection_reason="Auto-fix",
             rejected_output={"code": "buggy"},
@@ -230,7 +230,7 @@ class TestFeedbackFlowUnit:
 
         r1 = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="g1",
+            review_id="g1",
             account_id=test_user,
             rejection_reason="R1",
             rejected_output={},
@@ -238,7 +238,7 @@ class TestFeedbackFlowUnit:
         )
         await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="g2",
+            review_id="g2",
             account_id=test_user,
             rejection_reason="R2",
             rejected_output={},
@@ -274,7 +274,7 @@ class TestFeedbackFlowUnit:
         mgr = FeedbackManager(rls_session, test_org)
         record = await mgr.create_feedback_record(
             run_id=run_id,
-            gate_id="gate-corr-node",
+            review_id="gate-corr-node",
             account_id=test_user,
             rejection_reason="Output quality insufficient",
             rejected_output={"result": "poor quality text"},

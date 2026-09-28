@@ -44,12 +44,12 @@ from modulo.db.models.schema import SchemaVersion
 _log = logging.getLogger(__name__)
 _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
 # FAR-541 (iteration 4, m4): node ids starting with this prefix are reserved —
-# the executor synthesizes HITL gate nodes as ``hitl_gate_<gate_id>``
+# the executor synthesizes HITL gate nodes as ``hitl_review_<review_id>``
 # (node_runner/graph_cache), and consumer/stamp checks (recover-node 422
 # guard, dispatcher reconcile, HITL routing) key on the prefix to tell a real
 # gate apart from manual nodes and guardrail rows. A user node id squatting
 # the prefix would be misrouted as a gate.
-HITL_GATE_NODE_ID_PREFIX = "hitl_gate_"
+HITL_REVIEW_NODE_ID_PREFIX = "hitl_review_"
 # FAR-583: node ids starting with "__" are reserved for the run_node_outputs
 # sentinel namespace — "__run_meta__" (the run-level metadata row) and
 # "__unknown__" (unparseable legacy marker keys) are row keys in the per-node
@@ -60,7 +60,7 @@ DB_SENTINEL_NODE_ID_PREFIX = "__"
 # FAR-613: the minimum trimmed length of a HITL gate's human-provided
 # description. The description is the reviewer's decision briefing — a gate
 # must explain WHY a human must decide on it. Shared with the API contract
-# (``api.routes.pipelines.HitlGateConfig`` field validator enforces the same
+# (``api.routes.pipelines.HitlReviewConfig`` field validator enforces the same
 # threshold for edge-level gate configs) and the pipeline editor's save
 # validation, so all three surfaces agree.
 HITL_DESCRIPTION_MIN_LENGTH = 20
@@ -503,7 +503,7 @@ def _check_composite_sub_edges(
                 node_id=node_id,
             )
             continue
-        if edge.get("hitl_gate_config"):
+        if edge.get("hitl_review_config"):
             result.error(
                 "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED",
                 f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge carries a HITL gate "
@@ -1384,15 +1384,15 @@ class GraphValidator:
 
         # FAR-613: gate-description requirement (save-time only — see the
         # method docstring for the blast-radius scoping).
-        self._check_hitl_gate_descriptions(graph_json, result)
+        self._check_hitl_review_descriptions(graph_json, result)
 
         # FAR-859: subject_path JMESPath syntax + length check (both edge
         # and node configs — node-level hitl_config bypasses Pydantic).
-        self._check_hitl_gate_subject_paths(graph_json, result)
+        self._check_hitl_review_subject_paths(graph_json, result)
 
         # FAR-860: response_contract validation (both edge-level
-        # hitl_gate_config and node-level hitl_config).
-        self._check_hitl_gate_response_contracts(graph_json, result)
+        # hitl_review_config and node-level hitl_config).
+        self._check_hitl_review_response_contracts(graph_json, result)
 
         self._check_topology(graph_json, result)
         if not result.is_valid:
@@ -1551,7 +1551,7 @@ class GraphValidator:
         """Collect unique node ids; emits TOPOLOGY_NODE_MISSING_ID and returns None on a missing id.
 
         FAR-541 (iteration 4, m4): also rejects node ids squatting the
-        reserved ``hitl_gate_`` prefix (TOPOLOGY_NODE_RESERVED_ID_PREFIX) —
+        reserved ``hitl_review_`` prefix (TOPOLOGY_NODE_RESERVED_ID_PREFIX) —
         the executor synthesizes HITL gate nodes under that prefix and the
         stamp/reconcile checks route on it.
 
@@ -1567,10 +1567,10 @@ class GraphValidator:
                 result.error("TOPOLOGY_NODE_MISSING_ID", "A node is missing its 'id' field")
                 return None
             nid_str = str(nid)
-            if nid_str.startswith(HITL_GATE_NODE_ID_PREFIX):
+            if nid_str.startswith(HITL_REVIEW_NODE_ID_PREFIX):
                 result.error(
                     "TOPOLOGY_NODE_RESERVED_ID_PREFIX",
-                    f"Node id '{nid_str}' uses the reserved '{HITL_GATE_NODE_ID_PREFIX}' prefix "
+                    f"Node id '{nid_str}' uses the reserved '{HITL_REVIEW_NODE_ID_PREFIX}' prefix "
                     "(synthesized HITL gate nodes)",
                     node_id=nid_str,
                 )
@@ -1759,7 +1759,7 @@ class GraphValidator:
         result: ValidationResult,
     ) -> None:
         """Validate eval_condition on a HITL gate config, if present."""
-        hitl_config = edge.get("hitl_gate_config")
+        hitl_config = edge.get("hitl_review_config")
         if not isinstance(hitl_config, dict):
             return
         eval_cond = hitl_config.get("eval_condition")
@@ -1816,15 +1816,15 @@ class GraphValidator:
             return True
         return len(description.strip()) < HITL_DESCRIPTION_MIN_LENGTH
 
-    def _check_hitl_gate_descriptions(self, graph_json: dict[str, Any], result: ValidationResult) -> None:
+    def _check_hitl_review_descriptions(self, graph_json: dict[str, Any], result: ValidationResult) -> None:
         """FAR-613: every HITL gate must carry a human-provided description.
 
         The description is the reviewer's decision briefing — it surfaces in
         the approve/reject UI and the MCP gate resource. Both gate shapes are
         checked:
 
-        * EDGE-level: ``hitl_gate_config`` on an edge. The Pydantic contract
-          (``api.routes.pipelines.HitlGateConfig``) already enforces the same
+        * EDGE-level: ``hitl_review_config`` on an edge. The Pydantic contract
+          (``api.routes.pipelines.HitlReviewConfig``) already enforces the same
           threshold on REST/MCP graph writes; this check is the model-level
           backstop so validation and the contract cannot drift.
         * NODE-level (FAR-402): ``hitl_config`` on a ``node_type == "hitl"``
@@ -1849,8 +1849,8 @@ class GraphValidator:
             nid = str(node.get("id", ""))
             if self._hitl_description_issue(node.get("hitl_config")):
                 result.error(
-                    "HITL_GATE_DESCRIPTION_REQUIRED",
-                    f"HITL gate on node '{nid}' requires a human-provided description "
+                    "HITL_REVIEW_DESCRIPTION_REQUIRED",
+                    f"HITL review on node '{nid}' requires a human-provided description "
                     f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
                     node_id=nid,
                 )
@@ -1858,7 +1858,7 @@ class GraphValidator:
         for edge in graph_json.get("edges", []):
             if not isinstance(edge, dict):
                 continue
-            hitl_config = edge.get("hitl_gate_config")
+            hitl_config = edge.get("hitl_review_config")
             if not isinstance(hitl_config, dict):
                 continue
             source = edge.get("source")
@@ -1876,8 +1876,8 @@ class GraphValidator:
                 if str(source) in node_type_by_id and node_type_by_id[str(source)] == "hitl":
                     continue  # already reported by the node-level pass
                 result.error(
-                    "HITL_GATE_DESCRIPTION_REQUIRED",
-                    f"HITL gate on edge '{source}->{target}' requires a human-provided description "
+                    "HITL_REVIEW_DESCRIPTION_REQUIRED",
+                    f"HITL review on edge '{source}->{target}' requires a human-provided description "
                     f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
                     node_id=_string_or_default(source),
                 )
@@ -1907,7 +1907,8 @@ class GraphValidator:
         if len(subject_path) > HITL_SUBJECT_PATH_MAX_LENGTH:
             result.error(
                 "HITL_SUBJECT_PATH_TOO_LONG",
-                f"HITL gate on {source_label}: subject_path exceeds max length of {HITL_SUBJECT_PATH_MAX_LENGTH} chars",
+                f"HITL review on {source_label}: subject_path exceeds max length"
+                f" of {HITL_SUBJECT_PATH_MAX_LENGTH} chars",
             )
             return
         try:
@@ -1915,18 +1916,18 @@ class GraphValidator:
         except jmespath.exceptions.JMESPathError as exc:
             result.error(
                 "HITL_SUBJECT_PATH_INVALID_JMESPATH",
-                f"HITL gate on {source_label}: invalid JMESPath in subject_path: {exc}",
+                f"HITL review on {source_label}: invalid JMESPath in subject_path: {exc}",
             )
 
     @staticmethod
-    def _iter_hitl_gate_configs(graph_json: dict[str, Any]) -> Iterator[tuple[Any, str]]:
+    def _iter_hitl_review_configs(graph_json: dict[str, Any]) -> Iterator[tuple[Any, str]]:
         """Yield ``(config, source_label)`` for every HITL gate config in the graph.
 
         Shared by the ``subject_path`` and ``response_contract`` checks (FAR-860)
         so the node-level / edge-level walk — including the skip of edge configs
         that belong to a node-level gate — cannot drift between them.
 
-        Checks both edge-level ``hitl_gate_config`` and node-level
+        Checks both edge-level ``hitl_review_config`` and node-level
         ``hitl_config`` (the latter bypasses Pydantic entirely, so these checks
         are the ONLY save-time gate for node configs).
         """
@@ -1944,7 +1945,7 @@ class GraphValidator:
         for edge in graph_json.get("edges", []):
             if not isinstance(edge, dict):
                 continue
-            hitl_config = edge.get("hitl_gate_config")
+            hitl_config = edge.get("hitl_review_config")
             if not isinstance(hitl_config, dict):
                 continue
             source = edge.get("source")
@@ -1960,14 +1961,14 @@ class GraphValidator:
             yield hitl_config, f"edge '{source}->{target}'"
 
     @staticmethod
-    def _check_hitl_gate_subject_paths(graph_json: dict[str, Any], result: ValidationResult) -> None:
+    def _check_hitl_review_subject_paths(graph_json: dict[str, Any], result: ValidationResult) -> None:
         """Validate ``subject_path`` on all HITL gate configs.
 
-        Checks both edge-level ``hitl_gate_config`` and node-level
+        Checks both edge-level ``hitl_review_config`` and node-level
         ``hitl_config`` (the latter bypasses Pydantic's ``max_length``
         entirely — this is the ONLY save-time gate for node configs).
         """
-        for config, source_label in GraphValidator._iter_hitl_gate_configs(graph_json):
+        for config, source_label in GraphValidator._iter_hitl_review_configs(graph_json):
             GraphValidator._check_hitl_subject_path(config, source_label, result)
 
     @staticmethod
@@ -1979,7 +1980,7 @@ class GraphValidator:
         """Validate a HITL gate's ``response_contract`` (FAR-860).
 
         Mirrors the ``_check_hitl_subject_path`` pattern: validates both
-        edge-level ``hitl_gate_config`` and node-level ``hitl_config`` (the
+        edge-level ``hitl_review_config`` and node-level ``hitl_config`` (the
         latter bypasses Pydantic entirely).
 
         Rules:
@@ -1997,14 +1998,14 @@ class GraphValidator:
         if not isinstance(rc, dict):
             result.error(
                 "HITL_RESPONSE_CONTRACT_INVALID",
-                f"HITL gate on {source_label}: response_contract must be an object",
+                f"HITL review on {source_label}: response_contract must be an object",
             )
             return
         kind = rc.get("kind")
         if kind not in ("approval", "choice"):
             result.error(
                 "HITL_RESPONSE_CONTRACT_UNKNOWN_KIND",
-                f"HITL gate on {source_label}: response_contract.kind must be 'approval' or 'choice', got {kind!r}",
+                f"HITL review on {source_label}: response_contract.kind must be 'approval' or 'choice', got {kind!r}",
             )
             return
         options = rc.get("options")
@@ -2012,7 +2013,7 @@ class GraphValidator:
             if not isinstance(options, list) or not options:
                 result.error(
                     "HITL_RESPONSE_CONTRACT_CHOICE_REQUIRES_OPTIONS",
-                    f"HITL gate on {source_label}: response_contract kind 'choice' requires a non-empty options list",
+                    f"HITL review on {source_label}: response_contract kind 'choice' requires a non-empty options list",
                 )
                 return
             seen_ids: set[str] = set()
@@ -2020,7 +2021,7 @@ class GraphValidator:
                 if not isinstance(opt, dict):
                     result.error(
                         "HITL_RESPONSE_CONTRACT_INVALID_OPTION",
-                        f"HITL gate on {source_label}: response_contract option {i} must be an object",
+                        f"HITL review on {source_label}: response_contract option {i} must be an object",
                     )
                     continue
                 opt_id = opt.get("id")
@@ -2028,31 +2029,32 @@ class GraphValidator:
                 if not isinstance(opt_id, str) or not opt_id.strip():
                     result.error(
                         "HITL_RESPONSE_CONTRACT_OPTION_MISSING_ID",
-                        f"HITL gate on {source_label}: response_contract option {i} must have a non-empty string id",
+                        f"HITL review on {source_label}: response_contract option {i} must have a non-empty string id",
                     )
                     continue
                 if not isinstance(opt_label, str) or not opt_label.strip():
                     result.error(
                         "HITL_RESPONSE_CONTRACT_OPTION_MISSING_LABEL",
-                        f"HITL gate on {source_label}: response_contract option {i} must have a non-empty string label",
+                        f"HITL review on {source_label}: response_contract"
+                        f" option {i} must have a non-empty string label",
                     )
                     continue
                 if opt_id in seen_ids:
                     result.error(
                         "HITL_RESPONSE_CONTRACT_DUPLICATE_OPTION_ID",
-                        f"HITL gate on {source_label}: response_contract has duplicate option id {opt_id!r}",
+                        f"HITL review on {source_label}: response_contract has duplicate option id {opt_id!r}",
                     )
                 seen_ids.add(opt_id)
 
     @staticmethod
-    def _check_hitl_gate_response_contracts(graph_json: dict[str, Any], result: ValidationResult) -> None:
+    def _check_hitl_review_response_contracts(graph_json: dict[str, Any], result: ValidationResult) -> None:
         """Validate ``response_contract`` on all HITL gate configs (FAR-860).
 
-        Checks both edge-level ``hitl_gate_config`` and node-level
+        Checks both edge-level ``hitl_review_config`` and node-level
         ``hitl_config`` (the latter bypasses Pydantic entirely — this is
         the ONLY save-time gate for node configs).
         """
-        for config, source_label in GraphValidator._iter_hitl_gate_configs(graph_json):
+        for config, source_label in GraphValidator._iter_hitl_review_configs(graph_json):
             GraphValidator._check_hitl_response_contract(config, source_label, result)
 
     @staticmethod
@@ -3601,18 +3603,18 @@ def _parallel_write_detail(setters: list[dict[str, Any]]) -> str | None:
     return f"parallel branches write the same run_context keys: {sorted(common)}"
 
 
-def check_hitl_gate_descriptions(graph_json: dict[str, Any]) -> list[ValidationIssue]:
+def check_hitl_review_descriptions(graph_json: dict[str, Any]) -> list[ValidationIssue]:
     """Run the FAR-613 HITL gate-description check standalone (public seam).
 
     Single-sourced with the save-time check
-    (:meth:`GraphValidator._check_hitl_gate_descriptions`) so the write
+    (:meth:`GraphValidator._check_hitl_review_descriptions`) so the write
     surfaces cannot drift. Exists for graph-WRITE surfaces that do not run
     the full ``validate_definition`` (which needs a session): the MCP
     ``update_pipeline_graph`` tool bypasses the REST Pydantic contract for
     node-level ``hitl_config`` and never runs full validation, so it calls
     this with the submitted ``{"nodes": [...], "edges": [...]}`` shape and
-    rejects on ``HITL_GATE_DESCRIPTION_REQUIRED`` issues.
+    rejects on ``HITL_REVIEW_DESCRIPTION_REQUIRED`` issues.
     """
     result = ValidationResult()
-    GraphValidator()._check_hitl_gate_descriptions(graph_json, result)
+    GraphValidator()._check_hitl_review_descriptions(graph_json, result)
     return result.issues

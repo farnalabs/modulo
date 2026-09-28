@@ -39,7 +39,7 @@ async def test_spike_deliver_manual_unavailable_for_terminal_eval_failed_run():
     human can only remediate through the guardrail-override path (recover_node
     extension), never through deliver_manual.
     """
-    run_id, gate_id = _run_identifier()
+    run_id, review_id = _run_identifier()
     session = AsyncMock(spec=AsyncSession)
     # No gate row exists for this run: the UPDATE matches nothing and the
     # follow-up SELECT (GateNotFound check) also returns nothing.
@@ -54,7 +54,7 @@ async def test_spike_deliver_manual_unavailable_for_terminal_eval_failed_run():
         await mgr.deliver_manual(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=uuid.uuid4(),
             claim_token="opaque-token",
             output={"result": "manual"},
@@ -69,7 +69,7 @@ async def test_spike_deliver_manual_unavailable_for_terminal_eval_failed_run():
 @pytest.mark.asyncio
 async def test_spike_deliver_manual_requires_a_gate_even_for_failed_runs():
     """deliver_manual on a plain failed run also 404s when no gate exists."""
-    run_id, gate_id = _run_identifier()
+    run_id, review_id = _run_identifier()
     session = AsyncMock(spec=AsyncSession)
     update_result = MagicMock()
     update_result.scalar_one_or_none.return_value = None
@@ -82,7 +82,7 @@ async def test_spike_deliver_manual_requires_a_gate_even_for_failed_runs():
         await mgr.deliver_manual(
             session,
             run_id=run_id,
-            gate_id=gate_id,
+            review_id=review_id,
             org_id=uuid.uuid4(),
             claim_token="opaque-token",
             output={"result": "manual"},
