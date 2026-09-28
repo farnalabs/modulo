@@ -12,36 +12,30 @@ import {
 /**
  * Invoke a row's action-menu command.
  *
- * The action menu is a PrimeVue popup `<Menu>`. Three independent traps, all
- * observed on staging:
+ * The action menu is a PrimeVue popup `<Menu>`. The command handler is bound
+ * to the inner `.p-menu-item-content` `<div>` (`data-pc-section="itemcontent"`
+ * in primevue/menu/Menuitem.vue), NOT to the outer `<li role="menuitem">`.
  *
- * 1. PrimeVue 5's `Menuitem` puts `role="menuitem"` on the outer `<li>` but
- *    binds the command handler to the inner `.p-menu-item-content` `<div>`
- *    (primevue/menu/Menuitem.vue). A click that lands on the `<li>` bubbles
- *    up to the overlay's document-level dismisser (closing the menu) but
- *    never reaches the descendant handler — so the command never runs.
- * 2. `dispatchEvent('click')` on that inner `<div>` also fails to run the
- *    command: the synthetic event does not reach PrimeVue's component click
- *    handler (verified against primevue@5.0.1 — the menu stays open and the
- *    command never fires), so a dispatched click silently no-ops.
- * 3. A plain `.click()` on the inner link never completes: the anchored
- *    overlay's enter transition (`p-anchored-overlay`) leaves the `<a>` moving
- *    across frames, so Playwright's actionability wait loops on "element is not
- *    stable" and then "element was detached from the DOM", exhausting the click
- *    timeout (verified in the staging trace for this file — the locator
- *    resolves to `<a class="p-menu-item-link">` but the click never fires).
+ * Coordinate clicks on that inner content are unreliable: the popup overlay
+ * enters through the `p-anchored-overlay` transition, which moves the item
+ * across frames. Playwright computes the click point and dispatches at it,
+ * so a plain `.click()` waits forever on "element is not stable" and a
+ * `.click({ force: true })` — which skips the stability gate — lands on stale
+ * coordinates and no-ops on the first interaction after the menu opens.
+ * Reproduced against staging on primevue@5.0.1: the force click opened the
+ * Rename dialog 0 of 5 times on a fresh menu, while dispatching a real
+ * bubbling `click` on the content element worked 5 of 5 times.
  *
- * Wait for the item to be visible, then deliver a real pointer click with
- * `force: true`, which skips the stability gate while still dispatching a real
- * mouse event at the element's centre — the bubbling `@click` on
- * `.p-menu-item-content` then runs the command. The item is asserted visible
- * first, so a genuinely missing command still fails.
+ * Dispatch the click directly on the element that carries the handler. This
+ * is geometry- and animation-independent (the same activation PrimeVue's own
+ * keyboard handler performs), and the item is asserted visible first, so a
+ * genuinely missing command still fails.
  */
 async function clickRowAction(page: Page, row: Locator, label: string): Promise<void> {
   await row.getByTestId('pipeline-list-action-menu').click()
   const menuItem = page.getByRole('menuitem', { name: label, exact: true })
   await expect(menuItem).toBeVisible({ timeout: 15_000 })
-  await menuItem.locator('a.p-menu-item-link').click({ force: true })
+  await menuItem.locator('[data-pc-section="itemcontent"]').dispatchEvent('click')
 }
 
 /**
@@ -193,7 +187,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await deleteItem.locator('a.p-menu-item-link').click({ force: true })
+      await deleteItem.locator('[data-pc-section="itemcontent"]').dispatchEvent('click')
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
       await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Delete' }).click()
