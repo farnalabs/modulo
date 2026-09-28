@@ -352,23 +352,23 @@ export async function deleteTrigger(apiBase: string, token: string, triggerId: s
   }
 }
 
-export interface PendingGate {
-  gate_id: string
+export interface PendingReview {
+  review_id: string
   decision: string | null
   label: string | null
 }
 
-interface PendingGatesResponse {
-  gates: PendingGate[]
+interface PendingReviewsResponse {
+  reviews: PendingReview[]
 }
 
-/** List a run's pending (undecided) HITL gates. */
-export async function getRunPendingGates(apiBase: string, token: string, runId: string): Promise<PendingGate[]> {
-  const res = await apiFetch<PendingGatesResponse>(apiBase, token, 'GET', `/api/v1/runs/${runId}/hitl/pending`)
+/** List a run's pending (undecided) HITL reviews. */
+export async function getRunPendingReviews(apiBase: string, token: string, runId: string): Promise<PendingReview[]> {
+  const res = await apiFetch<PendingReviewsResponse>(apiBase, token, 'GET', `/api/v1/runs/${runId}/hitl/pending`)
   if (res.status !== 200) {
-    throw new Error(`[realstack] pending-gate list failed: ${res.status} ${res.text.slice(0, 300)}`)
+    throw new Error(`[realstack] pending-review list failed: ${res.status} ${res.text.slice(0, 300)}`)
   }
-  return res.body?.gates ?? []
+  return res.body?.reviews ?? []
 }
 
 /** Claim a HITL gate through the real API, returning the claim token. */

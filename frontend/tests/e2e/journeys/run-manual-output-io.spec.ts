@@ -7,7 +7,7 @@ import {
   cleanupJourneyEntities,
   createManualNodePipeline,
   getRunIo,
-  getRunPendingGates,
+  getRunPendingReviews,
   pollRunStatus,
   triggerRun,
   uniqueName,
@@ -53,16 +53,16 @@ test.describe('Real-stack journeys: manual output lands in run IO', { tag: '@reg
       const run = await triggerRun(apiBase, token, created.pipeline.id, { prompt: 'E2E journey manual-io run' })
       await pollRunStatus(apiBase, token, run.run_id, isParked, { timeoutMs: 120_000 })
 
-      // Resolve the parked gate (for a manual node the gate id is the node id).
-      const gates = await getRunPendingGates(apiBase, token, run.run_id)
-      const gate = gates.find((g) => g.decision === null)
-      expect(gate, 'the parked run must report one undecided gate').toBeTruthy()
-      const gateId = gate?.gate_id ?? ''
+      // Resolve the parked review (for a manual node the review id is the node id).
+      const reviews = await getRunPendingReviews(apiBase, token, run.run_id)
+      const review = reviews.find((r) => r.decision === null)
+      expect(review, 'the parked run must report one undecided review').toBeTruthy()
+      const reviewId = review?.review_id ?? ''
 
       // Claim through the real API and deliver a distinctive output.
-      const claimToken = await claimGate(apiBase, token, run.run_id, gateId)
+      const claimToken = await claimGate(apiBase, token, run.run_id, reviewId)
       const deliveredValue = `e2e-manual-${crypto.randomUUID().slice(0, 8)}`
-      const submitRes = await apiFetch(apiBase, token, 'POST', `/api/v1/runs/${run.run_id}/manual/${gateId}/submit`, {
+      const submitRes = await apiFetch(apiBase, token, 'POST', `/api/v1/runs/${run.run_id}/manual/${reviewId}/submit`, {
         claim_token: claimToken,
         output: { approved_output: deliveredValue },
       })
@@ -76,7 +76,7 @@ test.describe('Real-stack journeys: manual output lands in run IO', { tag: '@reg
       // normalized outputs carry the manual node's validated return.
       const ioRes = await getRunIo(apiBase, token, run.run_id)
       expect(ioRes.status).toBe(200)
-      const nodeOutput = (ioRes.body?.outputs_json ?? {})[gateId] as Record<string, unknown> | undefined
+      const nodeOutput = (ioRes.body?.outputs_json ?? {})[reviewId] as Record<string, unknown> | undefined
       expect(nodeOutput, 'the manual node output must appear in the run IO').toBeTruthy()
       expect((nodeOutput as Record<string, unknown>)?.approved_output).toBe(deliveredValue)
 
