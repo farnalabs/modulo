@@ -3,7 +3,7 @@ import {
   apiBaseFor,
   apiFetch,
   apiLogin,
-  claimGate,
+  claimReview,
   cleanupJourneyEntities,
   createManualNodePipeline,
   getRunIo,
@@ -37,7 +37,7 @@ test.describe('Real-stack journeys: manual output lands in run IO', { tag: '@reg
     })
   })
 
-  test('delivering manual output at the gate resumes the run and persists the value in run IO', { tag: '@regression' }, async ({ page, env }) => {
+  test('delivering manual output at the review resumes the run and persists the value in run IO', { tag: '@regression' }, async ({ page, env }) => {
     const apiBase = apiBaseFor(env)
     const token = await apiLogin(env)
     const cleanup: JourneyCleanup = { pipelineIds: [], schemaIds: [], token, apiBase }
@@ -60,7 +60,7 @@ test.describe('Real-stack journeys: manual output lands in run IO', { tag: '@reg
       const reviewId = review?.review_id ?? ''
 
       // Claim through the real API and deliver a distinctive output.
-      const claimToken = await claimGate(apiBase, token, run.run_id, reviewId)
+      const claimToken = await claimReview(apiBase, token, run.run_id, reviewId)
       const deliveredValue = `e2e-manual-${crypto.randomUUID().slice(0, 8)}`
       const submitRes = await apiFetch(apiBase, token, 'POST', `/api/v1/runs/${run.run_id}/manual/${reviewId}/submit`, {
         claim_token: claimToken,

@@ -371,17 +371,17 @@ export async function getRunPendingReviews(apiBase: string, token: string, runId
   return res.body?.reviews ?? []
 }
 
-/** Claim a HITL gate through the real API, returning the claim token. */
-export async function claimGate(apiBase: string, token: string, runId: string, gateId: string): Promise<string> {
+/** Claim a HITL review through the real API, returning the claim token. */
+export async function claimReview(apiBase: string, token: string, runId: string, reviewId: string): Promise<string> {
   const res = await apiFetch<{ claim_token: string }>(
     apiBase,
     token,
     'POST',
-    `/api/v1/runs/${runId}/hitl/${gateId}/claim`,
+    `/api/v1/runs/${runId}/hitl/${reviewId}/claim`,
     {},
   )
   if (res.status !== 200 || !res.body?.claim_token) {
-    throw new Error(`[realstack] gate claim failed: ${res.status} ${res.text.slice(0, 300)}`)
+    throw new Error(`[realstack] review claim failed: ${res.status} ${res.text.slice(0, 300)}`)
   }
   return res.body.claim_token
 }
