@@ -296,9 +296,25 @@ class _CapturedExec:
         return []
 
 
+class _PostgresBind:
+    """Minimal bind double: ``fetch`` resolves its backend from the bind.
+
+    The plan-coverage tests compile and EXPLAIN against real Postgres, so the
+    double advertises the Postgres dialect to select the ``DISTINCT ON`` path.
+    """
+
+    class _Dialect:
+        name = "postgresql"
+
+    dialect = _Dialect()
+
+
 class _CapturingSession:
     def __init__(self) -> None:
         self.statements: list[Any] = []
+
+    def get_bind(self) -> _PostgresBind:
+        return _PostgresBind()
 
     async def execute(self, statement: Any) -> _CapturedExec:
         self.statements.append(statement)
