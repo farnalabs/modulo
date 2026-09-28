@@ -21,12 +21,13 @@ URLs:
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,7 +60,10 @@ from modulo.core.eval_engine.eval_definition_write import (
     create_or_update_eval,
     validate_guardrail_request,
 )
-from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+from modulo.core.eval_engine.policy_gate import (
+    PolicyGateBindingViolationError,
+    validate_binding,
+)
 from modulo.core.eval_engine.suite_run import (
     EVAL_LEADERBOARD_DEFAULT_DAYS,
     EVAL_LEADERBOARD_MAX_DAYS,
@@ -83,6 +87,7 @@ from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
+from modulo.db.sqlstates import sqlstate_of
 
 _CODE_EVALS_CREATE_EVAL_DEFINITION = "evals.create_eval_definition"
 _CODE_EVAL_LIST = "eval.list"
@@ -99,8 +104,21 @@ _CODE_EVALS_LEADERBOARD = "evals.leaderboard"
 _CODE_EVALS_TIMESERIES = "evals.timeseries"
 _CODE_EVALS_SUITE_ALERTING = "evals.suite_alerting"
 _CODE_EVALS_COVERAGE_GAP = "evals.coverage_gap"
+_CODE_EVALS_POLICY_GATE_CREATE = "evals.policy_gate.create"
+_CODE_EVALS_POLICY_GATE_UPDATE = "evals.policy_gate.update"
+_CODE_EVALS_POLICY_GATE_DELETE = "evals.policy_gate.delete"
+_CODE_EVALS_POLICY_GATE_GET = "evals.policy_gate.get"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
+_POLICY_GATE_ACTION_PATTERN = r"^(warn|block)$"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
+_MSG_POLICY_GATE_NOT_FOUND = "Policy gate not found for this eval"
+_MSG_POLICY_GATE_CONFLICT = "A policy gate for this eval was created concurrently. Please retry."
+_MSG_POLICY_GATE_LOCK_TIMEOUT = "Gate save is temporarily unavailable due to high contention. Please retry."
+_MSG_POLICY_GATE_CASCADE_CONFLICT = (
+    "Cannot delete this eval: it has policy gate decision records. "
+    "Remove the associated pipeline run(s) or wait for decision retention "
+    "cleanup before deleting."
+)
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])
@@ -228,8 +246,650 @@ class EvalSuiteAlertingResponse(BaseModel):
     cooldown: int | None
 
 
-# Endpoints
 # ---------------------------------------------------------------------------
+# Policy Gate request / response schemas (FAR-1106, chunk 6)
+# ---------------------------------------------------------------------------
+
+
+class PolicyGateCreateRequest(BaseModel):
+    """Request body for POST /api/v1/evals/{eval_id}/policy-gate."""
+
+    model_config = {"extra": "forbid"}
+
+    action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
+
+
+class PolicyGateUpdateRequest(BaseModel):
+    """Request body for PUT /api/v1/evals/{eval_id}/policy-gate."""
+
+    model_config = {"extra": "forbid"}
+
+    action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
+
+
+class PolicyGateResponse(BaseModel):
+    """Response body for GET /api/v1/evals/{eval_id}/policy-gate."""
+
+    id: uuid.UUID
+    eval_id: uuid.UUID
+    action: str
+    version: int
+    pre_version_raw: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Policy Gate helpers — advisory lock and create-or-replace
+# ---------------------------------------------------------------------------
+
+_GATE_LOCK_TIMEOUT_SQL = "SET LOCAL statement_timeout = '5s'"
+_GATE_ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(:key))"
+_GATE_LOCK_KEY_PREFIX = "policy_gate:"
+
+
+async def _with_gate_advisory_lock[T](
+    eval_id: uuid.UUID,
+    session: AsyncSession,
+    fn: Callable[..., Awaitable[T]],
+) -> T:
+    """Execute *fn* while holding a transaction-scoped advisory lock keyed on *eval_id*.
+
+    The lock is released when the transaction commits or rolls back.
+
+    PostgreSQL advisory locks are transaction-scoped when called inside a
+    transaction.  The lock key is derived from *eval_id* via ``hashtext()``
+    — the established pattern for string-keyed advisory locks in this
+    codebase (see ``gate_coalescing.py:107``).
+
+    ``SET LOCAL statement_timeout`` limits how long the session blocks on
+    ``pg_advisory_xact_lock``.  5 seconds is long enough for normal
+    acquisition (the lock is held only for the check-delete-insert sequence)
+    and short enough to surface contention to the caller quickly.
+    On timeout, PostgreSQL raises ``statement_timeout`` (SQLSTATE 57014)
+    which surfaces as a 503 Service Unavailable.
+    """
+    lock_key = f"{_GATE_LOCK_KEY_PREFIX}{eval_id}"
+    await session.execute(text(_GATE_LOCK_TIMEOUT_SQL))
+    await session.execute(text(_GATE_ADVISORY_LOCK_SQL), {"key": lock_key})
+    return await fn()
+
+
+async def _create_or_replace_gate(
+    eval_id: uuid.UUID,
+    gate_fields: dict[str, Any],
+    session: AsyncSession,
+    principal: "TenantPrincipal",
+) -> PolicyGate:
+    """Create or replace a PolicyGate under an advisory lock.
+
+    Re-checks for a live gate (the advisory lock serialises concurrent
+    requests), soft-deletes any conflicting gate, then inserts the new one.
+    A second ``UniqueViolation`` while holding the lock is a true race
+    that could not be resolved → 409 Conflict.
+    """
+
+    async def _do_insert() -> PolicyGate:
+        # Re-check for a live gate (the advisory lock serialises concurrent requests)
+        existing = await session.execute(
+            select(PolicyGate).where(
+                PolicyGate.eval_id == eval_id,
+                PolicyGate.deleted_at.is_(None),
+            )
+        )
+        live_gate = existing.scalar_one_or_none()
+        if live_gate is not None:
+            # Soft-delete the conflicting gate
+            live_gate.deleted_at = func.now()
+            live_gate.deleted_by = principal.account_id
+        # Insert the new gate
+        new_gate = PolicyGate(
+            organisation_id=principal.organisation_id,
+            eval_id=eval_id,
+            node_id=gate_fields["node_id"],
+            action=gate_fields["action"],
+            version=1,
+        )
+        session.add(new_gate)
+        await session.flush()
+        return new_gate
+
+    return await _with_gate_advisory_lock(eval_id, session, _do_insert)
+
+
+# ---------------------------------------------------------------------------
+# Policy Gate endpoints (FAR-1106, chunk 6)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/evals/{eval_id}/policy-gate",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        400: {"description": "Bad Request — binding validation failed"},
+        404: {"description": "Eval not found"},
+        409: {"description": "Conflict — concurrent gate creation"},
+        503: {"description": "Service Unavailable — lock timeout"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_POLICY_GATE_CREATE)
+async def create_policy_gate(
+    eval_id: uuid.UUID,
+    req: PolicyGateCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
+) -> PolicyGateResponse:
+    """Create a PolicyGate for an eval (admin only).
+
+    The gate inherits the eval's edit permission — no separate permission
+    check is performed (criterion 14).
+
+    ``validate_binding`` is called to verify the gate-to-eval binding is
+    valid (cross-tenancy, guardrail-typed, suite-scoped, node_id mismatch).
+    Violations are logged at WARNING with structured context but the caller
+    receives a generic 400 -- never the violation list or org identifiers
+    (criteria 5-9).
+
+    Concurrent creates are serialised via a transaction-scoped advisory lock
+    (section 4.4/5).  A ``UniqueViolation`` while holding the lock → 409.
+    A lock-acquisition timeout (SQLSTATE 57014) → 503.
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can create policy gates",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Load the eval to verify it exists and belongs to this org
+            result = await session.execute(
+                select(Eval).where(
+                    Eval.id == eval_id,
+                    Eval.organisation_id == principal.organisation_id,
+                )
+            )
+            eval_row = result.scalar_one_or_none()
+            if eval_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
+                )
+
+            # Validate binding (cross-tenancy, guardrail, suite-scoped, node_id mismatch)
+            pg_fields = {
+                "id": uuid.uuid4(),  # placeholder — real id assigned on insert
+                "organisation_id": principal.organisation_id,
+                "node_id": eval_row.node_id or uuid.uuid4(),  # must be non-None for validation
+            }
+            ev_fields = {
+                "id": eval_row.id,
+                "organisation_id": eval_row.organisation_id,
+                "node_id": eval_row.node_id,
+                "eval_type": eval_row.eval_type,
+            }
+            try:
+                validate_binding(pg_fields, ev_fields)
+            except PolicyGateBindingViolationError as exc:
+                _log.warning(
+                    "Policy gate binding violation",
+                    extra={"violations": exc.violations},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Policy gate binding is invalid. Check the eval configuration.",
+                ) from exc
+
+            gate_fields = {
+                "action": req.action,
+                "node_id": eval_row.node_id or uuid.uuid4(),
+            }
+
+            try:
+                gate = await _create_or_replace_gate(eval_id, gate_fields, session, principal)
+            except IntegrityError:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_MSG_POLICY_GATE_CONFLICT,
+                ) from None
+
+            # Audit log (best-effort — a failed audit never blocks the create)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="policy_gate.created",
+                    actor_user_id=principal.account_id,
+                    resource_type="policy_gate",
+                    resource_id=gate.id,
+                    payload_json={
+                        "eval_id": str(eval_id),
+                        "action": gate.action,
+                        "version": gate.version,
+                    },
+                )
+            except Exception:
+                _log.exception(
+                    "policy_gate.create_audit_failed",
+                    extra={
+                        "org_id": str(principal.organisation_id),
+                        "eval_id": str(eval_id),
+                    },
+                )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_CREATE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        # Detect lock-acquisition timeout (SQLSTATE 57014)
+        if sqlstate_of(exc) == "57014":
+            _log.warning(
+                "policy_gate.create_lock_timeout",
+                extra={"org_id": str(principal.organisation_id), "eval_id": str(eval_id)},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_MSG_POLICY_GATE_LOCK_TIMEOUT,
+            ) from None
+        _log.exception(_CODE_EVALS_POLICY_GATE_CREATE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception(
+            "policy_gate.create_error",
+            extra={"org_id": str(principal.organisation_id), "eval_id": str(eval_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating the policy gate.",
+        ) from None
+
+    return PolicyGateResponse(
+        id=gate.id,
+        eval_id=gate.eval_id,
+        action=gate.action,
+        version=gate.version,
+        pre_version_raw=gate.pre_version_raw,
+    )
+
+
+@router.put(
+    "/evals/{eval_id}/policy-gate",
+    dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        400: {"description": "Bad Request — binding validation failed"},
+        404: {"description": "Policy gate not found"},
+        409: {"description": "Conflict — concurrent gate update"},
+        503: {"description": "Service Unavailable — lock timeout"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_POLICY_GATE_UPDATE)
+async def update_policy_gate(
+    eval_id: uuid.UUID,
+    req: PolicyGateUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
+) -> PolicyGateResponse:
+    """Update a PolicyGate's action (admin only).
+
+    The gate inherits the eval's edit permission — no separate permission
+    check is performed (criterion 14).
+
+    Version increments on each edit (1→2→3).  ``pre_version_raw`` captures
+    ALL currently-mutable fields as ``{"action": <value>}`` — the snapshot
+    key set equals the set of mutable fields (criteria 17/18).
+
+    ``validate_binding`` is called to verify the gate-to-eval binding is
+    still valid after the update.  Violations are logged at WARNING with
+    structured context but the caller receives a generic 400 (criteria 5-9).
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can update policy gates",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Load the eval to verify it exists
+            eval_result = await session.execute(
+                select(Eval).where(
+                    Eval.id == eval_id,
+                    Eval.organisation_id == principal.organisation_id,
+                )
+            )
+            eval_row = eval_result.scalar_one_or_none()
+            if eval_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
+                )
+
+            # Load the existing live gate
+            gate_result = await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_id,
+                    PolicyGate.organisation_id == principal.organisation_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            gate = gate_result.scalar_one_or_none()
+            if gate is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_POLICY_GATE_NOT_FOUND,
+                )
+
+            # Validate binding (cross-tenancy, guardrail, suite-scoped, node_id mismatch)
+            pg_fields = {
+                "id": gate.id,
+                "organisation_id": principal.organisation_id,
+                "node_id": gate.node_id,
+            }
+            ev_fields = {
+                "id": eval_row.id,
+                "organisation_id": eval_row.organisation_id,
+                "node_id": eval_row.node_id,
+                "eval_type": eval_row.eval_type,
+            }
+            try:
+                validate_binding(pg_fields, ev_fields)
+            except PolicyGateBindingViolationError as exc:
+                _log.warning(
+                    "Policy gate binding violation",
+                    extra={"violations": exc.violations},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Policy gate binding is invalid. Check the eval configuration.",
+                ) from exc
+
+            # Snapshot pre_version_raw: KEY SET must equal the set of mutable
+            # fields (currently `action` only) — not a hardcoded list (criteria 17/18).
+            mutable_fields = {"action"}
+            snapshot = {field: getattr(gate, field) for field in mutable_fields}
+            gate.pre_version_raw = snapshot
+            gate.version = (gate.version or 1) + 1
+            gate.action = req.action
+
+            # Audit log (best-effort)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="policy_gate.updated",
+                    actor_user_id=principal.account_id,
+                    resource_type="policy_gate",
+                    resource_id=gate.id,
+                    payload_json={
+                        "eval_id": str(eval_id),
+                        "action": gate.action,
+                        "version": gate.version,
+                        "pre_version_raw": snapshot,
+                    },
+                )
+            except Exception:
+                _log.exception(
+                    "policy_gate.update_audit_failed",
+                    extra={
+                        "org_id": str(principal.organisation_id),
+                        "eval_id": str(eval_id),
+                    },
+                )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_UPDATE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_UPDATE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception(
+            "policy_gate.update_error",
+            extra={"org_id": str(principal.organisation_id), "eval_id": str(eval_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating the policy gate.",
+        ) from None
+
+    return PolicyGateResponse(
+        id=gate.id,
+        eval_id=gate.eval_id,
+        action=gate.action,
+        version=gate.version,
+        pre_version_raw=gate.pre_version_raw,
+    )
+
+
+@router.delete(
+    "/evals/{eval_id}/policy-gate",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        404: {"description": "Policy gate not found"},
+        409: {"description": "Conflict — gate has decision records"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_POLICY_GATE_DELETE)
+async def delete_policy_gate(
+    eval_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.delete"),
+) -> None:
+    """Soft-delete a PolicyGate (admin only).
+
+    The gate inherits the eval's edit permission — no separate permission
+    check is performed (criterion 14).
+
+    Sets ``deleted_at`` / ``deleted_by`` on the gate row.  The row remains
+    (soft-deleted) but is no longer live.
+
+    If the gate has existing ``PolicyGateDecision`` rows, the FK RESTRICT
+    raises ``IntegrityError`` → mapped to a typed 409 naming the
+    remediation (criterion 4a / §4.3a).
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete policy gates",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Load the eval to verify it exists
+            eval_result = await session.execute(
+                select(Eval).where(
+                    Eval.id == eval_id,
+                    Eval.organisation_id == principal.organisation_id,
+                )
+            )
+            eval_row = eval_result.scalar_one_or_none()
+            if eval_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
+                )
+
+            # Load the existing live gate
+            gate_result = await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_id,
+                    PolicyGate.organisation_id == principal.organisation_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            gate = gate_result.scalar_one_or_none()
+            if gate is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_POLICY_GATE_NOT_FOUND,
+                )
+
+            gate_id = gate.id
+            gate_action = gate.action
+
+            # Soft-delete the gate
+            gate.deleted_at = func.now()
+            gate.deleted_by = principal.account_id
+
+            # Audit log (best-effort)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="policy_gate.deleted",
+                    actor_user_id=principal.account_id,
+                    resource_type="policy_gate",
+                    resource_id=gate_id,
+                    payload_json={
+                        "eval_id": str(eval_id),
+                        "action": gate_action,
+                    },
+                )
+            except Exception:
+                _log.exception(
+                    "policy_gate.delete_audit_failed",
+                    extra={
+                        "org_id": str(principal.organisation_id),
+                        "eval_id": str(eval_id),
+                    },
+                )
+    except HTTPException:
+        raise
+    except IntegrityError:
+        # FK RESTRICT on PolicyGateDecision rows — gate has decision records
+        _log.exception(_CODE_EVALS_POLICY_GATE_DELETE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_POLICY_GATE_CASCADE_CONFLICT,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_DELETE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_DELETE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception(
+            "policy_gate.delete_error",
+            extra={"org_id": str(principal.organisation_id), "eval_id": str(eval_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting the policy gate.",
+        ) from None
+
+
+@router.get(
+    "/evals/{eval_id}/policy-gate",
+    responses={
+        404: {"description": "Policy gate not found"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_POLICY_GATE_GET)
+async def get_policy_gate(
+    eval_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> PolicyGateResponse:
+    """Read a PolicyGate for an eval.
+
+    Returns the gate's action and version.  Returns 404 when no gate exists
+    (criterion 13).  The gate inherits the eval's edit permission — no
+    separate permission check is performed (criterion 14).
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Load the eval to verify it exists
+            eval_result = await session.execute(
+                select(Eval).where(
+                    Eval.id == eval_id,
+                    Eval.organisation_id == principal.organisation_id,
+                )
+            )
+            eval_row = eval_result.scalar_one_or_none()
+            if eval_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
+                )
+
+            # Load the live gate
+            gate_result = await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_id,
+                    PolicyGate.organisation_id == principal.organisation_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+            gate = gate_result.scalar_one_or_none()
+            if gate is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_POLICY_GATE_NOT_FOUND,
+                )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_GET)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_GET)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception(
+            "policy_gate.get_error",
+            extra={"org_id": str(principal.organisation_id), "eval_id": str(eval_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching the policy gate.",
+        ) from None
+
+    return PolicyGateResponse(
+        id=gate.id,
+        eval_id=gate.eval_id,
+        action=gate.action,
+        version=gate.version,
+        pre_version_raw=gate.pre_version_raw,
+    )
 
 
 @router.post(
