@@ -7,6 +7,7 @@ pipeline row serialises concurrent graph writes within a serialisable transactio
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -27,7 +28,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -2670,6 +2671,47 @@ async def _require_team_membership(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=denial_detail)
 
 
+def _session_is_postgres(session: AsyncSession) -> bool:
+    """True when the session's bind positively reports PostgreSQL.
+
+    ``set_config``-based ``SET LOCAL`` statements are Postgres-only, so they
+    must be skipped on SQLite (the unit fixtures) - and on a bare ``AsyncMock``
+    test double, whose ``get_bind()`` returns an un-awaited coroutine rather
+    than a bind (that coroutine is closed here: pytest's ``error::RuntimeWarning``
+    turns the never-awaited warning into a test failure).
+
+    Anything that does not positively report ``postgresql`` counts as "not
+    postgres": the lock bound this guards is a safety improvement, never a
+    correctness requirement, so the safe direction to fail is the no-op.
+    """
+    bind: Any = session.get_bind()
+    if inspect.iscoroutine(bind):
+        bind.close()
+        return False
+    return getattr(getattr(bind, "dialect", None), "name", None) == "postgresql"
+
+
+#: Bounded wait for the in-txn row lock (the ``SELECT ... FOR UPDATE`` below),
+#: in milliseconds. Without it a contended PATCH parks a pooled connection on
+#: an UNBOUNDED lock wait; with it the wait degrades to a clear, mapped
+#: response (``api.db_error_handling`` translates SQLSTATE 55P03
+#: ``lock_not_available`` to 409) instead of a generic 503.
+#:
+#: ``set_config(..., is_local => true)`` is transaction-scoped - the SQL
+#: equivalent of ``SET LOCAL`` - so the bound also covers any row lock this
+#: mutation transaction takes AFTER the gate (same shape as the runner-capacity
+#: gate in ``core/runner_capacity.py``). That is deliberate: no part of a
+#: request-scoped mutation should hang indefinitely.
+#:
+#: A module constant, not a Settings field, mirroring
+#: ``core.run_outputs_dualwrite._MARK_RUN_FAILED_LOCK_TIMEOUT_MS``. The two
+#: existing lock-timeout settings (``runner_capacity_lock_timeout_ms``,
+#: ``runner_marker_sweep_lock_timeout_seconds``) are pinned to their own
+#: subsystems; reusing either would silently couple API PATCH contention to an
+#: operator's runner-capacity tuning.
+_MUTATION_ROW_LOCK_TIMEOUT_MS = 5000
+
+
 async def _reapply_team_gate_inside_mutation_txn(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -2683,13 +2725,27 @@ async def _reapply_team_gate_inside_mutation_txn(
     before the endpoint's mutation transaction opens, so ownership/visibility
     can change between the two (TOCTOU). Re-selects the row ``FOR UPDATE`` by
     id + organisation and re-runs the membership-or-admin matrix against the
-    locked row's CURRENT visibility/``owner_team_id`` — the same matrix the
+    locked row's CURRENT visibility/``owner_team_id`` - the same matrix the
     dependency enforces, evaluated atomically with the mutation.
+
+    The wait for that lock is BOUNDED (``_MUTATION_ROW_LOCK_TIMEOUT_MS``, set
+    via ``SET LOCAL`` semantics immediately before the select): a contended
+    mutation surfaces SQLSTATE 55P03, which ``handle_db_errors`` maps to a
+    clear 409 rather than an unbounded pooled-connection wait.
 
     Fail closed: 404 when the row is gone (the caller's crud call would 404
     anyway), 403 when the locked row is team-private and the caller is neither
     a member of its owner team nor an org admin.
     """
+    # POSTGRES-ONLY (same dialect gate as db/rls.py and the runner-capacity
+    # gate): SQLite has no ``set_config``, and the unit fixtures run on SQLite
+    # mocks. On Postgres this is transaction-scoped (is_local => true), i.e.
+    # SET LOCAL - it must run BEFORE the FOR UPDATE below to bound that wait.
+    if _session_is_postgres(session):
+        await session.execute(
+            text("SELECT set_config('lock_timeout', :val, true)"),
+            {"val": f"{_MUTATION_ROW_LOCK_TIMEOUT_MS}ms"},
+        )
     stmt = select(Pipeline).where(
         Pipeline.id == pipeline_id,
         Pipeline.organisation_id == principal.organisation_id,
@@ -3921,16 +3977,18 @@ class ConvertToAgentRequest(BaseModel):
 async def _load_locked_pipeline_graph(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
+    *,
+    pipeline_row: Pipeline,
 ) -> tuple[list[dict[str, Any]], list[Any]]:
-    """Load and row-lock a pipeline, returning its graph nodes + edge rows.
+    """Return the graph nodes + edge rows for an ALREADY locked pipeline.
 
-    Raises 404 when the pipeline does not exist.
+    ``pipeline_row`` is the ``FOR UPDATE`` row the caller locked with
+    ``_reapply_team_gate_inside_mutation_txn`` (which 404s a missing row AND
+    re-verifies the team gate inside this transaction). This helper takes no
+    lock of its own: the graph read and the team-gate lock must be the same
+    transaction over the same row, so the lock can never be dropped from one
+    of the two node-conversion endpoints that call it.
     """
-    pipeline_row = (
-        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
-    ).scalar_one_or_none()
-    if pipeline_row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
     edges = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
     return nodes, edges
@@ -4017,12 +4075,23 @@ async def convert_node_to_agent_endpoint(
     req: ConvertToAgentRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    # Team gate: this graph write mutates a team-private pipeline, so it gets
+    # the SAME two-layer protection as replace_pipeline_graph/update_pipeline -
+    # the request-time membership-or-admin dependency AND the in-txn re-check
+    # below (closing the request-time -> mutation TOCTOU). Before this, neither
+    # layer existed here: a non-member org operator could convert nodes on a
+    # team-private pipeline. The plain (JWT) variant pairs with this endpoint's
+    # own ``require_permission`` - ``_any_credential`` is paired only with
+    # ``require_permission_any_credential`` (the credential flavours must
+    # match; the gate body itself is single-sourced).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
 
-            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id, pipeline_row=locked)
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
@@ -4119,12 +4188,16 @@ async def revert_node_to_manual_endpoint(
     snapshot_id: Annotated[uuid.UUID, Query()],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    # Team gate: see convert_node_to_agent_endpoint - both layers (request-time
+    # dependency + in-txn re-check) were missing here too.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
 
-            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id, pipeline_row=locked)
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:

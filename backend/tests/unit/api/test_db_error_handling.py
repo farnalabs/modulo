@@ -21,7 +21,7 @@ from typing import Any
 import pydantic
 import pytest
 from fastapi import HTTPException, status
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.db_error_handling import handle_db_errors
 
@@ -335,3 +335,41 @@ class TestHandleDbErrors:
         ):
             await _endpoint(IntegrityError("stmt", {}, Exception("duplicate")))()
         assert "test.endpoint.integrity_error" in caplog.text
+
+
+class _DriverError(Exception):
+    """Stand-in for an asyncpg/psycopg driver error carrying a SQLSTATE."""
+
+    def __init__(self, message: str, sqlstate: str) -> None:
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+class TestLockTimeoutMapping:
+    """SQLSTATE 55P03 (``lock_not_available``) -> 409, not the generic 503.
+
+    ``_reapply_team_gate_inside_mutation_txn`` now sets a bounded
+    ``SET LOCAL lock_timeout`` before its ``FOR UPDATE``; when that expires the
+    database raises 55P03. The DB is healthy in that case - only the row lock
+    was busy - so the answer must say so (409 conflict, retry after the other
+    change) instead of reading as a transient outage the client should retry
+    immediately.
+    """
+
+    async def test_lock_not_available_maps_to_409_with_a_clear_detail(self) -> None:
+        endpoint = _endpoint(OperationalError("stmt", {}, _DriverError("lock timeout", "55P03")))
+        with pytest.raises(HTTPException) as excinfo:
+            await endpoint()
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        detail = excinfo.value.detail
+        assert "lock" in detail.lower(), detail
+        assert "another change is in progress" in detail, detail
+        assert detail != "Database temporarily unavailable."
+
+    async def test_other_sqlstates_keep_the_generic_503(self) -> None:
+        """The refinement is state-specific: a real outage still reads as one."""
+        endpoint = _endpoint(OperationalError("stmt", {}, _DriverError("query canceled", "57014")))
+        with pytest.raises(HTTPException) as excinfo:
+            await endpoint()
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert excinfo.value.detail == "Database temporarily unavailable."
