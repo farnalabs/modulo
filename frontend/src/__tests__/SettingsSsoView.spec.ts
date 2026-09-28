@@ -437,6 +437,10 @@ describe('SettingsSsoView — delete provider', () => {
 
     expect(wrapper.text()).toContain('Delete "Acme SSO"?')
     expect(wrapper.text()).toContain('This action cannot be undone.')
+    const sessionWarning = wrapper.find('[data-testid="settings-sso-delete-session-warning"]')
+    expect(sessionWarning.exists()).toBe(true)
+    expect(sessionWarning.text()).toContain('Users currently signed in with this provider are not signed out')
+    expect(sessionWarning.text()).toContain('New sign-ins through this provider will be blocked')
 
     await wrapper.find('[data-testid="settings-sso-delete-confirm"]').trigger('click')
     await nextTick()

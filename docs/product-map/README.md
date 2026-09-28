@@ -764,6 +764,17 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-org` registry gained the shipped UI behaviour + scoped deferral.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-28):** closed `feat-sso`'s
+> "Delete-provider confirmation does not warn about active SSO sessions" gap
+> (`auth/sso-provider-ui.md`). The delete-confirmation dialog now explains that
+> deleting a provider does NOT sign out already-signed-in users — their sessions
+> remain valid until they expire and only new sign-ins through the provider are
+> blocked. The warning ships a static `settings-sso-delete-session-warning`
+> testid, registered in the `/settings/sso` manifest `elements:` inventory (the
+> reverse testid-coverage guard front-to-back), with vitest assertions on the
+> delete-confirmation flow. The `feat-sso` manifest registry gained the shipped
+> behaviour line; the tracker gap is removed.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
