@@ -18597,7 +18597,7 @@ export interface components {
         /** UpdateHitlReviewWindowRequest */
         UpdateHitlReviewWindowRequest: {
             /** Hitl Review Window Seconds */
-            hitl_review_window_seconds?: number | null;
+            hitl_review_window_seconds: number | null;
         };
         /** UpdateOrgRequest */
         UpdateOrgRequest: {
