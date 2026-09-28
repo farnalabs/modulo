@@ -199,6 +199,31 @@ describe('LoginView - login-context integration', () => {
     expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
   })
 
+  it('renders the login form when the login-context body stalls after headers (body-read timeout)', async () => {
+    // The timeout must cover the JSON body read, not just the response
+    // headers: a server that returns headers then stalls the body previously
+    // left `await res.json()` outside the timeout window and could still
+    // strand the page on the loading state.
+    vi.useFakeTimers()
+    vi.spyOn(global, 'fetch').mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => new Promise<never>(() => {}),
+      } as unknown as Response),
+    )
+
+    const wrapper = mountView()
+    // login-context's body read times out, then the SSO fallback's body read
+    // times out too.
+    await vi.advanceTimersByTimeAsync(9_000)
+    await vi.advanceTimersByTimeAsync(9_000)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="login-context-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+  })
+
   it('shows SSO providers in single-org mode when available', async () => {
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce({
