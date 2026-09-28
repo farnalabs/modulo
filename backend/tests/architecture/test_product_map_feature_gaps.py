@@ -646,12 +646,6 @@ def test_no_bdd_citations_for_fully_deselected_features():
     citation must name at least one executing scenario; fully-deselected drafts
     belong nowhere in the graph and must be archived/re-anchored instead.
     """
-    registered_coverage = {
-        (entry, ref)
-        for entry in _product_map_entry_paths()
-        for ref in _entry_frontmatter(entry).get("bdd") or []
-        if isinstance(ref, str) and ref.endswith(".feature")
-    }
     deselected: dict[str, list[str]] = {}
     for entry in _product_map_entry_paths():
         frontmatter = _entry_frontmatter(entry)
