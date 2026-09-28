@@ -1,3 +1,4 @@
+import type { components } from '../../../src/lib/api/schema'
 import type { TestEnv } from './env'
 import { getBaseUrl } from './env'
 
@@ -352,15 +353,10 @@ export async function deleteTrigger(apiBase: string, token: string, triggerId: s
   }
 }
 
-export interface PendingReview {
-  review_id: string
-  decision: string | null
-  label: string | null
-}
+/** A pending (undecided) HITL review, as served by GET /runs/{id}/hitl/pending. */
+export type PendingReview = components['schemas']['ReviewResponse']
 
-interface PendingReviewsResponse {
-  reviews: PendingReview[]
-}
+type PendingReviewsResponse = components['schemas']['PendingReviewsResponse']
 
 /** List a run's pending (undecided) HITL reviews. */
 export async function getRunPendingReviews(apiBase: string, token: string, runId: string): Promise<PendingReview[]> {
