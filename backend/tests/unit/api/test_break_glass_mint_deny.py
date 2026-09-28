@@ -75,12 +75,18 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
         "update_model_backend_endpoint",
         "delete_model_backend_endpoint",
     },
-    # eval definitions
+    # eval definitions + the eval's policy-gate authoring mutations. A policy
+    # gate is a safety control (a `block` gate can halt runs), so — exactly as
+    # with the guardrail config-as-code surface below — a break-glass account
+    # must never author or disable it. The read route is intentionally exempt.
     "evals.py": {
         "create_eval_definition",
         "update_eval_definition",
         "delete_eval_definition",
         "create_eval_from_run",
+        "create_policy_gate",
+        "update_policy_gate",
+        "delete_policy_gate",
     },
     # guardrail config-as-code admin surface (FAR-309 PR B per-scope invariant):
     # the elevated read + propose/apply/reject carry the break-glass deny.
