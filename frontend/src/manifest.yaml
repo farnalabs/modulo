@@ -4322,6 +4322,9 @@ elements:
       - testid: settings-sso-delete-confirm
         type: button
         dynamic_testid: false
+      - testid: settings-sso-delete-session-warning
+        type: element
+        dynamic_testid: false
       - testid: settings-sso-delete-cancel
         type: button
         dynamic_testid: false
@@ -5325,6 +5328,7 @@ features:
             - "[x] Per-provider OIDC resolution mirrors the SAML two-leg RLS contract (FAR-1001 parity): the system role (BYPASSRLS) resolves an OIDC provider owned by ANY org (a second-created org's slug resolves even though a first-org-bound app session can never see the row); the app fallback (smart NOBYPASSRLS, first-org scoped) resolves only the first org's provider and returns all-None for a sibling org's slug (fail-closed)"
             - "[x] The OIDC app fallback runs inside a scoped transaction (FAR-1058 parity — set_rls_org requires an active transaction, autobegin=False session factories otherwise raised RuntimeError → 500): a provider read on a transaction-less app session resolves in its own begin() and leaves the caller's session transaction-less; the login/callback routes (always wrapped in session.begin()) read in place"
             - "[x] An unbound pre-auth app session sees ZERO OIDC providers; an unknown OIDC slug fails closed all-None at the resolver and 400 (not 500) on GET /oidc/{provider}/login; GET /oidc/{provider}/login for a cross-org provider 307-redirects to the IdP authorization endpoint with the resolved provider's client_id + callback redirect_uri"
+            - "[x] The provider delete-confirmation dialog warns that users already signed in with the provider are NOT signed out automatically — their sessions remain valid until they expire and only new sign-ins through the provider are blocked (settings-sso-delete-session-warning, `SettingsSsoView.vue`)"
         deferrals:
             - IdP-initiated SSO and ACS paths are exercised with the XML-signature step mocked (xmlsec cannot sign/verify round-trip on this Windows host); a Linux CI job with a real signed response would close the gap
             - SAML single logout (SLO) and SCIM deprovisioning are not implemented yet

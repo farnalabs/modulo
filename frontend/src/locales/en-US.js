@@ -2827,6 +2827,7 @@ export default {
       "no_providers_description": "Add an OIDC or SAML provider to enable single sign-on for your organisation.",
       "delete_confirm": "Delete \"{name}\"?",
       "delete_warning": "This action cannot be undone.",
+      "delete_session_warning": "Users currently signed in with this provider are not signed out — their sessions remain valid until they expire. New sign-ins through this provider will be blocked.",
       "deleting": "Deleting...",
       "delete": "Delete",
       "cancel": "Cancel",
