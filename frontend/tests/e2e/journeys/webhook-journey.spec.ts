@@ -112,11 +112,10 @@ test.describe('Real-stack journeys: webhook trigger delivery', { tag: '@regressi
       await page.goto('/settings/triggers')
       const row = page.locator('tr').filter({ hasText: created.pipeline.name }).first()
       await expect(row).toBeVisible({ timeout: 30_000 })
-      const fired = await expect.poll(async () => {
+      await expect.poll(async () => {
         const listed = await listTriggers(apiBase, token, created.pipeline.id)
         return listed.items.find((t) => t.id === trigger.id)?.last_fired_at ?? null
       }, { timeout: 30_000, intervals: [1_000, 2_000, 5_000] }).toBeTruthy()
-      expect(fired).toBeTruthy()
 
       // Cleanup order: cancel the parked run (manual nodes never finish on
       // their own) so the pipeline becomes deletable.
