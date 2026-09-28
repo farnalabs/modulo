@@ -107,10 +107,18 @@ DELIVERY_SENTINEL_SPEC_KEY = "modulo.delivery_sentinel"
 # it), so a marker under /tmp is run-scoped by construction; ``run_scope``
 # (the run id) additionally keys the marker so a workspace that somehow
 # outlived its run can never leak a claimed marker into the next run.
-# Both suppressions are deliberate: the marker root MUST be a fixed path that
-# survives the workspace seal — this is an in-sandbox claim file, not a host
-# tempfile.
-_GH_PR_GUARD_MARKER_ROOT = "/tmp"  # noqa: S108  # nosec B108
+#
+# The /tmp root is a deliberate, code-reviewed S5443 tradeoff — not an
+# unchecked host tempfile. It is a fixed in-SANDBOX path that must survive the
+# workspace seal; the marker is a claim DIRECTORY created by atomic ``mkdir``
+# as the sandbox agent user, its name is run-scoped and sanitised to
+# ``[A-Za-z0-9._-]``, it holds NO credentials, and the whole guard is
+# best-effort: a hostile/pre-created marker can at worst refuse one run's
+# ``gh pr create`` (fail-closed), never read, redirect, or escalate anything.
+# The NOSONAR below documents that rationale on the flagged line (matching the
+# docker.py / db/bootstrap.py /tmp-literal precedent) so the rule stays
+# suppressed through review instead of re-opening as a false positive.
+_GH_PR_GUARD_MARKER_ROOT = "/tmp"  # noqa: S108  # nosec B108  # NOSONAR S5443 - documented run-scoped in-sandbox marker root (see block comment above)
 
 # Scope fragments are embedded in a filesystem path and single-quoted into a
 # shell script — reduce them to a safe alphabet instead of raising (the guard
