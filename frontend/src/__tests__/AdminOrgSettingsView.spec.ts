@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
@@ -9,9 +9,22 @@ const communityState = vi.hoisted(() => ({
   reject: false,
 }))
 
+// FAR-1257: org default HITL review window endpoint state.
+const hitlWindowState = vi.hoisted(() => ({
+  data: { hitl_review_window_seconds: null as number | null, is_default: true } as unknown,
+  error: undefined as unknown,
+  reject: false,
+}))
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/v1/admin/org/hitl-review-window') {
+        if (hitlWindowState.reject) {
+          return Promise.reject(new Error('window unreachable'))
+        }
+        return Promise.resolve({ data: hitlWindowState.data, error: hitlWindowState.error })
+      }
       if (url === '/api/v1/admin/org/community-objects') {
         if (communityState.reject) {
           return Promise.reject(new Error('network down'))
@@ -100,7 +113,155 @@ describe('AdminOrgSettingsView', () => {
     communityState.enabled = true
     communityState.error = undefined
     communityState.reject = false
+    hitlWindowState.data = { hitl_review_window_seconds: null, is_default: true }
+    hitlWindowState.error = undefined
+    hitlWindowState.reject = false
     vi.mocked(api.PUT).mockResolvedValue({ data: {}, error: undefined } as any)
+  })
+
+  async function mountWindowView() {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { team_rbac: true }, currentTier: 'team' })
+    const wrapper = mount(AdminOrgSettingsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  function windowPutBodies(): unknown[] {
+    return vi
+      .mocked(api.PUT)
+      .mock.calls.filter((c) => c[0] === '/api/v1/admin/org/hitl-review-window')
+      .map((c) => (c[1] as { body?: Record<string, unknown> }).body)
+  }
+
+  // -- FAR-1257: org default HITL review window -----------------------------
+
+  it('shows "no org default" when only the instance default applies', async () => {
+    const wrapper = await mountWindowView()
+    const input = wrapper.find('[data-testid="org-hitl-review-window-value"]') as any
+    expect((input.element as HTMLInputElement).value).toBe('')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organisation default')
+    wrapper.unmount()
+  })
+
+  it('loads an existing org default in the largest whole unit that divides evenly', async () => {
+    hitlWindowState.data = { hitl_review_window_seconds: 900, is_default: false }
+    const wrapper = await mountWindowView()
+    expect((wrapper.find('[data-testid="org-hitl-review-window-value"]').element as HTMLInputElement).value).toBe('15')
+    expect((wrapper.find('[data-testid="org-hitl-review-window-unit"]').element as HTMLSelectElement).value).toBe('minutes')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('900 seconds')
+    wrapper.unmount()
+
+    hitlWindowState.data = { hitl_review_window_seconds: 86400, is_default: false }
+    const days = await mountWindowView()
+    expect((days.find('[data-testid="org-hitl-review-window-value"]').element as HTMLInputElement).value).toBe('1')
+    expect((days.find('[data-testid="org-hitl-review-window-unit"]').element as HTMLSelectElement).value).toBe('days')
+    days.unmount()
+  })
+
+  it('saves minutes converted to seconds', async () => {
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('15')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(windowPutBodies()).toEqual([{ hitl_review_window_seconds: 900 }])
+    expect(wrapper.find('[data-testid="org-hitl-review-window-saved"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('saves a non-minute unit converted to seconds', async () => {
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('hours')
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('2')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(windowPutBodies()).toEqual([{ hitl_review_window_seconds: 7200 }])
+    wrapper.unmount()
+  })
+
+  it('clears the org default with an explicit null when the value is empty', async () => {
+    hitlWindowState.data = { hitl_review_window_seconds: 900, is_default: false }
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(windowPutBodies()).toEqual([{ hitl_review_window_seconds: null }])
+    expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('No organisation default')
+    wrapper.unmount()
+  })
+
+  it('refuses a value below the 60 second floor without calling the API', async () => {
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('30')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(windowPutBodies()).toHaveLength(0)
+    expect(wrapper.find('[data-testid="org-hitl-review-window-error"]').text()).toContain('60 and 604800')
+    wrapper.unmount()
+  })
+
+  it('refuses a value above the 604800 second ceiling without calling the API', async () => {
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('minutes')
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('10081')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(windowPutBodies()).toHaveLength(0)
+    expect(wrapper.find('[data-testid="org-hitl-review-window-error"]').text()).toContain('60 and 604800')
+    wrapper.unmount()
+  })
+
+  it('accepts the exact envelope bounds', async () => {
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('60')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    // A successful save re-normalises the form to the largest whole unit, so
+    // re-pick the unit before exercising the upper bound.
+    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('604800')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(windowPutBodies()).toEqual([
+      { hitl_review_window_seconds: 60 },
+      { hitl_review_window_seconds: 604800 },
+    ])
+    wrapper.unmount()
+  })
+
+  it('reports a load failure inline and keeps the page usable', async () => {
+    hitlWindowState.reject = true
+    const wrapper = await mountWindowView()
+
+    expect(wrapper.text()).toContain('Organisation Settings')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-load-error"]').text()).toContain('window unreachable')
+    expect(wrapper.find('[data-testid="org-hitl-review-window-retry"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('reports a save failure inline without redirecting', async () => {
+    vi.mocked(api.PUT).mockResolvedValueOnce({ data: null, error: 'window rejected' } as any)
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('30')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="org-hitl-review-window-error"]').text()).toContain('window rejected')
+    expect(mockPush).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('renders without crashing', async () => {

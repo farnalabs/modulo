@@ -115,6 +115,99 @@
         <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive">{{ communityObjectsError }}</div>
       </SectionCard>
 
+      <!-- HITL review window (FAR-1257): the ORG default, the middle layer of
+           pipeline override > org default > instance default. Value + unit
+           select for readability; the API contract is seconds. Empty value on
+           save sends null, which clears the org key (inherit instance). -->
+      <SectionCard
+        :title="$t('views.AdminOrgSettingsView.hitl_review_window')"
+        :description="$t('views.AdminOrgSettingsView.hitl_review_window_description')"
+      >
+        <div v-if="hitlWindowLoading" class="flex items-center gap-2">
+          <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <span class="text-sm text-muted-foreground">{{ $t('views.AdminOrgSettingsView.hitl_review_window_loading') }}</span>
+        </div>
+
+        <div v-else-if="hitlWindowLoadError" class="space-y-2">
+          <p class="text-sm text-destructive" role="alert" data-testid="org-hitl-review-window-load-error">{{ hitlWindowLoadError }}</p>
+          <button
+            type="button"
+            class="text-sm font-medium text-primary underline underline-offset-2 hover:no-underline"
+            data-testid="org-hitl-review-window-retry"
+            @click="loadHitlReviewWindow"
+          >
+            {{ $t('views.AdminOrgSettingsView.hitl_review_window_retry') }}
+          </button>
+        </div>
+
+        <template v-else>
+          <div class="flex flex-wrap items-end gap-3">
+            <div class="w-32">
+              <label for="org-hitl-review-window-value" class="mb-1.5 block text-xs font-medium text-muted-foreground">
+                {{ $t('views.AdminOrgSettingsView.hitl_review_window_value') }}
+              </label>
+              <input
+                id="org-hitl-review-window-value"
+                v-model="hitlWindowValue"
+                type="number"
+                min="0"
+                step="any"
+                inputmode="decimal"
+                :placeholder="$t('views.AdminOrgSettingsView.hitl_review_window_placeholder')"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                aria-describedby="org-hitl-review-window-hint"
+                data-testid="org-hitl-review-window-value"
+              />
+            </div>
+            <div class="w-36">
+              <label for="org-hitl-review-window-unit" class="mb-1.5 block text-xs font-medium text-muted-foreground">
+                {{ $t('views.AdminOrgSettingsView.hitl_review_window_unit') }}
+              </label>
+              <select
+                id="org-hitl-review-window-unit"
+                v-model="hitlWindowUnit"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                data-testid="org-hitl-review-window-unit"
+              >
+                <option value="seconds">{{ $t('views.AdminOrgSettingsView.unit_seconds') }}</option>
+                <option value="minutes">{{ $t('views.AdminOrgSettingsView.unit_minutes') }}</option>
+                <option value="hours">{{ $t('views.AdminOrgSettingsView.unit_hours') }}</option>
+                <option value="days">{{ $t('views.AdminOrgSettingsView.unit_days') }}</option>
+              </select>
+            </div>
+            <Button
+              type="button"
+              class="h-[42px] px-4"
+              :disabled="hitlWindowSaving"
+              data-testid="org-hitl-review-window-save"
+              @click="saveHitlReviewWindow"
+            >
+              {{ hitlWindowSaving ? $t('common.saving') : $t('common.save') }}
+            </Button>
+          </div>
+
+          <p id="org-hitl-review-window-hint" class="mt-2 text-xs text-muted-foreground">
+            {{ $t('views.AdminOrgSettingsView.hitl_review_window_hint') }}
+          </p>
+
+          <p
+            v-if="hitlWindowError"
+            class="mt-2 text-sm text-destructive"
+            role="alert"
+            data-testid="org-hitl-review-window-error"
+          >{{ hitlWindowError }}</p>
+          <p
+            v-else-if="hitlWindowSaved"
+            class="mt-2 text-sm text-success"
+            data-testid="org-hitl-review-window-saved"
+          >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</p>
+
+          <div class="mt-4 rounded-lg border border-input bg-muted/30 p-3" data-testid="org-hitl-review-window-status">
+            <p class="text-xs font-medium">{{ hitlWindowStatus }}</p>
+          </div>
+        </template>
+      </SectionCard>
+
       <!-- Delete Organization -->
       <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
         <Button type="button" severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
@@ -162,6 +255,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -178,6 +272,7 @@ import { formatDateShort, formatDateFilename } from '../lib/formatDate'
 
 const planStore = usePlanStore()
 const router = useRouter()
+const { t } = useI18n()
 
 const { data: orgData, loading, error: loadError, load: loadData } = useDataFetch(
   async () => {
@@ -270,6 +365,148 @@ async function toggleCommunityObjects(next: boolean) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// HITL review window — ORG default (FAR-1257).
+//
+// The API contract is seconds (envelope 60..604800); the form shows a value +
+// unit select so the operator does not have to think in raw seconds. Empty
+// value = no org default (the PUT body sends null, which removes the key and
+// falls through to the instance default).
+// ---------------------------------------------------------------------------
+
+type HitlWindowUnit = 'seconds' | 'minutes' | 'hours' | 'days'
+
+const HITL_WINDOW_MIN_SECONDS = 60
+const HITL_WINDOW_MAX_SECONDS = 604800
+
+const HITL_WINDOW_UNIT_SECONDS: Record<HitlWindowUnit, number> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 3600,
+  days: 86400,
+}
+
+type HitlWindowFormResult =
+  | { kind: 'clear' }
+  | { kind: 'invalid' }
+  | { kind: 'ok'; seconds: number }
+
+/**
+ * Resolve the value+unit form into the seconds the API expects.
+ * `clear` (empty field) maps to a null PUT body; anything that cannot be a
+ * whole-envelope value is `invalid` so the caller can refuse the save rather
+ * than send a value the backend would 422 on.
+ */
+function resolveHitlWindowForm(value: string | number, unit: HitlWindowUnit): HitlWindowFormResult {
+  const raw = String(value ?? '').trim()
+  if (raw === '') return { kind: 'clear' }
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return { kind: 'invalid' }
+  const seconds = Math.round(parsed * HITL_WINDOW_UNIT_SECONDS[unit])
+  if (seconds < HITL_WINDOW_MIN_SECONDS || seconds > HITL_WINDOW_MAX_SECONDS) return { kind: 'invalid' }
+  return { kind: 'ok', seconds }
+}
+
+/** Largest whole unit the value divides evenly by, so 86400 reads "1 Days". */
+function pickHitlWindowUnit(seconds: number): HitlWindowUnit {
+  if (seconds % HITL_WINDOW_UNIT_SECONDS.days === 0) return 'days'
+  if (seconds % HITL_WINDOW_UNIT_SECONDS.hours === 0) return 'hours'
+  if (seconds % HITL_WINDOW_UNIT_SECONDS.minutes === 0) return 'minutes'
+  return 'seconds'
+}
+
+const hitlWindowLoading = ref(true)
+const hitlWindowLoadError = ref<string | null>(null)
+const hitlWindowValue = ref<string | number>('')
+const hitlWindowUnit = ref<HitlWindowUnit>('minutes')
+const hitlWindowCurrentSeconds = ref<number | null>(null)
+const hitlWindowIsDefault = ref(true)
+const hitlWindowSaving = ref(false)
+const hitlWindowError = ref<string | null>(null)
+const hitlWindowSaved = ref(false)
+
+const hitlWindowStatus = computed(() => {
+  if (hitlWindowIsDefault.value || hitlWindowCurrentSeconds.value == null) {
+    return t('views.AdminOrgSettingsView.hitl_review_window_status_default')
+  }
+  // Raw seconds, always >= 60, so the plural form is never wrong.
+  return t('views.AdminOrgSettingsView.hitl_review_window_status_set', {
+    seconds: hitlWindowCurrentSeconds.value,
+  })
+})
+
+function applyHitlWindow(seconds: number | null) {
+  hitlWindowCurrentSeconds.value = seconds
+  hitlWindowIsDefault.value = seconds === null
+  if (seconds === null) {
+    hitlWindowValue.value = ''
+    hitlWindowUnit.value = 'minutes'
+    return
+  }
+  const unit = pickHitlWindowUnit(seconds)
+  hitlWindowUnit.value = unit
+  hitlWindowValue.value = seconds / HITL_WINDOW_UNIT_SECONDS[unit]
+}
+
+async function loadHitlReviewWindow() {
+  hitlWindowLoading.value = true
+  hitlWindowLoadError.value = null
+  try {
+    const resp = await api.GET('/api/v1/admin/org/hitl-review-window')
+    if (resp.error) {
+      hitlWindowLoadError.value = t('views.AdminOrgSettingsView.hitl_review_window_load_failed', {
+        error: formatApiError(resp.error),
+      })
+      return
+    }
+    const data = resp.data as { hitl_review_window_seconds?: number | null; is_default?: boolean } | undefined
+    // `is_default` marks the ABSENT-key case: no org default is configured.
+    const seconds = data && data.is_default !== true ? (data.hitl_review_window_seconds ?? null) : null
+    applyHitlWindow(seconds)
+  } catch (e: unknown) {
+    hitlWindowLoadError.value = t('views.AdminOrgSettingsView.hitl_review_window_load_failed', {
+      error: formatApiError(e),
+    })
+  } finally {
+    hitlWindowLoading.value = false
+  }
+}
+
+async function saveHitlReviewWindow() {
+  if (hitlWindowSaving.value) return
+  hitlWindowError.value = null
+  hitlWindowSaved.value = false
+  const result = resolveHitlWindowForm(hitlWindowValue.value, hitlWindowUnit.value)
+  if (result.kind === 'invalid') {
+    hitlWindowError.value = t('views.AdminOrgSettingsView.hitl_review_window_out_of_range', {
+      min: HITL_WINDOW_MIN_SECONDS,
+      max: HITL_WINDOW_MAX_SECONDS,
+    })
+    return
+  }
+  const seconds = result.kind === 'clear' ? null : result.seconds
+  hitlWindowSaving.value = true
+  try {
+    const resp = await api.PUT('/api/v1/admin/org/hitl-review-window', {
+      body: { hitl_review_window_seconds: seconds },
+    })
+    if (resp.error) {
+      hitlWindowError.value = t('views.AdminOrgSettingsView.hitl_review_window_save_failed', {
+        error: formatApiError(resp.error),
+      })
+      return
+    }
+    applyHitlWindow(seconds)
+    hitlWindowSaved.value = true
+  } catch (e: unknown) {
+    hitlWindowError.value = t('views.AdminOrgSettingsView.hitl_review_window_save_failed', {
+      error: formatApiError(e),
+    })
+  } finally {
+    hitlWindowSaving.value = false
+  }
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return 'N/A'
   const d = new Date(dateStr)
@@ -336,4 +573,5 @@ async function confirmDelete() {
 
 planStore.fetchPlan()
 loadCommunityObjects()
+loadHitlReviewWindow()
 </script>
