@@ -39,11 +39,24 @@ class _FakeExecResult:
         return list(_FAKE_ROWS)
 
 
+class _FakeDialect:
+    """Minimal dialect double: fetch resolves its backend from the bind."""
+
+    name = "postgresql"
+
+
+class _FakeBind:
+    dialect = _FakeDialect()
+
+
 class _FakeAsyncSession:
     """Hand-rolled double: capture the statement passed to ``execute``."""
 
     def __init__(self) -> None:
         self.statements: list[Any] = []
+
+    def get_bind(self) -> _FakeBind:
+        return _FakeBind()
 
     async def execute(self, statement: Any) -> _FakeExecResult:
         self.statements.append(statement)
@@ -53,8 +66,27 @@ class _FakeAsyncSession:
 class _RaisingSession:
     """DB session whose ``execute`` raises the injected connection failure."""
 
+    def get_bind(self) -> _FakeBind:
+        return _FakeBind()
+
     async def execute(self, statement: Any) -> None:
         raise RuntimeError("connection closed")
+
+
+class _SqliteBind:
+    """Bind double advertising a non-Postgres dialect (no DISTINCT ON)."""
+
+    class _Dialect:
+        name = "sqlite"
+
+    dialect = _Dialect()
+
+
+class _SqliteSession(_FakeAsyncSession):
+    """Fake session whose bind reports SQLite — exercises the portable branch."""
+
+    def get_bind(self) -> _SqliteBind:
+        return _SqliteBind()
 
 
 _ORG_ID = "00000000-0000-0000-0000-0000000000AA"
@@ -109,6 +141,34 @@ async def test_f1_order_by_is_the_snapshot_ladder() -> None:
         cursor = position
     tail = order_segment.find("EVIDENCE.ID DESC") + len("EVIDENCE.ID DESC")
     assert not order_segment[tail:].strip()
+
+
+# ---------------------------------------------------------------------------
+# F1 on a portable backend — no DISTINCT ON, row_number() fallback
+# ---------------------------------------------------------------------------
+
+
+async def test_f1_portable_backend_uses_row_number_instead_of_distinct_on() -> None:
+    """SQLite has no DISTINCT ON: the newest-per-key selection is expressed
+    with ``row_number() OVER (PARTITION BY org/subject/key ORDER BY ...)``
+    filtered to ``rn = 1`` — same ladder, no Postgres-only syntax."""
+    from sqlalchemy.dialects import sqlite
+
+    session = _SqliteSession()
+    await fetch("node_execution", "r1:n1", _ORG_ID, session)
+    assert len(session.statements) == 1
+    sql = str(session.statements[0].compile(dialect=sqlite.dialect())).upper()
+    assert "DISTINCT ON" not in sql
+    assert "ROW_NUMBER() OVER" in sql
+    assert "PARTITION BY" in sql
+    # The partition ladder matches the Postgres DISTINCT ON columns.
+    assert "ORGANISATION_ID" in sql
+    assert "SUBJECT_TYPE" in sql
+    assert "SUBJECT_ID" in sql
+    assert '"KEY"' in sql
+    # Newest-first ordering survives in the window.
+    assert "CREATED_AT DESC" in sql
+    assert "ID DESC" in sql
 
 
 # ---------------------------------------------------------------------------

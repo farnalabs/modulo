@@ -26,8 +26,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from modulo.db.models.evidence import Evidence
 
@@ -84,37 +85,56 @@ async def fetch(
     """Subject-scoped DB query.  Returns the most recent Evidence row per
     distinct key for the given subject.
 
-    Uses ``DISTINCT ON (organisation_id, subject_type, subject_id, key)``
-    ``ORDER BY organisation_id, subject_type, subject_id, key,
-    created_at DESC, id DESC``.  Scoped by organisation via ``WHERE``
-    clause AND included in ``DISTINCT ON`` so the dedup is
-    tenant-scoped by construction — never touches ``predicate_ast``.
+    On Postgres this uses ``DISTINCT ON (organisation_id, subject_type,
+    subject_id, key)`` ``ORDER BY organisation_id, subject_type,
+    subject_id, key, created_at DESC, id DESC``.  Portable backends
+    (e.g. SQLite) have no ``DISTINCT ON``, so the same newest-per-key
+    selection is expressed with a ``row_number() OVER (...)`` window
+    filtered to ``rn = 1`` — identical ordering, identical result.
+
+    Scoped by organisation via the ``WHERE`` clause AND included in the
+    dedup partition so the dedup is tenant-scoped by construction —
+    never touches ``predicate_ast``.
 
     May raise on DB errors — callers must not let a fetch failure
     bypass the policy (§6.2 fetch-failure contract).
     """
-    stmt = (
-        select(Evidence)
-        .where(
-            Evidence.organisation_id == org_id,
-            Evidence.subject_type == subject_type,
-            Evidence.subject_id == subject_id,
-        )
-        .order_by(
-            Evidence.organisation_id,
-            Evidence.subject_type,
-            Evidence.subject_id,
-            Evidence.key,
-            Evidence.created_at.desc(),
-            Evidence.id.desc(),
-        )
-        .distinct(
-            Evidence.organisation_id,
-            Evidence.subject_type,
-            Evidence.subject_id,
-            Evidence.key,
-        )
+    partition_by = (
+        Evidence.organisation_id,
+        Evidence.subject_type,
+        Evidence.subject_id,
+        Evidence.key,
     )
+    order_by = (
+        Evidence.created_at.desc(),
+        Evidence.id.desc(),
+    )
+    subject_filter = (
+        Evidence.organisation_id == org_id,
+        Evidence.subject_type == subject_type,
+        Evidence.subject_id == subject_id,
+    )
+
+    bind = db.get_bind()
+    is_postgres = str(getattr(bind.dialect, "name", "")).startswith("postgres")
+
+    if is_postgres:
+        stmt = (
+            select(Evidence)
+            .where(*subject_filter)
+            .order_by(Evidence.organisation_id, Evidence.subject_type, Evidence.subject_id, Evidence.key, *order_by)
+            .distinct(*partition_by)
+        )
+    else:
+        # Portable fallback: rank rows per key by recency, keep rn = 1.
+        ranked = (
+            select(Evidence, func.row_number().over(partition_by=partition_by, order_by=order_by).label("rn"))
+            .where(*subject_filter)
+            .subquery()
+        )
+        ranked_alias = aliased(Evidence, ranked)
+        stmt = select(ranked_alias).where(ranked.c.rn == 1)
+
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
