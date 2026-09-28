@@ -55,6 +55,17 @@ class TestClassifyPath:
             ".github/ISSUE_TEMPLATE/bug.md",
             ".github/pull_request_template.md",
         ],
+        ids=[
+            "backend-unit-test",
+            "backend-integration-test",
+            "frontend-unit-test",
+            "architecture-test",
+            "docs",
+            "readme",
+            "github-codeowners",
+            "github-issue-template",
+            "github-pr-template",
+        ],
     )
     def test_class_a_paths(self, path: str) -> None:
         assert classify_path(path) == "A", f"{path} should be class-A"
@@ -78,6 +89,23 @@ class TestClassifyPath:
             "deploy/fly/entrypoint.sh",
             "backend/src/modulo/db/migrations/versions/0001_initial.py",
             "backend/src/modulo/core/pipeline_engine/graph.py",
+        ],
+        ids=[
+            "gh-workflow-ci",
+            "gh-workflow-deploy",
+            "gh-script-freeze-check",
+            "scripts-classifier",
+            "root-pyproject",
+            "backend-pyproject",
+            "frontend-package-json",
+            "semgrep-rule",
+            "pre-commit-config",
+            "backend-api-routes",
+            "frontend-view",
+            "fly-toml",
+            "deploy-entrypoint",
+            "backend-migration",
+            "backend-pipeline-engine",
         ],
     )
     def test_class_b_paths(self, path: str) -> None:
