@@ -119,6 +119,104 @@
                 </div>
               </div>
 
+              <!-- Policy Gate section -->
+              <div class="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-4">
+                <h3 class="mb-3 text-sm font-semibold" data-test-id="policy-gate-heading">{{ $t('views.EvalEditorView.policyGate.heading') }}</h3>
+
+                <div class="space-y-3">
+                  <div class="flex items-center gap-4">
+                    <label class="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        value="warn"
+                        v-model="policyGate.action"
+                        data-test-id="policy-gate-action-warn"
+                        class="accent-primary"
+                      />
+                      <span>Warn</span>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        value="block"
+                        v-model="policyGate.action"
+                        data-test-id="policy-gate-action-block"
+                        class="accent-primary"
+                      />
+                      <span>Block</span>
+                    </label>
+                  </div>
+
+                  <p class="text-xs text-muted-foreground">
+                    {{ policyGate.action === 'block'
+                      ? $t('views.EvalEditorView.policyGate.actionBlockDescription')
+                      : $t('views.EvalEditorView.policyGate.actionWarnDescription')
+                    }}
+                  </p>
+
+                  <!-- Delete gate button -->
+                  <div v-if="policyGate.exists" class="flex items-center gap-2">
+                    <template v-if="!gateDeleteConfirming">
+                      <button
+                        type="button"
+                        data-test-id="policy-gate-delete"
+                        :aria-label="$t('views.EvalEditorView.policyGate.deleteAriaLabel')"
+                        class="inline-flex items-center gap-1 rounded border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                        @click="gateDeleteConfirming = true"
+                      >
+                        <Trash2 class="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    </template>
+                    <template v-else>
+                      <div class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs">
+                        <span>
+                          {{ $t('views.EvalEditorView.policyGate.deleteConfirm') }}
+                          <template v-if="policyGate.action === 'block'">
+                            {{ $t('views.EvalEditorView.policyGate.deleteConfirmBlockWarning') }}
+                          </template>
+                        </span>
+                        <button
+                          type="button"
+                          data-test-id="policy-gate-confirm-delete"
+                          class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                          @click="deletePolicyGate"
+                          ref="gateDeleteConfirmBtnRef"
+                        >
+                          {{ $t('common.confirm') }}
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded px-2 py-0.5 text-xs font-medium hover:bg-accent"
+                          @click="cancelGateDelete"
+                        >
+                          {{ $t('common.no') }}
+                        </button>
+                      </div>
+                    </template>
+                  </div>
+
+                  <!-- Gate error state -->
+                  <div
+                    v-if="gateError"
+                    role="alert"
+                    aria-live="assertive"
+                    data-test-id="policy-gate-error"
+                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
+                  >
+                    <span>{{ $t('views.EvalEditorView.policyGate.errorState') }}</span>
+                    <button
+                      type="button"
+                      data-test-id="policy-gate-retry"
+                      :aria-label="$t('views.EvalEditorView.policyGate.retryAriaLabel')"
+                      class="rounded bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+                      @click="retryPolicyGate"
+                    >
+                      {{ $t('views.EvalEditorView.policyGate.retry') }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <div class="flex items-center gap-2 pt-2">
               <Button :disabled="!canSave || saving" data-testid="eval-editor-save" @click="saveEval">
                 {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
@@ -169,6 +267,14 @@
                   <p class="truncate font-medium">{{ ev.name }}</p>
                   <div class="mt-1 flex flex-wrap items-center gap-2">
                     <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{{ ev.eval_type }}</span>
+                    <span
+                      v-if="evalGateActions[ev.id]"
+                      class="inline-block rounded px-2 py-0.5 text-xs font-medium"
+                      :class="evalGateActions[ev.id] === 'block' ? 'bg-destructive/10 text-destructive' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'"
+                      data-test-id="policy-gate-badge"
+                    >
+                      {{ evalGateActions[ev.id] === 'block' ? $t('views.EvalEditorView.policyGate.badgeBlock') : $t('views.EvalEditorView.policyGate.badgeWarn') }}
+                    </span>
                     <span v-if="ev.pass_threshold != null" class="text-xs text-muted-foreground">
                       {{ $t('views.EvalEditorView.threshold', { value: ev.pass_threshold.toFixed(2) }) }}
                     </span>
@@ -230,7 +336,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -303,6 +409,21 @@ const evalsLoading = ref(false)
 const deletingEvalId = ref<string | null>(null)
 const deleting = ref(false)
 
+// Policy Gate state (§3.2)
+const policyGate = reactive({
+  action: 'warn' as 'warn' | 'block',
+  exists: false,
+  id: null as string | null,
+  version: 1,
+})
+const gateSnapshot = reactive({
+  action: 'warn' as 'warn' | 'block',
+})
+const gateError = ref(false)
+const gateDeleteConfirming = ref(false)
+const gateDeleteConfirmBtnRef = ref<HTMLElement | null>(null)
+const evalGateActions = ref<Record<string, string>>({})
+
 const configParseError = computed(() => {
   if (!form.config_json.trim()) return null
   try {
@@ -326,6 +447,11 @@ const canSave = computed(() => {
   )
 })
 
+const hasUnsavedChanges = computed(() => {
+  // Check if any eval form fields are dirty (original check not present — assume any editing state is dirty)
+  return editingEvalId.value !== null || form.name.trim() !== '' || policyGate.action !== gateSnapshot.action
+})
+
 function resetForm() {
   form.name = ''
   form.node_id = '__all__'
@@ -335,6 +461,14 @@ function resetForm() {
   editingEvalId.value = null
   formError.value = null
   formSuccess.value = null
+  // Reset gate state (§3.2 — every lifecycle transition)
+  policyGate.action = 'warn'
+  policyGate.exists = false
+  policyGate.id = null
+  policyGate.version = 1
+  gateSnapshot.action = 'warn'
+  gateError.value = false
+  gateDeleteConfirming.value = false
 }
 
 const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDataFetch(
@@ -380,12 +514,57 @@ async function loadEvals() {
       params: { query: { pipeline_id: selectedPipelineId.value } as any },
     })
     evals.value = (data as any)?.items ?? []
+    // Fetch gate actions for badge display (§6.1 / criterion 16)
+    await loadGateBadges()
   } catch {
     evals.value = []
     evalsError.value = t('views.EvalEditorView.failed_to_load_evals')
   } finally {
     evalsLoading.value = false
   }
+}
+
+async function loadGateBadges() {
+  const actions: Record<string, string> = {}
+  await Promise.all(
+    evals.value.map(async (ev) => {
+      try {
+        const { data } = await api.GET('/api/v1/evals/{eval_id}/policy-gate', {
+          params: { path: { eval_id: ev.id } },
+        })
+        if (data && (data as any).action) {
+          actions[ev.id] = (data as any).action
+        }
+      } catch {
+        // 404 means no gate — skip silently
+      }
+    }),
+  )
+  evalGateActions.value = actions
+}
+
+async function fetchPolicyGate(evalId: string) {
+  try {
+    const { data } = await api.GET('/api/v1/evals/{eval_id}/policy-gate', {
+      params: { path: { eval_id: evalId } },
+    })
+    if (data) {
+      const d = data as any
+      policyGate.action = d.action ?? 'warn'
+      policyGate.exists = true
+      policyGate.id = d.id ?? null
+      policyGate.version = d.version ?? 1
+      gateSnapshot.action = d.action ?? 'warn'
+    }
+  } catch {
+    // 404 — no gate exists, use defaults
+    policyGate.action = 'warn'
+    policyGate.exists = false
+    policyGate.id = null
+    policyGate.version = 1
+    gateSnapshot.action = 'warn'
+  }
+  gateError.value = false
 }
 
 async function onPipelineChange() {
@@ -402,6 +581,7 @@ async function saveEval() {
   saving.value = true
   formError.value = null
   formSuccess.value = null
+  gateError.value = false
 
   let configParsed: Record<string, unknown> = {}
   try {
@@ -420,6 +600,9 @@ async function saveEval() {
     config_json: configParsed,
     pass_threshold: form.pass_threshold,
   }
+
+  // Phase 1: save the eval
+  let savedEvalId: string | null = null
   try {
     const evalId = editingEvalId.value
     if (evalId) {
@@ -427,14 +610,52 @@ async function saveEval() {
         params: { path: { eval_id: evalId } },
         body,
       })
+      savedEvalId = evalId
     } else {
-      await api.POST('/api/v1/evals', { body })
+      const { data: created } = await api.POST('/api/v1/evals', { body })
+      savedEvalId = (created as any)?.id ?? null
     }
-    // FAR-631: reset BEFORE setting the flash — resetForm() nulls formSuccess,
-    // so setting first (then resetting) erased the message in the same
-    // synchronous block and it never rendered.
+
+    // Phase 2: save the policy gate (if modified or new)
+    const gateModified = policyGate.action !== gateSnapshot.action || !policyGate.exists
+    if (gateModified && savedEvalId) {
+      try {
+        if (policyGate.exists && policyGate.id) {
+          // Update existing gate
+          const { data: updated } = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
+            params: { path: { eval_id: savedEvalId } },
+            body: { action: policyGate.action },
+          })
+          if (updated) {
+            const d = updated as any
+            policyGate.id = d.id
+            policyGate.version = d.version ?? policyGate.version + 1
+            gateSnapshot.action = policyGate.action
+          }
+        } else {
+          // Create new gate
+          const { data: created } = await api.POST('/api/v1/evals/{eval_id}/policy-gate', {
+            params: { path: { eval_id: savedEvalId } },
+            body: { action: policyGate.action },
+          })
+          if (created) {
+            const d = created as any
+            policyGate.id = d.id
+            policyGate.exists = true
+            policyGate.version = d.version ?? 1
+            gateSnapshot.action = policyGate.action
+          }
+        }
+      } catch {
+        // Gate save failed — eval still committed (§3.3 two-phase reporting)
+        gateError.value = true
+      }
+    }
+
+    // Reset and show success
+    const wasEditing = savedEvalId !== null
     resetForm()
-    formSuccess.value = evalId
+    formSuccess.value = wasEditing
       ? t('views.EvalEditorView.eval_updated')
       : t('views.EvalEditorView.eval_created')
     await loadEvals()
@@ -454,6 +675,8 @@ function startEdit(ev: EvalDefinition) {
   form.pass_threshold = ev.pass_threshold ?? 0.8
   formError.value = null
   formSuccess.value = null
+  // Fetch gate state for this eval (§3.2 — switching evals re-populates)
+  fetchPolicyGate(ev.id)
 }
 
 function confirmDelete(id: string) {
@@ -478,6 +701,62 @@ async function deleteEval(id: string) {
     }
   } finally {
     deleting.value = false
+  }
+}
+
+function cancelGateDelete() {
+  gateDeleteConfirming.value = false
+  nextTick(() => {
+    gateDeleteConfirmBtnRef.value?.focus()
+  })
+}
+
+async function deletePolicyGate() {
+  if (!editingEvalId.value) return
+  gateDeleteConfirming.value = false
+  try {
+    await api.DELETE('/api/v1/evals/{eval_id}/policy-gate', {
+      params: { path: { eval_id: editingEvalId.value } },
+    })
+    policyGate.exists = false
+    policyGate.id = null
+    policyGate.action = 'warn'
+    policyGate.version = 1
+    gateSnapshot.action = 'warn'
+    gateError.value = false
+    // Refresh badges
+    await loadGateBadges()
+  } catch (e: unknown) {
+    const errMsg = formatApiError(e)
+    if (errMsg.toLowerCase().includes('not found') || errMsg.includes('404')) {
+      // Gate already deleted
+      policyGate.exists = false
+      policyGate.id = null
+      policyGate.action = 'warn'
+      policyGate.version = 1
+      gateSnapshot.action = 'warn'
+    } else {
+      formError.value = errMsg
+    }
+  }
+}
+
+async function retryPolicyGate() {
+  if (!editingEvalId.value) return
+  try {
+    const { data } = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
+      params: { path: { eval_id: editingEvalId.value } },
+      body: { action: policyGate.action },
+    })
+    if (data) {
+      const d = data as any
+      policyGate.id = d.id
+      policyGate.version = d.version ?? policyGate.version + 1
+      gateSnapshot.action = policyGate.action
+      gateError.value = false
+    }
+  } catch {
+    // Retry failed — keep error state available (§3.3 — no backoff/circuit breaker)
   }
 }
 
