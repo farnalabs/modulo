@@ -552,13 +552,13 @@ async def status_rows(
 async def smoke(session: AsyncSession) -> dict[str, Any]:
     """Connectivity probe + basic posture assertions (non-zero exit on failure)."""
     try:
-        one = (await session.execute(text("SELECT 1"))).scalar_one()
+        one: int = (await session.execute(text("SELECT 1"))).scalar_one()
         if one != 1:
             raise SmokeFailureError("connectivity probe SELECT 1 did not return 1")
-        role = (await session.execute(text("SELECT session_user"))).scalar_one()
+        role: str = (await session.execute(text("SELECT session_user"))).scalar_one()
         if role != "modulo_breakglass":
             raise SmokeFailureError(f"session_user is {role!r}, expected 'modulo_breakglass'")
-        function = (
+        function: str | None = (
             await session.execute(text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)')"))
         ).scalar_one()
         if not function:

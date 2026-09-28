@@ -151,7 +151,7 @@ def _build_runs_scorecard_stmt(
     date_from: datetime,
     date_to: datetime,
     team_ids: tuple[uuid.UUID, ...] | None = None,
-) -> sa.Select[Any]:
+) -> sa.Select[*tuple[Any, ...]]:
     """One aggregate row of guardrail fire counts over *runs* in range.
 
     The guardrail summary is a point-in-time snapshot persisted at run
@@ -208,7 +208,7 @@ def _build_corrections_stmt(
     date_from: datetime,
     date_to: datetime,
     team_ids: tuple[uuid.UUID, ...] | None = None,
-) -> sa.Select[Any]:
+) -> sa.Select[*tuple[Any, ...]]:
     """One aggregate row of single-node correction outcomes in range.
 
     Counts feedback records whose handler is an AI-correction type (the T2b

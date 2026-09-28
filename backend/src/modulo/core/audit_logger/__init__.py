@@ -550,7 +550,7 @@ async def export_chain(
     offset = (safe_page - 1) * safe_page_size
     query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).offset(offset).limit(safe_page_size)
     result = await session.execute(query)
-    events = list(result.scalars())
+    events: list[Any] = list(result.scalars())
 
     count_query = _apply_filters(
         select(func.count(AuditEvent.id)),
@@ -633,7 +633,7 @@ async def list_audit_events(
     query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(resolved_limit + 1)
 
     result = await session.execute(query)
-    events = list(result.scalars())
+    events: list[Any] = list(result.scalars())
 
     has_more = len(events) > resolved_limit
     if has_more:

@@ -5181,7 +5181,7 @@ async def _paginate_trigger_events(
         has_more = cp.has_more
     else:
         q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
-        rows = list((await s.execute(q.limit(lim + 1))).scalars().all())
+        rows: list[Any] = list((await s.execute(q.limit(lim + 1))).scalars().all())
         has_more = len(rows) > lim
         items = rows[:lim]
         next_cursor = None

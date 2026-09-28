@@ -2406,14 +2406,14 @@ async def _enforce_agent_token_budgets(
         if not budgets:
             return None
         per_agent = _accumulate_agent_tokens(usage, node_agent_map)
-        for agent_id, budget in budgets.items():
-            if per_agent.get(agent_id, 0) > budget:
+        for agent_key, budget in budgets.items():
+            if per_agent.get(agent_key, 0) > budget:
                 _log.warning(
                     "cost_ledger.token_budget_exceeded",
                     extra={
                         "run_id": str(run.id),
-                        "agent_id": agent_id,
-                        "accumulated_tokens": per_agent.get(agent_id, 0),
+                        "agent_id": agent_key,
+                        "accumulated_tokens": per_agent.get(agent_key, 0),
                         "token_budget": budget,
                     },
                 )
