@@ -34,7 +34,6 @@ bdd:
   - backend/tests/bdd/features/evals/eval_block.feature
   - backend/tests/bdd/features/evals/eval_llm_judge.feature
   - backend/tests/bdd/features/evals/eval_regex.feature
-  - backend/tests/bdd/features/ui/eval_dashboard.feature
   - backend/tests/bdd/steps/test_eval.py
   - backend/tests/bdd/steps/test_eval_block_steps.py
   - backend/tests/bdd/steps/test_eval_scorer_gates.py
@@ -120,6 +119,19 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
+- 2026-09-28: **Improve Architecture product-map walk** — archived the stale
+  `ui/eval_dashboard.feature` UI-journey BDD draft (pinned `@awaiting-implementation`
+  since 2026-08, never ran). Its steps referenced testids that exist nowhere in the
+  frontend (`eval-result-item`, `eval-results-list`, `filter-failed`,
+  `compare-run-checkbox`, `compare-button`, `eval-comparison`, `empty-state`,
+  `theme-toggle`, `node-output`, `canvas-node`, `approval-banner`, ... — verified
+  0 hits across `frontend/src`), navigated to fictional run ids, and described a
+  surface the product maps to different real testids. The executing BDD citations
+  (`eval/` + `evals/` features) and the real UI-journey Playwright coverage
+  (`frontend/tests/e2e/evals.spec.ts`, `eval-pages-empty-states.spec.ts`,
+  `journeys/eval-journey.spec.ts`) are unaffected; this tracker now cites only
+  executing BDD features (guarded by
+  `test_no_bdd_citations_for_fully_deselected_features`).
 - 2026-09-26: **Improve Architecture product-map walk** — reconciled the
   tracker with the FAR-1103 chunk 5a retirement: `failure_behaviour` was
   removed from the public surface (REST payloads + MCP params + generated
