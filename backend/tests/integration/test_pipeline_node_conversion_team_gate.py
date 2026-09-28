@@ -1,10 +1,17 @@
 """ITEM 4: the team gate on convert-to-agent / revert-to-manual, against real Postgres.
 
-The two node-conversion endpoints mutate a pipeline's graph but carried NEITHER
-the request-time ``require_team_membership_or_admin`` dependency NOR the
-in-txn ``_reapply_team_gate_inside_mutation_txn`` re-check that their siblings
-(``replace_pipeline_graph`` / ``update_pipeline``) have - so a non-member org
-operator could convert or revert nodes on a TEAM-PRIVATE pipeline.
+PARITY + defence-in-depth: the two node-conversion endpoints mutate a
+pipeline's graph but carried NEITHER the request-time
+``require_team_membership_or_admin`` dependency NOR the in-txn
+``_reapply_team_gate_inside_mutation_txn`` re-check that their siblings
+(``replace_pipeline_graph`` / ``update_pipeline``) have.
+
+That is a parity gap, not a live Postgres hole: migration 0124 drops the
+OR-combined ``rls_org_isolation`` policy on ``pipelines`` and leaves
+``rls_team_isolation`` as the sole policy, so a non-member's read already
+returns no row. The tests below PROVE that - they are the evidence for the
+rationale, and the reason the unit tests (which cover the dependency's own 403
+branch against a session double) are not the whole story.
 
 Runs against the migrated testcontainer with the real auth stack:
 

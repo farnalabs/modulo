@@ -12,16 +12,11 @@ from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
-from modulo.db.sqlstates import sqlstate_of
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
 _log = logging.getLogger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
-
-# SQLSTATE ``lock_not_available`` - raised when a statement's lock_timeout
-# expires (e.g. the bounded ``SET LOCAL lock_timeout`` + ``SELECT ... FOR
-# UPDATE`` in ``api.routes.pipelines._reapply_team_gate_inside_mutation_txn``).
-_LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 
 # A lock timeout is NOT a database outage: the engine is healthy, this request
 # simply could not acquire the row lock because another transaction holds it.
@@ -67,7 +62,7 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError as exc:
-        if sqlstate_of(exc) == _LOCK_NOT_AVAILABLE_SQLSTATE:
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
             # lock_timeout expired on a bounded row lock (55P03): the DB is
             # healthy, this transaction just could not take the lock. Clear,
             # non-generic answer - see _MSG_LOCK_TIMEOUT for why this is 409

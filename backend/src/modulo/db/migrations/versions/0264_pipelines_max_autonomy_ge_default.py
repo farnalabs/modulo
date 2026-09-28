@@ -5,11 +5,10 @@ Revises: 0263_evidence_layer
 Create Date: 2026-09-28
 
 .. warning::
-   THIS IS A DATA-MUTATING MIGRATION. Statement 1 below UPDATEs existing
+   THIS IS A DATA-MUTATING MIGRATION. Statement 2 below UPDATEs existing
    ``pipelines`` rows (it LOWERS ``default_autonomy_level`` on every row whose
-   ceiling sits below its default) before the composite CHECK is added. Read
-   the "Behaviour-preserving repair" section before deciding whether to run it
-   against a copy of production data.
+   ceiling sits below its default). Read the "Behaviour-preserving repair"
+   section before deciding whether to run it against a copy of production data.
 
 Why: the invariant ``max_autonomy_level >= default_autonomy_level`` (levels
 ordered ``manual_approval`` (0) < ``notify_on_complete`` (1) <
@@ -22,7 +21,29 @@ guard their relative order. This migration closes that gap at the DB layer so
 no code path - PATCH, graph write, declarative apply, MCP tool, direct SQL -
 can store an inverted pair again.
 
-Behaviour-preserving repair (statement 1)
+Statement order: ADD (NOT VALID) -> repair UPDATE -> VALIDATE
+------------------------------------------------------------
+The three statements run as separate statements inside the ONE transaction
+this repo's upgrade path gives every migration (see LOCKING below), in this
+order for a reason:
+
+* ``ADD CONSTRAINT ... NOT VALID`` FIRST. NOT VALID checks no existing rows,
+  so the add succeeds no matter how many inverted rows are already present -
+  the earlier "the CHECK cannot be added while an inverted row exists" reading
+  was wrong for a NOT VALID add. What taking the add FIRST does buy is the
+  lock: it acquires ACCESS EXCLUSIVE on ``pipelines`` before any DML runs, and
+  under this single-transaction upgrade that lock is held until the whole run
+  commits. A concurrent writer therefore cannot commit an inverted pair at ANY
+  point during this migration. That is what closes the window the
+  repair-first order left open (see LOCKING).
+* The repair UPDATE then rewrites every inverted row. Writers are already
+  blocked, so the only inverted rows it can see are pre-existing ones - and it
+  cannot be raced by a fresh inverted pair landing between it and the add.
+* ``VALIDATE CONSTRAINT`` LAST: a full-table scan that must pass. It runs
+  while the add's ACCESS EXCLUSIVE is still held, so the scan cannot observe a
+  row that violates the constraint either.
+
+Behaviour-preserving repair (statement 2)
 -----------------------------------------
 Pre-invariant rows come in three shapes (a non-NULL ceiling with
 ``rank(default) > rank(ceiling)`` is the only invalid one):
@@ -47,8 +68,15 @@ The UPDATE is idempotent: once no inverted rows exist its WHERE clause matches
 nothing, and it can never produce a row the new CHECK rejects (it moves
 ``default`` DOWN onto ``ceiling``).
 
-The composite CHECK (statements 2-3)
-------------------------------------
+The repair rewrites user-configured values, so its rowcount is LOGGED (the
+same ``bind.execute(...).rowcount`` + ``logger.info`` pattern as 0175) - a
+deploy can tell from the migration log whether 0 or N rows changed. A
+``RAISE NOTICE`` was not used instead: migration 0192 records that NOTICEs do
+not surface deterministically through ``env.py``, so the Python-side log is
+the reliable channel.
+
+The composite CHECK (statements 1 and 3)
+----------------------------------------
 ``ck_pipelines_max_autonomy_ge_default``::
 
     max_autonomy_level IS NULL OR
@@ -93,18 +121,31 @@ of the whole upgrade run, not merely for the instant the ADD takes its lock.
 The split only buys non-blocking DML if the ADD's own transaction commits
 first (per-migration transactions, or the statements executed as separate
 alembic invocations).
+
+That held lock is also why the statement order above is sound: a repair-first
+order would leave the gap between the repair's row locks releasing and the
+ADD committing, during which a concurrent writer could commit an inverted
+pair that the NOT VALID add would then never check and the later VALIDATE
+would abort the whole upgrade over. Taking the ADD first means the blocking
+window opens BEFORE any repair work and never closes until the run commits,
+so there is no gap to race.
 """
 
 from __future__ import annotations
 
+import logging
+
 from alembic import op
+from sqlalchemy import text
 
 revision: str = "0264_pipelines_max_autonomy_ge_default"
 down_revision: str | None = "0263_evidence_layer"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
-# DATA-MUTATING statement 1: lower the default onto the ceiling for every
+logger = logging.getLogger(f"alembic.{revision}")
+
+# DATA-MUTATING statement 2: lower the default onto the ceiling for every
 # INVERTED row (rank(default) > rank(ceiling)). Behaviour-preserving - see the
 # docstring. A NULL default ranks NULL, so ``NULL > rank`` never matches and
 # those rows are left alone (a NULL default can never violate the invariant).
@@ -126,11 +167,11 @@ REPAIR_INVERTED_DEFAULTS = (
     "WHEN 'fully_autonomous' THEN 2 END)"
 )
 
-# Existence-gated CHECK, added NOT VALID (ACCESS EXCLUSIVE - held until the
-# single upgrade transaction commits; see the docstring's LOCKING note) then
-# VALIDATEd in a separate guarded step (SHARE UPDATE EXCLUSIVE - only
-# non-blocking for INSERTs once the ADD has committed), mirroring the
-# lock-safety pattern introduced in 0176/0255/0256/0259.
+# Existence-gated CHECK, added NOT VALID (ACCESS EXCLUSIVE - taken FIRST and
+# held until the single upgrade transaction commits; see the docstring's
+# LOCKING note) then VALIDATEd in a separate guarded step (SHARE UPDATE
+# EXCLUSIVE - only non-blocking for INSERTs once the ADD has committed),
+# mirroring the lock-safety pattern introduced in 0176/0255/0256/0259.
 # Every gate is table-qualified via conrelid so a same-named constraint on a
 # different table cannot satisfy it. Literal DDL (no f-string SQL): the S608
 # f-string-SQL rule applies to this directory.
@@ -159,20 +200,32 @@ _VALIDATE_CEILING_GE_DEFAULT_CHECK = (
     "ck_pipelines_max_autonomy_ge_default; END IF; END $$;"
 )
 
-#: Ordered ``op.execute`` payload: the behaviour-preserving repair FIRST (the
-#: CHECK cannot be added while an inverted row exists), then the ACCESS
-#: EXCLUSIVE "add NOT VALID" window (its lock is held until the upgrade
-#: transaction commits), then the SHARE UPDATE EXCLUSIVE validation scan.
+#: Ordered statement payload: the existence-gated "add NOT VALID" FIRST (so its
+#: ACCESS EXCLUSIVE is taken before any DML and held for the whole single
+#: upgrade transaction - see LOCKING), then the behaviour-preserving repair,
+#: then the SHARE UPDATE EXCLUSIVE validation scan. ``upgrade()`` runs each in
+#: order; the repair additionally logs its rowcount.
 UPGRADE_STATEMENTS: tuple[str, ...] = (
-    REPAIR_INVERTED_DEFAULTS,
     _ADD_CEILING_GE_DEFAULT_CHECK_NOT_VALID,
+    REPAIR_INVERTED_DEFAULTS,
     _VALIDATE_CEILING_GE_DEFAULT_CHECK,
 )
 
 
 def upgrade() -> None:
     for statement in UPGRADE_STATEMENTS:
-        op.execute(statement)
+        if statement == REPAIR_INVERTED_DEFAULTS:
+            # DATA-MUTATING: report the rowcount so a deploy can tell whether
+            # 0 or N user-configured rows changed (0175's pattern). Run through
+            # the bind rather than op.execute because op.execute returns no
+            # result - there is no rowcount to log from it.
+            result = op.get_bind().execute(text(statement))
+            logger.info(
+                "0264 repair: %s inverted pipeline row(s) rewritten onto their ceiling",
+                result.rowcount,
+            )
+        else:
+            op.execute(statement)
 
 
 def downgrade() -> None:

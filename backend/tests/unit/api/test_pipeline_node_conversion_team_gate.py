@@ -1,16 +1,24 @@
 """ITEM 4 (FAR-1163 follow-up): the team gate on convert-to-agent / revert-to-manual.
 
-Before this change NEITHER layer of the team gate existed on the two
-node-conversion endpoints:
+PARITY + defence-in-depth: before this change NEITHER layer of the two-layer
+team gate sat on the two node-conversion endpoints, while both layers sat on
+their siblings ``replace_pipeline_graph_endpoint`` (PATCH /graph) and
+``update_pipeline_endpoint`` (PATCH /{id}):
 
 * no ``require_team_membership_or_admin(resolve_pipeline_team_scope)``
   dependency (request-time check), and
 * no ``_reapply_team_gate_inside_mutation_txn`` re-check inside the mutation
-  transaction (the request-time -> mutation TOCTOU close),
+  transaction (the request-time -> mutation TOCTOU close).
 
-unlike their siblings ``replace_pipeline_graph_endpoint`` (PATCH /graph) and
-``update_pipeline_endpoint`` (PATCH /{id}). A non-member org operator could
-therefore mutate a team-private pipeline through these two routes.
+This is a parity gap, NOT a live Postgres hole: migration 0124 drops the
+OR-combined ``rls_org_isolation`` policy on ``pipelines`` and leaves
+``rls_team_isolation`` as the sole policy, so under Postgres a non-member's
+read already returns no row - the resolver 404s before the handler runs (the
+integration tests observe exactly that). The request-time dependency is still
+the only team layer where RLS does NOT apply: non-Postgres backends,
+break-glass / execution_context sessions, and RLS misconfiguration. The in-txn
+re-check closes the request-time -> mutation TOCTOU atomically with the write,
+which no read-time policy can do.
 
 Tests (mocked session, real FastAPI dependency stack):
 

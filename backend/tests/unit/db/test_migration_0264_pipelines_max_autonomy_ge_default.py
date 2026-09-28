@@ -12,9 +12,13 @@ Lenses:
 * **Chain** - 0264 chains onto ``0263_evidence_layer`` as the single linear
   head (0259's test documents the run-up through 0263).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
-  behaviour-preserving ``UPDATE`` repair FIRST (the CHECK cannot be added
-  while an inverted row exists), then the existence-gated ``ADD ... NOT
-  VALID``, then the ``VALIDATE``. Downgrade is the reconciliation-chain no-op.
+  existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
+  before any DML and held for the whole single-transaction upgrade - see the
+  migration's LOCKING section), then the behaviour-preserving ``UPDATE``
+  repair, then the ``VALIDATE``. Downgrade is the reconciliation-chain no-op.
+* **Repair observability** - the repair runs through ``op.get_bind()`` (not
+  ``op.execute``) so its rowcount can be logged; a deploy must be able to tell
+  from the migration log whether 0 or N rows changed.
 * **Repair semantics** - the WHERE clause selects exactly ``ceiling IS NOT
   NULL AND rank(default) > rank(ceiling)`` (the NULL arms never match) and
   lowers the DEFAULT onto the ceiling (never the other way round - raising the
@@ -31,7 +35,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from alembic.script import ScriptDirectory
@@ -82,10 +86,29 @@ def _source() -> str:
 
 
 def _executed() -> list[str]:
+    """Every statement the upgrade runs, in order, regardless of channel.
+
+    The repair is routed through ``op.get_bind().execute(...)`` so its rowcount
+    is loggable; the two DDL gates go through ``op.execute``. Both channels are
+    recorded here so ORDER assertions cover the whole upgrade, not just one of
+    the two paths.
+    """
     module = _load_migration()
+    executed: list[str] = []
+    result = MagicMock(rowcount=0)
+
+    def _record_bind(stmt: object, *_a: object, **_kw: object) -> MagicMock:
+        executed.append(str(getattr(stmt, "text", stmt)))
+        return result
+
+    def _record_op(stmt: object, *_a: object, **_kw: object) -> None:
+        executed.append(str(stmt))
+
     with patch.object(module, "op") as op:
+        op.get_bind.return_value.execute.side_effect = _record_bind
+        op.execute.side_effect = _record_op
         module.upgrade()
-    return [call.args[0] for call in op.execute.call_args_list]
+    return executed
 
 
 class TestChain:
@@ -103,25 +126,52 @@ class TestChain:
 
 
 class TestUpgrade:
-    def test_emits_repair_then_add_then_validate_in_order(self) -> None:
-        executed = _executed()
-        assert len(executed) == 3, f"expected repair + add-NOT-VALID + VALIDATE, got {len(executed)} statements"
-        repair, add_ddl, validate_ddl = executed
+    def test_emits_add_then_repair_then_validate_in_order(self) -> None:
+        """ADD (NOT VALID) FIRST: its ACCESS EXCLUSIVE must be taken before any DML.
 
-        # 1. The DATA-MUTATING repair must come first - a pre-existing
-        #    inverted row would make the ADD+VALIDATE fail the scan.
-        assert repair.startswith("UPDATE pipelines SET default_autonomy_level = max_autonomy_level"), repair
-        # 2. The existence-gated ADD NOT VALID.
+        A repair-first order leaves the gap between the repair's row locks
+        releasing and the ADD committing, during which a concurrent writer can
+        commit an inverted pair the NOT VALID add never checks - and the later
+        VALIDATE then aborts the whole upgrade over it.
+        """
+        executed = _executed()
+        assert len(executed) == 3, f"expected add-NOT-VALID + repair + VALIDATE, got {len(executed)} statements"
+        add_ddl, repair, validate_ddl = executed
+
+        # 1. The existence-gated ADD NOT VALID.
         assert f"conname='{_CONSTRAINT}'" in add_ddl, add_ddl
         assert "IF NOT EXISTS (SELECT 1 FROM pg_constraint" in add_ddl, add_ddl
         assert f"conrelid = {_REGCLASS}" in add_ddl, add_ddl
         assert "NOT VALID;" in add_ddl, add_ddl
         assert "ALTER TABLE public.pipelines ADD CONSTRAINT" in add_ddl, add_ddl
+        # 2. The DATA-MUTATING repair.
+        assert repair.startswith("UPDATE pipelines SET default_autonomy_level = max_autonomy_level"), repair
         # 3. The VALIDATE.
         assert f"conname='{_CONSTRAINT}'" in validate_ddl, validate_ddl
         assert f"conrelid = {_REGCLASS}" in validate_ddl, validate_ddl
         assert "NOT convalidated" in validate_ddl, validate_ddl
         assert "VALIDATE CONSTRAINT" in validate_ddl, validate_ddl
+
+    def test_repair_runs_through_the_bind_and_logs_its_rowcount(self) -> None:
+        """The repair must be observable: a deploy reads the rowcount from the log.
+
+        ``op.execute`` returns no result, so the repair has to go through
+        ``op.get_bind()`` for the rowcount to exist at all.
+        """
+        module = _load_migration()
+        with patch.object(module, "op") as op:
+            result = op.get_bind.return_value.execute.return_value
+            result.rowcount = 7
+            with patch.object(module, "logger") as logger:
+                module.upgrade()
+        bind_execute_calls = op.get_bind.return_value.execute.call_args_list
+        assert len(bind_execute_calls) == 1, "the repair must run through op.get_bind().execute exactly once"
+        repair_sql = str(bind_execute_calls[0].args[0].text)
+        assert repair_sql.startswith("UPDATE pipelines SET default_autonomy_level = max_autonomy_level"), repair_sql
+        assert logger.info.call_count == 1, "the repair rowcount must be logged exactly once"
+        fmt, *args = logger.info.call_args.args
+        assert "%s" in fmt or "%d" in fmt, fmt
+        assert args and args[0] == 7, f"the logged value must be the rowcount, got {args}"
 
     def test_repair_selects_exactly_the_inverted_rows(self) -> None:
         """``ceiling IS NOT NULL`` AND ``rank(default) > rank(ceiling)``.
@@ -130,7 +180,7 @@ class TestUpgrade:
         ranks NULL so ``NULL > x`` never matches - neither may be touched, and
         the DEFAULT is what moves (onto the ceiling), never the ceiling.
         """
-        repair = _executed()[0]
+        repair = _executed()[1]
         assert "SET default_autonomy_level = max_autonomy_level" in repair, repair
         assert "WHERE max_autonomy_level IS NOT NULL" in repair, repair
         assert f"AND {_REPAIR_RANK_DEFAULT} > {_REPAIR_RANK_CEILING}" in repair, repair
@@ -140,7 +190,7 @@ class TestUpgrade:
     def test_existence_gates_are_table_qualified(self) -> None:
         """conname alone would let a same-named constraint elsewhere skip the gate."""
         executed = _executed()
-        for ddl in executed[1:]:
+        for ddl in (executed[0], executed[2]):
             assert f"conname='{_CONSTRAINT}'" in ddl, ddl
             assert f"conrelid = {_REGCLASS}" in ddl, ddl
             # Exactly one pg_constraint lookup per DO block, and every lookup
@@ -150,7 +200,7 @@ class TestUpgrade:
 
     def test_check_predicate_is_the_ranked_ceiling_ge_default(self) -> None:
         """``max IS NULL OR rank(default) <= rank(ceiling)`` over full vocabulary."""
-        add_ddl = _executed()[1]
+        add_ddl = _executed()[0]
         assert "max_autonomy_level IS NULL OR " in add_ddl, add_ddl
         assert f"{_REPAIR_RANK_DEFAULT} <= {_REPAIR_RANK_CEILING}" in add_ddl, add_ddl
         for value in _VOCABULARY:
@@ -166,6 +216,15 @@ class TestUpgrade:
         """A data-mutating migration must announce itself in its docstring."""
         assert "DATA-MUTATING" in _source()
         assert "Behaviour-preserving" in _source()
+
+    def test_docstring_does_not_claim_not_valid_blocks_on_existing_rows(self) -> None:
+        """The old rationale was wrong: NOT VALID checks no existing rows.
+
+        The docstring must say so explicitly rather than repeat the claim that
+        the CHECK cannot be added while an inverted row exists.
+        """
+        source = _source()
+        assert "NOT VALID checks no existing rows" in source, source
 
 
 class TestDowngrade:
@@ -198,7 +257,7 @@ class TestModelParity:
         The migrated-DB parity suite compares PRESENCE; this pins the SHAPE,
         so a one-sided edit to either side fails here instead of in prod.
         """
-        add_ddl = _executed()[1]
+        add_ddl = _executed()[0]
         predicate = add_ddl.split("CHECK (", 1)[1].split(") NOT VALID;", 1)[0]
         assert predicate == str(_model_check().sqltext), (predicate, str(_model_check().sqltext))
 
@@ -210,5 +269,5 @@ class TestModelParity:
     @pytest.mark.parametrize("vocabulary_value", _VOCABULARY)
     def test_every_vocabulary_value_is_ranked_on_both_sides(self, vocabulary_value: str) -> None:
         """Both CASE arms must rank every value - an unranked value yields NULL."""
-        add_ddl = _executed()[1]
+        add_ddl = _executed()[0]
         assert add_ddl.count(f"'{vocabulary_value}'") == 2, add_ddl

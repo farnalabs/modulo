@@ -1,8 +1,9 @@
 """SQLSTATE extraction + FAR-583 dual-write vocabularies (qa iteration 2).
 
 Shared LEAF module: ``db.crud.run`` (the dual-write chokepoint's retry
-decision) and ``core.pipeline_engine.node_runner`` (the marker-savepoint
-failure classification) both consume :func:`sqlstate_of` and the vocabularies
+decision), ``core.pipeline_engine.node_runner`` (the marker-savepoint
+failure classification) and ``api.db_error_handling`` (the ``55P03`` lock
+timeout -> 409 mapping) all consume :func:`sqlstate_of` and the vocabularies
 below — previously two forked copies existed (``crud.run._sqlstate_of`` and
 ``node_runner._MARKER_TXN_ABORTING_SQLSTATES``). Deliberately leaf (imports
 nothing from modulo) so both consumers import it without a cycle; the model
@@ -28,10 +29,19 @@ from typing import Any
 
 __all__ = [
     "DUAL_WRITE_RETRYABLE_SQLSTATES",
+    "LOCK_NOT_AVAILABLE_SQLSTATE",
     "MARKER_TXN_ABORTING_SQLSTATES",
     "SAVEPOINT_ROLLBACK_FAILURE_SQLSTATES",
     "sqlstate_of",
 ]
+
+# SQLSTATE ``lock_not_available``: a statement's ``lock_timeout`` expired (the
+# bounded ``SET LOCAL lock_timeout`` + ``SELECT ... FOR UPDATE`` in
+# ``api.routes.pipelines._reapply_team_gate_inside_mutation_txn``, and the
+# runner-capacity gate). Lives here rather than next to its one consumer so the
+# codebase keeps a single spelling of ``55P03`` — the same reason the
+# retry/abort vocabularies above are shared.
+LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 
 # The ONE bounded in-session retry of the new-table leg: ONLY the statement
 # timeout (57014) is genuinely savepoint-recoverable — the transaction-aborting
