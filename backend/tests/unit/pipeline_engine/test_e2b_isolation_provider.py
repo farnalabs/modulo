@@ -56,7 +56,7 @@ _FIXED_ALLOWLIST: list[dict[str, Any]] = [{"host": "api.example.com", "port": 44
 
 
 # ---------------------------------------------------------------------------
-# Fakes / harness (mirrors test_e2b_via_provider_flag's no-output scenario)
+# Fakes / harness (mirrors test_e2b_log_tail_provider's no-output scenario)
 # ---------------------------------------------------------------------------
 
 

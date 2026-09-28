@@ -29,7 +29,7 @@ unit-tests:
   - backend/tests/unit/core/runtime_provider/test_docker_endpoint_tls.py
   - backend/tests/unit/core/runtime_provider/test_far1128_cap_environments_dispatch.py
   - backend/tests/unit/runtime_provider/test_docker_provider.py
-  - backend/tests/unit/pipeline_engine/test_e2b_isolation_flag.py
+  - backend/tests/unit/pipeline_engine/test_e2b_isolation_provider.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
 bdd:
@@ -133,7 +133,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       end-to-end under `sh`: first create passes, a failed first create
       releases its claim for a retry, second refused; install idempotency
       re-writes a stale run scope) and
-      `tests/unit/pipeline_engine/test_e2b_isolation_flag.py` (gating
+      `tests/unit/pipeline_engine/test_e2b_isolation_provider.py` (gating
       predicate + call-site routing/best-effort), with the e2b call site's own
       spec-metadata read pinned in
       `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`

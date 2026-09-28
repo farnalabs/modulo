@@ -143,11 +143,6 @@ def _sandbox_with_completed_command(sandbox_id: str, output_json: str) -> MagicM
 
 
 # ---------------------------------------------------------------------------
-# Settings flag
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # _build_log_tail_provider: the REAL construction seam (not the injected fake)
 # ---------------------------------------------------------------------------
 
@@ -156,7 +151,7 @@ async def test_build_log_tail_provider_constructs_real_e2b_provider() -> None:
     """The real builder body runs the hub factory and returns the E2B provider.
 
     No network: ``RuntimeProviderHub.initialise`` only constructs and registers
-    the provider object (no E2B API call).  Every flag call-site test injects a
+    the provider object (no E2B API call).  Every call-site test injects a
     fake builder, so this is the only test that executes the real body.
     """
     from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
@@ -192,12 +187,12 @@ async def test_log_tail_caller_hits_provider_not_urllib(monkeypatch: pytest.Monk
     monkeypatch.setattr("urllib.request.urlopen", AsyncMock(side_effect=AssertionError("urlopen must not run")))
 
     fn = make_sandbox_agent_fn(_base_node_def())
-    sandbox = await _completed_no_output_sandbox("sbx-flagon")
+    sandbox = await _completed_no_output_sandbox("sbx-logtail")
     events: list[str] = []
     # FAR-1050 R4: the dispatch tears down through the ABC by-ref primitive, so the
     # pre-kill ordering probe is wired to the dispatch seam's own kill marker
     # (the legacy ``sandbox.kill`` handle is unreachable on this path).
-    install_fake_dispatch(monkeypatch, ref="sbx-flagon", kill_events=events)
+    install_fake_dispatch(monkeypatch, ref="sbx-logtail", kill_events=events)
     fake_orig_read = fake.read_log_tail
 
     async def _recording_read(provider_ref: str, *, max_bytes: int) -> bytes:
@@ -216,7 +211,7 @@ async def test_log_tail_caller_hits_provider_not_urllib(monkeypatch: pytest.Monk
     assert "provider-fixed-tail" in message
     builder.assert_awaited_once()
     # provider primitive called with the dispatch's sandbox id + plan's bound
-    assert fake.calls == [("sbx-flagon", 6000)]
+    assert fake.calls == [("sbx-logtail", 6000)]
     # pre-kill ordering preserved on the provider path
     assert events[0] == "fetch"
     assert events.index("fetch") < events.index("kill")

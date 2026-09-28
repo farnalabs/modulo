@@ -156,8 +156,15 @@ async def test_rogue_rolsuper_and_privileged_membership_fail_boot(migrated_db_ur
         await conn.close()
 
 
-def test_allow_list_constant_is_the_ten_writable_columns() -> None:
-    """Schema-evolution tripwire: the allow-list constant is exactly the 10 columns."""
+def test_allow_list_constant_is_the_eleven_writable_columns() -> None:
+    """Schema-evolution tripwire: the allow-list constant is exactly the 11 columns.
+
+    ``must_change_password`` is app-writable: the admin create-user /
+    reset-password routes set it true and the forced-change flow clears it
+    (me.py), so its omission denied those UPDATEs on every deployment whose
+    ``modulo_app`` role carries the column allow-list (the staging @regression
+    create-user 501).
+    """
     assert tuple(sorted(ACCOUNTS_WRITABLE_COLUMNS)) == (
         "active",
         "auth_provider",
@@ -165,6 +172,7 @@ def test_allow_list_constant_is_the_ten_writable_columns() -> None:
         "email",
         "is_system_admin",
         "last_login",
+        "must_change_password",
         "password_hash",
         "preferences",
         "sso_subject",
