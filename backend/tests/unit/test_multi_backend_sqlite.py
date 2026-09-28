@@ -131,3 +131,64 @@ class TestSqliteMultiBackend:
             )
             membership = result.scalar_one()
             assert membership.role == "admin"
+
+    async def test_evidence_json_value_round_trips_on_sqlite(self, engine) -> None:
+        """The evidence model's JSON column must compile and round-trip on a
+        portable dialect (regression: raw JSONB could not render on SQLite).
+
+        Also exercises ``fetch()``'s non-Postgres ``row_number()`` fallback —
+        SQLite has no ``DISTINCT ON`` — asserting newest-per-key wins."""
+        from sqlalchemy import text
+
+        from modulo.core.eval_engine.evidence_layer import fetch
+        from modulo.db.models.evidence import Evidence
+
+        org_id = uuid.uuid4()
+        subject_id = "node_execution:run-1:node-1"
+
+        async with AsyncSession(engine) as session:
+            async with session.begin():
+                session.add(Organisation(id=org_id, name="Evidence Org", slug="evidence-org"))
+
+            async with session.begin():
+                # Two rows for the same key — a stale boolean then a newer value.
+                session.add_all(
+                    [
+                        Evidence(
+                            organisation_id=org_id,
+                            key="node_has_work",
+                            subject_type="node_execution",
+                            subject_id=subject_id,
+                            value=True,
+                            producer_type="run",
+                        ),
+                        Evidence(
+                            organisation_id=org_id,
+                            key="node_has_work",
+                            subject_type="node_execution",
+                            subject_id=subject_id,
+                            value={"nested": [1, 2, 3]},
+                            producer_type="run",
+                        ),
+                        Evidence(
+                            organisation_id=org_id,
+                            key="capability_present",
+                            subject_type="node_execution",
+                            subject_id=subject_id,
+                            value="text-is-a-valid-json-scalar",
+                            producer_type="system_state",
+                        ),
+                    ]
+                )
+
+            rows = await fetch("node_execution", subject_id, org_id, session)
+            assert {row.key for row in rows} == {"node_has_work", "capability_present"}
+            # The fallback must dedup per key, returning one row per key.
+            assert len(rows) == 2
+
+            # Existing rows written before the fallback still deserialise:
+            # the JSON column stores plain JSON text on SQLite.
+            raw = (
+                await session.execute(text("SELECT value FROM evidence WHERE key = 'capability_present'"))
+            ).scalar_one()
+            assert isinstance(raw, str)

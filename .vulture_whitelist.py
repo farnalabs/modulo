@@ -407,6 +407,9 @@ __all__ = [
     #     production callers wired in chunk 3) ---
     "resolve_policy_gate",  # policy gate resolution (unwired until chunk 3)
     "validate_binding",  # policy gate binding validation (unwired until chunk 3)
+    # --- FAR-966 chunk 7 evidence layer (unwired; chunk 8 consumers) ---
+    "assert_write_authorisation",  # producer write-authorisation (consumed by chunk 8)
+    "map_run_evidence_to_evidence",  # RunEvidence fold-in mapping (consumed by chunk 8/9)
     # --- FAR-737 PR badge enrichment (test-referenced cache-isolation helper;
     #     production code only reads/writes the cache internally) ---
     "clear_enrichment_cache",

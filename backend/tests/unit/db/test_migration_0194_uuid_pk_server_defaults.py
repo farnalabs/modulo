@@ -29,6 +29,8 @@ _EXPECTED_COUNT = 84
 # including them would make the count drift on every table added after 0194.
 # evals / policy_gates / policy_gate_decisions (0250_eval_policy_gate) set
 # gen_random_uuid() inline on their id columns, same as the tables above.
+# evidence (0263_evidence_layer, FAR-966) sets gen_random_uuid() inline on its
+# id column too, so it is out of scope for the same reason.
 _POST_0194_TABLES = frozenset(
     {
         "collection_install",
@@ -37,6 +39,7 @@ _POST_0194_TABLES = frozenset(
         "evals",
         "policy_gates",
         "policy_gate_decisions",
+        "evidence",
     }
 )
 

@@ -29,6 +29,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "eval_results",
         "eval_suites",
         "evals",
+        "evidence",
         "feature_flag_catalog",
         "feedback_records",
         "hitl_claims",
