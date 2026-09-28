@@ -142,6 +142,7 @@ import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
 import { useLoginPrefs } from '../composables/useLoginPrefs'
+import { withTimeout } from '../lib/asyncUtils'
 import { setAccessToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
@@ -164,6 +165,16 @@ type OrgInfo = components['schemas']['OrgInfo']
 const loginPrefs = useLoginPrefs()
 const lastUsedMethod = ref<string | null>(loginPrefs.getLastMethod())
 
+// Budgets for the two anonymous pre-auth reads that gate the login form.
+// Neither call may strand the page: if it never settles, the `contextLoading`
+// finally below still runs because the timeout rejects the awaited promise.
+// Observed on staging under load — a hung login-context left the page on the
+// "Loading" state forever, so no credential form ever rendered and every
+// @regression test that signs in failed (and retried) until the job hit its
+// 90-minute timeout. Fail over to the direct login form instead.
+const LOGIN_CONTEXT_TIMEOUT_MS = 8_000
+const SSO_DISCOVERY_TIMEOUT_MS = 8_000
+
 // --- Login context state ---
 const contextLoading = ref(true)
 const multiOrg = ref(false)
@@ -185,7 +196,11 @@ const displayOrgName = ref('')
 
 async function fetchLoginContext() {
   try {
-    const res = await fetch('/api/v1/auth/login-context')
+    const res = await withTimeout(
+      fetch('/api/v1/auth/login-context'),
+      LOGIN_CONTEXT_TIMEOUT_MS,
+      'login-context',
+    )
     if (!res.ok) {
       // login-context is unavailable (e.g. a transient 429 from the anonymous
       // GET rate limit). Fall back to the single-org direct login, but still
@@ -226,7 +241,11 @@ async function fetchLoginContext() {
 
 async function discoverSsoProviders() {
   try {
-    const res = await fetch('/api/v1/auth/sso/providers')
+    const res = await withTimeout(
+      fetch('/api/v1/auth/sso/providers'),
+      SSO_DISCOVERY_TIMEOUT_MS,
+      'sso-providers',
+    )
     if (!res.ok) {
       ssoState.value = 'unavailable'
       return

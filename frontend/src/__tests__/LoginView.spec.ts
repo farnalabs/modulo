@@ -182,6 +182,23 @@ describe('LoginView - login-context integration', () => {
     })
   })
 
+  it('renders the login form when login-context hangs (timeout fallback)', async () => {
+    // A login-context request that never settles must not strand the page on
+    // the loading state — the bounded fallback renders the credential form so
+    // a hung pre-auth read cannot take the whole @regression suite with it.
+    vi.useFakeTimers()
+    vi.spyOn(global, 'fetch').mockImplementation(() => new Promise<Response>(() => {}))
+
+    const wrapper = mountView()
+    // login-context times out, then the SSO discovery fallback also times out.
+    await vi.advanceTimersByTimeAsync(9_000)
+    await vi.advanceTimersByTimeAsync(9_000)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="login-context-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+  })
+
   it('shows SSO providers in single-org mode when available', async () => {
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce({
