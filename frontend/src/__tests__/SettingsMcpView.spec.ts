@@ -57,6 +57,7 @@ import { api } from '../lib/api/client'
 import { decodeJwtPayload } from '../lib/jwt'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
 import McpOauthClientsCard from '../components/settings/McpOauthClientsCard.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 
 const getMock = api.GET as unknown as Mock
@@ -1120,5 +1121,78 @@ describe('SettingsMcpView', () => {
     expect(vm.keyCreatedDialogOpen).toBe(false)
     expect(vm.createdKeyValue).toBe('')
     expect(vm.createdKeyName).toBe('')
+  })
+
+  // ─── FAR-1251 majors: a post-mutation refetch is silent AND non-fatal ──
+
+  it('keeps the reveal dialog, its secret and the rendered list alive when the post-register refetch fails', async () => {
+    postMock.mockResolvedValueOnce({ data: mockCreatedOauthClient, error: undefined })
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('Claude Key')
+
+    // Every GET AFTER the initial load fails with a transient 5xx - exactly
+    // the refetch the register emit triggers while the reveal dialog is open.
+    getMock.mockImplementation(() =>
+      Promise.resolve({ data: null, error: { status: 503, detail: 'Service unavailable' } }),
+    )
+
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
+    await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').setValue('https://a.example/cb')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    ;(box.element as HTMLInputElement).checked = true
+    await box.trigger('change')
+    await nextTick()
+
+    const vm = oauthVm(wrapper)
+    await vm.registerOauthClient()
+    await flushPromises()
+
+    // The card never unmounted, so the one-time credential dialog is intact -
+    // the secret (returned only once by the API) is still readable on screen.
+    expect(wrapper.findComponent(McpOauthClientsCard).exists()).toBe(true)
+    expect(vm.oauthCreatedDialogOpen).toBe(true)
+    const secret = wrapper.find('[data-testid="settings-mcp-oauth-client-secret"]')
+    expect(secret.exists()).toBe(true)
+    expect((secret.element as HTMLInputElement).value).toBe('mod_oauth_secret_value_123')
+
+    // Last-good data stays rendered: no page spinner and no page-fatal swap.
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Claude Key')
+    expect(wrapper.text()).toContain('CLI Client')
+    expect(wrapper.text()).toContain('https://mcp.modulo.run')
+    expect(wrapper.text()).toContain('Configuration Snippets')
+
+    // Exactly ONE error surface - the inline, non-page-fatal one - carrying
+    // the refetch failure so it is surfaced rather than discarded.
+    const alerts = wrapper.findAllComponents(ErrorAlert)
+    expect(alerts.length).toBe(1)
+    expect(alerts[0].text()).toContain('Service unavailable')
+    expect(alerts[0].attributes('aria-live')).toBe('assertive')
+  })
+
+  it('a post-mutation refetch stays silent: no page spinner while it is in flight', async () => {
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+
+    // The refetch never settles, so we inspect the page WHILE it is in flight.
+    getMock.mockReturnValue(new Promise(() => {}))
+    wrapper.findComponent(McpOauthClientsCard).vm.$emit('refresh')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+    expect(wrapper.findComponent(McpOauthClientsCard).exists()).toBe(true)
+    expect(wrapper.text()).toContain('Claude Key')
+    expect(wrapper.text()).toContain('CLI Client')
+    expect(wrapper.text()).toContain('Configuration Snippets')
   })
 })

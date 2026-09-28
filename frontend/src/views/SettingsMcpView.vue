@@ -4,10 +4,30 @@
     <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.SettingsMcpView.mcp_configuration')" :subtitle="$t('views.SettingsMcpView.configure_mcp_server_settings_and_api_keys')" />
 
+    <!-- The INITIAL load owns the page-level states: the spinner while it
+         runs, and the ErrorAlert with retry if it FAILS (nothing was ever
+         rendered then, so there is no last-good content to keep on screen).
+         After the first successful load, `loading` never flips again
+         (silentRefetch) and a later failure is non-fatal - see `refetchError`
+         at the top of the branch below. -->
     <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
+    <ErrorAlert v-else-if="initialLoadError" :message="initialLoadError" :on-retry="loadAll" />
 
     <template v-else>
+      <!-- A refetch failure AFTER a successful load must not replace what is
+           rendered: the last-good data stays on screen and every card (plus
+           any open one-time-secret dialog behind them) stays mounted, so a
+           client secret shown "only once" is never destroyed by a transient
+           5xx. The failure itself surfaces here instead - the existing error
+           surface in a non-page-fatal form, in an aria-live region with the
+           same retry affordance the page-level alert has. -->
+      <ErrorAlert
+        v-if="refetchError"
+        :message="refetchError"
+        :on-retry="loadAll"
+        aria-live="assertive"
+      />
+
       <!-- MCP Server Status -->
       <Card>
         <template #title>{{ $t('views.SettingsMcpView.mcp_server_status') }}</template>
@@ -143,25 +163,22 @@
           </div>
         </template>
       </Card>
-    </template>
 
-    <!-- Registered OAuth Clients (extracted to McpOauthClientsCard).
-         Rendered OUTSIDE the loading/error gate on purpose: the child's
-         register/revoke handlers emit `refresh`, which re-runs `loadAll` and
-         flips `loading` for the duration of the refetch. Unmounting the card
-         at that moment would tear down the one-time credential dialog and
-         lose the client secret before the user could copy it - the API key
-         dialog already sits outside this gate for the same reason. `fetched`
-         keeps the card off the initial spinner; `!loadError` keeps it in
-         step with every other card when a fetch fails. -->
-    <McpOauthClientsCard
-      v-if="fetched && !loadError"
-      :clients="oauthClients"
-      :forbidden="oauthForbidden"
-      :list-error="oauthListError"
-      :can-manage="canManageOauth"
-      @refresh="refreshAfterOauthMutation"
-    />
+      <!-- Registered OAuth Clients (extracted to McpOauthClientsCard).
+           Rendered behind the SAME data gate as every other card: the
+           post-mutation refetch is silent (silentRefetch) and a refetch
+           failure is non-fatal (see `refetchError` above), so nothing
+           unmounts while the one-time-secret reveal dialog is open - the
+           exemption this card used to carry is no longer needed, and all
+           four cards now appear and disappear together. -->
+      <McpOauthClientsCard
+        :clients="oauthClients"
+        :forbidden="oauthForbidden"
+        :list-error="oauthListError"
+        :can-manage="canManageOauth"
+        @refresh="refreshAfterOauthMutation"
+      />
+    </template>
 
     <FormDialog
       v-model:open="createKeyDialogOpen"
@@ -400,6 +417,11 @@ const {
       apiKeysForbidden: false,
       oauthListError: null,
     },
+    // Silent refetch: only the FIRST load flips `loading`, so the
+    // post-mutation refetches (create key, revoke key, OAuth register/revoke)
+    // update the cards in place instead of swapping the whole page for a
+    // spinner and remounting every card mid-dialog (FAR-1251).
+    silentRefetch: true,
   },
 )
 
@@ -421,14 +443,36 @@ const oauthForbidden = computed(() => mcpData.value?.oauthForbidden ?? false)
 const apiKeysRestricted = computed(() => !canManageOauth.value || (mcpData.value?.apiKeysForbidden ?? false))
 
 /**
- * The OAuth card emits `refresh` after a successful register/revoke so the
- * table picks up the change. The card renders outside the loading gate (see
- * the template comment), so the refetch never unmounts it; a refetch FAILURE
- * is surfaced by `loadError` - the page-level ErrorAlert with retry - so the
- * promise rejection itself is swallowed rather than left unhandled.
+ * Split the fetch error by WHEN it happened, because the two cases must not
+ * behave the same:
+ *
+ * - BEFORE the first successful load there is nothing rendered to preserve,
+ *   so the failure stays page-fatal: the ErrorAlert above with retry.
+ * - AFTER a successful load (`fetched` only ever flips true), the failure
+ *   came from a refetch. Replacing the page would destroy last-good state -
+ *   including a one-time client secret revealed in a dialog that can never be
+ *   shown again - so it is surfaced inline instead, with everything left
+ *   mounted on screen.
  */
-function refreshAfterOauthMutation(): void {
-  void loadAll().catch(() => {})
+const initialLoadError = computed(() => (fetched.value ? null : loadError.value))
+const refetchError = computed(() => (fetched.value ? loadError.value : null))
+
+/**
+ * The OAuth card emits `refresh` after a successful register/revoke so the
+ * table picks up the change. The refetch is SILENT (silentRefetch above), so
+ * it never unmounts the card or any other while a reveal dialog is open, and
+ * a failure is NOT discarded: a rejected refetch lands in `loadError`, which
+ * `refetchError` renders in the inline aria-live region without replacing the
+ * page. The catch only covers a rejection escaping `load()` itself (vue-query
+ * reports most failures through its error state rather than by rejecting) -
+ * record those the same way instead of swallowing them.
+ */
+async function refreshAfterOauthMutation(): Promise<void> {
+  try {
+    await loadAll()
+  } catch (e: unknown) {
+    loadError.value = formatApiError(e)
+  }
 }
 
 const createKeyDialogOpen = ref(false)
