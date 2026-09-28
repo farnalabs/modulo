@@ -42,6 +42,16 @@ _EVASION_PAYLOAD = "C4N4RY_ABC12345"  # 0 -> O-lookalike digits defeat the naive
 
 _ITERATIONS = 100
 
+# A generous per-detection budget for the canary seam calls. The seam's
+# fail-closed mechanism-error handling (timeout -> block, by design and covered
+# in test_guardrails_timeout.py) means a host-load scheduling delay against the
+# default 2s budget can turn a CLEAN payload into a block — a false positive in
+# test_detectable_canary_clean_payload_never_fires that is indistinguishable
+# from a real regex false match. Pinning a wide budget keeps this canary a
+# deterministic test of DETECTION while leaving timeout semantics to their own
+# tests.
+_SEAM_TIMEOUT_SECONDS = 30.0
+
 
 def _canary_definition(*, action: str) -> EvalDefinition:
     """A deterministic canary guardrail row (org-level, block/observe action)."""
@@ -74,6 +84,7 @@ async def _pass_once(action: str, payload: dict[str, Any]) -> bool:
         EvalEngine(),
         [_canary_definition(action=action)],
         payload,
+        timeout_seconds=_SEAM_TIMEOUT_SECONDS,
     )
     if action == GuardrailAction.BLOCK.value:
         return outcome.blocked
