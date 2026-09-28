@@ -1,5 +1,6 @@
 import { type Locator, type Page } from '@playwright/test'
 import { test, expect, loginAsAdmin } from '../setup/fixtures'
+import { clickMenuItem } from '../setup/row-menu'
 import {
   apiBaseFor,
   apiFetch,
@@ -10,32 +11,13 @@ import {
 } from '../setup/realstack-api'
 
 /**
- * Invoke a row's action-menu command.
- *
- * The action menu is a PrimeVue popup `<Menu>`. The command handler is bound
- * to the inner `.p-menu-item-content` `<div>` (`data-pc-section="itemcontent"`
- * in primevue/menu/Menuitem.vue), NOT to the outer `<li role="menuitem">`.
- *
- * Coordinate clicks on that inner content are unreliable: the popup overlay
- * enters through the `p-anchored-overlay` transition, which moves the item
- * across frames. Playwright computes the click point and dispatches at it,
- * so a plain `.click()` waits forever on "element is not stable" and a
- * `.click({ force: true })` — which skips the stability gate — lands on stale
- * coordinates and no-ops on the first interaction after the menu opens.
- * Reproduced against staging on primevue@5.0.1: the force click opened the
- * Rename dialog 0 of 5 times on a fresh menu, while dispatching a real
- * bubbling `click` on the content element worked 5 of 5 times.
- *
- * Dispatch the click directly on the element that carries the handler. This
- * is geometry- and animation-independent (the same activation PrimeVue's own
- * keyboard handler performs), and the item is asserted visible first, so a
- * genuinely missing command still fails.
+ * Invoke a row's action-menu command. See `setup/row-menu.ts` for why a real
+ * pointer sequence is required (the overlay transition defeats coordinate
+ * clicks, and a synthetic click lands on the item's anchor href and navigates).
  */
 async function clickRowAction(page: Page, row: Locator, label: string): Promise<void> {
   await row.getByTestId('pipeline-list-action-menu').click()
-  const menuItem = page.getByRole('menuitem', { name: label, exact: true })
-  await expect(menuItem).toBeVisible({ timeout: 15_000 })
-  await menuItem.locator('[data-pc-section="itemcontent"]').dispatchEvent('click')
+  await clickMenuItem(page, page.getByRole('menuitem', { name: label, exact: true }))
 }
 
 /**
@@ -182,12 +164,12 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       // account the command is absent, so skip rather than fail the suite on
       // an unavailable surface.
       await row.getByTestId('pipeline-list-action-menu').click()
-      await expect(page.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible({ timeout: 15_000 })
       const deleteItem = page.getByRole('menuitem', { name: 'Delete', exact: true })
+      await expect(deleteItem).toBeVisible({ timeout: 15_000 })
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await deleteItem.locator('[data-pc-section="itemcontent"]').dispatchEvent('click')
+      await clickMenuItem(page, deleteItem)
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
       await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Delete' }).click()
