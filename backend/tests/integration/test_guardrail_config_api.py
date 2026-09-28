@@ -258,6 +258,16 @@ async def _apply(client: AsyncClient, org_id: uuid.UUID, user_id: uuid.UUID) -> 
     return resp.json()
 
 
+async def _import_config(client: AsyncClient, org_id: uuid.UUID, user_id: uuid.UUID, yaml_text: str) -> dict:
+    resp = await client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": yaml_text},
+        headers=_auth_headers(org_id, user_id),
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
 # ---------------------------------------------------------------------------
 # Propose → apply lifecycle
 # ---------------------------------------------------------------------------
@@ -834,6 +844,273 @@ async def test_cross_org_isolation(
 
 
 # ---------------------------------------------------------------------------
+# Cross-org inheritance (import)
+# ---------------------------------------------------------------------------
+
+
+async def test_import_applies_config_directly(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    """Import applies a config YAML as the APPLIED state without propose/review.
+
+    This is the inheritance/backup surface: an admin imports a config (e.g. the
+    unmasked elevated export from another org) and the imported set becomes the
+    org's applied guardrail config on the SAME call — no propose round-trip,
+    because the source org already reviewed the policy.
+    """
+    resp = await integration_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": _CONFIG_YAML},
+        headers=_auth_headers(org_a, admin_a),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["imported"] is True
+    assert body["status"] == "clean"
+    assert len(body["hash"]) == 64
+    assert set(body["hash"]) <= set("0123456789abcdef")
+    # The diff reports what importing changed vs the previous (empty) applied set.
+    assert {change["action"] for change in body["diff"]} == {"add"}
+
+    # The live rows are materialized under the org's pipeline scope...
+    assert await _count_guardrail_rows(db_engine, org_a) == 2
+    assert set(await _guardrail_row_names(db_engine, org_a)) == {"no-aws-keys", "valid-payload"}
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT pipeline_id, eval_type FROM evals WHERE organisation_id = :oid AND name = 'no-aws-keys'",
+            ),
+            {"oid": str(org_a)},
+        )
+        bound = rows.all()
+    assert len(bound) == 1
+    assert uuid.UUID(str(bound[0][0])) == pipeline_a
+    assert bound[0][1] == "guardrail"
+
+    # ...and the pin is stored as a clean applied snapshot: drift reads clean
+    # and the export round-trips the imported content.
+    drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert drift["status"] == "clean"
+    assert drift["current_hash"] == drift["applied_hash"] == body["hash"]
+
+    get_body = (
+        await integration_client.get(
+            "/api/v1/guardrails/config",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert get_body["status"] == "clean"
+    assert "no-aws-keys" in get_body["config_yaml"]
+    assert "valid-payload" in get_body["config_yaml"]
+
+
+async def test_cross_org_inheritance_imports_elevated_export(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    org_b: uuid.UUID,
+    admin_b: uuid.UUID,
+    pipeline_a: uuid.UUID,
+    pipeline_b: uuid.UUID,
+):
+    """Org B inherits Org A's guardrail policy by importing A's elevated export."""
+    # Org A applies a config as its source of truth.
+    await _propose(integration_client, org_a, admin_a, _CONFIG_YAML)
+    await _apply(integration_client, org_a, admin_a)
+
+    # Org B's admin inherits it by importing A's elevated (unmasked) export —
+    # the doc's cross-org inheritance flow: GET /elevated in the source org,
+    # POST /import in the inheriting org.
+    export = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/elevated",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert export["status"] == "clean"
+
+    import_body = await _import_config(integration_client, org_b, admin_b, export["config_yaml"])
+    assert import_body["imported"] is True
+    assert import_body["status"] == "clean"
+
+    # Org B now enforces the inherited rules against ITS OWN rows/pipelines...
+    assert set(await _guardrail_row_names(db_engine, org_b)) == {"no-aws-keys", "valid-payload"}
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT pipeline_id, eval_type FROM evals WHERE organisation_id = :oid AND name = 'no-aws-keys'",
+            ),
+            {"oid": str(org_b)},
+        )
+        bound = rows.all()
+    assert len(bound) == 1
+    assert uuid.UUID(str(bound[0][0])) == pipeline_b
+
+    # ...and org A is untouched (its own rows still exist).
+    assert set(await _guardrail_row_names(db_engine, org_a)) == {"no-aws-keys", "valid-payload"}
+
+
+async def test_import_is_idempotent_on_reimport(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    """Re-importing the same config is a clean no-op (stable ids)."""
+    first = await _import_config(integration_client, org_a, admin_a, _CONFIG_YAML)
+    second = await _import_config(integration_client, org_a, admin_a, _CONFIG_YAML)
+
+    assert second["hash"] == first["hash"]
+    assert second["diff"] == []
+    assert second["status"] == "clean"
+    assert await _count_guardrail_rows(db_engine, org_a) == 2
+    drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert drift["status"] == "clean"
+
+
+async def test_import_updates_existing_applied_config(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    """Importing a changed set reconciles removals as well as upserts."""
+    await _import_config(integration_client, org_a, admin_a, _CONFIG_YAML)
+    import_body = await _import_config(integration_client, org_a, admin_a, _CONFIG_YAML_V2)
+
+    assert {change["action"] for change in import_body["diff"]} == {"update", "remove"}
+    assert set(await _guardrail_row_names(db_engine, org_a)) == {"no-aws-keys"}
+    drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert drift["status"] == "clean"
+
+
+async def test_import_rejects_invalid_and_empty_configs(
+    integration_client: AsyncClient,
+    org_b: uuid.UUID,
+    admin_b: uuid.UUID,
+):
+    bad_yaml = _CONFIG_YAML.replace("type: regex", "type: llm_judge")
+    resp = await integration_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": bad_yaml},
+        headers=_auth_headers(org_b, admin_b),
+    )
+    assert resp.status_code == 422
+
+    resp = await integration_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": "   \n"},
+        headers=_auth_headers(org_b, admin_b),
+    )
+    assert resp.status_code == 422
+
+    resp = await integration_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": "not: [valid: yaml"},
+        headers=_auth_headers(org_b, admin_b),
+    )
+    assert resp.status_code == 422
+
+
+async def test_import_fails_closed_on_node_bound_collision(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    """A config id colliding with a node-bound row fails closed with a 409."""
+    node_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
+                "VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) "
+                "ON CONFLICT (id) DO NOTHING",
+            ),
+            {"nid": str(node_id), "oid": str(org_a), "pid": str(pipeline_a), "aid": str(admin_a)},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org_a),
+                "pid": str(pipeline_a),
+                "nid": str(node_id),
+                "cfg": json.dumps(
+                    {
+                        "interception_point": "input",
+                        "action": "observe",
+                        "type": "regex",
+                        "pattern": "graph-save-pattern",
+                        "field": "body",
+                    }
+                ),
+                "aid": str(admin_a),
+            },
+        )
+
+    resp = await integration_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": _CONFIG_YAML},
+        headers=_auth_headers(org_a, admin_a),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "no-aws-keys" in resp.json()["detail"]
+
+    # Clean no-op: no org-level row was materialized and the node-bound row
+    # survives untouched, so the applied pin is not reported as phantom drift.
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT node_id, config_json FROM evals "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND name = 'no-aws-keys'",
+            ),
+            {"oid": str(org_a)},
+        )
+        colliding = rows.all()
+    assert len(colliding) == 1
+    assert colliding[0][0] is not None
+    assert colliding[0][1]["pattern"] == "graph-save-pattern"
+
+    async with db_engine.connect() as conn:
+        org_rows = await conn.execute(
+            text(
+                "SELECT count(*) FROM evals "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND node_id IS NULL",
+            ),
+            {"oid": str(org_a)},
+        )
+        assert int(org_rows.scalar_one()) == 0
+
+
+# ---------------------------------------------------------------------------
 # Permission gate
 # ---------------------------------------------------------------------------
 
@@ -887,3 +1164,38 @@ async def test_operator_cannot_apply_or_reject(
 
     # The denied attempts left no guardrail rows behind.
     assert await _count_guardrail_rows(db_engine, org_a) == 0
+
+
+async def test_operator_cannot_import(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    operator_a: uuid.UUID,
+):
+    """An operator holds ``eval.definition.create`` but is NOT an admin — the
+    import reconcile mutates ``evals`` rows, so it must be gated by the same
+    admin check the direct evals API enforces (the operator gets 403, not a
+    side channel past the stricter API)."""
+    resp = await integration_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": _CONFIG_YAML},
+        headers=_auth_headers(org_a, operator_a, role="operator"),
+    )
+    assert resp.status_code == 403
+
+    # Nothing was imported.
+    assert await _count_guardrail_rows(db_engine, org_a) == 0
+
+
+async def test_viewer_cannot_import(
+    integration_client: AsyncClient,
+    org_a: uuid.UUID,
+    viewer_a: uuid.UUID,
+):
+    resp = await integration_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": _CONFIG_YAML},
+        headers=_auth_headers(org_a, viewer_a, role="viewer"),
+    )
+    assert resp.status_code == 403

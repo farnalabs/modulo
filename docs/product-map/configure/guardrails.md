@@ -112,6 +112,20 @@ compensation, and single-node self-correction. Built on the eval engine
       re-execution, no connector/vault access
 - [x] Packs ship as versioned policy packs (e.g. SOC2 pack, policy pack) that
       bundle pre-authored guardrail definitions
+- [x] Cross-org inheritance ships via the config-as-code import surface:
+      `POST /api/v1/guardrails/config/import` (admin-gated like apply/reject)
+      applies a config YAML — e.g. the unmasked elevated export
+      (`GET /elevated`) of ANOTHER organisation — directly as the org's APPLIED
+      state in one step, without a propose/review round-trip (the source org
+      already reviewed the policy). The transport is YAML-only so RLS isolation
+      is preserved (no cross-org row is ever read); invalid configs fail 422, a
+      node-bound-id collision fails 409 as a clean no-op before any mutation,
+      the pin is stored as a clean snapshot (drift reads clean), a
+      `guardrail_config.imported` audit event records the hash/count/diff, and
+      re-imports are idempotent
+      (`backend/src/modulo/api/routes/guardrail_config.py`,
+      `backend/tests/integration/test_guardrail_config_api.py`,
+      `backend/tests/bdd/features/evals/guardrail_config.feature`)
 
 ## Known Gaps
 
@@ -121,8 +135,21 @@ compensation, and single-node self-correction. Built on the eval engine
 - **Loop-interception covers Modulo-hosted sandbox agent loops only** — the
   pre-execution/post-result bridge does not intercept tool calls issued inside
   external/unmediated runtimes.
+- **The `/settings/guardrails` page does not yet offer an in-page Import
+  control** — cross-org inheritance is an API surface (import + the elevated
+  export read); the settings UI stays propose/apply/reject.
 
 ## QA History
+- 2026-09-28: **Improve Architecture product-map walk** — shipped the
+  previously-deferred cross-org inheritance gap: added
+  `POST /api/v1/guardrails/config/import` (admin-gated direct apply of an
+  imported config YAML — e.g. another org's elevated export — stored as a
+  clean applied snapshot), with integration tests (cross-org inheritance flow,
+  idempotent re-import, replace-applied-directly, node-bound collision 409,
+  permission gates) and four new BDD scenarios in `guardrail_config.feature`.
+  The manifest `feat-guardrails` entry ticks the cross-org behavior; the
+  remaining unchecked item / known gap is the missing in-page Import control
+  on `/settings/guardrails`. Status stays `partial`.
 - 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
   `feat-guardrails` registry entry: the previously-vague "policy templates and
   cross-org inheritance are partially wired" gap is now split into what actually
