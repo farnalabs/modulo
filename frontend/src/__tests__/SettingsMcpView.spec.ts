@@ -28,6 +28,15 @@ const mockOAuthClients = {
   ],
 }
 const mockNoOAuthClients = { items: [] }
+const mockOAuthClientList = [
+  { id: 'client-1', client_id: 'mod_oauth_xyz', name: 'CLI Client', scopes: ['trigger:run', 'hitl:review'], redirect_uris: ['https://example.com/callback'], created_at: '2026-06-20T00:00:00Z' },
+]
+const mockCreatedOauthClient = {
+  id: 'client-2',
+  client_id: 'mod_oauth_new_client',
+  client_secret: 'mod_oauth_secret_value_123',
+  name: 'CLI Tool',
+}
 
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -39,17 +48,27 @@ vi.mock('../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
+// The OAuth client section is role-gated (backend requires admin|operator),
+// so the view reads the org role off the JWT. Default every test to admin and
+// let individual tests override it.
+vi.mock('../lib/jwt', () => ({
+  decodeJwtPayload: vi.fn(() => ({ org_role: 'admin' })),
+}))
+
 import { api } from '../lib/api/client'
+import { decodeJwtPayload } from '../lib/jwt'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
 
 const getMock = api.GET as unknown as Mock
 const postMock = api.POST as unknown as Mock
 const putMock = api.PUT as unknown as Mock
+const deleteMock = api.DELETE as unknown as Mock
+const decodeJwtPayloadMock = decodeJwtPayload as unknown as Mock
 
 const dialogStub = { template: '<div><slot /></div>' }
 const stubs = { Dialog: dialogStub, DialogContent: dialogStub, DialogDescription: dialogStub, DialogFooter: dialogStub, DialogHeader: dialogStub, DialogTitle: dialogStub, FeatureGate: dialogStub }
 
-function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, oauth = mockOAuthClients) {
+function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, oauth: unknown = mockOAuthClients) {
   getMock.mockImplementation((path: string) => {
     if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mcpConfig, error: undefined })
     if (path === '/api/v1/api-keys') return Promise.resolve({ data: apiKeysData, error: undefined })
@@ -58,7 +77,7 @@ function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, 
   })
 }
 
-function mountView(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, oauth = mockOAuthClients) {
+function mountView(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, oauth: unknown = mockOAuthClients) {
   mockApiResponses(mcpConfig, apiKeysData, oauth)
   return mount(SettingsMcpView, { global: { stubs } })
 }
@@ -68,6 +87,8 @@ describe('SettingsMcpView', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     vi.useRealTimers()
+    decodeJwtPayloadMock.mockReturnValue({ org_role: 'admin' })
+    deleteMock.mockResolvedValue({ data: { deleted: true }, error: undefined })
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
       writable: true,
@@ -196,13 +217,15 @@ describe('SettingsMcpView', () => {
     expect(copyBtn.text()).toBe('Copy')
   })
 
-  it('shows OAuth clients placeholder', async () => {
+  it('shows the OAuth clients section with a register button', async () => {
     const wrapper = mountView()
     await nextTick()
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('Registered OAuth Clients')
-    expect(wrapper.text()).toContain('coming in v0.4')
+    const registerBtn = wrapper.find('[data-testid="settings-mcp-register-oauth-client"]')
+    expect(registerBtn.exists()).toBe(true)
+    expect(registerBtn.text()).toContain('Register OAuth Client')
   })
 
   // ─── Copy to clipboard ────────────────────────────────────────────────
@@ -544,5 +567,222 @@ describe('SettingsMcpView', () => {
     await nextTick()
     const copyKeyBtn = wrapper.find('[data-testid="settings-mcp-copy-key-value"]')
     expect(copyKeyBtn.exists()).toBe(true)
+  })
+
+  // ─── OAuth client registration / revocation (FAR-1251) ────────────────
+
+  it('lists registered OAuth clients with a revoke action', async () => {
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockOAuthClientList)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('CLI Client')
+    expect(wrapper.text()).toContain('mod_oauth_xyz')
+    expect(wrapper.text()).toContain('trigger:run')
+    expect(wrapper.text()).toContain('https://example.com/callback')
+    expect(wrapper.findAll('[data-testid="settings-mcp-revoke-oauth-client"]').length).toBe(1)
+  })
+
+  it('shows the OAuth empty state when no clients are registered', async () => {
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, [])
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('No OAuth clients registered yet.')
+    expect(wrapper.findAll('[data-testid="settings-mcp-revoke-oauth-client"]').length).toBe(0)
+  })
+
+  it('register button opens the form with name, redirect URI and scope fields', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-name"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-hitl-review"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-library-browse"]').exists()).toBe(true)
+  })
+
+  it('register validation blocks the POST and shows inline field errors', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    const vm = wrapper.vm as any
+
+    await vm.registerOauthClient()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+    expect(vm.registerOauthDialogOpen).toBe(true)
+
+    await wrapper.find('[data-testid="settings-mcp-oauth-name"]').trigger('blur')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-name-error"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').trigger('blur')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-redirect-error"]').exists()).toBe(true)
+
+    // touch scopes then leave none selected
+    const scope = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    ;(scope.element as HTMLInputElement).checked = true
+    await scope.trigger('change')
+    ;(scope.element as HTMLInputElement).checked = false
+    await scope.trigger('change')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-error"]').exists()).toBe(true)
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('registers an OAuth client with the correct wire shape and reveals the secret once', async () => {
+    postMock.mockResolvedValueOnce({ data: mockCreatedOauthClient, error: undefined })
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, [])
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
+    await wrapper
+      .find('[data-testid="settings-mcp-oauth-redirect-uris"]')
+      .setValue('https://a.example/cb\n\nhttps://b.example/cb')
+    for (const testid of ['settings-mcp-oauth-scope-trigger-run', 'settings-mcp-oauth-scope-hitl-review']) {
+      const box = wrapper.find(`[data-testid="${testid}"]`)
+      ;(box.element as HTMLInputElement).checked = true
+      await box.trigger('change')
+    }
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    await vm.registerOauthClient()
+    await flushPromises()
+
+    expect(postMock).toHaveBeenCalledWith('/api/v1/mcp/oauth/clients', {
+      body: {
+        name: 'CLI Tool',
+        redirect_uris: ['https://a.example/cb', 'https://b.example/cb'],
+        scopes: ['trigger:run', 'hitl:review'],
+      },
+    })
+    expect(vm.registerOauthDialogOpen).toBe(false)
+    expect(vm.oauthCreatedDialogOpen).toBe(true)
+    expect(
+      (wrapper.find('[data-testid="settings-mcp-oauth-client-secret"]').element as HTMLInputElement).value,
+    ).toBe('mod_oauth_secret_value_123')
+    expect(
+      (wrapper.find('[data-testid="settings-mcp-oauth-client-id"]').element as HTMLInputElement).value,
+    ).toBe('mod_oauth_new_client')
+    expect(wrapper.text()).toContain('shown only once')
+    expect(wrapper.find('[data-testid="settings-mcp-copy-oauth-client-id"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-copy-oauth-client-secret"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-created-warning"]').exists()).toBe(true)
+  })
+
+  it('register API error is surfaced through formatApiError', async () => {
+    postMock.mockResolvedValueOnce({
+      data: undefined,
+      error: { status: 500, detail: 'MODULO_PUBLIC_URL must be configured for OAuth flow' },
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
+    await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').setValue('https://a.example/cb')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    ;(box.element as HTMLInputElement).checked = true
+    await box.trigger('change')
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    await vm.registerOauthClient()
+    await flushPromises()
+
+    const err = wrapper.find('[data-testid="settings-mcp-oauth-register-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('MODULO_PUBLIC_URL must be configured for OAuth flow')
+    expect(vm.oauthCreatedDialogOpen).toBe(false)
+    expect(err.attributes('aria-live')).toBe('assertive')
+  })
+
+  it('revoke flow opens a confirm dialog naming the client and DELETEs by client_id', async () => {
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockOAuthClientList)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-revoke-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(wrapper.text()).toContain('Are you sure you want to revoke the OAuth client')
+    expect(wrapper.text()).toContain('CLI Client')
+
+    const vm = wrapper.vm as any
+    await vm.revokeOauthClient()
+    await flushPromises()
+    expect(deleteMock).toHaveBeenCalledWith('/api/v1/mcp/oauth/clients/{client_id}', {
+      params: { path: { client_id: 'mod_oauth_xyz' } },
+    })
+    expect(vm.revokeOauthDialogOpen).toBe(false)
+  })
+
+  it('renders the restricted state for a viewer and hides register/revoke', async () => {
+    decodeJwtPayloadMock.mockReturnValue({ org_role: 'viewer' })
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockOAuthClientList)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-restricted"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="settings-mcp-revoke-oauth-client"]').length).toBe(0)
+  })
+
+  it('a 403 from the OAuth list keeps the rest of the page alive', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') {
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Only admin or operator users can list OAuth clients' },
+          response: { status: 403 },
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('MCP Configuration')
+    expect(wrapper.text()).toContain('Claude Key')
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-restricted"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').exists()).toBe(false)
+  })
+
+  it('a non-403 OAuth list failure degrades to an inline section error', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') {
+        return Promise.resolve({ data: undefined, error: { status: 503, detail: 'Database unavailable' } })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('MCP Configuration')
+    const err = wrapper.find('[data-testid="settings-mcp-oauth-list-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('Database unavailable')
+    expect(err.attributes('aria-live')).toBe('assertive')
   })
 })
