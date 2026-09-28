@@ -538,7 +538,44 @@ def _feature_scenarios_fully_deselected(feature: Path) -> bool:
             total += 1
             if "@awaiting-implementation" not in tags:
                 executing += 1
+            tags = set()
     return total > 0 and executing == 0
+
+
+def test_feature_scenarios_fully_deselected_resets_tags_per_scenario(tmp_path: Path):
+    """A per-scenario tag must not bleed into the following scenario.
+
+    Here the first (pinned) scenario is deselected but the second, untagged
+    scenario executes, so the file is not "fully deselected". A parser that
+    accumulated tags across scenarios would misclassify it as fully deselected
+    and wrongly let a ``bdd:`` citation to it pass the guard.
+    """
+    feature = tmp_path / "mixed.feature"
+    feature.write_text(
+        "@awaiting-implementation\n"
+        "Scenario: pinned draft\n"
+        "  Given a step\n"
+        "\n"
+        "Scenario: executing coverage\n"
+        "  Given a step\n",
+        encoding="utf-8",
+    )
+    assert _feature_scenarios_fully_deselected(feature) is False
+
+
+def test_feature_scenarios_fully_deselected_when_every_scenario_pinned(tmp_path: Path):
+    feature = tmp_path / "all_pinned.feature"
+    feature.write_text(
+        "@awaiting-implementation\n"
+        "Scenario: first draft\n"
+        "  Given a step\n"
+        "\n"
+        "@awaiting-implementation\n"
+        "Scenario: second draft\n"
+        "  Given a step\n",
+        encoding="utf-8",
+    )
+    assert _feature_scenarios_fully_deselected(feature) is True
 
 
 #: Heading that opens a behaviour-tracker's currently-acknowledged gap list.
