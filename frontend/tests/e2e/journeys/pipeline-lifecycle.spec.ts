@@ -17,22 +17,24 @@ import {
  *
  * 1. PrimeVue 5's `Menuitem` puts `role="menuitem"` on the outer `<li>` but
  *    binds the command handler to the inner `.p-menu-item-content` `<div>`
- *    (primevue/menu/Menuitem.vue). A click dispatched on the `<li>` bubbles
+ *    (primevue/menu/Menuitem.vue). A click that lands on the `<li>` bubbles
  *    up to the overlay's document-level dismisser (closing the menu) but
  *    never reaches the descendant handler — so the command never runs.
- * 2. The anchored-overlay enter transition leaves the item moving/detaching
- *    across frames, so a coordinate-based `.click()` can retry on stability
- *    until the test times out.
+ * 2. `dispatchEvent('click')` on that inner `<div>` also fails to run the
+ *    command: the synthetic event does not reach PrimeVue's component click
+ *    handler (verified against primevue@5.0.1 — the menu stays open and the
+ *    command never fires), so a dispatched click silently no-ops.
  *
- * Enter the menu and dispatch the click at the inner `<li> > div` that
- * actually carries the handler. The item is asserted visible first, so a
+ * Drive a real pointer click on the inner link (the way a user activates the
+ * item). Playwright auto-waits for the anchored overlay to settle, so the
+ * enter transition is handled. The item is asserted visible first, so a
  * genuinely missing command still fails.
  */
 async function clickRowAction(page: Page, row: Locator, label: string): Promise<void> {
   await row.getByTestId('pipeline-list-action-menu').click()
   const menuItem = page.getByRole('menuitem', { name: label, exact: true })
   await expect(menuItem).toBeVisible({ timeout: 15_000 })
-  await menuItem.locator(':scope > div').first().dispatchEvent('click')
+  await menuItem.locator('a.p-menu-item-link').click()
 }
 
 /**
@@ -184,7 +186,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await deleteItem.locator(':scope > div').first().dispatchEvent('click')
+      await deleteItem.locator('a.p-menu-item-link').click()
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
       await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Delete' }).click()
