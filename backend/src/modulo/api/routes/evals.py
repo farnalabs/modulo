@@ -286,11 +286,11 @@ _GATE_ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(:key))"
 _GATE_LOCK_KEY_PREFIX = "policy_gate:"
 
 
-async def _with_gate_advisory_lock[T](
+async def _with_gate_advisory_lock(
     eval_id: uuid.UUID,
     session: AsyncSession,
-    fn: Callable[..., Awaitable[T]],
-) -> T:
+    fn: Callable[..., Awaitable[PolicyGate]],
+) -> PolicyGate:
     """Execute *fn* while holding a transaction-scoped advisory lock keyed on *eval_id*.
 
     The lock is released when the transaction commits or rolls back.
