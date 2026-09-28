@@ -542,6 +542,27 @@ async def test_sentinel_only_isolation_failure_does_not_fail_the_run(
         await fn(_run_state())
 
 
+async def test_isolation_cancellation_propagates_through_the_call_site(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """Cancellation is re-raised, never swallowed by the best-effort swallow
+    (which handles ordinary failures only): a cancelled dispatch must stay
+    cancelled through the FAR-1264 call-site guard."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _RecordingIsolationProvider()
+    provider.apply_isolation = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+    _patch_isolation_builder(monkeypatch, provider)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, delivery_sentinel="PR_CREATED"))
+    sandbox = await _completed_no_output_sandbox("sbx-cancel")
+    install_fake_dispatch(monkeypatch, ref="sbx-cancel")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+
 async def test_enforcement_node_isolation_failure_still_fails_closed(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:

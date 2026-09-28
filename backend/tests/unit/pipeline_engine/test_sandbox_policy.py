@@ -501,6 +501,15 @@ def test_gh_pr_guard_marker_path_sanitises_scope() -> None:
     assert marker.endswith(".marker")
 
 
+def test_gh_pr_guard_marker_path_falls_back_when_scope_sanitises_to_empty() -> None:
+    """A non-empty scope made entirely of characters the sanitiser rewrites to
+    ``_`` (``///`` -> ``___``) or strips (``...``) reduces to nothing: the path
+    must fall back to the stable unscoped marker, never emit a bare prefix."""
+    fallback = gh_pr_guard_marker_path(None)
+    assert gh_pr_guard_marker_path("///") == fallback
+    assert gh_pr_guard_marker_path("...") == fallback
+
+
 def test_gh_pr_guard_script_preserves_real_gh_and_embeds_marker() -> None:
     """The install script must resolve the real gh BEFORE shadowing (no
     self-recursion) and embed the run-scoped marker path."""
