@@ -18,8 +18,6 @@ with contextlib.suppress(FileNotFoundError, OSError):
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/run_detail.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
-    scenarios("../features/ui/org_settings.feature")
-with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/pipeline_builder.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/eval_dashboard.feature")
@@ -378,105 +376,6 @@ def _sensitive_values_masked_in_prompt(page: Page) -> None:
     if dialog.is_visible():
         text = dialog.text_content() or ""
         assert "\u2022" in text, f"Expected bullet characters in masked prompt, got: {text[:200]}"
-
-
-# ============================================================================
-# org_settings.feature  —  5 scenarios
-# ============================================================================
-
-
-@given("I am on the organisation settings page")
-def _on_org_settings(page: Page, base_url: str) -> None:
-    page.goto(f"{base_url}/settings/organisation")
-    page.wait_for_selector('[data-loading="false"]', timeout=15000)
-
-
-@given("I am an org admin")
-def _i_am_org_admin() -> None:
-    pass
-
-
-@given("there are 3 members in the organisation")
-def _three_members(page: Page) -> None:
-    page.locator('[data-testid="member-row"]')
-    # This will be true when the frontend renders the member list
-    # For now we just check the page loaded
-
-
-@given("the organisation has 2 API keys")
-def _two_api_keys(page: Page) -> None:
-    page.locator('[data-testid="api-key-row"]')
-    # Check that the page has an API key section
-
-
-@when(parsers.parse('I change the organisation name to "{name}"'))
-def _change_org_name(page: Page, name: str) -> None:
-    name_input = page.locator('[data-testid="org-name-input"]')
-    if name_input.is_visible():
-        name_input.fill(name)
-        save_btn = page.locator('[data-testid="save-org-settings"]')
-        if save_btn.is_visible():
-            save_btn.click()
-            page.wait_for_selector('[data-loading="false"]', timeout=10000)
-
-
-@when('I click "Add Member"')
-def _click_add_member(page: Page) -> None:
-    add_btn = page.locator('[data-testid="add-member-button"]')
-    if add_btn.is_visible():
-        add_btn.click()
-        page.wait_for_timeout(500)
-
-
-@when("I revoke an API key")
-def _revoke_api_key(page: Page) -> None:
-    revoke_btn = page.locator('[data-testid="revoke-api-key"]').first
-    if revoke_btn.is_visible():
-        revoke_btn.click()
-        confirm_btn = page.locator('[data-testid="confirm-revoke"]')
-        if confirm_btn.is_visible():
-            confirm_btn.click()
-            page.wait_for_timeout(500)
-
-
-@then("I see the organisation name and member list")
-def _see_org_name_and_members(page: Page) -> None:
-    name_section = page.locator('[data-testid="org-name-input"]')
-    member_list = page.locator('[data-testid="member-list"]')
-    assert name_section.is_visible(), "Organisation name input should be visible"
-    assert member_list.is_visible(), "Member list should be visible"
-
-
-@then("the organisation name is updated")
-def _org_name_updated(page: Page) -> None:
-    success = page.locator('[data-testid="save-success"]')
-    if success.is_visible():
-        assert "updated" in (success.text_content() or "").lower()
-
-
-@then("I see a member invitation form")
-def _see_invitation_form(page: Page) -> None:
-    form = page.locator('[data-testid="invite-member-form"]')
-    assert form.is_visible(), "Invitation form should be visible"
-
-
-@then("the API key status changes to revoked")
-def _api_key_revoked(page: Page) -> None:
-    revoked_badge = page.locator('[data-testid="api-key-status"]').first
-    if revoked_badge.is_visible():
-        assert "revoked" in (revoked_badge.text_content() or "").lower()
-
-
-@given("I am on the organisation settings page as a viewer")
-def _on_org_settings_viewer(page: Page, base_url: str) -> None:
-    page.goto(f"{base_url}/settings/organisation")
-    page.wait_for_selector('[data-loading="false"]', timeout=15000)
-
-
-@then("I see a permission denied message")
-def _see_permission_denied(page: Page) -> None:
-    denied = page.locator('[data-testid="permission-denied"]')
-    assert denied.is_visible(), "Permission denied message should be visible"
 
 
 # ============================================================================
