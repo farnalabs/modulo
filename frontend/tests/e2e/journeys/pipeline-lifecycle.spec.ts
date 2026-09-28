@@ -12,7 +12,7 @@ import {
 /**
  * Invoke a row's action-menu command.
  *
- * The action menu is a PrimeVue popup `<Menu>`. Two independent traps, both
+ * The action menu is a PrimeVue popup `<Menu>`. Three independent traps, all
  * observed on staging:
  *
  * 1. PrimeVue 5's `Menuitem` puts `role="menuitem"` on the outer `<li>` but
@@ -24,17 +24,24 @@ import {
  *    command: the synthetic event does not reach PrimeVue's component click
  *    handler (verified against primevue@5.0.1 — the menu stays open and the
  *    command never fires), so a dispatched click silently no-ops.
+ * 3. A plain `.click()` on the inner link never completes: the anchored
+ *    overlay's enter transition (`p-anchored-overlay`) leaves the `<a>` moving
+ *    across frames, so Playwright's actionability wait loops on "element is not
+ *    stable" and then "element was detached from the DOM", exhausting the click
+ *    timeout (verified in the staging trace for this file — the locator
+ *    resolves to `<a class="p-menu-item-link">` but the click never fires).
  *
- * Drive a real pointer click on the inner link (the way a user activates the
- * item). Playwright auto-waits for the anchored overlay to settle, so the
- * enter transition is handled. The item is asserted visible first, so a
- * genuinely missing command still fails.
+ * Wait for the item to be visible, then deliver a real pointer click with
+ * `force: true`, which skips the stability gate while still dispatching a real
+ * mouse event at the element's centre — the bubbling `@click` on
+ * `.p-menu-item-content` then runs the command. The item is asserted visible
+ * first, so a genuinely missing command still fails.
  */
 async function clickRowAction(page: Page, row: Locator, label: string): Promise<void> {
   await row.getByTestId('pipeline-list-action-menu').click()
   const menuItem = page.getByRole('menuitem', { name: label, exact: true })
   await expect(menuItem).toBeVisible({ timeout: 15_000 })
-  await menuItem.locator('a.p-menu-item-link').click()
+  await menuItem.locator('a.p-menu-item-link').click({ force: true })
 }
 
 /**
@@ -186,7 +193,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await deleteItem.locator('a.p-menu-item-link').click()
+      await deleteItem.locator('a.p-menu-item-link').click({ force: true })
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
       await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Delete' }).click()
