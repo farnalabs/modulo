@@ -150,8 +150,8 @@
                 id="org-hitl-review-window-value"
                 v-model="hitlWindowValue"
                 type="number"
-                min="0"
-                step="any"
+                min="1"
+                step="1"
                 inputmode="decimal"
                 :placeholder="$t('views.AdminOrgSettingsView.hitl_review_window_placeholder')"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -199,6 +199,7 @@
           <p
             v-else-if="hitlWindowSaved"
             class="mt-2 text-sm text-success"
+            role="status"
             data-testid="org-hitl-review-window-saved"
           >{{ $t('views.AdminOrgSettingsView.hitl_review_window_saved') }}</p>
 

@@ -3848,7 +3848,12 @@ class UpdateHitlReviewWindowRequest(BaseModel):
     # Same shipped envelope as every other layer: 1 min .. 7 days. ``None``
     # clears the org default (inherit instance/env); ``0`` is rejected — the
     # safety net cannot be disabled.
-    hitl_review_window_seconds: int | None = Field(default=None, ge=60, le=604800)
+    #
+    # REQUIRED (no default) so an OMITTED field is a 422, not a silent clear:
+    # ``default=None`` made "field absent" indistinguishable from an explicit
+    # ``null`` and let a partial PUT wipe the organisation default. The
+    # destructive clear now has to be spelled out as an explicit ``null``.
+    hitl_review_window_seconds: int | None = Field(..., ge=60, le=604800)
 
 
 @router.get("/org/hitl-review-window")

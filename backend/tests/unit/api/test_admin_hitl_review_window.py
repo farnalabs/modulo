@@ -180,6 +180,31 @@ class TestWrite:
         assert resp.status_code == 422
 
     @pytest.mark.anyio
+    async def test_put_omitted_field_is_422_but_explicit_null_clears(
+        self,
+        client_admin,
+        mock_session,
+    ):
+        """An OMITTED ``hitl_review_window_seconds`` must NOT be mistaken for a
+        clear: with ``default=None`` a partial PUT silently wiped the org
+        default. The field is required, so an absent field 422s before the
+        handler runs and the stored key is untouched; only an explicit
+        ``null`` performs the destructive clear (the frontend always sends the
+        field)."""
+        org = mock_session.execute.return_value.scalar_one_or_none.return_value
+        org.settings_json = {_KEY: 4500, "license_key": "license-abc"}
+
+        resp = await client_admin.put(_PATH, json={})
+        assert resp.status_code == 422
+        assert org.settings_json == {_KEY: 4500, "license_key": "license-abc"}
+
+        resp = await client_admin.put(_PATH, json={_KEY: None})
+        assert resp.status_code == 200
+        assert resp.json() == {_KEY: None, "is_default": True}
+        assert _KEY not in org.settings_json
+        assert org.settings_json["license_key"] == "license-abc"
+
+    @pytest.mark.anyio
     async def test_put_null_clears_the_key(self, client_admin, mock_session):
         """``null`` REMOVES the key (inherit the instance default) — it must
         never be stored as a null window the resolver would have to guess at.

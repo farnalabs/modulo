@@ -209,6 +209,43 @@ describe('AdminOrgSettingsView', () => {
     wrapper.unmount()
   })
 
+  it('advertises whole-number bounds on the value input', async () => {
+    // The native contract must not promise what the resolver refuses: min 1 /
+    // step 1 (a whole number >= 1), while `resolveHitlWindowForm` stays the
+    // authority on the 60-second floor and the 7-day ceiling.
+    const wrapper = await mountWindowView()
+    const input = wrapper.find('[data-testid="org-hitl-review-window-value"]')
+    expect(input.attributes('min')).toBe('1')
+    expect(input.attributes('step')).toBe('1')
+    wrapper.unmount()
+  })
+
+  it('refuses a zero window without calling the API', async () => {
+    // Minimum-value coverage: `0` seconds is below the envelope floor, so the
+    // resolver must refuse it (the safety net has no "0 = disabled").
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('0')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    expect(windowPutBodies()).toHaveLength(0)
+    expect(wrapper.find('[data-testid="org-hitl-review-window-error"]').text()).toContain('60 and 604800')
+    wrapper.unmount()
+  })
+
+  it('announces a successful save as a polite live region', async () => {
+    const wrapper = await mountWindowView()
+    await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('15')
+    await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
+    await flushPromises()
+
+    const saved = wrapper.find('[data-testid="org-hitl-review-window-saved"]')
+    expect(saved.exists()).toBe(true)
+    expect(saved.attributes('role')).toBe('status')
+    wrapper.unmount()
+  })
+
   it('refuses a value above the 604800 second ceiling without calling the API', async () => {
     const wrapper = await mountWindowView()
     await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('minutes')
