@@ -3075,6 +3075,10 @@ async def restore_pipeline_endpoint(
             )
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            # No in-txn session.refresh here (unlike archive/unarchive):
+            # restore_pipeline loads the row via ``UPDATE ... RETURNING(Pipeline)``,
+            # so the DB-computed ``updated_at`` is eager-loaded from the returned
+            # row and is not expired after commit -> no Pydantic lazy-load, no 422.
             pipeline = await restore_pipeline(session, pipeline_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)

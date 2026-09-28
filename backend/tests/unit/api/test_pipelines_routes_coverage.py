@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -949,12 +949,26 @@ def test_lifecycle_actions_refresh_flushed_row(client: tuple[TestClient, AsyncMo
     attribute extraction raise outside the async greenlet, which
     ``handle_db_errors`` maps to 422. Both endpoints now mirror
     ``update_pipeline_endpoint``'s in-transaction ``session.refresh``.
+
+    This is behavioural, not a mere presence-guard: ``session.refresh`` stands
+    in for the DB reload that surfaces the DB-computed ``updated_at``, so the
+    response body must carry the refreshed value. Without the in-txn refresh the
+    endpoint returns the stale ``updated_at`` and this test fails.
     """
     http, session = client
     crud = {"archive": "archive_pipeline", "unarchive": "unarchive_pipeline"}[action]
+    refreshed = _make_pipeline()
+    db_updated_at = _NOW + timedelta(seconds=5)
+
+    async def _refresh(instance: object) -> None:
+        # Mirror the DB-computed onupdate value becoming visible after the
+        # in-transaction reload.
+        instance.updated_at = db_updated_at
+
+    session.refresh = AsyncMock(side_effect=_refresh)
     with (
-        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
-        patch(f"{_PREFIX}{crud}", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=refreshed)),
+        patch(f"{_PREFIX}{crud}", new=AsyncMock(return_value=refreshed)),
     ):
         _rls_started = _start_rls()
         try:
@@ -963,6 +977,10 @@ def test_lifecycle_actions_refresh_flushed_row(client: tuple[TestClient, AsyncMo
             _stop_all(_rls_started)
 
     assert resp.status_code == 200, resp.text
+    # The response must carry the DB-computed value the refresh loaded (the
+    # behavioural guarantee); the awaited-refresh check is a belt-and-braces
+    # signal for the same in-txn reload.
+    assert datetime.fromisoformat(resp.json()["updated_at"]) == db_updated_at
     session.refresh.assert_awaited()
 
 
