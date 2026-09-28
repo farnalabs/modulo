@@ -1,21 +1,22 @@
-"""FAR-1050 R1: flag-gated log-probe routing (``MODULO_E2B_VIA_PROVIDER``).
+"""FAR-1050 R1/R6: log-probe routing through the ABC (site T6).
 
 Drives the T6 call sites inside ``_sandbox_agent_impl`` through the real
 dispatch (sandbox mock, no network) and proves:
 
-1. Flag OFF (explicit ``MODULO_E2B_VIA_PROVIDER=false``; no longer the
-   default since R5): callers still hit urllib — the legacy
-   ``_fetch_sandbox_log_tail`` runs, the provider builder never does.
-2. Flag ON (the default since R5): callers hit the provider —
-   ``FakeRuntimeProvider.read_log_tail``
-   returns a fixed tail that lands in the failure message, the legacy
-   helper and ``urllib`` are never touched (hostname absence at runtime),
-   and the fetch still precedes the kill (pre-kill ordering preserved).
-3. ``_read_log_tail_via_provider`` itself: empty on no key (provider never
+1. Callers hit the provider — ``FakeRuntimeProvider.read_log_tail``
+   returns a fixed tail that lands in the failure message, ``urllib`` is
+   never touched (hostname absence at runtime), and the fetch still
+   precedes the kill (pre-kill ordering preserved).
+2. ``_read_log_tail_via_provider`` itself: empty on no key (provider never
    built), empty on provider build failure, empty on provider exception,
    decode of the provider's bytes on success.
-4. The settings flag: default True (R5 flip), env-var enable, and the
-   explicit-false revert back to the legacy path.
+3. Only the sanctioned ``api.e2b.app`` hostname is reachable — enforced
+   structurally by
+   ``backend/tests/architecture/test_e2b_bound_form_guards.py``.
+
+R6 deleted the legacy urllib arm and the ``MODULO_E2B_VIA_PROVIDER`` flag,
+so this file's original legacy half (callers still hit urllib, plus the
+settings-flag default test) retired with them.
 """
 
 import uuid
@@ -31,7 +32,6 @@ from modulo.core.pipeline_engine.node_runner import (
     make_sandbox_agent_fn,
 )
 from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
-from modulo.settings import Settings, get_settings
 from tests.unit.pipeline_engine.conftest import install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -142,44 +142,9 @@ def _sandbox_with_completed_command(sandbox_id: str, output_json: str) -> MagicM
     return sandbox
 
 
-def _enable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", True)
-
-
-def _disable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", False)
-
-
 # ---------------------------------------------------------------------------
 # Settings flag
 # ---------------------------------------------------------------------------
-
-
-def test_flag_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FAR-1050 R5: the dispatch flip - ON is the shipped default.
-
-    The suite pins ``MODULO_E2B_VIA_PROVIDER=false`` as its baseline (see
-    ``tests/conftest.py``), so the override is cleared first to read the
-    PRODUCT default the settings field ships with.
-    """
-    monkeypatch.delenv("MODULO_E2B_VIA_PROVIDER", raising=False)
-    assert Settings(_env_file=None).modulo_e2b_via_provider is True
-
-
-def test_flag_enabled_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "true")
-    assert Settings(_env_file=None).modulo_e2b_via_provider is True
-
-
-def test_flag_disabled_by_env_reverts_to_the_legacy_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R5 revert: an explicit ``MODULO_E2B_VIA_PROVIDER=false`` yields OFF.
-
-    The settings value is what every gated call site reads, so an explicit
-    false flips the whole rewire back to the legacy direct path in one
-    restart - no legacy code was deleted at the flip.
-    """
-    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "false")
-    assert Settings(_env_file=None).modulo_e2b_via_provider is False
 
 
 # ---------------------------------------------------------------------------
@@ -214,62 +179,22 @@ async def test_build_log_tail_provider_returns_none_when_hub_init_fails(
 
 
 # ---------------------------------------------------------------------------
-# Call-site routing: flag OFF → urllib, flag ON → provider
+# Call-site routing: the log tail is read through the provider, never urllib
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_off_caller_hits_urllib_not_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    _disable_flag(monkeypatch)
-    monkeypatch.setenv("E2B_API_KEY", "test-key")
-    builder = AsyncMock(side_effect=AssertionError("provider builder must not run when flag OFF"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
-
-    import urllib.request
-
-    payload = b'{"logEntries": [{"message": "legacy-urllib-tail", "level": "error"}]}'
-
-    def _fake_urlopen(req: Any, timeout: Any) -> Any:
-        class _Resp:
-            def __enter__(self) -> Any:
-                return self
-
-            def __exit__(self, *args: object) -> bool:
-                return False
-
-            def read(self) -> bytes:
-                return payload
-
-        return _Resp()
-
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-
-    fn = make_sandbox_agent_fn(_base_node_def())
-    sandbox = await _completed_no_output_sandbox("sbx-flagoff")
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        pytest.raises(SandboxNodeFailedError) as excinfo,
-    ):
-        await fn(_run_state())
-
-    assert "legacy-urllib-tail" in str(excinfo.value)
-    builder.assert_not_awaited()
-
-
-async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    _enable_flag(monkeypatch)
+async def test_log_tail_caller_hits_provider_not_urllib(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = FakeRuntimeProvider(b"provider-fixed-tail")
     builder = AsyncMock(return_value=fake)
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
-    legacy = AsyncMock(side_effect=AssertionError("legacy helper must not run when flag ON"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", legacy)
-    # urlopen must never fire on the flag-ON path (hostname absence at runtime).
+    # urlopen must never fire on the provider path (the hostname lives only in e2b.py).
     monkeypatch.setattr("urllib.request.urlopen", AsyncMock(side_effect=AssertionError("urlopen must not run")))
 
     fn = make_sandbox_agent_fn(_base_node_def())
     sandbox = await _completed_no_output_sandbox("sbx-flagon")
     events: list[str] = []
-    # FAR-1050 R4: flag ON tears down through the ABC by-ref primitive, so the
+    # FAR-1050 R4: the dispatch tears down through the ABC by-ref primitive, so the
     # pre-kill ordering probe is wired to the dispatch seam's own kill marker
     # (the legacy ``sandbox.kill`` handle is unreachable on this path).
     install_fake_dispatch(monkeypatch, ref="sbx-flagon", kill_events=events)
@@ -290,10 +215,9 @@ async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.Monke
     message = str(excinfo.value)
     assert "provider-fixed-tail" in message
     builder.assert_awaited_once()
-    legacy.assert_not_awaited()
     # provider primitive called with the dispatch's sandbox id + plan's bound
     assert fake.calls == [("sbx-flagon", 6000)]
-    # pre-kill ordering preserved on the flag-ON path
+    # pre-kill ordering preserved on the provider path
     assert events[0] == "fetch"
     assert events.index("fetch") < events.index("kill")
     # FAR-1050 R2b: the prompt write went through the ABC primitive, not the
@@ -302,21 +226,18 @@ async def test_flag_on_caller_hits_provider_not_urllib(monkeypatch: pytest.Monke
     assert not sandbox.files.write.called
 
 
-async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+async def test_timeout_kill_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """T6 site 1 (stalled/timed-out → pre-kill probe) routes through the provider.
 
-    ``commands.run`` raises so ``cmd_result`` is None; the flag-ON arm must call
+    ``commands.run`` raises so ``cmd_result`` is None; the dispatch must call
     ``_read_log_tail_via_provider`` (not the legacy urllib helper) before the kill.
     """
-    _enable_flag(monkeypatch)
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = FakeRuntimeProvider(b"timeout-tail")
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
         AsyncMock(return_value=fake),
     )
-    legacy = AsyncMock(side_effect=AssertionError("legacy helper must not run when flag ON"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", legacy)
 
     fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
     sandbox = MagicMock()
@@ -325,7 +246,7 @@ async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.Monke
     sandbox.commands.run = AsyncMock(side_effect=TimeoutError("command timed out"))
     sandbox.files.read = AsyncMock(side_effect=TimeoutError("no output.json"))
     sandbox.kill = AsyncMock()
-    # FAR-1050 R4: flag ON starts the command through the ABC stream primitive;
+    # FAR-1050 R4: the provider path starts the command through the ABC stream primitive;
     # a start-time TimeoutError lands on the same stall/timeout arm the legacy
     # background-command start bound produces.
     install_fake_dispatch(
@@ -341,16 +262,14 @@ async def test_flag_on_timeout_kill_path_uses_provider(monkeypatch: pytest.Monke
         await fn(_run_state())
 
     assert fake.calls == [("sbx-timeout", 6000)]
-    legacy.assert_not_awaited()
     # FAR-1050 R2b: writes + the stall-path log re-read went through the ABC
     # primitives; the legacy handle was never touched.
     assert any(e.startswith("write:") for e in fake_file_io.events)
     assert not sandbox.files.write.called
 
 
-async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+async def test_schema_failure_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """T6 site 3 (declared-schema violation → SandboxNodeFailedError) uses provider."""
-    _enable_flag(monkeypatch)
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     # FAR-1050 R2b: output.json is read through ``read_file`` now, so the
     # payload the schema validator sees comes from the fake's byte store.
@@ -360,8 +279,6 @@ async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.Mon
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
         AsyncMock(return_value=fake),
     )
-    legacy = AsyncMock(side_effect=AssertionError("legacy helper must not run when flag ON"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", legacy)
 
     node_def = _base_node_def(timeout_seconds=30, output_schema_json={"required": ["status", "summary"]})
     fn = make_sandbox_agent_fn(node_def)
@@ -376,17 +293,15 @@ async def test_flag_on_schema_failure_path_uses_provider(monkeypatch: pytest.Mon
 
     assert "schema validation" in str(excinfo.value)
     assert fake.calls == [("sbx-schema", 6000)]
-    legacy.assert_not_awaited()
 
 
-async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+async def test_generic_exception_path_uses_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """T6 site 4 (generic exception envelope) routes through the provider.
 
-    FAR-1050 R2b: the write failure is injected on the FLAG-ON path (the fake
+    FAR-1050 R2b: the write failure is injected on the provider path (the fake
     provider's ``write_file``) — ``sandbox.files.write`` is a plain mock that
     must stay untouched, which is what makes this test prove the routing.
     """
-    _enable_flag(monkeypatch)
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake_file_io.write_error = RuntimeError("e2b file write exploded")
     fake = FakeRuntimeProvider(b"exc-tail")
@@ -394,8 +309,6 @@ async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.
         "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
         AsyncMock(return_value=fake),
     )
-    legacy = AsyncMock(side_effect=AssertionError("legacy helper must not run when flag ON"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", legacy)
 
     fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
     sandbox = MagicMock()
@@ -412,7 +325,6 @@ async def test_flag_on_generic_exception_path_uses_provider(monkeypatch: pytest.
 
     assert result["output"]["status"] == "failed"
     assert fake.calls == [("sbx-exc", 6000)]
-    legacy.assert_not_awaited()
     assert any(e.startswith("write:") for e in fake_file_io.events)
     assert not sandbox.files.write.called
 

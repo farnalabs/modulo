@@ -1620,7 +1620,7 @@ async def test_total_timeout_over_cap_stdout_emits_artifact_pointer(tmp_path):
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.artifacts.store.get_store", return_value=store),
         patch(
-            "modulo.core.pipeline_engine.node_runner._wait_command_with_idle_watchdog",
+            "modulo.core.pipeline_engine.node_runner._wait_command_with_exec_process",
             new=AsyncMock(side_effect=_total_timeout_exc),
         ),
         pytest.raises(SandboxNodeFailedError),

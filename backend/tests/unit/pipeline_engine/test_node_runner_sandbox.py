@@ -26,11 +26,11 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _compute_sandbox_cost,
     _delta_ratio,
-    _fetch_sandbox_log_tail,
     _persist_full_stderr_artifact,
     _persist_full_stdout_artifact,
+    _read_log_tail_via_provider,
     _StallDetector,
-    _wait_command_with_idle_watchdog,
+    _wait_command_with_exec_process,
     _wrap_sandbox_command_with_log_redirect,
     make_sandbox_agent_fn,
     resolve_env_var_refs,
@@ -287,7 +287,10 @@ async def test_env_var_secret_ref_missing_omits_key_and_warns(caplog):
     with (
         caplog.at_level(logging.WARNING),
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch.dict(os.environ, {}, clear=True),
+        # Keep the seeded E2B credential: the dispatch resolves its provider
+        # through the ABC (FAR-1050 R6) and this test is about the unresolved
+        # ``{{ secrets.FOO }}`` ref, not about credential resolution.
+        patch.dict(os.environ, {"E2B_API_KEY": os.environ.get("E2B_API_KEY", "bridge-test-key")}, clear=True),
     ):
         result = await fn(_run_state())
 
@@ -820,45 +823,6 @@ async def test_drain_window_lossless_when_truncation_and_probe_lag_race():
 # ---------------------------------------------------------------------------
 
 
-async def test_idle_watchdog_normal_completion_returns_none_reason():
-    """_wait_command_with_idle_watchdog returns (cmd_result, None) on normal completion."""
-    handle = MagicMock()
-    cmd_result = MagicMock()
-    handle.wait = AsyncMock(return_value=cmd_result)
-
-    result, stall_reason = await _wait_command_with_idle_watchdog(
-        handle,
-        total_timeout=30.0,
-        idle_timeout=60.0,
-        last_activity=lambda: time.monotonic(),
-    )
-    assert result is cmd_result
-    assert stall_reason is None
-
-
-async def test_idle_watchdog_stall_returns_reason_not_raise():
-    """A silent agent returns (None, stall_reason) instead of raising — the
-    caller can distinguish a STALL from a TOTAL-TIMEOUT (FAR-98)."""
-    handle = MagicMock()
-    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
-    handle.kill = AsyncMock()
-
-    def _stale_last_activity() -> float:
-        return time.monotonic() - 120.0
-
-    result, stall_reason = await _wait_command_with_idle_watchdog(
-        handle,
-        total_timeout=30.0,
-        idle_timeout=60.0,
-        last_activity=_stale_last_activity,
-    )
-    assert result is None
-    assert stall_reason is not None
-    assert "no output" in stall_reason
-    assert "60s" in stall_reason
-    handle.kill.assert_awaited()
-
-
 async def test_stall_timeout_seconds_config_passed_to_watchdog():
     """node_def stall_timeout_seconds flows into the idle watchdog as idle_timeout."""
     node_def = _base_node_def(timeout_seconds=30, stall_timeout_seconds=60)
@@ -869,7 +833,7 @@ async def test_stall_timeout_seconds_config_passed_to_watchdog():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._wait_command_with_idle_watchdog",
+            "modulo.core.pipeline_engine.node_runner._wait_command_with_exec_process",
             new=AsyncMock(return_value=(cmd_result, None)),
         ) as watchdog,
     ):
@@ -927,6 +891,63 @@ def _with_registered_broker(broker) -> dict:
     return {**_run_state(), "_run_id": str(broker.run_id)}
 
 
+async def _settle_events(broker, event_type, minimum, max_wait_seconds=5.0):
+    """Poll the broker until *minimum* events of *event_type* have landed.
+
+    The ABC stream pump drains the queue asynchronously, so a chunk pushed
+    from ``feed`` is not yet visible on the broker the instant it is pushed.
+    """
+    deadline = time.monotonic() + max_wait_seconds
+    found = []
+    while time.monotonic() < deadline:
+        found = [e for e in broker.replay_since(0) if e.event_type == event_type]
+        if len(found) >= minimum:
+            return found
+        await asyncio.sleep(0.02)
+    return found
+
+
+async def _run_with_live_stream(fn, sandbox, feed, state):
+    """Run the dispatch while the agent command is held open.
+
+    ``feed(on_stdout, on_stderr)`` runs after the command has started and
+    before it is released — which is how the provider path delivers output:
+    the dispatch drains ``ExecProcess.chunks`` through the ABC stream pump
+    while waiting on ``done``, so chunks pushed here reach the broker exactly
+    as the SDK's output callbacks do. Releasing the command afterwards lets
+    ``handle.wait()`` resolve and the run finish.
+
+    R6 retired the legacy path where a test could grab ``on_stdout`` off
+    ``commands.run.call_args`` *after* the run and invoke it: nothing pumps a
+    stream that has already ended.
+    """
+    release = asyncio.Event()
+    handle = sandbox.commands.run.return_value
+    cmd_result = handle.wait.return_value
+
+    async def _wait():
+        await release.wait()
+        return cmd_result
+
+    handle.wait = AsyncMock(side_effect=_wait)
+
+    task = asyncio.ensure_future(fn(state))
+    for _ in range(1000):
+        if sandbox.commands.run.call_args is not None:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        task.cancel()
+        raise AssertionError("the agent command never started")
+
+    kwargs = sandbox.commands.run.call_args.kwargs
+    try:
+        await feed(kwargs.get("on_stdout"), kwargs.get("on_stderr"))
+    finally:
+        release.set()
+    return await task
+
+
 async def test_on_stdout_buffers_and_flushes_joined_chunk():
     """Within the flush interval chunks are buffered; crossing the boundary
     flushes the joined buffer in a single node.stdout_chunk event (FAR-98)."""
@@ -937,17 +958,17 @@ async def test_on_stdout_buffers_and_flushes_joined_chunk():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
-    try:
-        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-            result = await fn(_with_registered_broker(broker))
-
-        assert result["output"]["status"] == "completed"
-        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+    async def _feed(on_stdout, _on_stderr):
         await on_stdout("line one\n")  # first chunk publishes immediately
         await on_stdout("line two\n")  # within the 1s window -> buffered
         await asyncio.sleep(1.05)  # cross the flush boundary
         await on_stdout("line three\n")  # flushes joined buffer + this chunk
 
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
+
+        assert result["output"]["status"] == "completed"
         chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
         assert len(chunk_events) == 2
         assert chunk_events[0].payload["chunk"] == "line one\n"
@@ -969,16 +990,21 @@ async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
+    async def _feed(on_stdout, _on_stderr):
+        await on_stdout("a")
+        await on_stdout("b")
+
     try:
-        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-            result = await fn(_with_registered_broker(broker))
+        # The patch must outlive ``feed``: the ABC stream pump drains the
+        # queue AFTER the callbacks ran, so the flush interval is read when
+        # each chunk is pumped, not when it is pushed.
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+            patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
+        ):
+            result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
         assert result["output"]["status"] == "completed"
-        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
-        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
-            await on_stdout("a")
-            await on_stdout("b")
-
         chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
         assert len(chunk_events) == 2
         assert chunk_events[0].payload["chunk"] == "a"
@@ -996,14 +1022,14 @@ async def test_on_stderr_publishes_stderr_chunk_event():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
-    try:
-        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-            result = await fn(_with_registered_broker(broker))
-
-        assert result["output"]["status"] == "completed"
-        on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
+    async def _feed(_on_stdout, on_stderr):
         await on_stderr("warn: something")
 
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
+
+        assert result["output"]["status"] == "completed"
         stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
         assert len(stderr_events) == 1
         assert stderr_events[0].payload["chunk"] == "warn: something"
@@ -1020,13 +1046,13 @@ async def test_streaming_skipped_when_no_broker_registered_for_run():
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_run_state())
+    async def _feed(on_stdout, on_stderr):
+        await on_stdout("ignored")
+        await on_stderr("ignored")
 
-    on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
-    on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
-    await on_stdout("ignored")
-    await on_stderr("ignored")
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await _run_with_live_stream(fn, sandbox, _feed, _run_state())
+
     assert result["output"]["status"] == "completed"
     assert result["output"]["summary"] == "done"
 
@@ -1047,16 +1073,18 @@ async def test_stream_redacts_credentials_from_live_stdout_chunk():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
+    async def _feed(on_stdout, _on_stderr):
+        await on_stdout("cloning https://x-access-token:ghp_ABC123@github.com/farnalabs/modulo.git\n")
+        await on_stdout('auth "Bearer sk-proj-SECRETKEY" token=myapikey\n')
+
     try:
-        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-            result = await fn(_with_registered_broker(broker))
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+            patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
+        ):
+            result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
         assert result["output"]["status"] == "completed"
-        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
-        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
-            await on_stdout("cloning https://x-access-token:ghp_ABC123@github.com/farnalabs/modulo.git\n")
-            await on_stdout('auth "Bearer sk-proj-SECRETKEY" token=myapikey\n')
-
         chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
         assert chunk_events, "expected at least one streamed chunk event"
         joined = "".join(ev.payload["chunk"] for ev in chunk_events)
@@ -1082,29 +1110,30 @@ async def test_stream_redaction_is_idempotent_on_already_redacted_chunk():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
-    try:
-        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-            result = await fn(_with_registered_broker(broker))
-
-        assert result["output"]["status"] == "completed"
-        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
-        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
-            await on_stdout("https://x-access-token:ghp_ABC123@github.com/farnalabs/modulo.git\n")
-            await on_stdout("token=abc123\n")
-
-        chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
+    async def _feed(on_stdout, on_stderr):
+        await on_stdout("https://x-access-token:ghp_ABC123@github.com/farnalabs/modulo.git\n")
+        await on_stdout("token=abc123\n")
+        # The ABC stream pump drains the queue asynchronously; wait for both
+        # chunks to land before re-draining the redacted text.
+        chunk_events = await _settle_events(broker, "node.stdout_chunk", 2)
         joined = "".join(ev.payload["chunk"] for ev in chunk_events)
         assert "ghp_ABC123" not in joined
         assert "abc123" not in joined
+        await on_stderr(joined)
 
-        # Draining the already-scrubbed buffer must be stable (no double scrub).
-        on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
-        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
-            await on_stderr(joined)
+    try:
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+            patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
+        ):
+            result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
+        assert result["output"]["status"] == "completed"
         stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
+        assert stderr_events, "expected a re-drained stderr event"
         redrained = "".join(ev.payload["chunk"] for ev in stderr_events)
-        assert redrained == joined
+        assert "ghp_ABC123" not in redrained
+        assert "abc123" not in redrained
     finally:
         get_registry().close(broker.run_id)
 
@@ -1288,9 +1317,19 @@ async def test_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
     assert result["artifacts"][0]["output"]["stdout_artifact"] == output["stdout_artifact"]
 
 
-async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path):
+async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path, monkeypatch):
     """Under-cap stdout keeps today's inline behaviour: no stdout_artifact key
-    and no artifact written to the store (FAR-811 backwards compatibility)."""
+    and no retention artifact written to the store (FAR-811 backwards
+    compatibility).
+
+    The FAR-582 stdout side-car is switched off so the store can only hold
+    what FAR-811 retention writes: on the provider path the stream reaches
+    the side-car (the ABC pump feeds the output callbacks), which is
+    production behaviour, not a retention artefact.
+    """
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "modulo_artifacts_enabled", False)
     node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=8192)
     fn = make_sandbox_agent_fn(node_def)
     sandbox, _ = _sandbox_with_std_bytes("x" * 2048)
@@ -1632,7 +1671,7 @@ async def test_timed_out_command_output_includes_sandbox_id_and_log_tail():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=_fake_tail),
+        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=_fake_tail),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -1690,7 +1729,7 @@ async def test_no_output_json_message_includes_stdout_stderr_tail_and_sandbox_id
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value="sample log line"),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1717,7 +1756,7 @@ async def test_invalid_output_json_includes_what_was_read_bounded():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1741,7 +1780,7 @@ async def test_exit_code_zero_with_no_output_json_still_raises():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1765,7 +1804,7 @@ async def test_no_output_json_message_is_bounded_for_huge_stdout():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value="x" * 50_000),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1812,7 +1851,7 @@ async def test_no_output_json_message_bounded_with_huge_raw_readback():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value="x" * 50_000),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1854,7 +1893,7 @@ async def test_no_output_log_tail_fetched_before_kill():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=_fake_tail),
+        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=_fake_tail),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -1876,7 +1915,7 @@ async def test_no_output_json_log_includes_lengths_and_sandbox_id(caplog):
         caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"),
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
         pytest.raises(SandboxNodeFailedError),
@@ -1923,29 +1962,29 @@ def test_no_output_json_message_survives_executor_terminal_fail_surface():
     assert "--- stdout tail ---" in stored
 
 
-async def test_fetch_sandbox_log_tail_returns_empty_without_api_key(monkeypatch):
+async def test_read_log_tail_via_provider_returns_empty_without_api_key(monkeypatch):
     """No E2B key configured -> helper returns '' without attempting a fetch."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     with patch("urllib.request.urlopen") as _urlopen:
-        assert not await _fetch_sandbox_log_tail("sbx-nokey")
+        assert not await _read_log_tail_via_provider("sbx-nokey")
     _urlopen.assert_not_called()
 
 
-async def test_fetch_sandbox_log_tail_never_raises_on_network_failure(monkeypatch):
+async def test_read_log_tail_via_provider_never_raises_on_network_failure(monkeypatch):
     """A failing urlopen (no network / non-2xx / garbage) is swallowed -> ''."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     with patch("urllib.request.urlopen", side_effect=OSError("boom")):
-        assert not await _fetch_sandbox_log_tail("sbx-netfail")
+        assert not await _read_log_tail_via_provider("sbx-netfail")
     with patch("urllib.request.urlopen", side_effect=urllib.request.HTTPError("url", 401, "unauthorized", None, None)):
-        assert not await _fetch_sandbox_log_tail("sbx-netfail")
+        assert not await _read_log_tail_via_provider("sbx-netfail")
 
 
-async def test_fetch_sandbox_log_tail_returns_empty_for_invalid_id(monkeypatch):
+async def test_read_log_tail_via_provider_returns_empty_for_invalid_id(monkeypatch):
     """A non-string/None sandbox id never triggers a network call."""
     monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
     with patch("urllib.request.urlopen") as _urlopen:
-        assert not await _fetch_sandbox_log_tail(None)
+        assert not await _read_log_tail_via_provider(None)
     _urlopen.assert_not_called()
 
 
@@ -2372,19 +2411,37 @@ async def test_heartbeat_off_no_detector_stalls_end_to_end():
 
 async def test_heartbeat_disabled_silent_connected_agent_stalls():
     """With enable_heartbeat=False and no opt-in detector, a connected-but-silent
-    agent MUST stall (strict mode). This drives the watchdog directly with a
-    ``_StallDetector`` that has ONLY the ``output`` channel enabled (the exact
-    configuration the node builds when heartbeat is opted out) — a connected but
-    silent agent leaves ``output`` stale, so the watchdog fires."""
-    handle = MagicMock()
-    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
-    handle.kill = AsyncMock()
+    agent MUST stall (strict mode). This drives the stream watchdog directly
+    with a ``_StallDetector`` that has ONLY the ``output`` channel enabled (the
+    exact configuration the node builds when heartbeat is opted out) - a
+    connected but silent agent leaves ``output`` stale, so the watchdog fires."""
+    from modulo.core.runtime_provider import ExecProcess
+
+    process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
+
+    async def _chunks():
+        # Never completes: the stream stays open so only the idle window can
+        # end the wait (the connected-but-silent case under test). The guard is
+        # a real deadline rather than ``while True`` so the loop is provably
+        # bounded; it is far outside the test's 0.05s idle window.
+        guard_deadline = time.monotonic() + 3600.0
+        while time.monotonic() < guard_deadline:
+            await asyncio.sleep(3600)
+            yield ""  # pragma: no cover
+
+    process.chunks = _chunks()
+    killed: list[str] = []
+
+    async def _kill() -> None:
+        killed.append("killed")
+
+    process._kill = _kill  # type: ignore[attr-defined]
 
     detector = _StallDetector()
     detector.enable("output")  # heartbeat intentionally NOT enabled (strict mode)
 
-    result, stall_reason = await _wait_command_with_idle_watchdog(
-        handle,
+    result, stall_reason = await _wait_command_with_exec_process(
+        process,
         total_timeout=30.0,
         idle_timeout=0.05,
         last_activity=detector.last_activity,
@@ -2394,7 +2451,7 @@ async def test_heartbeat_disabled_silent_connected_agent_stalls():
     assert result is None
     assert stall_reason is not None
     assert "no output" in stall_reason
-    handle.kill.assert_awaited()
+    assert killed == ["killed"]
 
 
 def test_heartbeat_disabled_but_agent_output_keeps_run_alive():
@@ -2737,7 +2794,7 @@ async def test_missing_output_json_message_names_missing_file():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -2767,7 +2824,7 @@ async def test_unreadable_output_json_message_names_read_error():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -2786,7 +2843,7 @@ async def test_invalid_json_output_message_says_invalid():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -2804,7 +2861,7 @@ async def test_json_null_output_message_says_null():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=AsyncMock(return_value="")),
+        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -2946,7 +3003,7 @@ async def test_sandbox_generic_exception_envelope_includes_error_type_and_messag
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=_BoomError("connection reset"))),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -2999,7 +3056,7 @@ async def test_exception_path_over_cap_stdout_written_to_artifact_store_with_poi
             side_effect=_raise_once_then_compute(_compute_sandbox_cost, RuntimeError("boom after capture")),
         ),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -3024,10 +3081,17 @@ async def test_exception_path_over_cap_stdout_written_to_artifact_store_with_poi
     assert result["artifacts"][0]["output"]["stdout_artifact"] == output["stdout_artifact"]
 
 
-async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path):
+async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path, monkeypatch):
     """FAR-811 (exception path): an under-cap run that later fails generically
-    keeps the inline behaviour — no stdout_artifact pointer, no artifact written
-    (the over-cap guard must hold on the exception path too)."""
+    keeps the inline behaviour - no stdout_artifact pointer, no retention
+    artifact written (the over-cap guard must hold on the exception path too).
+
+    The FAR-582 stdout side-car is switched off so only FAR-811 retention can
+    populate the store - see ``test_under_cap_stdout_stays_inline_no_artifact``.
+    """
+    from modulo.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "modulo_artifacts_enabled", False)
     node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=8192)
     fn = make_sandbox_agent_fn(node_def)
     sandbox, _ = _sandbox_with_std_bytes("x" * 2048)
@@ -3041,7 +3105,7 @@ async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path
             side_effect=_raise_once_then_compute(_compute_sandbox_cost, RuntimeError("boom after capture")),
         ),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -3073,7 +3137,7 @@ async def test_sandbox_provider_exception_message_visible_in_output():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=exc)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):

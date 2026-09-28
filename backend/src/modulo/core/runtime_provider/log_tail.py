@@ -1,10 +1,10 @@
-"""E2B log-entry parsing shared by the legacy probe and the R1 primitive.
+"""E2B log-entry parsing for the runtime provider's log-tail primitive.
 
-FAR-1050 R1: ``node_runner._fetch_sandbox_log_tail`` (the flag-OFF legacy
-probe) and ``E2BRuntimeProvider.read_log_tail`` (the flag-ON primitive) must
-produce byte-identical tails over the same E2B ``logEntries`` payload. The
-parsing helpers live here, once, so the two paths cannot drift; the
-content-parity test pins the behaviour rather than re-asserting a copy.
+FAR-1050 R6: ``E2BRuntimeProvider.read_log_tail`` is now the sole E2B log
+probe. The legacy ``node_runner._fetch_sandbox_log_tail`` helper this module
+once shared its parsing with was deleted when the direct E2B path was retired,
+so there is no second producer left to drift from; the R1 content-parity suite
+still pins the payload expectations the two paths used to share.
 """
 
 from __future__ import annotations
