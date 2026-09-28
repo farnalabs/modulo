@@ -70,6 +70,10 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
 from modulo.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES
+from modulo.core.runtime_provider import (
+    ProviderCapabilityUnsupportedError,
+    WorkspaceMetrics,
+)
 from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
 
 if TYPE_CHECKING:
@@ -1464,17 +1468,21 @@ class _ProviderMediatedHandle:
     - ``sandbox_id`` — the provider ref returned by ``create_workspace``;
     - ``kill(...)`` — ``destroy_workspace`` (T5 budget + stall kills);
     - ``commands.run(script, timeout=...)`` — ``exec_command`` (T10 workspace
-      inputs + drift probe).
+      inputs + drift probe);
+    - ``get_metrics()`` — the ABC's ``get_metrics`` primitive (FAR-1050 R6,
+      the ADR 040 metrics-gap close): the resource-cap killer polls it, so
+      ``resource_limits`` are enforced on this path exactly as on the
+      legacy SDK handle when the provider implements the primitive. A
+      provider that does not implement it refuses with the typed
+      ``ProviderCapabilityUnsupportedError``, which the watchdog turns into
+      its explicit, once-per-dispatch
+      ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning —
+      fail open, never a crash.
 
     Deliberately ABSENT: ``files`` (every file site is gated onto the ABC
-    primitives by FAR-1050 R2b) and ``get_metrics`` (the ABC models no
-    metrics primitive — the resource-cap killer detects the missing primitive
-    and fails OPEN through its EXPLICIT, once-per-dispatch
-    ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning, so an
-    operator can see the caps are not enforced on this path rather than
-    reading it as a transient metrics failure; ADR 040 metrics gap). Touching
-    ``files`` therefore means only one thing: a call site that still expects
-    the deleted legacy surface, which must be loud, never a silent downgrade.
+    primitives by FAR-1050 R2b). Touching ``files`` therefore means only
+    one thing: a call site that still expects the deleted legacy surface,
+    which must be loud, never a silent downgrade.
     """
 
     def __init__(self, provider: "RuntimeProvider", provider_ref: str) -> None:
@@ -1491,6 +1499,16 @@ class _ProviderMediatedHandle:
     async def kill(self, **_kwargs: Any) -> None:
         """T5 kill site: ``destroy_workspace`` on the provider that created it."""
         await self._provider.destroy_workspace(self.sandbox_id)
+
+    async def get_metrics(self) -> list[WorkspaceMetrics]:
+        """Resource-cap poll site: the ABC's ``get_metrics`` primitive (FAR-1050 R6).
+
+        Addressed by the provider ref this handle wraps — the same
+        ref-first convention as ``kill``/``commands``. Raises the typed
+        ``ProviderCapabilityUnsupportedError`` verbatim when the provider
+        does not implement the primitive (the watchdog fails open on it).
+        """
+        return await self._provider.get_metrics(self.sandbox_id)
 
 
 def _bounded_tail(text: str, limit: int) -> str:
@@ -7008,6 +7026,28 @@ class _SandboxWatchdog:
                 changed = True
         return changed
 
+    def _log_resource_caps_gap_once(self, reason: str) -> None:
+        """Explicit, once-per-dispatch warning that resource caps are NOT enforced.
+
+        Shared by both gap shapes — a handle with no ``get_metrics``
+        surface at all, and a provider whose ABC default refused the
+        primitive — so an operator sees ONE clear warning naming the gap
+        per node dispatch, never the generic "metrics unavailable"
+        traceback (which reads as a transient SDK hiccup) and never once
+        per poll tick.
+        """
+        if self._resource_gap_logged:
+            return
+        self._resource_gap_logged = True
+        _log.warning(
+            "sandbox_agent.resource_caps_not_enforced_via_provider",
+            extra={
+                "node_id": self._node_id,
+                "run_id": self._run_id,
+                "reason": reason,
+            },
+        )
+
     async def enforce_resource_limits(self) -> bool:
         """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
 
@@ -7028,39 +7068,35 @@ class _SandboxWatchdog:
         as a percentage threshold would kill a 2-core self._sandbox at >2%
         CPU usage.
 
-        FAR-1050 R4 follow-up (ADR 040 metrics gap): on the provider path
-        ``self._sandbox`` is the ABC-mediated ``_ProviderMediatedHandle``,
-        which exposes NO ``get_metrics`` — the frozen ``RuntimeProvider``
-        ABC models no metrics primitive, so there is nothing to poll. The
-        caps therefore CANNOT be enforced there. That fail-open is made
-        explicit and observable below: a distinct, one-per-dispatch warning
-        naming the gap, never a silent pass and never the generic
-        "metrics unavailable" traceback an operator would read as a
-        transient SDK hiccup.
+        FAR-1050 R6 (ADR 040 metrics gap, now CLOSED): on the provider
+        path ``self._sandbox`` is the ABC-mediated ``_ProviderMediatedHandle``
+        and polls the ABC's ``get_metrics`` primitive, so ``resource_limits``
+        ARE enforced there whenever the provider implements it (E2B does).
+
+        Three fail-open shapes remain, all explicit and none fatal to the
+        run — resource-cap enforcement is best-effort monitoring:
+          1. a handle with no ``get_metrics`` surface at all, or
+          2. a provider that does not implement the primitive (its ABC
+             default refuses with ``ProviderCapabilityUnsupportedError``)
+             -> the ONE-PER-DISPATCH
+             ``sandbox_agent.resource_caps_not_enforced_via_provider``
+             warning naming the gap, then fail open;
+          3. a metrics poll/compare failure (SDK unreachable, bad sample)
+             -> ``sandbox_agent.resource_metrics_unavailable`` /
+             ``..._compare_failed``, then fail open. Never kill on a
+             measurement failure.
         """
         if not self._resource_limits or self._sandbox_mode != "script" or self._sandbox is None:
             return False
         get_metrics = getattr(self._sandbox, "get_metrics", None)
         if not callable(get_metrics):
-            # Explicit, observable fail-open for the missing ABC primitive —
-            # resource caps are NOT enforced on this path (ADR 040 metrics
-            # gap; the provider contract would need a new metrics primitive,
-            # which the contract freeze defers to an ADR amendment).
-            if not self._resource_gap_logged:
-                self._resource_gap_logged = True
-                _log.warning(
-                    "sandbox_agent.resource_caps_not_enforced_via_provider",
-                    extra={
-                        "node_id": self._node_id,
-                        "run_id": self._run_id,
-                        "reason": (
-                            "the ABC-mediated sandbox handle exposes no get_metrics primitive "
-                            "(the RuntimeProvider contract models none - ADR 040), so the "
-                            "configured resource_limits are NOT enforced while "
-                            "the ABC-mediated dispatch holds no metrics primitive; fail open by design"
-                        ),
-                    },
-                )
+            # Shape 1: no primitive on the handle at all — explicit,
+            # observable fail-open (ADR 040 metrics gap).
+            self._log_resource_caps_gap_once(
+                "the sandbox handle exposes no get_metrics primitive, so the configured "
+                "resource_limits are NOT enforced for this workspace; fail open by design "
+                "(ADR 040 metrics gap)"
+            )
             return False
         try:
             # get_metrics is a fresh coroutine per call, so wait_for is
@@ -7072,8 +7108,19 @@ class _SandboxWatchdog:
             )
         except asyncio.CancelledError:
             raise
+        except ProviderCapabilityUnsupportedError as exc:
+            # Shape 2: the provider genuinely cannot report metrics — the
+            # ABC default's typed refusal. Same EXPLICIT, once-per-dispatch
+            # warning as a missing primitive (never the generic transient
+            # "metrics unavailable" traceback an operator would read as an
+            # SDK hiccup), then fail open: never crash the run.
+            self._log_resource_caps_gap_once(
+                f"{exc} - the configured resource_limits are NOT enforced for this "
+                "workspace; fail open by design (ADR 040 metrics gap)"
+            )
+            return False
         except Exception:
-            # Fail-open: metrics unavailable (SDK too old / self._sandbox
+            # Shape 3 - Fail-open: metrics unavailable (SDK too old / self._sandbox
             # unreachable) — never kill on a measurement failure.
             _log.warning(
                 "sandbox_agent.resource_metrics_unavailable",
@@ -7081,8 +7128,9 @@ class _SandboxWatchdog:
                 exc_info=True,
             )
             return False
-        # get_metrics returns a LIST of SandboxMetrics samples —
-        # compare against the latest (most recent instantaneous sample).
+        # get_metrics returns a LIST of samples (SandboxMetrics on the legacy
+        # handle, WorkspaceMetrics through the ABC) — compare against the
+        # latest (most recent instantaneous sample).
         metrics = metrics_raw[-1] if isinstance(metrics_raw, (list, tuple)) and metrics_raw else metrics_raw
         if metrics is None:
             return False
