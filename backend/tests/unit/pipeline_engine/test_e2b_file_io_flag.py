@@ -1,23 +1,25 @@
-"""FAR-1050 R2b: flag-gated file-I/O call-site rewire (site T4, 13 sites).
+"""FAR-1050 R2b/R6: file-I/O call-site routing through the ABC (site T4).
 
-Proves the three things the rewire plan asks of this slice, all without a live
+Proves the three things the rewire plan asks of this site, all without a live
 E2B sandbox:
 
 1. **Bytes-in/bytes-out round-trip.** ``_write_file_via_provider`` UTF-8-encodes
-   the text the legacy arm passes as ``str``; ``_read_file_via_provider`` decodes
-   the primitive's bytes back to the same text — and the provider is addressed
-   with the dispatch's sandbox id.
-2. **Write-before-command ordering.** Every flag-ON write still lands before
+   the text; ``_read_file_via_provider`` decodes the primitive's bytes back to
+   the same text — and the provider is addressed with the dispatch's sandbox id.
+2. **Write-before-command ordering.** Every write lands before
    ``sandbox.commands.run`` starts the agent.
-3. **Drain-window equivalence.** A scripted log drives the legacy
-   ``sandbox.files`` arm and the flag-ON provider arm tick-for-tick; both
-   produce identical drained chunks, offset and retained length — including the
-   window truncation.
+3. **Drain-window progression.** A growing log drives the drain across stages:
+   the offset tracks the log end and the retained window truncates at
+   ``drain_window_bytes``.
 
-Plus the routing invariants: with the flag ON **no** ``sandbox.files`` call is
-reachable in ``node_runner.py`` (asserted through a handle that records every
-attribute touch, so a swallowed exception cannot hide a legacy-path call), and
-the flag-OFF arm never touches the provider seam.
+Plus the routing invariant: **no** ``sandbox.files`` call is reachable in
+``node_runner.py`` (asserted through a handle that records every attribute
+touch, so a swallowed exception cannot hide a legacy-path call).
+
+R6 deleted the legacy ``sandbox.files`` arm and the ``MODULO_E2B_VIA_PROVIDER``
+flag, so this file's original flag-OFF matrix — including the tick-for-tick
+parity test between the two arms, which had nothing left to compare against —
+retired with them.
 """
 
 import json
@@ -32,7 +34,6 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _build_file_io_provider,
     _file_io_provider_for,
-    _file_io_via_provider_enabled,
     _get_info_via_provider,
     _list_fs_entries_via_provider,
     _read_file_via_provider,
@@ -40,8 +41,7 @@ from modulo.core.pipeline_engine.node_runner import (
     make_sandbox_agent_fn,
 )
 from modulo.core.runtime_provider import RuntimeProviderError, WorkspaceFileInfo
-from modulo.settings import Settings, get_settings
-from tests.unit.pipeline_engine.conftest import FakeFileIOProvider, install_fake_dispatch
+from tests.unit.pipeline_engine.conftest import install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -51,14 +51,6 @@ _PROMPT_PATH = "/home/user/prompt.md"
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
-
-
-def _enable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", True)
-
-
-def _disable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", False)
 
 
 def _base_node_def(**overrides: Any) -> dict[str, Any]:
@@ -107,7 +99,7 @@ class _ForbiddenFiles:
 
     The dispatch swallows some file failures (the output.json read sits in a
     try/except), so an AssertionError alone could be masked — ``touched`` is
-    the assertion surface: it must stay empty on the flag-ON path.
+    the assertion surface: it must stay empty on the provider path.
     """
 
     def __init__(self) -> None:
@@ -115,7 +107,9 @@ class _ForbiddenFiles:
 
     def __getattr__(self, name: str) -> Any:
         self.touched.append(name)
-        raise AssertionError(f"sandbox.files.{name} must not be touched while MODULO_E2B_VIA_PROVIDER is ON")
+        raise AssertionError(
+            f"sandbox.files.{name} must not be touched: the legacy direct path is retired (FAR-1050 R6)"
+        )
 
 
 def _watchdog(
@@ -148,64 +142,12 @@ def _watchdog(
     )
 
 
-class _ScriptedLog:
-    """A log that grows in stages so the drain window is actually exercised."""
-
-    def __init__(self, stages: list[str]) -> None:
-        self.stages = stages
-        self.index = 0
-
-    @property
-    def text(self) -> str:
-        return self.stages[self.index]
-
-    def advance(self) -> None:
-        self.index = min(self.index + 1, len(self.stages) - 1)
-
-
-def _legacy_sandbox_for_log(log: _ScriptedLog) -> MagicMock:
-    sandbox = MagicMock()
-    sandbox.sandbox_id = "sbx-drain-legacy"
-    sandbox.files.get_info = AsyncMock(side_effect=lambda path, **kw: MagicMock(size=len(log.text)))
-    sandbox.files.read = AsyncMock(side_effect=lambda path, **kw: log.text)
-    return sandbox
-
-
-def _provider_for_log(log: _ScriptedLog) -> FakeFileIOProvider:
-    """A fake provider whose stat/read are driven by the same scripted log."""
-    provider = FakeFileIOProvider()
-
-    async def _get_info(provider_ref: str, path: str) -> WorkspaceFileInfo:
-        provider.refs.append(provider_ref)
-        provider.events.append(f"get_info:{path}")
-        return WorkspaceFileInfo(path=path, size=len(log.text), is_dir=False)
-
-    async def _read_file(provider_ref: str, path: str) -> bytes:
-        provider.refs.append(provider_ref)
-        provider.events.append(f"read:{path}")
-        return log.text.encode()
-
-    provider.get_info = _get_info  # type: ignore[method-assign]
-    provider.read_file = _read_file  # type: ignore[method-assign]
-    return provider
-
-
-def _patch_provider_builder(monkeypatch: pytest.MonkeyPatch, provider: Any) -> AsyncMock:
-    builder = AsyncMock(return_value=provider)
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_file_io_provider", builder)
-    # ``_file_io_provider_for`` resolves a credential BEFORE building, and
-    # these tests deliberately bypass the ``fake_file_io`` fixture.
-    monkeypatch.setenv("E2B_API_KEY", "test-key")
-    return builder
-
-
 # ---------------------------------------------------------------------------
 # 1. Bytes-in / bytes-out round-trip
 # ---------------------------------------------------------------------------
 
 
-async def test_write_then_read_round_trip_is_bytes_in_bytes_out(fake_file_io, monkeypatch: pytest.MonkeyPatch) -> None:
-    _enable_flag(monkeypatch)
+async def test_write_then_read_round_trip_is_bytes_in_bytes_out(fake_file_io) -> None:
     text = "héllo — ünïcode prompt ✅"
 
     await _write_file_via_provider("sbx-rt", _PROMPT_PATH, text)
@@ -220,11 +162,8 @@ async def test_write_then_read_round_trip_is_bytes_in_bytes_out(fake_file_io, mo
     assert await _read_file_via_provider("sbx-rt", _PROMPT_PATH) == text
 
 
-async def test_read_round_trip_preserves_length_on_multibyte_content(
-    fake_file_io, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_read_round_trip_preserves_length_on_multibyte_content(fake_file_io) -> None:
     """The decode must not change length — drain windowing slices by char."""
-    _enable_flag(monkeypatch)
     text = "é" * 100 + "\n" + "→" * 50
     await _write_file_via_provider("sbx-len", "/tmp/multibyte.txt", text)
 
@@ -238,8 +177,7 @@ async def test_read_round_trip_preserves_length_on_multibyte_content(
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_on_writes_land_before_the_agent_command(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    _enable_flag(monkeypatch)
+async def test_provider_writes_land_before_the_agent_command(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     sandbox = _sandbox_mock("sbx-order")
     order = fake_file_io.events
 
@@ -250,7 +188,7 @@ async def test_flag_on_writes_land_before_the_agent_command(monkeypatch: pytest.
         return await original_run(*args, **kwargs)
 
     sandbox.commands.run = AsyncMock(side_effect=_run_and_record)
-    # FAR-1050 R4: flag ON no longer reaches ``AsyncSandbox.create`` — the
+    # FAR-1050 R4: the provider path no longer reaches ``AsyncSandbox.create`` — the
     # command starts through the ABC stream primitive, so the ordering probe
     # is wired to the dispatch seam's own "command" milestone.
     install_fake_dispatch(monkeypatch, ref="sbx-order", command_events=order)
@@ -263,56 +201,47 @@ async def test_flag_on_writes_land_before_the_agent_command(monkeypatch: pytest.
         await fn(_run_state())
 
     write_indexes = [i for i, e in enumerate(order) if e.startswith("write:")]
-    assert write_indexes, "the flag-ON dispatch performed no provider writes"
+    assert write_indexes, "the dispatch performed no provider writes"
     assert order.index("command") > write_indexes[-1]
     assert not sandbox.files.write.called
 
 
 # ---------------------------------------------------------------------------
-# 3. Drain-window equivalence on a scripted log
+# 3. Drain-window progression (provider path)
 # ---------------------------------------------------------------------------
 
 
-async def test_drain_window_equivalence_flag_on_matches_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tick-for-tick parity: same drained chunks, offset and retained length.
+async def test_drain_window_progression_and_truncation(fake_file_io) -> None:
+    """Offset tracks the growing log; the retained window truncates.
 
-    The flag is toggled per tick so each watchdog really exercises ITS OWN
-    arm — otherwise both would run the provider path and the comparison would
-    be vacuous. The third stage overflows the 64-char window, so the
-    comparison covers truncation, not just the first tick.
+    The provider half of the original flag-parity drain test. R6 deleted the
+    legacy arm, so there is nothing left to compare against, but every
+    invariant that test pinned on the provider arm still stands: offset
+    progression across stages, a retained window capped at
+    ``drain_window_bytes``, and truncation actually exercised (the third
+    stage overflows the 64-char window).
     """
     stages = [
         "stage-one-" * 5,  # 50 chars
         ("stage-one-" * 5) + ("stage-two-" * 5),  # 100 chars > window
         ("stage-one-" * 5) + ("stage-two-" * 5) + ("stage-three-" * 10),  # 220 chars
     ]
-    log = _ScriptedLog(stages)
+    sandbox = _sandbox_mock("sbx-drain-window")
+    wd = _watchdog(sandbox=sandbox, drain_window_bytes=64)
 
-    legacy_wd = _watchdog(sandbox=_legacy_sandbox_for_log(log), drain_window_bytes=64)
-    _patch_provider_builder(monkeypatch, _provider_for_log(log))
-    provider_wd = _watchdog(sandbox=_sandbox_mock("sbx-drain-on"), drain_window_bytes=64)
+    for stage in stages:
+        fake_file_io.files[nr._SANDBOX_LOG_PATH] = stage.encode()
+        await wd.drain_sandbox_log()
 
-    for _ in range(len(stages)):
-        _disable_flag(monkeypatch)
-        await legacy_wd.drain_sandbox_log()
-        _enable_flag(monkeypatch)
-        await provider_wd.drain_sandbox_log()
-        log.advance()
-
-    assert provider_wd._drained_chunks == legacy_wd._drained_chunks
-    assert provider_wd._drain_offset == legacy_wd._drain_offset
-    assert provider_wd._drained_len == legacy_wd._drained_len
-    # The window really did truncate (otherwise this would pass vacuously).
-    assert legacy_wd._drained_len <= 64
-    assert provider_wd._drained_len <= 64
-    assert provider_wd._drain_offset == len(stages[-1])
+    assert wd._drain_offset == len(stages[-1])
+    assert wd._drained_chunks
+    # Truncation really happened: the retained buffer is capped, not the
+    # whole 220-char log.
+    assert wd._drained_len <= 64
 
 
-async def test_drain_window_probe_failure_is_quiet_on_the_flag_on_path(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_drain_window_probe_failure_is_quiet_on_the_provider_path(fake_file_io) -> None:
     """A provider-side stat failure degrades exactly like the legacy probe."""
-    _enable_flag(monkeypatch)
     sandbox = _sandbox_mock("sbx-drain-fail")
     wd = _watchdog(sandbox=sandbox)
 
@@ -333,10 +262,8 @@ async def test_drain_window_probe_failure_is_quiet_on_the_flag_on_path(
 # ---------------------------------------------------------------------------
 
 
-async def test_no_sandbox_files_call_is_reachable_when_the_flag_is_on(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
-    """The legacy handle is unreachable flag-ON — even where a failure is swallowed.
+async def test_no_sandbox_files_call_is_reachable(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """The legacy handle is unreachable — even where a failure is swallowed.
 
     ``_ForbiddenFiles`` records every attribute touch, so an arm that catches
     its own AssertionError cannot make this test pass vacuously. FAR-1050 R4
@@ -344,7 +271,6 @@ async def test_no_sandbox_files_call_is_reachable_when_the_flag_is_on(
     handle the body ever holds is the ABC-mediated one (whose ``files``
     surface raises by construction).
     """
-    _enable_flag(monkeypatch)
     sandbox = _sandbox_mock("sbx-forbidden")
     forbidden = _ForbiddenFiles()
     sandbox.files = forbidden
@@ -363,69 +289,8 @@ async def test_no_sandbox_files_call_is_reachable_when_the_flag_is_on(
     assert any(e.startswith("read:") for e in fake_file_io.events)
 
 
-async def test_flag_off_stays_on_the_legacy_handle(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Flag OFF (the default): the provider seam is never constructed."""
-    _disable_flag(monkeypatch)
-    monkeypatch.setenv("E2B_API_KEY", "test-key")
-    builder = AsyncMock(side_effect=AssertionError("provider builder must not run when the flag is OFF"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_file_io_provider", builder)
-
-    sandbox = _sandbox_mock("sbx-flagoff")
-    fn = make_sandbox_agent_fn(_base_node_def())
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        pytest.raises(SandboxNodeFailedError),
-    ):
-        await fn(_run_state())
-
-    assert sandbox.files.write.called
-    builder.assert_not_awaited()
-
-
-async def test_flag_off_context_files_stay_on_the_legacy_handle(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Flag OFF: the context-files write loop stays on ``sandbox.files.write``.
-
-    The flag-OFF dispatch test above runs with an empty ``context_files``
-    map, so the loop body (and the flag-OFF arm inside it) never executes.
-    This exercises the legacy arm explicitly and asserts the provider seam
-    is still never constructed.
-    """
-    _disable_flag(monkeypatch)
-    monkeypatch.setenv("E2B_API_KEY", "test-key")
-    builder = AsyncMock(side_effect=AssertionError("provider builder must not run when the flag is OFF"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_file_io_provider", builder)
-
-    sandbox = _sandbox_mock("sbx-flagoff-ctx")
-    node_def = _base_node_def(context_files={"/home/user/context/notes.txt": "ctx-body"})
-    fn = make_sandbox_agent_fn(node_def)
-    with (
-        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        pytest.raises(SandboxNodeFailedError),
-    ):
-        await fn(_run_state())
-
-    sandbox.files.write.assert_any_await("/home/user/context/notes.txt", "ctx-body")
-    builder.assert_not_awaited()
-
-
-async def test_watchdog_fs_probe_flag_off_stays_on_the_legacy_handle(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Site 4 (``files.list``): flag OFF lists through the legacy handle."""
-    _disable_flag(monkeypatch)
-    sandbox = _sandbox_mock("sbx-fs-flagoff")
-    sandbox.files.list = AsyncMock(return_value=[])
-    wd = _watchdog(sandbox=sandbox, watch_globs=["*.log"])
-    wd._fs_min_stat_interval = 0.0
-
-    await wd.probe_filesystem()
-
-    assert sandbox.files.list.await_args.kwargs["path"] == "/"
-
-
-async def test_watchdog_fs_probe_flag_on_routes_through_the_provider(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
-    """Site 4 (``files.list``): flag-ON lists + stats through the ABC."""
-    _enable_flag(monkeypatch)
+async def test_watchdog_fs_probe_routes_through_the_provider(fake_file_io) -> None:
+    """Site 4 (``files.list``): lists + stats through the ABC."""
     path = "/home/user/out/build.log"
     fake_file_io.files[path] = b"a" * 10
 
@@ -445,11 +310,8 @@ async def test_watchdog_fs_probe_flag_on_routes_through_the_provider(
     assert not sandbox.files.list.called
 
 
-async def test_watchdog_log_growth_probe_flag_on_routes_through_the_provider(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
-    """Site 3 (``files.get_info`` on the watch log): flag-ON uses the ABC."""
-    _enable_flag(monkeypatch)
+async def test_watchdog_log_growth_probe_routes_through_the_provider(fake_file_io) -> None:
+    """Site 3 (``files.get_info`` on the watch log): uses the ABC."""
     watch_path = "/home/user/out.json"
     fake_file_io.files[watch_path] = b"a" * 10
 
@@ -465,11 +327,8 @@ async def test_watchdog_log_growth_probe_flag_on_routes_through_the_provider(
     assert not sandbox.files.get_info.called
 
 
-async def test_watchdog_drain_probe_flag_on_routes_through_the_provider(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
-    """Sites 1+2 (drain stat + read): flag-ON uses the ABC."""
-    _enable_flag(monkeypatch)
+async def test_watchdog_drain_probe_routes_through_the_provider(fake_file_io) -> None:
+    """Sites 1+2 (drain stat + read): uses the ABC."""
     log_path = nr._SANDBOX_LOG_PATH
     fake_file_io.files[log_path] = b"hello from the agent\n"
 
@@ -484,57 +343,22 @@ async def test_watchdog_drain_probe_flag_on_routes_through_the_provider(
 
 
 # ---------------------------------------------------------------------------
-# 5. Flag + provider-resolution units
+# 5. Provider-resolution units
 # ---------------------------------------------------------------------------
 
 
-def test_flag_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FAR-1050 R5: the dispatch flip - ON is the shipped default.
+async def test_build_file_io_provider_constructs_real_e2b_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real builder body runs the hub factory — no network, no injection.
 
-    ``tests/conftest.py`` pins the suite baseline to the revert value, so
-    clear the override to read the PRODUCT default.
+    Restores the R1 hub seam the autouse bridge fixture replaced, so this
+    exercises the REAL chain rather than the mock-sandbox bridge.
     """
-    monkeypatch.delenv("MODULO_E2B_VIA_PROVIDER", raising=False)
-    assert Settings(_env_file=None).modulo_e2b_via_provider is True
-
-
-def test_flag_explicit_false_reverts_to_the_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R5 revert: ``MODULO_E2B_VIA_PROVIDER=false`` selects the legacy arm.
-
-    The env-derived settings resolve False, and with that instance wired in
-    ``_file_io_via_provider_enabled`` (the gate every T4 site branches on)
-    takes the legacy ``sandbox.files`` path - the revert still works after
-    the default flipped to ON. The seam reads ``get_settings()`` per call,
-    so the env-derived instance is substituted for the cached one here.
-    """
-    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "false")
-    settings = Settings(_env_file=None)
-    assert settings.modulo_e2b_via_provider is False
-    monkeypatch.setattr(nr, "get_settings", lambda *a, **k: settings)
-    assert _file_io_via_provider_enabled() is False
-
-
-def test_flag_read_failure_fails_open_to_the_legacy_arm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A settings outage resolves to the flag-OFF value — never a crash."""
-
-    def _boom() -> Any:
-        raise RuntimeError("settings down")
-
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.get_settings", _boom)
-    assert _file_io_via_provider_enabled() is False
-
-
-def test_flag_read_uses_the_runtime_settings_instance(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", True)
-    assert _file_io_via_provider_enabled() is True
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", False)
-    assert _file_io_via_provider_enabled() is False
-
-
-async def test_build_file_io_provider_constructs_real_e2b_provider() -> None:
-    """The real builder body runs the hub factory — no network, no injection."""
     from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+    from tests.unit._e2b_sandbox_bridge import original_seam
 
+    monkeypatch.setattr(nr, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
     provider = await _build_file_io_provider("test-key")
     assert isinstance(provider, E2BRuntimeProvider)
 
@@ -543,19 +367,18 @@ async def test_build_file_io_provider_returns_none_when_hub_init_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
+    from tests.unit._e2b_sandbox_bridge import original_seam
 
     async def _boom(self: RuntimeProviderHub, config: dict[str, Any]) -> None:
         raise RuntimeError("hub exploded")
 
     monkeypatch.setattr(RuntimeProviderHub, "initialise", _boom)
+    monkeypatch.setattr(nr, "_build_log_tail_provider", original_seam("_build_log_tail_provider"))
     assert await _build_file_io_provider("test-key") is None
 
 
-async def test_provider_resolution_fails_closed_without_a_sandbox_ref(
-    fake_file_io, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_provider_resolution_fails_closed_without_a_sandbox_ref(fake_file_io) -> None:
     """No dispatch sandbox id -> typed failure, never a legacy-handle fallback."""
-    _enable_flag(monkeypatch)
     with pytest.raises(RuntimeProviderError, match="dispatch sandbox id"):
         await _file_io_provider_for(None)
     with pytest.raises(RuntimeProviderError, match="dispatch sandbox id"):
@@ -588,9 +411,8 @@ async def test_provider_resolution_fails_closed_when_the_builder_yields_nothing(
         await _file_io_provider_for("sbx-none")
 
 
-async def test_write_helper_propagates_a_provider_failure(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    """A flag-ON write failure raises into the caller's existing handling."""
-    _enable_flag(monkeypatch)
+async def test_write_helper_propagates_a_provider_failure(fake_file_io) -> None:
+    """A provider write failure raises into the caller's existing handling."""
     fake_file_io.write_error = RuntimeError("provider write exploded")
 
     with pytest.raises(RuntimeError, match="provider write exploded"):
@@ -598,7 +420,7 @@ async def test_write_helper_propagates_a_provider_failure(monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
-# 6. Remaining flag-ON call-site arms (context files, script input, bridge)
+# 6. Remaining provider call-site arms (context files, script input, bridge)
 # ---------------------------------------------------------------------------
 
 
@@ -639,9 +461,8 @@ def _script_node_def(**overrides: Any) -> dict[str, Any]:
     return node_def
 
 
-async def test_get_info_via_provider_requires_a_non_empty_path(fake_file_io, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_info_via_provider_requires_a_non_empty_path(fake_file_io) -> None:
     """Site 3: a blank/absent watch path fails closed, never reaching the ABC."""
-    _enable_flag(monkeypatch)
     with pytest.raises(RuntimeProviderError, match="non-empty path"):
         await _get_info_via_provider("sbx-info", None)
     with pytest.raises(RuntimeProviderError, match="non-empty path"):
@@ -649,10 +470,9 @@ async def test_get_info_via_provider_requires_a_non_empty_path(fake_file_io, mon
     assert not fake_file_io.events
 
 
-async def test_list_fs_entries_filters_untracked_rows(fake_file_io, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_fs_entries_filters_untracked_rows(fake_file_io) -> None:
     """Site 4: non-str rows, the redirected log, the watch log and glob misses
     are all excluded BEFORE a stat; only tracker-kept rows are statted."""
-    _enable_flag(monkeypatch)
     keep = "/home/user/out/build.log"
     watch_log = "/home/user/watch.json"
     fake_file_io.files[keep] = b"1234567890"
@@ -678,12 +498,11 @@ async def test_list_fs_entries_filters_untracked_rows(fake_file_io, monkeypatch:
     assert "get_info:/home/user/notes.txt" not in fake_file_io.events
 
 
-async def test_flag_on_context_files_land_through_the_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+async def test_context_files_land_through_the_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The context-files arm (written before the command) routes to the ABC."""
-    _enable_flag(monkeypatch)
     sandbox = _sandbox_mock("sbx-ctx")
     node_def = _base_node_def(context_files={"/home/user/context/notes.txt": "ctx-body"})
-    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # FAR-1050 R4: the dispatch itself runs through the provider
     # seam, so the dispatch must be a fake (the command still fails, as the
     # empty fixture sandbox does, keeping the SandboxNodeFailedError arm).
     install_fake_dispatch(monkeypatch, ref="sbx-ctx")
@@ -700,14 +519,11 @@ async def test_flag_on_context_files_land_through_the_provider(monkeypatch: pyte
     assert not sandbox.files.write.called
 
 
-async def test_flag_on_script_mode_input_json_lands_through_the_provider(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_script_mode_input_json_lands_through_the_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The script-mode input.json arm routes to the ABC, not ``sandbox.files``."""
-    _enable_flag(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = b'{"result": "ok"}'
     sandbox = _script_sandbox_mock("sbx-script")
-    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # FAR-1050 R4: the dispatch itself runs through the provider
     # seam; the scripted command completes with exit code 0.
     install_fake_dispatch(monkeypatch, ref="sbx-script", exit_code=0)
 
@@ -720,12 +536,11 @@ async def test_flag_on_script_mode_input_json_lands_through_the_provider(
     assert not sandbox.files.write.called
 
 
-async def test_flag_on_bridge_writes_land_through_the_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    """All three loop-intercept bridge files route to the ABC when the flag is ON."""
-    _enable_flag(monkeypatch)
+async def test_bridge_writes_land_through_the_provider(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """All three loop-intercept bridge files route to the ABC, never the SDK handle."""
     fake_file_io.files["/home/user/output.json"] = b'{"summary": "done"}'
     sandbox = _script_sandbox_mock("sbx-bridge")
-    # FAR-1050 R4: flag ON routes the dispatch itself through the provider
+    # FAR-1050 R4: the dispatch itself runs through the provider
     # seam; the scripted command completes with exit code 0.
     install_fake_dispatch(monkeypatch, ref="sbx-bridge", exit_code=0)
 

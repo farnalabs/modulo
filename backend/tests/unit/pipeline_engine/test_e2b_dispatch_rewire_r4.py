@@ -1,30 +1,31 @@
-"""FAR-1050 R4: the dispatch rewire (create / stream / kill) behind the flag.
+"""FAR-1050 R4/R6: the dispatch rewire (create / stream / kill) through the ABC.
 
 One proof per row of the design doc's binding risk table
 (``docs/design/e2b-provider-conformance-rewire.md`` §5), all without a live
-E2B sandbox:
+E2B sandbox. R6 deleted the legacy direct path and the
+``MODULO_E2B_VIA_PROVIDER`` flag, so every dispatch proof below runs the
+provider path unconditionally:
 
-1. **Full ``_sandbox_agent_impl`` run flag-ON** with a fake provider: the ABC
-   call sequence, the dispatch marker written BEFORE create, cancellation
+1. **Full ``_sandbox_agent_impl`` run** with a fake provider: the ABC call
+   sequence, the dispatch marker written BEFORE create, cancellation
    propagation, no zero-exit fabrication on a stream error, retry
    classification unchanged.
-2. **Flag-OFF run asserts ZERO provider calls** (every seam refuses to run).
-3. **Streaming semantics**: ordered chunks, ``exit_code is None`` + ``error``
+2. **Streaming semantics**: ordered chunks, ``exit_code is None`` + ``error``
    set on a proxy drop, ``done`` fires on an early consumer close.
-4. **Watchdog**: a slice timeout never cancels the underlying wait (the
+3. **Watchdog**: a slice timeout never cancels the underlying wait (the
    FAR-97/98 ``cancelling()==0`` invariant, re-expressed over
    ``ExecProcess.done``).
-5. **Retry classification**: provider ``RateLimitedError`` /
+4. **Retry classification**: provider ``RateLimitedError`` /
    ``ProvisionTimeoutError`` map to the EXISTING retryable codes; no new
-   ``harness.unknown`` outcome on a flag-ON rate limit; no re-parenting.
-6. **Cost stamping**: flag ON/OFF produce identical ``cost_estimate_usd`` for
-   a fixed elapsed + output fixture.
-7. **Marker / telemetry attribution**: ``provider`` + flag state on BOTH paths.
-8. **T10**: flag ON hands ``provision_workspace_inputs_in_sandbox`` the
-   ABC-mediated handle (four commands round-trip through the fake provider);
-   flag OFF hands it the legacy handle.
-9. **S2/S3/S4** (org-deletion / pipeline-execution / evidence kill sites):
-   never read the flag and work with it ON and OFF.
+   ``harness.unknown`` outcome on a rate limit; no re-parenting.
+5. **Cost stamping**: the dispatch stamps through the sanctioned
+   ``_compute_sandbox_cost`` helper exactly once per run.
+6. **Marker / telemetry attribution**: ``provider`` + ``via_provider`` on the
+   marker rewrite and on node telemetry.
+7. **T10**: ``provision_workspace_inputs_in_sandbox`` gets the ABC-mediated
+   handle and its four commands round-trip through the fake provider.
+8. **S2/S3/S4** (org-deletion / pipeline-execution / evidence kill sites):
+   stay direct by ADR 040 decision and never reference the retired flag.
 """
 
 import asyncio
@@ -45,7 +46,6 @@ from modulo.core.pipeline_engine.node_runner import (
     SandboxRateLimitedError,
     _build_dispatch_provider,
     _dispatch_marker_json,
-    _dispatch_via_provider_enabled,
     _ExecStreamOutcome,
     _ProviderMediatedHandle,
     _require_dispatch_provider,
@@ -61,7 +61,7 @@ from modulo.core.runtime_provider import (
     RuntimeProviderError,
     WorkspaceSpec,
 )
-from modulo.settings import Settings, get_settings
+from modulo.settings import get_settings
 from tests.unit.pipeline_engine.conftest import install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -72,14 +72,6 @@ _COMPLETED_OUTPUT = '{"status": "completed", "summary": "done"}'
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
-
-
-def _enable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", True)
-
-
-def _disable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "modulo_e2b_via_provider", False)
 
 
 def _base_node_def(**overrides: Any) -> dict[str, Any]:
@@ -107,34 +99,6 @@ def _install_log_tail(monkeypatch: pytest.MonkeyPatch, tail: bytes = b"r4-tail")
     builder = AsyncMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=tail)))
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner._build_log_tail_provider", builder)
     return builder
-
-
-def _legacy_sandbox(sandbox_id: str, output_json: str, *, exit_code: int = 0) -> MagicMock:
-    """A flag-OFF dispatch sandbox whose command completes with ``output.json``."""
-    cmd_result = MagicMock()
-    cmd_result.exit_code = exit_code
-    cmd_result.stdout = "legacy stdout"
-    cmd_result.stderr = ""
-
-    handle = MagicMock()
-    handle.wait = AsyncMock(return_value=cmd_result)
-    # The duck-typed helpers call ``sandbox.commands.run`` directly, so the
-    # handle doubles as their result: empty stdout keeps the drift probe's
-    # string handling on real ``str`` rather than an auto-MagicMock.
-    handle.stdout = ""
-
-    def _read(path: str, *args: Any, **kwargs: Any) -> str:
-        return output_json if str(path).endswith("output.json") else ""
-
-    sandbox = MagicMock()
-    sandbox.sandbox_id = sandbox_id
-    sandbox.files.write = AsyncMock()
-    sandbox.files.read = AsyncMock(side_effect=_read)
-    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
-    sandbox.files.list = AsyncMock(return_value=[])
-    sandbox.commands.run = AsyncMock(return_value=handle)
-    sandbox.kill = AsyncMock()
-    return sandbox
 
 
 def _spy_dispatch_marker(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> None:
@@ -213,40 +177,8 @@ class _ScriptedStream:
 
 
 # ---------------------------------------------------------------------------
-# 1. Flag + seam unit
+# 1. Seam units
 # ---------------------------------------------------------------------------
-
-
-def test_flag_defaults_on_and_reader_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    # R5 flip: ON is the shipped default (was False before the flip).
-    # ``tests/conftest.py`` pins the suite baseline to the revert value, so
-    # clear the override to read the PRODUCT default.
-    monkeypatch.delenv("MODULO_E2B_VIA_PROVIDER", raising=False)
-    assert Settings(_env_file=None).modulo_e2b_via_provider is True
-    _disable_flag(monkeypatch)
-    assert _dispatch_via_provider_enabled() is False
-    _enable_flag(monkeypatch)
-    assert _dispatch_via_provider_enabled() is True
-    # Fail-open: an unreadable settings store resolves to the flag's REVERT
-    # value (OFF = the legacy direct path), never to a crash - so a settings
-    # outage after the flip still lands on the safe legacy path.
-    monkeypatch.setattr(nr, "get_settings", MagicMock(side_effect=RuntimeError("settings down")))
-    assert _dispatch_via_provider_enabled() is False
-
-
-def test_flag_explicit_false_reverts_dispatch_to_the_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R5 revert: ``MODULO_E2B_VIA_PROVIDER=false`` still selects the legacy path.
-
-    The env-derived settings resolve False; wired in place of the cached
-    instance, the R4 dispatch gate reads OFF and the whole create/stream/kill
-    sequence takes the legacy direct branch (the legacy code was NOT deleted
-    by the flip).
-    """
-    monkeypatch.setenv("MODULO_E2B_VIA_PROVIDER", "false")
-    settings = Settings(_env_file=None)
-    assert settings.modulo_e2b_via_provider is False
-    monkeypatch.setattr(nr, "get_settings", lambda *a, **k: settings)
-    assert _dispatch_via_provider_enabled() is False
 
 
 def test_require_dispatch_provider_fails_closed_with_typed_error() -> None:
@@ -279,25 +211,26 @@ async def test_build_dispatch_provider_returns_the_e2b_provider(monkeypatch: pyt
 
 
 # ---------------------------------------------------------------------------
-# 2. Full flag-ON dispatch: ABC call sequence + marker-before-create
+# 2. Full dispatch: ABC call sequence + marker-before-create
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_on_full_dispatch_runs_the_abc_call_sequence(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+async def test_provider_full_dispatch_runs_the_abc_call_sequence(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """marker -> create -> command -> by-ref destroy -> close.
 
     The dispatch marker is acquired BEFORE ``create_workspace``, and every
     lifecycle step of the run happens on the provider — the legacy
     ``AsyncSandbox.create`` is never reached (asserted below).
     """
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
 
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-r4-seq", exit_code=0)
     _spy_dispatch_marker(monkeypatch, dispatch.events)
 
-    legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when flag ON"))
+    legacy_create = AsyncMock(
+        side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider")
+    )
     fn = make_sandbox_agent_fn(_base_node_def())
     with patch("e2b.AsyncSandbox.create", new=legacy_create):
         result = await fn(_run_state())
@@ -308,7 +241,7 @@ async def test_flag_on_full_dispatch_runs_the_abc_call_sequence(monkeypatch: pyt
     assert isinstance(dispatch.created_spec, WorkspaceSpec)
     assert dispatch.created_spec.image_ref == "opencode"
     # ...and the agent command really went through the ABC stream with the
-    # dispatch envs (MODULO_SCHEMA_DIR rides on the command env flag-ON).
+    # dispatch envs (MODULO_SCHEMA_DIR rides on the command env provider).
     assert dispatch.last_command is not None
     assert dispatch.last_command[0] == "sh"
     assert dispatch.last_environment is not None
@@ -318,41 +251,12 @@ async def test_flag_on_full_dispatch_runs_the_abc_call_sequence(monkeypatch: pyt
     assert result["artifacts"][0]["output"]["exit_code"] == 0
 
 
-async def test_flag_off_full_dispatch_makes_zero_provider_calls(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Flag OFF (the default): NOT ONE provider seam may be constructed."""
-    _disable_flag(monkeypatch)
-    refusals: dict[str, AsyncMock] = {}
-    for seam in (
-        "_build_dispatch_provider",
-        "_build_file_io_provider",
-        "_build_log_tail_provider",
-        "_build_isolation_provider",
-    ):
-        refusal = AsyncMock(side_effect=AssertionError(f"{seam} must not run when the flag is OFF"))
-        monkeypatch.setattr(f"modulo.core.pipeline_engine.node_runner.{seam}", refusal)
-        refusals[seam] = refusal
-
-    sandbox = _legacy_sandbox("sbx-flagoff-r4", _COMPLETED_OUTPUT)
-    fn = make_sandbox_agent_fn(_base_node_def())
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as legacy_create:
-        result = await fn(_run_state())
-
-    legacy_create.assert_awaited_once()
-    assert result["output"]["status"] == "completed"
-    for seam, refusal in refusals.items():
-        assert refusal.await_count == 0, seam
-    # The legacy handle really was the one that ran.
-    assert sandbox.commands.run.await_count == 1
-    assert sandbox.kill.await_count >= 1
-
-
 # ---------------------------------------------------------------------------
 # 3. Cancellation propagates (never swallowed, never converted to ExecResult(-1))
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_on_cancelled_create_propagates(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    _enable_flag(monkeypatch)
+async def test_provider_cancelled_create_propagates(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     _install_log_tail(monkeypatch)
     dispatch = install_fake_dispatch(
         monkeypatch,
@@ -368,8 +272,7 @@ async def test_flag_on_cancelled_create_propagates(monkeypatch: pytest.MonkeyPat
     assert "create" in dispatch.events
 
 
-async def test_flag_on_cancelled_stream_start_propagates(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    _enable_flag(monkeypatch)
+async def test_provider_cancelled_stream_start_propagates(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     _install_log_tail(monkeypatch)
     dispatch = install_fake_dispatch(
         monkeypatch,
@@ -389,9 +292,10 @@ async def test_flag_on_cancelled_stream_start_propagates(monkeypatch: pytest.Mon
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_on_stream_error_never_fabricates_a_zero_exit(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+async def test_provider_stream_error_never_fabricates_a_zero_exit(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
     """A proxy drop surfaces as ``exit_code = -1`` + failed status, never 0."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     dispatch = install_fake_dispatch(
@@ -410,11 +314,10 @@ async def test_flag_on_stream_error_never_fabricates_a_zero_exit(monkeypatch: py
     assert dispatch.events == ["create", "command", "destroy_by_ref", "close"], dispatch.events
 
 
-async def test_flag_on_healthy_non_zero_exit_is_a_result_not_a_stream_error(
+async def test_provider_healthy_non_zero_exit_is_a_result_not_a_stream_error(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """A command that exits non-zero on a HEALTHY stream keeps its real code."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     install_fake_dispatch(monkeypatch, ref="sbx-exit7", exit_code=7)
@@ -614,11 +517,10 @@ def test_translated_classes_resolve_to_the_existing_retryable_codes() -> None:
     assert "SandboxQueueTimeoutError" not in _NEVER_RETRYABLE_NAMES
 
 
-async def test_flag_on_rate_limit_enters_the_existing_backoff_then_queue_timeout(
+async def test_provider_rate_limit_enters_the_existing_backoff_then_queue_timeout(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """The provider's typed rate limit drives the SAME bounded backoff loop."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     dispatch = install_fake_dispatch(
         monkeypatch,
@@ -639,12 +541,11 @@ async def test_flag_on_rate_limit_enters_the_existing_backoff_then_queue_timeout
     assert "command" not in dispatch.events
 
 
-async def test_flag_on_wrapped_sdk_rate_limit_still_backs_off(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+async def test_provider_wrapped_sdk_rate_limit_still_backs_off(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The E2B provider wraps SDK failures — the ``RateLimitException`` on
     ``__cause__`` must still reach the backoff loop (no ``harness.unknown``)."""
     from e2b.exceptions import RateLimitException
 
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     wrapped = RuntimeError("Failed to create E2B sandbox with template 'opencode'")
     wrapped.__cause__ = RateLimitException("429 rate limited")
@@ -659,13 +560,12 @@ async def test_flag_on_wrapped_sdk_rate_limit_still_backs_off(monkeypatch: pytes
     assert dispatch.events.count("create") == nr._SANDBOX_RATE_LIMIT_MAX_RETRIES + 1
 
 
-async def test_flag_on_typed_rate_limit_escaping_a_provider_call_is_retryable(
+async def test_provider_typed_rate_limit_escaping_a_provider_call_is_retryable(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """A ``RateLimitedError`` from ANY provider call (here: a file write) is
     re-raised as the pre-existing retryable class — never swallowed into a
     synthetic ``harness.unknown`` envelope."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     install_fake_dispatch(monkeypatch, ref="sbx-429-outside")
     fake_file_io.write_error = RateLimitedError("429 concurrent sandbox limit")
@@ -674,10 +574,9 @@ async def test_flag_on_typed_rate_limit_escaping_a_provider_call_is_retryable(
         await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
 
-async def test_flag_on_provision_timeout_escaping_a_provider_call_is_retryable(
+async def test_provider_provision_timeout_escaping_a_provider_call_is_retryable(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     install_fake_dispatch(monkeypatch, ref="sbx-provision-timeout-outside")
     fake_file_io.write_error = ProvisionTimeoutError("workspace never became ready")
@@ -686,31 +585,12 @@ async def test_flag_on_provision_timeout_escaping_a_provider_call_is_retryable(
         await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
 
-async def test_flag_off_non_provider_failure_still_builds_the_legacy_envelope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The translation seam must not touch the flag-OFF generic envelope."""
-    _disable_flag(monkeypatch)
-    monkeypatch.delenv("E2B_API_KEY", raising=False)
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-    sandbox = _legacy_sandbox("sbx-exc-off", "")
-    sandbox.files.write = AsyncMock(side_effect=RuntimeError("legacy write exploded"))
-
-    fn = make_sandbox_agent_fn(_base_node_def())
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_run_state())
-
-    assert result["output"]["status"] == "failed"
-    assert result["artifacts"][0]["output"]["error_type"] == "RuntimeError"
-    assert result["artifacts"][0]["output"]["via_provider"] is False
-
-
 # ---------------------------------------------------------------------------
 # 7. Egress carried into the provider create path (ADR 040 egress rule)
 # ---------------------------------------------------------------------------
 
 
-async def test_flag_on_restrictive_egress_reaches_the_provider_create(
+async def test_provider_restrictive_egress_reaches_the_provider_create(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """FAR-1050 R5: the stopgap refusal is GONE — a resolved ``deny_all`` is
@@ -720,10 +600,11 @@ async def test_flag_on_restrictive_egress_reaches_the_provider_create(
     Fails on the pre-R5 code: the stopgap raised ``SandboxTierRefusedError``
     whenever an egress policy was resolved, so no spec was ever built.
     """
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
-    legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when flag ON"))
+    legacy_create = AsyncMock(
+        side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider")
+    )
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-egress", exit_code=0)
 
     fn = make_sandbox_agent_fn(_base_node_def(egress_policy="deny_all"))
@@ -739,16 +620,17 @@ async def test_flag_on_restrictive_egress_reaches_the_provider_create(
     assert dispatch.created_spec.egress_policy == "deny_all"
 
 
-async def test_flag_on_selected_allowlist_rides_the_spec_metadata(
+async def test_provider_selected_allowlist_rides_the_spec_metadata(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """FAR-1050 R5: the selected-mode allowlist reaches the provider spec's
     ``workspace_metadata`` under the LEGACY create's key (``egress_allowlist``),
     and the dispatch is no longer refused for a resolved policy."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
-    legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when flag ON"))
+    legacy_create = AsyncMock(
+        side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider")
+    )
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-egress-selected", exit_code=0)
     # Keep the unit offline: allowlist pre-resolution is a DNS lookup on both
     # paths, and the legacy resolution helper is unchanged by this slice.
@@ -774,62 +656,24 @@ async def test_flag_on_selected_allowlist_rides_the_spec_metadata(
     isolation.apply_isolation.assert_awaited_once()
 
 
-async def test_flag_off_egress_deny_all_still_uses_the_legacy_create(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Flag OFF: the legacy ``allow_internet_access=False`` arm is untouched."""
-    _disable_flag(monkeypatch)
-    sandbox = _legacy_sandbox("sbx-egress-off", _COMPLETED_OUTPUT)
-    create = AsyncMock(return_value=sandbox)
-
-    fn = make_sandbox_agent_fn(_base_node_def(egress_policy="deny_all"))
-    with patch("e2b.AsyncSandbox.create", new=create):
-        await fn(_run_state())
-
-    assert create.await_args.kwargs["allow_internet_access"] is False
-
-
-async def test_flag_off_egress_selected_still_denies_internet_with_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Flag OFF unchanged for the other restrictive policy: ``selected`` still
-    maps to ``allow_internet_access=False`` and the allowlist still rides the
-    legacy create's ``metadata`` kwarg under ``egress_allowlist``."""
-    _disable_flag(monkeypatch)
-    sandbox = _legacy_sandbox("sbx-egress-selected-off", _COMPLETED_OUTPUT)
-    create = AsyncMock(return_value=sandbox)
-    # Offline: allowlist pre-resolution is DNS, and the legacy in-sandbox
-    # policy step is patched out (it is not what this assertion covers).
-    monkeypatch.setattr(nr, "_resolve_egress_allowlist", AsyncMock(side_effect=lambda v: v))
-    monkeypatch.setattr(
-        "modulo.core.pipeline_engine.sandbox_policy.apply_sandbox_policy",
-        AsyncMock(return_value=None),
-    )
-
-    allowlist = [{"host": "api.example.com", "port": 443}]
-    fn = make_sandbox_agent_fn(_base_node_def(egress_policy="selected", egress_allowlist=allowlist))
-    with patch("e2b.AsyncSandbox.create", new=create):
-        result = await fn(_run_state())
-
-    assert result["output"]["status"] == "completed"
-    kwargs = create.await_args.kwargs
-    assert kwargs["allow_internet_access"] is False
-    assert json.loads(kwargs["metadata"]["egress_allowlist"]) == allowlist
-
-
 # ---------------------------------------------------------------------------
 # 8. Cost stamping parity
 # ---------------------------------------------------------------------------
 
 
-async def test_cost_estimate_is_identical_for_flag_on_and_off(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
-    """Fixed elapsed + fixed output => identical ``cost_estimate_usd``.
+async def test_cost_estimate_stamps_through_the_sanctioned_helper(
+    monkeypatch: pytest.MonkeyPatch, fake_file_io
+) -> None:
+    """Fixed elapsed + fixed output => pinned ``cost_estimate_usd``.
 
     The elapsed component is pinned by wrapping ``_compute_sandbox_cost`` so
-    the comparison is about the DISPATCH (which output fixture reaches the
-    function, and that the flag-ON path calls it at all), not about wall
-    clock. Both paths must call the SAME sanctioned helper with the SAME
-    output and stamp its result unchanged.
+    the assertion is about the DISPATCH (which output fixture reaches the
+    function, and that the provider path calls it at all), not about wall
+    clock. The dispatch must call the sanctioned helper exactly once with the
+    SAME output and stamp its result unchanged.
+
+    (FAR-1050 R6 retired ``MODULO_E2B_VIA_PROVIDER``; the legacy half of the
+    former on/off comparison is the legacy direct path R6 deleted.)
     """
     real = nr._compute_sandbox_cost
     pinned_elapsed = 123.456
@@ -842,28 +686,16 @@ async def test_cost_estimate_is_identical_for_flag_on_and_off(monkeypatch: pytes
     fixture = {"status": "completed", "summary": "done", "cost_estimate_usd": 1.25}
     encoded = json.dumps(fixture).encode()
 
-    # --- flag ON ---
-    _enable_flag(monkeypatch)
     monkeypatch.setattr(nr, "_compute_sandbox_cost", _pinned)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = encoded
     install_fake_dispatch(monkeypatch, ref="sbx-cost-on", exit_code=0)
-    fn_on = make_sandbox_agent_fn(_base_node_def())
+    fn = make_sandbox_agent_fn(_base_node_def())
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=AssertionError("no legacy create"))):
-        on_result = await fn_on(_run_state())
+        result = await fn(_run_state())
 
-    # --- flag OFF ---
-    _disable_flag(monkeypatch)
-    legacy = _legacy_sandbox("sbx-cost-off", json.dumps(fixture))
-    fn_off = make_sandbox_agent_fn(_base_node_def())
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=legacy)):
-        off_result = await fn_off(_run_state())
-
-    on_cost = on_result["output"]["cost_estimate_usd"]
-    off_cost = off_result["output"]["cost_estimate_usd"]
-    assert len(calls) == 2, "both paths must stamp through _compute_sandbox_cost exactly once"
-    assert on_cost == off_cost
-    assert on_cost == real(pinned_elapsed, fixture)
+    assert len(calls) == 1, "the dispatch must stamp through _compute_sandbox_cost exactly once"
+    assert result["output"]["cost_estimate_usd"] == real(pinned_elapsed, fixture)
 
 
 # ---------------------------------------------------------------------------
@@ -871,46 +703,35 @@ async def test_cost_estimate_is_identical_for_flag_on_and_off(monkeypatch: pytes
 # ---------------------------------------------------------------------------
 
 
-async def test_dispatch_marker_and_telemetry_carry_provider_and_flag_state(
+async def test_dispatch_marker_and_telemetry_carry_provider_attribution(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
-    """Both flag states stamp ``provider`` + ``via_provider`` on the marker
-    rewrite AND on the node telemetry (envelope)."""
+    """The marker rewrite AND the node telemetry stamp ``provider`` +
+    ``via_provider`` so a run is attributable to provider execution."""
     stamped = _capture_marker_store(monkeypatch)
-    results: dict[bool, dict[str, Any]] = {}
 
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     install_fake_dispatch(monkeypatch, ref="sbx-attr-on", exit_code=0)
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=AssertionError("no legacy create"))):
-        results[True] = await make_sandbox_agent_fn(_base_node_def())(_run_state())
+        result = await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
-    _disable_flag(monkeypatch)
-    legacy = _legacy_sandbox("sbx-attr-off", _COMPLETED_OUTPUT)
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=legacy)):
-        results[False] = await make_sandbox_agent_fn(_base_node_def())(_run_state())
+    # Node telemetry (the P1b splitter folds these verbatim).
+    assert result["output"]["provider"] == "e2b"
+    assert result["output"]["via_provider"] is True
+    assert result["artifacts"][0]["output"]["via_provider"] is True
 
-    for flag_on in (True, False):
-        result = results[flag_on]
-        # Node telemetry (the P1b splitter folds these verbatim).
-        assert result["output"]["provider"] == "e2b"
-        assert result["output"]["via_provider"] is flag_on
-        assert result["artifacts"][0]["output"]["via_provider"] is flag_on
-
-    assert len(stamped) == 2
-    for entry in stamped:
-        assert entry["provider"] == "e2b"
-        assert entry["via_provider"] in (True, False)
-        assert entry["sandbox_id"]
-    assert {e["via_provider"] for e in stamped} == {True, False}
+    assert len(stamped) == 1
+    entry = stamped[0]
+    assert entry["provider"] == "e2b"
+    assert entry["via_provider"] is True
+    assert entry["sandbox_id"]
 
 
 async def test_marker_telemetry_lands_in_node_telemetry_json(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The attribution keys survive the envelope -> telemetry split."""
     from modulo.core.node_output_split import split_node_output
 
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     install_fake_dispatch(monkeypatch, ref="sbx-telemetry", exit_code=0)
@@ -922,17 +743,17 @@ async def test_marker_telemetry_lands_in_node_telemetry_json(monkeypatch: pytest
     assert telemetry["via_provider"] is True
 
 
-def test_dispatch_marker_json_carries_provider_and_flag_and_stays_readable() -> None:
+def test_dispatch_marker_json_carries_provider_and_routing_and_stays_readable() -> None:
     """ADR 040 marker schema versioning: the extra key never breaks a reader."""
     from modulo.core.runner_capacity import parse_marker_state
 
-    for flag_on in (True, False):
-        raw = _dispatch_marker_json("run:1:node:n:2", "e2b", via_provider=flag_on)
+    for provider_flag in (True, False):
+        raw = _dispatch_marker_json("run:1:node:n:2", "e2b", via_provider=provider_flag)
         payload = json.loads(raw)
         assert payload["state"] == "dispatching"
         assert payload["attempt_key"] == "run:1:node:n:2"
         assert payload["provider"] == "e2b"
-        assert payload["via_provider"] is flag_on
+        assert payload["via_provider"] is provider_flag
         # Unknown-field tolerance on read.
         assert parse_marker_state(raw) == "dispatching"
 
@@ -977,17 +798,11 @@ def _patch_workspace_inputs(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     return seen
 
 
-def _background_free_calls(mock: AsyncMock) -> list[Any]:
-    """The calls that are NOT the agent command's background start."""
-    return [c for c in mock.await_args_list if not c.kwargs.get("background")]
-
-
-async def test_flag_on_workspace_inputs_receive_the_abc_mediated_handle(
+async def test_provider_workspace_inputs_receive_the_abc_mediated_handle(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """The helper gets the ABC-mediated handle and its four commands
     (setup + clone + teardown + drift probe) round-trip the fake provider."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     seen = _patch_workspace_inputs(monkeypatch)
@@ -1006,25 +821,6 @@ async def test_flag_on_workspace_inputs_receive_the_abc_mediated_handle(
     # ...each a shell round-trip through exec_command.
     assert dispatch.last_command is not None
     assert dispatch.last_command[0] == "sh"
-
-
-async def test_flag_off_workspace_inputs_receive_the_legacy_handle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _disable_flag(monkeypatch)
-    seen = _patch_workspace_inputs(monkeypatch)
-    sandbox = _legacy_sandbox("sbx-t10-off", _COMPLETED_OUTPUT)
-
-    node_def = _base_node_def(workspace_inputs=[{"dest": "repos/example", "ref": {"kind": "branch"}}])
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await make_sandbox_agent_fn(node_def)(_run_state())
-
-    assert result["output"]["status"] == "completed"
-    assert len(seen) == 1
-    assert seen[0] is sandbox
-    # The four helper commands went through the legacy handle (the fifth
-    # ``commands.run`` call is the agent command's own background start).
-    assert len(_background_free_calls(sandbox.commands.run)) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -1053,11 +849,8 @@ def test_s2_s3_s4_kill_sites_never_read_the_flag() -> None:
         assert "_dispatch_via_provider_enabled" not in source, rel
 
 
-async def test_s3_run_watchdog_kill_works_with_the_flag_on_and_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``pipeline_execution._kill_sandbox_best_effort`` never raises and its
-    behaviour is identical in both flag states."""
+async def test_s3_run_watchdog_kill_never_raises() -> None:
+    """``pipeline_execution._kill_sandbox_best_effort`` never raises."""
     from modulo.core import pipeline_execution as pe
 
     killed: list[str] = []
@@ -1086,22 +879,13 @@ async def test_s3_run_watchdog_kill_works_with_the_flag_on_and_off(
 
     connect = AsyncMock(side_effect=lambda _sid: _Sbx())
 
-    for flag_on in (True, False):
-        if flag_on:
-            _enable_flag(monkeypatch)
-        else:
-            _disable_flag(monkeypatch)
-        killed.clear()
-        connect.reset_mock()
-        with patch("e2b.AsyncSandbox.connect", new=connect):
-            await pe._kill_sandbox_best_effort(_Engine(), "run-1", "org-1")  # type: ignore[arg-type]
-        assert killed == ["killed"]
-        assert connect.await_count == 1
+    with patch("e2b.AsyncSandbox.connect", new=connect):
+        await pe._kill_sandbox_best_effort(_Engine(), "run-1", "org-1")  # type: ignore[arg-type]
+    assert killed == ["killed"]
+    assert connect.await_count == 1
 
 
-async def test_s2_org_deletion_kill_works_with_the_flag_on_and_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_s2_org_deletion_kill_is_bounded_and_best_effort() -> None:
     from modulo.db.crud import org_deletion as od
 
     class _Result:
@@ -1117,20 +901,13 @@ async def test_s2_org_deletion_kill_works_with_the_flag_on_and_off(
 
     kill = AsyncMock()
     with patch("e2b.AsyncSandbox.kill", new=kill):
-        for flag_on in (True, False):
-            if flag_on:
-                _enable_flag(monkeypatch)
-            else:
-                _disable_flag(monkeypatch)
-            kill.reset_mock()
-            assert await od._abort_org_live_sandboxes(_Session(), uuid.UUID(_ORG_ID)) == 1  # type: ignore[arg-type]
-            assert kill.await_count == 1
-            assert kill.await_args.args[0] == "sbx-s2"
+        kill.reset_mock()
+        assert await od._abort_org_live_sandboxes(_Session(), uuid.UUID(_ORG_ID)) == 1  # type: ignore[arg-type]
+        assert kill.await_count == 1
+        assert kill.await_args.args[0] == "sbx-s2"
 
 
-async def test_s4_evidence_probes_work_with_the_flag_on_and_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_s4_evidence_probes_run_through_the_sdk_handle() -> None:
     from modulo.core.pipeline_engine import evidence as ev
 
     class _Commands:
@@ -1158,35 +935,15 @@ async def test_s4_evidence_probes_work_with_the_flag_on_and_off(
 
     handle = _Sbx()
 
-    for flag_on in (True, False):
-        if flag_on:
-            _enable_flag(monkeypatch)
-        else:
-            _disable_flag(monkeypatch)
-        with patch("e2b.AsyncSandbox.connect", new=AsyncMock(return_value=handle)):
-            result = await ev._e2b_run_command("sbx-s4", "echo probe-ok")
-            files = await ev._e2b_list_files("sbx-s4")
-        assert result.stdout == "probe-ok"
-        assert [f.name for f in files] == ["output.json"]
+    with patch("e2b.AsyncSandbox.connect", new=AsyncMock(return_value=handle)):
+        result = await ev._e2b_run_command("sbx-s4", "echo probe-ok")
+        files = await ev._e2b_list_files("sbx-s4")
+    assert result.stdout == "probe-ok"
+    assert [f.name for f in files] == ["output.json"]
 
 
 # ---------------------------------------------------------------------------
-# 12. Legacy branch still present (flag OFF is the default revert point)
-# ---------------------------------------------------------------------------
-
-
-def test_flag_off_branches_stay_in_the_source() -> None:
-    """Design §2: the legacy direct branch is NOT deleted by R4."""
-    source = Path(nr.__file__).read_text(encoding="utf-8")
-    assert "AsyncSandbox.create(" in source
-    assert "sandbox.commands.run(" in source
-    assert "sandbox.kill(request_timeout=" in source
-    # ...and every R4 site is gated on the flag local.
-    assert source.count("_via_provider_dispatch") >= 5
-
-
-# ---------------------------------------------------------------------------
-# 13. Flag-ON seam error arms (every defensive branch is reachable + tested)
+# 12. Dispatch seam error arms (every defensive branch is reachable + tested)
 # ---------------------------------------------------------------------------
 
 
@@ -1194,7 +951,7 @@ def test_require_dispatch_spec_fails_closed_with_typed_error() -> None:
     """The create-spec narrow refuses a missing spec with the typed error.
 
     Companion to ``test_require_dispatch_provider_fails_closed_with_typed_error``:
-    the flag-ON create loop must never reach ``create_workspace`` without a
+    the provider create loop must never reach ``create_workspace`` without a
     ``WorkspaceSpec`` (there is no silent fall back to ``AsyncSandbox.create``).
     """
     with pytest.raises(RuntimeProviderError):
@@ -1255,7 +1012,7 @@ def test_provider_mediated_handle_has_no_metrics_surface() -> None:
 
 async def test_watchdog_resource_cap_gap_fails_open_loudly_once_per_dispatch(caplog: pytest.LogCaptureFixture) -> None:
     """R4 follow-up (ADR 040 metrics gap): resource caps CANNOT be enforced on
-    the flag-ON path, and the fail-open is explicit + observable — one clear
+    the provider path, and the fail-open is explicit + observable — one clear
     warning naming the gap, NOT the generic transient 'metrics unavailable'
     traceback — and it fires once per dispatch, not once per poll tick."""
     handle = _ProviderMediatedHandle(MagicMock(), "sbx-gap")
@@ -1407,12 +1164,11 @@ async def test_exec_process_watchdog_propagates_a_cancelled_pump_after_done() ->
         )
 
 
-async def test_flag_on_empty_provider_ref_after_create_is_refused(
+async def test_provider_empty_provider_ref_after_create_is_refused(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """A provider that returns an empty ref must fail closed, never build a
     handle addressed by the empty string."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     install_fake_dispatch(monkeypatch, ref="")
 
@@ -1422,12 +1178,11 @@ async def test_flag_on_empty_provider_ref_after_create_is_refused(
     assert result["artifacts"][0]["output"]["error_type"] == "RuntimeProviderError"
 
 
-async def test_flag_on_dispatch_provider_close_failure_is_swallowed(
+async def test_provider_dispatch_provider_close_failure_is_swallowed(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """A provider ``close()`` failure is best-effort: the dispatch still returns
     its real outcome."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-close-fail", exit_code=0)
@@ -1440,11 +1195,10 @@ async def test_flag_on_dispatch_provider_close_failure_is_swallowed(
     close.assert_awaited_once()
 
 
-async def test_flag_on_dispatch_provider_close_cancellation_propagates(
+async def test_provider_dispatch_provider_close_cancellation_propagates(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
     """A cancellation during ``close()`` re-raises — it is never swallowed."""
-    _enable_flag(monkeypatch)
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-close-cancel", exit_code=0)

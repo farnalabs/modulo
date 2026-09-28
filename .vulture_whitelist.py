@@ -430,11 +430,10 @@ __all__ = [
     # ReconcileTuning``), which vulture does not credit as uses.
     "ReconcileTerminalizer",
     "ReconcileTuning",
-    # --- FAR-1050 slice 2: RuntimeProvider.destroy_workspace_by_ref (ADR 040
-    #     reclamation primitive). The ABC default + the E2B override are
-    #     exercised by tests/unit/core/runtime_provider/test_e2b_conformance_slice2.py;
-    #     the production dispatch/reclamation caller lands in the next FAR-1050 slice,
-    #     so vulture sees no production call site yet ---
+    # --- FAR-1050 R6: RuntimeProvider.destroy_workspace_by_ref is now wired
+    #     into the production dispatch teardown (node_runner finally block), so
+    #     the previous "no production call site yet" note no longer holds; the
+    #     ABC default + E2B override remain test-exercised ---
     "destroy_workspace_by_ref",
     # --- FAR-250 SSE relay public surface (test-referenced; the production
     #     call sites are the relay tests' stand-ins for ops/diagnostic use) ---

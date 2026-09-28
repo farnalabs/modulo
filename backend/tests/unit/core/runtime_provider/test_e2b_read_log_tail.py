@@ -5,15 +5,15 @@ Exercises, without a live sandbox or network:
 1. The ABC's ``read_log_tail`` default raises the typed
    ``ProviderCapabilityUnsupportedError`` (error honesty — never a raw
    ``NotImplementedError``) for a provider that does not override it.
-2. ``E2BRuntimeProvider.read_log_tail`` parses/bounds the payload exactly
-   like the legacy ``node_runner._fetch_sandbox_log_tail`` helper it was
-   moved from: preferred-level reordering, ``[-max_bytes:]`` final bound,
+2. ``E2BRuntimeProvider.read_log_tail`` owns the log probe end to end
+   (FAR-1050 R6 deleted the legacy ``node_runner`` urllib helper):
+   preferred-level reordering, ``[-max_bytes:]`` final bound,
    ``min(4000, max_bytes)`` raw fallback, ``b""`` on invalid ref or fetch
    failure (never raises).
-3. **Content parity**: legacy-urllib-fixture vs the primitive over the
-   same payload — both paths must produce identical tail content.
-4. Key fallback: runtime bridge → legacy ``E2B_API_KEY`` → constructor key
-   (the legacy probe's chain, preserved on the ABC path).
+3. **Pinned payloads**: the payloads the R1 parity suite pinned are
+   asserted directly against the surviving primitive.
+4. Key fallback: runtime bridge → legacy ``E2B_API_KEY`` → constructor key.
+5. Hostname confinement: ``api.e2b.app`` appears only in the provider module.
 """
 
 from pathlib import Path
@@ -22,7 +22,6 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import _fetch_sandbox_log_tail
 from modulo.core.runtime_provider import (
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
@@ -213,65 +212,63 @@ async def test_e2b_read_log_tail_no_key_returns_empty(monkeypatch: pytest.Monkey
 
 
 # ---------------------------------------------------------------------------
-# 3. Content parity: legacy urllib fixture vs the primitive
+# 3. Pinned payload expectations over the primitive (R6: the legacy helper
+#    this parity suite compared against is deleted, so these pin the SAME
+#    payloads directly against the surviving primitive).
 # ---------------------------------------------------------------------------
+
+
+_PAYOUT_EXPECTATIONS: dict[bytes, bytes] = {
+    (
+        b'{"logEntries": ['
+        b'{"message": "error line", "level": "error"},'
+        b'{"message": "plain line", "level": "debug"},'
+        b'{"fields": "fields-only", "level": "warn"}'
+        b"]}"
+    ): b"error line\nfields-only\nplain line",
+    b'{"other": 1}': b'{"other": 1}',
+    b"not json": b"not json",
+}
 
 
 @pytest.mark.parametrize(
     "payload", _PARITY_PAYLOADS, ids=["preferred-levels", "non-list", "invalid-json", "over-bound"]
 )
-async def test_content_parity_legacy_vs_primitive(payload: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Same payload through both paths → byte-identical decoded tail."""
+async def test_primitive_handles_every_pinned_payload(payload: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each pinned payload yields the expected tail through the primitive."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.setenv("E2B_API_KEY", "parity-key")
-
-    with patch("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(payload)):
-        legacy = await _fetch_sandbox_log_tail("sbx-parity")
-
     provider = E2BRuntimeProvider(api_key="parity-key")
     with patch("urllib.request.urlopen", lambda req, timeout: _fake_urlopen(payload)):
-        primitive = await provider.read_log_tail("sbx-parity", max_bytes=6000)
+        tail = await provider.read_log_tail("sbx-parity", max_bytes=6000)
 
-    assert primitive.decode("utf-8", errors="replace") == legacy
+    if payload in _PAYOUT_EXPECTATIONS:
+        assert tail == _PAYOUT_EXPECTATIONS[payload]
+    else:
+        # over-bound payload: the joined entry text is bounded to max_bytes.
+        assert tail == b"x" * 6000
 
 
-async def test_content_parity_network_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both paths fail open to an empty tail when the endpoint is down."""
+async def test_primitive_fails_open_on_network_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fetch failure yields an empty tail \u2014 never raises (T6 contract)."""
     monkeypatch.setenv("E2B_API_KEY", "parity-key")
-    with patch("urllib.request.urlopen", side_effect=OSError("down")):
-        legacy = await _fetch_sandbox_log_tail("sbx-parity")
     provider = E2BRuntimeProvider(api_key="parity-key")
     with patch("urllib.request.urlopen", side_effect=OSError("down")):
-        primitive = await provider.read_log_tail("sbx-parity", max_bytes=6000)
-    assert not legacy
-    assert not primitive
+        assert not await provider.read_log_tail("sbx-parity", max_bytes=6000)
 
 
 # ---------------------------------------------------------------------------
-# 4. Hostname scanner precondition (plan §5): ``api.e2b.app`` confined to
-#    the legacy helper island in node_runner — the flag-ON helper and the
-#    dispatch body carry no hostname.
+# 4. Hostname confinement (R6): ``api.e2b.app`` lives ONLY in the provider
+#    module \u2014 node_runner's legacy log-probe island was deleted in R6.
 # ---------------------------------------------------------------------------
 
 
-def test_hostname_confined_to_legacy_fetch_helper() -> None:
-    import inspect
-
+def test_hostname_confined_to_the_provider_module() -> None:
     from modulo.core.pipeline_engine import node_runner as nr
 
     node_runner_path = Path(nr.__file__)
     file_src = node_runner_path.read_text(encoding="utf-8")
-    legacy_src = inspect.getsource(nr._fetch_sandbox_log_tail)
-    flag_on_src = inspect.getsource(nr._read_log_tail_via_provider)
-    dispatch_src = inspect.getsource(nr._sandbox_agent_impl)
-
-    # The legacy island still holds the hostname (removed only at slice R6)...
-    assert file_src.count(_HOSTNAME) > 0
-    # ...and EVERY occurrence in the file lives inside that island, so the
-    # flag-ON helper and the dispatch body are hostname-free.
-    assert file_src.count(_HOSTNAME) == legacy_src.count(_HOSTNAME)
-    assert _HOSTNAME not in flag_on_src
-    assert _HOSTNAME not in dispatch_src
-    # The moved primitive now owns the hostname on the ABC path.
+    assert _HOSTNAME not in file_src
+    # The provider module owns the hostname.
     e2b_provider_src = (node_runner_path.parents[1] / "runtime_provider" / "e2b.py").read_text(encoding="utf-8")
     assert _HOSTNAME in e2b_provider_src
