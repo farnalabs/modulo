@@ -127,21 +127,26 @@ Secret rotation procedure is documented in `docs/security/secret-management.md`
 
 ### 2.4 Admin User Setup
 
-The `MODULO_USERS` environment variable seeds initial admin credentials:
+The `MODULO_USERS` environment variable seeds initial credentials at boot as
+comma-separated `email:password` entries (see `docs/deployment.md`):
 
 ```env
 MODULO_USERS=admin:<bcrypt-hashed-password>
 ```
 
+Entries accept a bcrypt hash (`user1:$2b$12$<hash>`) or plaintext
+(`admin:changeme`); plaintext is bcrypt-hashed at seed time. Existing accounts
+are left untouched.
+
 **Security considerations:**
-- `MODULO_USERS` is evaluated only on first startup when the admin table is
-  empty. Removing it after seeding does not delete the user.
+- `MODULO_USERS` takes effect when the seeded account does not exist yet.
+  Removing it after seeding does not delete the user.
 - Do not commit `MODULO_USERS` to any configuration file – inject it via the
   runtime environment (Docker secret, or vault).
-- Use bcrypt-hashed passwords. The format is `$2b$12$<hash>` (generate with any
+- Prefer bcrypt-hashed passwords in production. The format is `$2b$12$<hash>` (generate with any
   bcrypt tool, e.g. `htpasswd -bnBC 12 "" <password> | tr -d ':\n'`).
-- For SSO-enabled deployments, seed a single emergency local admin and manage
-  all other users via OIDC/SAML JIT provisioning.
+- For single sign-on (SSO) deployments, seed a single emergency local admin and manage
+  all other users via OIDC (OpenID Connect) / SAML (Security Assertion Markup Language) JIT provisioning.
 
 ### 2.5 Secrets Backend Selection
 

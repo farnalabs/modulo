@@ -120,11 +120,12 @@ The module-level `get_plugin_registry()` returns a lazily-initialised singleton.
 
 ### REST API
 
-Two authenticated endpoints expose plugin information:
+Three authenticated endpoints expose plugin information:
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/plugins` | List all discovered plugins with health status |
+| `GET` | `/api/v1/plugins/{plugin_id}` | Detail for a single plugin with health status |
 | `GET` | `/api/v1/plugins/{plugin_id}/health` | Health check for a single plugin |
 
 Both require `plugin.list` permission (returning a `TenantPrincipal`) and the `plugin_management` feature flag. Plugin management (install, upgrade, remove) is not handled through this API; see [Installation](#installation).
@@ -240,7 +241,7 @@ my_eval = "my_plugin:build_my_eval"
 # my_plugin/__init__.py
 def build_my_eval(config: dict) -> "EvalDefinition":
     # Return an EvalDefinition (see modulo.core.eval_engine.EvalDefinition) or
-    # any consumer-defined eval object — the registry stores the builder result
+    # any consumer-defined eval object: the registry stores the builder result
     # keyed by the entry-point name.
     ...
 ```
@@ -255,13 +256,13 @@ my_field = "my_plugin:build_my_field"
 ```python
 # my_plugin/__init__.py
 def build_my_field(config: dict) -> "SchemaField":
-    # Return a SchemaField or any consumer-defined field object — the registry
+    # Return a SchemaField or any consumer-defined field object: the registry
     # stores the builder result keyed by the entry-point name.
     ...
 ```
 
 > Note: `backend/pyproject.toml` declares no `project.entry-points` table for
-> these groups — they are provided by third-party plugin packages, not by
+> these groups, since they are provided by third-party plugin packages, not by
 > Modulo core. In-tree builders register the same way by adding the matching
 > `[project.entry-points."modulo.evals"]` / `[project.entry-points."modulo.schema_types"]`
 > table to their own `pyproject.toml`.
