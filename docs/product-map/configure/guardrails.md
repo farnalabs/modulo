@@ -30,7 +30,7 @@ bdd:
   - backend/tests/bdd/steps/test_guardrails_steps.py
   - backend/tests/bdd/steps/test_guardrail_config_steps.py
 depends-on: [feat-evals]
-status: covered
+status: partial
 ---
 
 # Guardrails
@@ -140,6 +140,14 @@ compensation, and single-node self-correction. Built on the eval engine
   export read); the settings UI stays propose/apply/reject.
 
 ## QA History
+- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+  tracker frontmatter `status:` with the manifest `feat-guardrails` registry:
+  the entry now reads `status: partial` (matching the manifest's still-unchecked
+  in-page Import-control deferral — cross-org inheritance itself now ships via
+  the config-as-code import API, see 2026-09-28 below) instead of `covered`. The
+  two layers previously disagreed on the same feature's coverage — a reader of
+  the graph got the opposite answer from the machine layer Assistant reads from
+  the manifest.
 - 2026-09-28: **Improve Architecture product-map walk** — shipped the
   previously-deferred cross-org inheritance gap: added
   `POST /api/v1/guardrails/config/import` (admin-gated direct apply of an

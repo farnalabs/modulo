@@ -18,7 +18,7 @@ bdd:
   - backend/tests/bdd/features/product_analytics/metrics_ingest.feature
 depends-on:
   - feat-license
-status: covered
+status: partial
 ---
 
 # Product Analytics
@@ -52,6 +52,13 @@ an eligible tier.
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
 
 ## QA History
+- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+  tracker frontmatter `status:` with the manifest `feat-product-analytics`
+  registry: the entry now reads `status: partial` (matching the manifest's
+  unchecked "in-product analytics export/administration surface is not shipped"
+  deferral) instead of `covered`. The two layers previously disagreed on the
+  same feature's coverage — a reader of the graph got the opposite answer from
+  the machine layer Assistant reads from the manifest.
 - 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
   `feat-product-analytics` registry entry: the vague "export and scheduling is
   partially wired" gap is now split into what ships versus what is deferred.
