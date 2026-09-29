@@ -340,16 +340,12 @@ def test_create_gate_eval_not_found_returns_404(client: tuple[TestClient, AsyncM
     assert resp.json()["detail"] == "Eval definition not found"
 
 
-@pytest.mark.parametrize(
-    "eval_row",
-    [
-        _eval_row(eval_type="guardrail"),  # guardrail-typed
-        _eval_row(node_id=None),  # suite-scoped (node_id NULL)
-    ],
-)
-def test_create_gate_binding_violation_returns_400(client: tuple[TestClient, AsyncMock], eval_row: MagicMock) -> None:
+def test_create_gate_binding_violation_returns_400(client: tuple[TestClient, AsyncMock]) -> None:
+    # Chunk 8 retired the guardrail-typed binding exclusion, so a guardrail eval
+    # is now bindable; the suite-scoped eval (node_id NULL) is the remaining
+    # exclusion that rejects a create.
     http, session = client
-    _queue_execute(session, [_result(scalar_one_or_none=eval_row)])
+    _queue_execute(session, [_result(scalar_one_or_none=_eval_row(node_id=None))])
 
     resp = http.post(_GATE_URL, json={"action": "warn"})
 
@@ -484,11 +480,13 @@ def test_update_gate_not_found_returns_404(client: tuple[TestClient, AsyncMock])
 
 
 def test_update_gate_binding_violation_returns_400(client: tuple[TestClient, AsyncMock]) -> None:
+    # Chunk 8 retired the guardrail-typed binding exclusion; a suite-scoped eval
+    # (node_id NULL) still fails the binding on update.
     http, session = client
     _queue_execute(
         session,
         [
-            _result(scalar_one_or_none=_eval_row(eval_type="guardrail")),
+            _result(scalar_one_or_none=_eval_row(node_id=None)),
             _result(scalar_one_or_none=_gate_row()),
         ],
     )

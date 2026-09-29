@@ -1032,6 +1032,10 @@ async def _run_guardrail_interception_pass(
     guardrails log-and-continue. Emits the interception latency metric. Returns
     ``(payload, results, redactions, blocked, block_message, skipped,
     blocking_eval_name)`` in assignment order.
+
+    The ingestion edge uses the direct ``config_json.action`` check — the
+    Policy Gate resolver is NOT wired here (§1/§3.3: the ingestion edge is
+    a pre-run safety gate, not a per-node policy evaluation).
     """
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import run_interception_pass_async

@@ -16,6 +16,7 @@ cutover to ``evals`` + ``policy_gates``:
   via ``validate_binding``: candidate rows passing the migration's filter
   (live, node-scoped, non-guardrail) validate clean, and each excluded shape
   raises with the expected exclusion name (collected, never short-circuited).
+  Guardrail-type Evals bind normally after chunk 8 retired exclusion 3.
 """
 
 import uuid
@@ -336,17 +337,16 @@ class TestViolationInventoryMechanism:
 
         assert outcome is None
 
-    def test_guardrail_typed_eval_violates(self) -> None:
-        """A guardrail-typed eval can never carry a PolicyGate — the
-        ``guardrail_eval`` exclusion is what the inventory would record."""
+    def test_guardrail_typed_eval_binds_normally(self) -> None:
+        """FAR-1107 chunk 8 (§3.4): exclusion 3 retired — guardrail-type
+        Evals MAY now bind to Policy Gates.  A same-org, same-node
+        guardrail eval validates clean: ``validate_binding`` returns None."""
         policy_gate_fields, eval_fields = self._candidate_fields()
         eval_fields["eval_type"] = "guardrail"
 
-        with pytest.raises(PolicyGateBindingViolationError) as exc_info:
-            validate_binding(policy_gate_fields, eval_fields)
+        outcome = validate_binding(policy_gate_fields, eval_fields)
 
-        exclusions = [v["exclusion"] for v in exc_info.value.violations]
-        assert exclusions == ["guardrail_eval"]
+        assert outcome is None
 
     def test_suite_scoped_eval_violates(self) -> None:
         """A suite-scoped eval (node_id NULL) can never carry a PolicyGate."""

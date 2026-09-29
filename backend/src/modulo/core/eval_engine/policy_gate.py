@@ -3,7 +3,7 @@
 Standalone, unwired, pure synchronous Python over plain data.
 
 Fixed source-priority order for ``resolve_policy_gate``:
-    (b) guardrail → (c) node_id mismatch → (a) no EvalResult →
+    (c) node_id mismatch → (a) no EvalResult →
     (d) persistence failure (out of scope for chunk 1 / FAR-971).
 
 Fail-closed / fail-open semantics:
@@ -14,8 +14,12 @@ Fail-closed / fail-open semantics:
 
 ``eval_result_id`` is ``None`` for source (a) (no EvalResult exists) and
 for soft-deleted eval (criterion 2 evaluation), and populated for sources
-(b) and (c) when an EvalResult happens to exist (Eval scoring is
+(c) when an EvalResult happens to exist (Eval scoring is
 independent of PolicyGate validity).
+
+Guardrail-type evals are no longer special-cased at evaluation time
+(chunk 8 retired the ``GUARDRAIL_EVAL_TYPE`` re-check branch); they
+resolve through the same code path as non-guardrail evals.
 """
 
 from __future__ import annotations
@@ -28,8 +32,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from modulo.db.models.policy_gate_decision import PolicyGateDecision
-
-GUARDRAIL_EVAL_TYPE = "guardrail"
 
 
 class PolicyGateBindingViolationError(ValueError):
@@ -109,7 +111,6 @@ def resolve_policy_gate(snapshot: EvalPolicySnapshot) -> Outcome:
     ``PolicyGate.deleted_at IS NULL`` before constructing a snapshot.
 
     Source priority (deterministic, fixed):
-        (b) guardrail-type re-check  → undefined, error="guardrail_recheck"
         (c) node_id mismatch         → undefined, error="node_id_mismatch"
         (a) no EvalResult             → undefined, error="no_eval_result"
         (d) persistence failure       → out of scope for chunk 1 (FAR-971)
@@ -121,15 +122,6 @@ def resolve_policy_gate(snapshot: EvalPolicySnapshot) -> Outcome:
     pg = snapshot.policy_gate
     ev = snapshot.eval
     er = snapshot.eval_result
-
-    # Source (b): guardrail-type re-check fires first (deterministic priority)
-    if ev.eval_type == GUARDRAIL_EVAL_TYPE:
-        return Outcome(
-            result=None,
-            action=pg.action,
-            eval_result_id=er.id if er is not None else None,
-            error="guardrail_recheck",
-        )
 
     # Source (c): node_id-match re-check
     if ev.node_id is None or ev.node_id != pg.node_id:
@@ -229,11 +221,7 @@ def validate_binding(
     if eval_fields["node_id"] is None:
         violations.append({"exclusion": "suite_scoped_eval", "policy_gate_id": str(pg_id), "eval_id": str(ev_id)})
 
-    # 3. Guardrail-typed eval
-    if eval_fields["eval_type"] == GUARDRAIL_EVAL_TYPE:
-        violations.append({"exclusion": "guardrail_eval", "policy_gate_id": str(pg_id), "eval_id": str(ev_id)})
-
-    # 4. node_id mismatch
+    # 3. node_id mismatch
     ev_node = eval_fields["node_id"]
     pg_node = policy_gate_fields["node_id"]
     if ev_node is not None and ev_node != pg_node:
