@@ -139,9 +139,16 @@ def _is_loopback_host(host: str) -> bool:
     if candidate == "localhost":
         return True
     try:
-        return ipaddress.ip_address(candidate).is_loopback
+        address = ipaddress.ip_address(candidate)
     except ValueError:
         return False
+    if address.is_loopback:
+        return True
+    # ``ipaddress`` does not report an IPv4-mapped IPv6 address such as
+    # ``::ffff:127.0.0.1`` as loopback, so unwrap it and test the embedded
+    # IPv4 — ``::ffff:127.0.0.1`` is still only reachable from this machine.
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_loopback
 
 
 def _describe_uri(uri: str) -> str:
