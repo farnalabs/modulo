@@ -46,10 +46,13 @@ listed org roles always granted).
 - [x] Admin config: `GET/PUT /api/v1/admin/assistant/config` reads and updates the
       assistant's provider/model/prompt/access settings with feature-flag + org
       scoping; `GET /available-providers` lists selectable providers
-- [x] Admin skills CRUD (`GET/POST /skills`, `PUT/DELETE /skills/{id}`): org-level
-      reusable skills named `org:...`, listable by users (`/api/v1/assistant/skills` via
-      `test_me_assistant_skills.py`); skills inject instructions into the assistant
-      context (ADR 011)
+- [x] Admin skills CRUD (`GET/POST /api/v1/admin/assistant/skills`,
+      `PUT/DELETE /api/v1/admin/assistant/skills/{skill_id}`): org-level
+      reusable skills named `org:...`. Users manage their OWN skills through
+      `GET/POST /api/v1/me/assistant/skills` and
+      `PUT/DELETE /api/v1/me/assistant/skills/{skill_id}`
+      (`UserAssistantSkillsView.vue`, `test_me_assistant_skills.py`); skills
+      inject instructions into the assistant context (ADR 011)
 - [x] Context sources: `GET/PUT /context-sources/{key}` and `DELETE /context-sources`
       manage the extra context injected into the assistant window
 - [x] Access control: the access list grants explicit user ids and org roles, admins
