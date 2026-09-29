@@ -508,6 +508,88 @@ class TestPipelineEntityContracts:
         assert view["business_owner_id"] == "20000000-0000-0000-0000-0000000000b1"
         assert view["reliability_owner_id"] is None
 
+    def test_runtime_limits_round_trip_into_managed_view(self) -> None:
+        """FAR-1294: a declared node timeout / run duration cap is hashed into
+        the managed view, so the generic plan diff reports drift on both."""
+        entity = PipelineEntity.model_validate(
+            {"name": "sample", "node_timeout_seconds": 600, "max_duration_seconds": 7200}
+        )
+        assert entity.node_timeout_seconds == 600
+        assert entity.max_duration_seconds == 7200
+        assert entity.managed_view()["node_timeout_seconds"] == 600
+        assert entity.managed_view()["max_duration_seconds"] == 7200
+
+    def test_declared_runtime_limits_are_managed(self) -> None:
+        entity = PipelineEntity.model_validate(
+            {"name": "sample", "node_timeout_seconds": 600, "max_duration_seconds": 7200}
+        )
+        assert entity.manages_node_timeout
+        assert entity.manages_max_duration
+
+    def test_omitted_runtime_limits_are_not_managed(self) -> None:
+        """Opt-in: omitting a key leaves a UI/API-tuned limit untouched — the
+        keys are absent from the view, so they are never hashed (no drift) and
+        never written. The columns are NOT NULL, so omission cannot clear them
+        the way it clears the nullable ``hitl_review_window_seconds``."""
+        entity = PipelineEntity.model_validate({"name": "sample"})
+        assert not entity.manages_node_timeout
+        assert not entity.manages_max_duration
+        assert "node_timeout_seconds" not in entity.managed_view()
+        assert "max_duration_seconds" not in entity.managed_view()
+
+    def test_declaring_one_runtime_limit_leaves_the_other_unmanaged(self) -> None:
+        """The two keys are gated independently."""
+        entity = PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": 600})
+        assert entity.manages_node_timeout
+        assert not entity.manages_max_duration
+        assert "node_timeout_seconds" in entity.managed_view()
+        assert "max_duration_seconds" not in entity.managed_view()
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_node_timeout_out_of_bounds_rejected(self, value: int) -> None:
+        """Same ``ge=1`` floor the REST PipelineCreate/PipelineUpdate fields
+        and the DB CHECK ``node_timeout_seconds > 0`` enforce; a bad value
+        fails at config load, not at apply."""
+        with pytest.raises(ValidationError):
+            PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": value})
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_max_duration_out_of_bounds_rejected(self, value: int) -> None:
+        """Same ``ge=1`` floor as above, mirrored from the DB CHECK
+        ``max_duration_seconds > 0`` (migration 0186)."""
+        with pytest.raises(ValidationError):
+            PipelineEntity.model_validate({"name": "sample", "max_duration_seconds": value})
+
+    @pytest.mark.parametrize("value", [1, 604800])
+    def test_runtime_limits_bounds_accepted(self, value: int) -> None:
+        entity = PipelineEntity.model_validate(
+            {"name": "sample", "node_timeout_seconds": value, "max_duration_seconds": value}
+        )
+        assert entity.node_timeout_seconds == value
+        assert entity.max_duration_seconds == value
+        assert entity.managed_view()["node_timeout_seconds"] == value
+        assert entity.managed_view()["max_duration_seconds"] == value
+
+    def test_null_node_timeout_rejected(self) -> None:
+        """The REST PATCH model accepts no null for this field, so a declared
+        null could never be applied: fail at config load with the field named
+        instead of deferring to a 422 mid-apply."""
+        with pytest.raises(ValidationError, match="node_timeout_seconds cannot be set to null"):
+            PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": None})
+
+    def test_null_max_duration_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="max_duration_seconds cannot be set to null"):
+            PipelineEntity.model_validate({"name": "sample", "max_duration_seconds": None})
+
+    def test_boolean_runtime_limits_rejected(self) -> None:
+        """YAML 1.1 resolves ``on``/``yes`` to True and pydantic's lax int
+        coercion would turn that into 1 — a one-second kill switch that applies
+        cleanly and then converges (1 == 1), so no later apply re-flags it."""
+        with pytest.raises(ValidationError, match="node_timeout_seconds must be a number of seconds, not a boolean"):
+            PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": True})
+        with pytest.raises(ValidationError, match="max_duration_seconds must be a number of seconds, not a boolean"):
+            PipelineEntity.model_validate({"name": "sample", "max_duration_seconds": False})
+
     def test_declared_graph_managed_view_includes_graph(self) -> None:
         entity = PipelineEntity.model_validate(
             {

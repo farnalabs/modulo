@@ -12,7 +12,7 @@ import uuid
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 
@@ -416,6 +416,26 @@ class PipelineEntity(BaseModel):
     ceiling back to "inherit the default", and omit it to leave the live
     ceiling untouched.
 
+    ``node_timeout_seconds`` / ``max_duration_seconds`` (FAR-1294) follow the
+    opt-in rule too, and for a harder reason than the ceiling: the REST
+    ``PipelineUpdate`` REJECTS an explicit null for both
+    (``reject_null_node_timeout`` / ``reject_null_max_duration`` — the platform
+    default is always a positive number of seconds, never "no cap"). The
+    "omission means null and clears" convention ``hitl_review_window_seconds``
+    uses is therefore impossible here — a null would 422 and hard-fail the
+    entity instead of clearing it. The only unconditional alternative (always
+    send the platform default) would silently overwrite a UI/API-tuned runtime
+    guardrail for every config that never declared the key, which is not an
+    additive parity fix. So: declare the key to manage the value (drift is then
+    reported on it, and the POST / PATCH carry it), omit it to leave the live
+    value untouched — the same contract as ``circuit_breaker_threshold``
+    (FAR-1182) and ``max_autonomy_level`` (FAR-1221). A declared value must be
+    a real number of seconds: this entity rejects booleans outright (mirroring
+    the REST models' boolean guard on ``circuit_breaker_threshold``) because
+    YAML 1.1 resolves ``on``/``yes`` to ``True`` and pydantic's lax int
+    coercion would otherwise turn a typo into a one-second kill switch that
+    applies cleanly and then converges (1 == 1), so no later run re-flags it.
+
     Accountability owners (FAR-1161): ``business_owner_email`` /
     ``reliability_owner_email`` reference a member of the target org by
     EMAIL (users are not apply-managed entities, so the human-writable email
@@ -495,6 +515,25 @@ class PipelineEntity(BaseModel):
             "omit the key to leave the live value untouched."
         ),
     )
+    node_timeout_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Per-node timeout in seconds (>= 1; platform default 300). The REST API "
+            "rejects a null here (the column is never 'no timeout'), so the field is "
+            "managed only when declared: omit the key to leave the live value untouched."
+        ),
+    )
+    max_duration_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Wall-clock cap on a single run in seconds (>= 1; platform default 3600). "
+            "The REST API rejects a null here (the cap cannot be lifted to 'no cap'), so "
+            "the field is managed only when declared: omit the key to leave the live "
+            "value untouched."
+        ),
+    )
 
     @field_validator("circuit_breaker_threshold")
     @classmethod
@@ -520,6 +559,50 @@ class PipelineEntity(BaseModel):
         test ``manages_circuit_breaker`` uses).
         """
         return "max_autonomy_level" in self.model_fields_set
+
+    @field_validator("node_timeout_seconds", "max_duration_seconds", mode="before")
+    @classmethod
+    def _validate_runtime_limit(cls, value: Any, info: ValidationInfo) -> Any:
+        # A declared null could never be applied: PipelineUpdate rejects an
+        # explicit null for both fields (reject_null_node_timeout /
+        # reject_null_max_duration), so fail at config load with the actionable
+        # message instead of deferring to a 422 mid-apply. Omitting the key is
+        # how a config says "leave the live value alone" — a field default is
+        # NOT validated, so the None default passes through untouched.
+        if value is None:
+            msg = (
+                f"{info.field_name} cannot be set to null (the API only accepts a number of "
+                f"seconds >= 1); omit the key to leave the live value untouched"
+            )
+            raise ValueError(msg)
+        # YAML 1.1 resolves `on`/`yes`/`off` to booleans and pydantic's lax int
+        # coercion turns True into 1 — a one-second kill switch that would apply
+        # cleanly and then converge (1 == 1), so nothing would ever re-flag it.
+        # Reject booleans at load, mirroring the REST models' boolean guard on
+        # circuit_breaker_threshold.
+        if isinstance(value, bool):
+            msg = (
+                f"{info.field_name} must be a number of seconds, not a boolean "
+                f"(YAML `on`/`yes` resolve to True); declare a value >= 1 or omit the key"
+            )
+            raise ValueError(msg)
+        return value
+
+    @property
+    def manages_node_timeout(self) -> bool:
+        """True when the config declares node_timeout_seconds (FAR-1294).
+
+        Managed ONLY when declared: the value cannot be cleared to null (see
+        the class docstring), so an omitted key must leave a UI/API-set node
+        timeout untouched rather than resetting it to the platform default.
+        Same ``model_fields_set`` test ``manages_circuit_breaker`` uses.
+        """
+        return "node_timeout_seconds" in self.model_fields_set
+
+    @property
+    def manages_max_duration(self) -> bool:
+        """True when the config declares max_duration_seconds (FAR-1294)."""
+        return "max_duration_seconds" in self.model_fields_set
 
     @field_validator("name")
     @classmethod
@@ -597,6 +680,15 @@ class PipelineEntity(BaseModel):
         # compares it (and the executor clears the live ceiling).
         if self.manages_max_autonomy:
             view["max_autonomy_level"] = self.max_autonomy_level
+        # FAR-1294: the two runtime limits (node timeout / run duration cap)
+        # are included ONLY when declared — the generic plan diff then reports
+        # drift on them, and an omitted key is neither compared nor written
+        # (the API accepts no null for either, so omission cannot clear them;
+        # see the class docstring).
+        if self.manages_node_timeout:
+            view["node_timeout_seconds"] = self.node_timeout_seconds
+        if self.manages_max_duration:
+            view["max_duration_seconds"] = self.max_duration_seconds
         if self.graph is not None:
             # FAR-1232: the DRIFT hash must compare the declared graph as the
             # server will DISPLAY it — the API read path masks credential-

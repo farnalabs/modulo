@@ -282,6 +282,13 @@ def apply_pipelines(
     owner; the REST PATCH keys on presence, so omitting them would wrongly
     leave the live owner untouched).
 
+    The runtime limits ``node_timeout_seconds`` / ``max_duration_seconds``
+    (FAR-1294) are the opposite: sent on both POST and PATCH only when the
+    config declares them, because the REST models accept no null for either —
+    an omitted key must leave a UI/API-tuned value untouched instead of
+    failing the entity with a 422 (or, on create, fall through to the server
+    default of 300 / 3600).
+
     Returns the pipeline name -> id map (current + created), consumed by the
     trigger phase to resolve (pipeline, name) identities. When a JUST-CREATED
     pipeline's apply fails (POST or the graph PATCH), the name is dropped
@@ -322,6 +329,14 @@ def apply_pipelines(
                     }
                     if entity.manages_circuit_breaker:
                         create_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
+                    # FAR-1294: the two runtime limits are sent only when the
+                    # config DECLARES them, so an omitted key falls through to
+                    # the server default (300 / 3600) instead of being written
+                    # as an explicit null (which PipelineCreate would reject).
+                    if entity.manages_node_timeout:
+                        create_payload["node_timeout_seconds"] = entity.node_timeout_seconds
+                    if entity.manages_max_duration:
+                        create_payload["max_duration_seconds"] = entity.max_duration_seconds
                     response = executor._post("/pipelines", create_payload)
                     pipeline_id = str(response["id"])
                     graph_differs = entity.graph is not None
@@ -373,6 +388,15 @@ def apply_pipelines(
                 # clears the column back to "inherit the default".
                 if entity.manages_max_autonomy:
                     patch_payload["max_autonomy_level"] = entity.max_autonomy_level
+                # FAR-1294: same opt-in gate as the create path. A DECLARED
+                # limit is always sent as a concrete int (the drift hash
+                # compares the key, so the write must be able to change it);
+                # an OMITTED limit is never sent, so a UI/API-tuned timeout or
+                # duration cap survives an apply that does not declare it.
+                if entity.manages_node_timeout:
+                    patch_payload["node_timeout_seconds"] = entity.node_timeout_seconds
+                if entity.manages_max_duration:
+                    patch_payload["max_duration_seconds"] = entity.max_duration_seconds
                 if entity.graph is not None and graph is not None and graph_differs:
                     patch_payload["graph_json"] = graph
                 if status == "updated" or entity.graph is not None:
