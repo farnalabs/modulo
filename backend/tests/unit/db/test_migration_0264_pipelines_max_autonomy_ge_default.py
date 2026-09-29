@@ -11,8 +11,10 @@ Lenses:
 
 * **Chain** - 0264 chains onto ``0263_evidence_layer``; 0265_hitl_review_window
   (FAR-1257) chains onto 0264, 0266_guardrail_policy_gate_sweep (FAR-1107)
-  chains onto 0265, and 0267_notification_hot_query_indexes chains onto 0266 as
-  the single linear head (0259's test documents the run-up through 0267).
+  chains onto 0265, 0267_notification_hot_query_indexes chains onto 0266,
+  0268_webhook_lookup_expiry_indexes chains onto 0267, and
+  0269_webhook_dedup_check_constraints chains onto 0268 as the single linear head
+  (0259's test documents the run-up through 0269).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -47,7 +49,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0267_notification_hot_query_indexes"
+_HEAD_MIGRATION = "0269_webhook_dedup_check_constraints"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a
