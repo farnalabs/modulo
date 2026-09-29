@@ -30,7 +30,7 @@ bdd:
   - backend/tests/bdd/steps/test_guardrails_steps.py
   - backend/tests/bdd/steps/test_guardrail_config_steps.py
 depends-on: [feat-evals]
-status: covered
+status: partial
 ---
 
 # Guardrails
@@ -115,6 +115,11 @@ compensation, and single-node self-correction. Built on the eval engine
 
 ## Known Gaps
 
+- **Cross-org guardrail inheritance is not shipped** — importing or sharing an
+  org's guardrail configuration between organisations is not implemented; the
+  config-as-code `GuardrailConfigSet` workflow and policy packs stay
+  scope-of-one-org (tracked as the manifest `feat-guardrails` unchecked
+  deferral).
 - **Correction is bounded single-node only** — the whole-pipeline feedback
   correction (`spawn_correction_run`) is a separate surface; this module never
   re-runs the pipeline.
@@ -123,6 +128,13 @@ compensation, and single-node self-correction. Built on the eval engine
   external/unmediated runtimes.
 
 ## QA History
+- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+  tracker frontmatter `status:` with the manifest `feat-guardrails` registry:
+  the entry now reads `status: partial` (matching the manifest's unchecked
+  "cross-org guardrail inheritance is not shipped" deferral, now also named in
+  Known Gaps) instead of `covered`. The two layers previously disagreed on the
+  same feature's coverage — a reader of the graph got the opposite answer from
+  the machine layer Assistant reads from the manifest.
 - 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
   `feat-guardrails` registry entry: the previously-vague "policy templates and
   cross-org inheritance are partially wired" gap is now split into what actually
