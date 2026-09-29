@@ -1,10 +1,10 @@
 <template>
   <div data-theme="agent" class="page-wide">
     <PageTabs :tabs="[
-      { label: 'Overview', to: '/admin/costs' },
-      { label: 'Spend Limits', to: '/admin/costs/limits' },
-      { label: 'Cost Components', to: '/admin/costs/components' },
-      { label: 'Cost Controls', to: '/admin/costs/controls' },
+      { label: $t('views.AdminCostBreakdownView.tabs_overview'), to: '/admin/costs' },
+      { label: $t('views.AdminCostBreakdownView.tabs_spend_limits'), to: '/admin/costs/limits' },
+      { label: $t('views.AdminCostBreakdownView.tabs_cost_components'), to: '/admin/costs/components' },
+      { label: $t('views.AdminCostBreakdownView.tabs_cost_controls'), to: '/admin/costs/controls' },
     ]" />
     <PageHeader :title="$t('views.AdminCostBreakdownView.cost_breakdown')" :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')" />
 
@@ -52,10 +52,12 @@
           <template #title>{{ $t('views.AdminCostBreakdownView.per_team_cost_breakdown') }}</template>
           <template #subtitle>{{ $t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team') }}</template>
           <template #content>
-            <div v-if="items.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              {{ $t('views.AdminCostBreakdownView.no_team_cost_data_available') }}
-            </div>
-            <div v-else class="overflow-x-auto">
+            <EmptyState
+              v-if="items.length === 0"
+              :title="$t('views.AdminCostBreakdownView.no_team_cost_data_available')"
+              data-testid="cost-team-empty"
+            />
+            <div v-else class="overflow-x-auto" data-testid="cost-team-table">
               <DataTable
                 :columns="[
                   { key: 'entity_name', label: $t('views.AdminCostBreakdownView.team') },
@@ -93,11 +95,18 @@
           <template #subtitle>{{ $t('views.AdminCostBreakdownView.days_where_spend_exceeded_2x_avg') }}</template>
           <template #content>
             <LoadingSpinner v-if="anomaliesLoading" />
-            <div v-else-if="anomaliesError" class="text-sm text-destructive">{{ anomaliesError }}</div>
-            <div v-else-if="anomalies.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              {{ $t('views.AdminCostBreakdownView.no_anomalies_detected') }}
-            </div>
-            <div v-else class="space-y-3">
+            <ErrorAlert
+              v-else-if="anomaliesError"
+              :message="anomaliesError"
+              :on-retry="loadAnomalies"
+              data-testid="cost-anomalies-error"
+            />
+            <EmptyState
+              v-else-if="anomalies.length === 0"
+              :title="$t('views.AdminCostBreakdownView.no_anomalies_detected')"
+              data-testid="cost-anomalies-empty"
+            />
+            <div v-else class="space-y-3" data-testid="cost-anomalies-list">
               <div
                 v-for="anomaly in activeAnomalies"
                 :key="anomaly.id"
@@ -107,17 +116,15 @@
                 <div>
                   <p class="text-sm font-medium">{{ anomaly.anomaly_date }}</p>
                   <p class="text-xs text-muted-foreground">
-                    Spend: <strong>{{ formatMoney(anomaly.amount, currencyCode) }}</strong>
-                    (baseline: {{ formatMoney(anomaly.baseline, currencyCode) }},
-                    {{ anomaly.percent_above > 0 ? '+' : '' }}{{ anomaly.percent_above.toFixed(0) }}% above)
+                    {{ $t('views.AdminCostBreakdownView.anomaly_spend_detail', { amount: formatMoney(anomaly.amount, currencyCode), baseline: formatMoney(anomaly.baseline, currencyCode), percent: (anomaly.percent_above > 0 ? '+' : '') + anomaly.percent_above.toFixed(0) + '%' }) }}
                   </p>
                 </div>
                 <Button size="small" severity="secondary" outlined :disabled="dismissLoading[anomaly.id]" :data-testid="'cost-anomaly-dismiss-' + anomaly.id" @click="dismissAnomaly(anomaly.id)">
-                  {{ dismissLoading[anomaly.id] ? '...' : $t('views.AdminCostBreakdownView.dismiss') }}
+                  {{ $t('views.AdminCostBreakdownView.dismiss') }}
                 </Button>
               </div>
               <p v-if="dismissedAnomalies.length > 0" class="pt-2 text-xs text-muted-foreground">
-                {{ dismissedAnomalies.length }} dismissed anomaly{{ dismissedAnomalies.length === 1 ? '' : 'ies' }}
+                {{ $t('views.AdminCostBreakdownView.dismissed_anomalies_count', { count: dismissedAnomalies.length }) }}
               </p>
             </div>
           </template>
@@ -130,6 +137,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'

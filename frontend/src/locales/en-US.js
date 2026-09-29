@@ -1911,6 +1911,12 @@ export default {
       "days_where_spend_exceeded_2x_avg": "Days where spend exceeded 2x the rolling 7-day average",
       "no_anomalies_detected": "No anomalies detected. Spend patterns are within expected ranges.",
       "dismiss": "Dismiss",
+      "tabs_overview": "Overview",
+      "tabs_spend_limits": "Spend Limits",
+      "tabs_cost_components": "Cost Components",
+      "tabs_cost_controls": "Cost Controls",
+      "anomaly_spend_detail": "Spend: {amount} (baseline: {baseline}, {percent} above)",
+      "dismissed_anomalies_count": "{count} dismissed anomaly | {count} dismissed anomalies",
       "annotations": "Annotations",
       "refused_limit_line": "refused (limit) ${amount}",
       "day_ledger_clamped_line": "day ledger clamped at column capacity"
