@@ -15,7 +15,33 @@
         </p>
       </div>
 
-      <LoadingSpinner v-if="loading" data-testid="settings-observability-loading" />
+      <div v-if="loading" data-testid="settings-observability-loading" class="space-y-6">
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
+          <div class="mb-4 h-5 w-40 bg-muted rounded" />
+          <div class="mb-1 h-4 w-32 bg-muted rounded" />
+          <div class="h-9 w-full bg-muted rounded" />
+        </div>
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
+          <div class="mb-4 flex items-center justify-between">
+            <div class="h-5 w-32 bg-muted rounded" />
+            <div class="h-8 w-28 bg-muted rounded" />
+          </div>
+          <div class="h-9 w-full bg-muted rounded" />
+        </div>
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
+          <div class="mb-4 h-5 w-36 bg-muted rounded" />
+          <div class="mb-1 h-4 w-40 bg-muted rounded" />
+          <div class="h-9 w-full bg-muted rounded" />
+          <div class="mt-2 h-3 w-2/3 bg-muted rounded" />
+        </div>
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
+          <div class="mb-4 h-5 w-28 bg-muted rounded" />
+          <div class="flex items-center gap-3">
+            <div class="h-6 w-11 rounded-full bg-muted" />
+            <div class="h-4 w-48 bg-muted rounded" />
+          </div>
+        </div>
+      </div>
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSettings" />
 
@@ -70,9 +96,7 @@
               :title="$t('views.SettingsObservabilityView.remove_header')"
               @click="removeHeader(index)"
             >
-              <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-              </svg>
+              <X class="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -199,9 +223,9 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Button from 'primevue/button'
+import { X } from '@lucide/vue'
 
 type OtelSettingsResponse = components['schemas']['OtelSettingsResponse']
 type TestSpanResult = components['schemas']['TestSpanResult']

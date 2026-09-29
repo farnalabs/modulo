@@ -91,14 +91,16 @@ Key design:
 
 ### Eval Engine (`modulo/core/eval_engine/`)
 
-Post-node automated quality checks. Runs before any HITL gate check on the same edge. Supports four eval types:
+Post-node automated quality checks. Runs before any HITL gate check on the same edge. Supports six eval types (see `docs/evals.md` for the full contract, including which types are trustworthy for correctness claims):
 
 | Type | Description |
 |------|-------------|
-| `llm_judge` | LLM-as-judge – passes agent output to a model for scoring |
-| `regex` | Pattern match against output |
-| `json_schema` | Validate output against a JSON Schema |
+| `llm_judge` | LLM-as-judge – passes agent output to a model for scoring (soft signal only, never a correctness gate) |
+| `regex` | Pattern match against output (shape only) |
+| `json_schema` | Validate output against a JSON Schema (shape only) |
 | `custom_function` | User-defined Python function |
+| `guardrail` | Deterministic data-safety check on the input payload (not routed through `EvalEngine`) |
+| `human_set` | Registered, versioned, human-authored assertion set (the trustworthy correctness path) |
 
 Each eval has a pass threshold and failure behaviour: `warn` (soft – run continues) or `block` (hard – run fails at this node). Eval results feed into the Feedback System.
 
@@ -278,16 +280,16 @@ A `sandbox_agent` node's content fields (`agent_prompt`, each `agent_commands` i
 git+<repo-url>[@<ref>]#<path>
 ```
 
-- `git+` marks the value as a ref (it sits in a string field exactly like `secretref://` does, an alternative value rather than a new field). A value that merely *mentions* `git+` mid-string stays inline content.
-- `<repo-url>` uses the same scheme set managed workspace inputs accept (`https://`, `ssh://`, SCP-style `git@host:path`). Credentials are forbidden in the URL: `@` after the repository is reserved for the ref separator.
+- `git+` marks the value as a ref (it sits in a string field exactly like `secretref://` does, as an alternative value, not a new field). A value that merely *mentions* `git+` mid-string stays inline content.
+- `<repo-url>` uses the same scheme set managed workspace inputs accept (`https://`, `ssh://`, SCP-style `git@host:path`). Credentials are forbidden in the URL, since `@` after the repository is reserved for the ref separator.
 - `@<ref>` is an optional branch / tag / commit SHA; omitted means `HEAD`. A 40-hex value is a **pin**.
 - `#<path>` is a repository-relative file path (non-empty, no `..`, no `#`, no newlines).
 
 Lifecycle (the shared parse/resolve/pin helpers live in `modulo/core/pipeline_engine/git_content.py`; the save-time gate is part of the graph validator):
 
 1. **Graph-save validation** (`GraphValidator`, codes `GIT_CONTENT_REF_INVALID` / `GIT_CONTENT_REF_UNPINNED`): a `git+` value must parse, and stored graphs must carry a **pinned** `@<40-hex>` ref, so every run snapshot (which deep-copies the live graph at snapshot creation) surfaces the resolved commit SHA for audit. Movable refs are rejected at save with a hint to pin them or use `modulo apply`. Composite-template sandbox sub-nodes obey the same gate. Agent rows are gated at every write path too: the REST/MCP Agent saves run `validate_agent_git_content_values` directly, the graph-PATCH Agent-command sync validates each incoming list before writing the row (the graph validator only checks `sandbox_agent` nodes, so an `agent`-type node could otherwise carry an unpinned ref into the row ungated), and prompt rollback re-validates the restored template (a legacy history entry must not re-poison a clean row). A `GitContentRefError` from any of these surfaces is mapped to HTTP 422 and rolls back the enclosing write.
-2. **Pin-on-apply**: `modulo apply` resolves a movable spec ref to its current commit SHA at plan time (`git ls-remote`, bounded, fail-closed: an unresolvable ref BLOCKS the entity) and rewrites the field to the canonical pinned form. The desired managed view, the write payload, the stored graph, and every subsequent run snapshot therefore hold the same pinned SHA.
-3. **Run-time rendering**: at the agent-command rendering point (`node_runner`), a whole-field pinned ref is fetched at exactly that commit (host-side `git clone --no-checkout` + `git show <sha>:<path>`) and the file content replaces the ref before dispatch (fetched content then flows through the normal Jinja render for llm mode / verbatim for script mode). Unpinned refs and fetch failures raise typed errors: the node fails closed rather than dispatching the raw ref string. Host-side fetch is public-repository-only in this increment (no credential material is ever embedded in the ref or the process environment); private-repo credential support is a later increment.
+2. **Pin-on-apply**: `modulo apply` resolves a movable spec ref to its current commit SHA at plan time (`git ls-remote`, bounded, fail-closed; an unresolvable ref BLOCKS the entity) and rewrites the field to the canonical pinned form. The desired managed view, the write payload, the stored graph, and every subsequent run snapshot therefore hold the same pinned SHA.
+3. **Run-time rendering**: at the agent-command rendering point (`node_runner`), a whole-field pinned ref is fetched at exactly that commit (host-side `git clone --no-checkout` + `git show <sha>:<path>`) and the file content replaces the ref before dispatch (fetched content then flows through the normal Jinja render for llm mode / verbatim for script mode). Unpinned refs and fetch failures raise typed errors, so the node fails closed rather than dispatching the raw ref string. Host-side fetch is public-repository-only in this increment (no credential material is ever embedded in the ref or the process environment); private-repo credential support is a later increment.
 4. **Drift (`--diff`)**: because the desired side is the resolved pin and the deployed side is the stored pin, the managed-field hash reports `updated` when the tracked ref moved (branch/tag advanced, spec changed, or the deployed graph was saved unpinned). `drift_detail` additionally names the move per content field as a `git_content` list (`{node, field, desired, current}` with the full old/new refs), rendered as `drift detail git-content ...` lines, so a CI gate on `--diff` fails on content drift and the report shows the actual commit transition. Re-running `modulo apply` converges the deployed pin.
 
 ## Feature Flags
@@ -594,7 +596,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 ### JWT Security
 
 - Access tokens: 15-min expiry
-- Refresh tokens: sliding 24-h expiry by default (configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`), rotated on use: each rotation mints a fresh token with the full lifetime, so this IS the idle-logout window: a session abandoned longer than the TTL cannot refresh and is logged out
+- Refresh tokens: sliding 24-h expiry by default (configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`), rotated on use (each rotation mints a fresh token with the full lifetime, so this IS the idle-logout window: a session abandoned longer than the TTL cannot refresh and is logged out)
 - Algorithm pinning: `HS256` only – `none` and other algs rejected
 - SECRET_KEY: minimum 32 bytes (256 bits) – refused at startup if insufficient
 - Token family invalidation on revocation
@@ -791,7 +793,7 @@ ADRs document key trade-offs and are maintained alongside this project's private
 | 029 | Agent Execution Tiers + the Bundled Runner | Accepted |
 | 038 | RBAC as a Security Boundary: One Rule, One Principal | Accepted |
 
-Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`): where two files shared a number, the later arrival was renumbered: 003 Agent Dispatch Model → 044, 004 Agent as a Self-Contained Bundle → 045, 005 Agent Architecture: Two-Tier → 046, 017 Centralized Authorization → 047, 021 E2B Session Liveness → 048, 025 Live-Edit History + Release Channels → 049 and Execution-Graph Router/HITL Nodes → 050, 042 Managed Sandbox Adapter Pattern → 051, so each number now names exactly one ADR file (the keeper files 003 Packaging & Distribution, 004 User Offboarding, 005 Single-Org Self-Hosted, 017 Celery to SAQ, 021 Worker Resilience, 025 Generic REST Integration Connector, 042 Governed Run Contract, kept their numbers). Centralized Authorization still exists as two copies, `047-centralized-authorization.md` (superseded by the canonical `018-centralized-authorization.md`), so it is listed once above under the combined number 047/018.
+Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`): where two files shared a number, the later arrival was renumbered (003 Agent Dispatch Model → 044, 004 Agent as a Self-Contained Bundle → 045, 005 Agent Architecture: Two-Tier → 046, 017 Centralized Authorization → 047, 021 E2B Session Liveness → 048, 025 Live-Edit History + Release Channels → 049 and Execution-Graph Router/HITL Nodes → 050, 042 Managed Sandbox Adapter Pattern → 051), so each number now names exactly one ADR file (the keeper files: 003 Packaging & Distribution, 004 User Offboarding, 005 Single-Org Self-Hosted, 017 Celery to SAQ, 021 Worker Resilience, 025 Generic REST Integration Connector, 042 Governed Run Contract, which kept their numbers). Centralized Authorization still exists as two copies, `047-centralized-authorization.md` (superseded by the canonical `018-centralized-authorization.md`), so it is listed once above under the combined number 047/018.
 
 ## Import Contracts (enforced by import-linter)
 

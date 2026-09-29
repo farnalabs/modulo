@@ -302,7 +302,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
 | `SECRET_KEY` | **Yes** | – | 32+ byte random string for JWT signing |
 | `FERNET_KEY` | **Yes** | – | 44-char base64 Fernet key for credential encryption |
-| `MODULO_USERS` | Alpha | – | Comma-separated `user:pass` pairs for initial user seed |
+| `MODULO_USERS` | No | – | Comma-separated `email:password` pairs for initial user seed (plaintext is bcrypt-hashed at seed time; `admin` gets the admin role) |
 | `MODULO_DB` | No | `postgres` | Database backend (`postgres`, `sqlite`, `mariadb`, or `mysql`) |
 | `REDIS_URL` | No | `redis://localhost:6379/0` | Redis URL for SAQ broker, event coordination, rate limiting |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
@@ -332,7 +332,7 @@ refuses to start without them:
 | `SECRET_KEY` | 32+ byte random string used to sign JWTs | `$(openssl rand -base64 48)` |
 | `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(openssl rand -base64 32)` (base64-encoded 32-byte key) |
 
-The command below sets all three inline, so it is runnable as written. `MODULO_ADMIN_PASSWORD`
+The command below sets all three inline, so it is runnable as written. `MODULO_USERS`
 seeds the initial admin user (optional but recommended for first login); `MODULO_DB=sqlite`
 selects the SQLite backend so no separate database server is needed.
 
@@ -343,7 +343,7 @@ uv sync
 DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
   SECRET_KEY=$(openssl rand -base64 48) \
   FERNET_KEY=$(openssl rand -base64 32) \
-  MODULO_ADMIN_PASSWORD=changeme \
+  MODULO_USERS=admin:changeme \
   MODULO_DB=sqlite \
   uv run uvicorn modulo.api.main:app --port 8000
 ```

@@ -74,7 +74,7 @@ describe('SettingsObservabilityView', () => {
     expect(wrapper.text()).toContain('Observability')
   })
 
-  it('shows loading spinner while fetching settings', async () => {
+  it('shows loading skeleton while fetching settings', async () => {
     vi.mocked(api.GET as unknown as () => Promise<unknown>).mockReturnValue(new Promise(() => {}))
 
     const wrapper = mount(SettingsObservabilityView, {

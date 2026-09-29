@@ -4159,7 +4159,11 @@ export default {
       "connection": "Provider connection error"
     },
     "eval": { "blocked": "Eval blocked", "failed": "Eval failed" },
-    "config": { "error": "Configuration error", "invalid": "Invalid configuration" }
+    "config": { "error": "Configuration error", "invalid": "Invalid configuration" },
+    "hitl": {
+      "review_expired": "HITL review expired",
+      "review_missing": "HITL review missing"
+    }
   },
   "errorCodeDescriptions": {
     "agent": {
@@ -4221,7 +4225,11 @@ export default {
       "connection": "A network error occurred while calling the LLM provider."
     },
     "eval": { "blocked": "A guardrail eval blocked the run from continuing.", "failed": "A guardrail eval failed during execution." },
-    "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." }
+    "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." },
+    "hitl": {
+      "review_expired": "The run sat unanswered at a human review gate past the review window and was cancelled.",
+      "review_missing": "The run was waiting for a human review, but its review gate was never created, so the run was cancelled automatically."
+    }
   },
   "statusDescriptions": {
     "complete": "The run finished successfully.",
