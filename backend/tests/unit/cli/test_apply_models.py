@@ -441,9 +441,32 @@ class TestPipelineEntityContracts:
             "description": None,
             "max_concurrent_runs": 2,
             "stdout_retention_config": None,
+            "hitl_review_window_seconds": None,
             "business_owner_id": None,
             "reliability_owner_id": None,
         }
+
+    def test_hitl_review_window_round_trips_into_managed_view(self) -> None:
+        """FAR-1257: the declarative field parses, hashes into the managed
+        view, and an omitted key means null (inherit the org/instance default)."""
+        entity = PipelineEntity.model_validate({"name": "sample", "hitl_review_window_seconds": 3600})
+        assert entity.hitl_review_window_seconds == 3600
+        assert entity.managed_view()["hitl_review_window_seconds"] == 3600
+        omitted = PipelineEntity.model_validate({"name": "sample"})
+        assert omitted.hitl_review_window_seconds is None
+        assert omitted.managed_view()["hitl_review_window_seconds"] is None
+
+    @pytest.mark.parametrize("value", [59, 604801])
+    def test_hitl_review_window_out_of_bounds_rejected(self, value: int) -> None:
+        """Same 60..604800 envelope the REST Pydantic field and the DB CHECK
+        enforce (FAR-1257); a bad value fails at config load, not at apply."""
+        with pytest.raises(ValidationError):
+            PipelineEntity.model_validate({"name": "sample", "hitl_review_window_seconds": value})
+
+    @pytest.mark.parametrize("value", [60, 604800])
+    def test_hitl_review_window_bounds_accepted(self, value: int) -> None:
+        entity = PipelineEntity.model_validate({"name": "sample", "hitl_review_window_seconds": value})
+        assert entity.hitl_review_window_seconds == value
 
     def test_mixed_case_max_autonomy_level_is_normalised(self) -> None:
         """FAR-1163: a case-variant ceiling in an apply YAML must hash

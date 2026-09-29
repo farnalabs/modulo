@@ -617,6 +617,23 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
             "HITL review expired unclaimed; run terminalized by dispatcher_reconcile to free its concurrency slot."
         ),
     ),
+    # FAR-721: the zero-claim awaiting_human zombie terminalizer
+    # (``_terminalize_hitl_review_missing``) writes the raw
+    # ``hitl_review_missing`` code — registered here (and aliased in
+    # LEGACY_ALIASES) beside its sibling ``hitl.review_expired`` so it never
+    # resolves through the ``harness.unknown`` fallback (which rendered as
+    # "Unknown error") and analytics buckets it as its own cancel class.
+    # Same terminal, routine-hygiene posture as the sibling: the gate row was
+    # never created, never retried, no alert.
+    "hitl.review_missing": ErrorCodeSpec(
+        error_class="hitl",
+        retryable=False,
+        alert_severity=None,
+        guidance=(
+            "HITL gate was never created for an awaiting_human run; run terminalized "
+            "by dispatcher_reconcile to free its concurrency slot."
+        ),
+    ),
     # --- eval codes ------------------------------------------------------
     _CODE_EVAL_BLOCKED: ErrorCodeSpec(
         error_class="eval",
@@ -763,9 +780,14 @@ LEGACY_ALIASES: dict[str, str] = {
     # Capacity.
     "claim_cap_exhausted": "capacity.claim",
     # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes
-    # the raw code — canonicalized to the ``hitl.gate_expired`` registry entry
+    # the raw code — canonicalized to the ``hitl.review_expired`` registry entry
     # beside its sibling terminalizer aliases above (never ``harness.unknown``).
     "hitl_review_expired": "hitl.review_expired",
+    # FAR-721: the zero-claim awaiting_human zombie terminalizer writes the
+    # raw ``hitl_review_missing`` code — canonicalized to its own registry
+    # entry beside its sibling terminalizer alias above (never
+    # ``harness.unknown``).
+    "hitl_review_missing": "hitl.review_missing",
     "pipeline_capacity": "capacity.pipeline",
     "org_capacity_limited": _CODE_CAPACITY_ORG,
     "capacity_timeout": "capacity.timeout",

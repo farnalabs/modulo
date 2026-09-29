@@ -116,6 +116,29 @@ def test_map_legacy_code_dotted_passthrough():
     assert map_legacy_code("harness.unknown") == "harness.unknown"
 
 
+def test_hitl_review_terminalizer_codes_map_to_their_own_hitl_entries():
+    """The raw terminalizer codes written by cron_helpers must canonicalize.
+
+    ``_terminalize_expired_hitl_reviews`` writes ``hitl_review_expired``
+    (FAR-648) and ``_terminalize_hitl_review_missing`` writes
+    ``hitl_review_missing`` (FAR-721) straight into ``runs.error_code``.
+    Both must resolve to their own ``hitl.*`` registry entry — never the
+    ``harness.unknown`` fallback (which presented as "Unknown error" and
+    bucketed them out of the hitl cancel class in analytics).
+    """
+    assert map_legacy_code("hitl_review_missing") == "hitl.review_missing"
+    assert map_legacy_code("hitl_review_missing") != "harness.unknown"
+    assert map_legacy_code("hitl_review_expired") == "hitl.review_expired"
+    assert map_legacy_code("hitl.review_missing") == "hitl.review_missing"
+    missing = ERROR_CODE_REGISTRY["hitl.review_missing"]
+    assert missing.error_class == "hitl"
+    assert missing.retryable is False
+    assert missing.alert_severity is None
+    assert class_for("hitl_review_missing") == "hitl"
+    assert "hitl_review_missing" in known_error_codes()
+    assert "hitl.review_missing" in expand_code_variants("hitl_review_missing")
+
+
 def test_map_legacy_code_unknown_and_none_fall_back_to_harness_unknown():
     """Unmapped codes and None resolve to the harness.unknown fallback."""
     assert map_legacy_code("some_mystery_code") == "harness.unknown"
