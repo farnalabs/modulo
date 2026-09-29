@@ -4192,6 +4192,9 @@ elements:
       - testid: settings-mcp-register-oauth-client
         type: button
         dynamic_testid: false
+      - testid: settings-mcp-oauth-public-url-warning
+        type: element
+        dynamic_testid: false
       - testid: settings-mcp-oauth-list-error
         type: element
         dynamic_testid: false

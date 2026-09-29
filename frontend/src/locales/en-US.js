@@ -2182,6 +2182,7 @@ export default {
       "created": "Created",
       "modulo_public_url_not_set": "MODULO_PUBLIC_URL not set",
       "modulo_public_url_not_configured": "The MODULO_PUBLIC_URL environment variable is not configured. The MCP server URL will fall back to",
+      "set_modulo_public_url_before_registering_oauth": "Set MODULO_PUBLIC_URL before registering an OAuth client - the OAuth flow needs the public URL to build its redirect endpoints.",
       "active": "Active",
       "local_only": "Local Only",
       "create_mcp_api_key": "Create MCP API Key",

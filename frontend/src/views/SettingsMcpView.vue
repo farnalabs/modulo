@@ -35,7 +35,7 @@
         <template #content>
         <div class="space-y-4">
           <div
-            v-if="!mcpUrl"
+            v-if="!publicUrlConfigured"
             class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning"
           >
             <p class="font-medium">{{ $t('views.SettingsMcpView.modulo_public_url_not_set') }}</p>
@@ -53,8 +53,8 @@
               <Button severity="secondary" outlined size="small" data-testid="settings-mcp-copy-url" @click="copyServerUrl">
                 {{ copiedField === 'server-url' ? $t('views.SettingsMcpView.copied') : $t('views.SettingsMcpView.copy') }}
               </Button>
-              <Badge :severity="mcpUrl ? 'info' : 'secondary'">
-                {{ mcpUrl ? $t('views.SettingsMcpView.active') : $t('views.SettingsMcpView.local_only') }}
+              <Badge :severity="publicUrlConfigured ? 'info' : 'secondary'">
+                {{ publicUrlConfigured ? $t('views.SettingsMcpView.active') : $t('views.SettingsMcpView.local_only') }}
               </Badge>
             </div>
           </div>
@@ -176,6 +176,7 @@
         :forbidden="oauthForbidden"
         :list-error="oauthListError"
         :can-manage="canManageOauth"
+        :public-url-configured="publicUrlConfigured"
         @refresh="refreshAfterOauthMutation"
       />
     </template>
@@ -328,8 +329,24 @@ interface McpPageData {
   oauthListError: string | null
 }
 
-type ApiKeyCreatedResponse = components['schemas']['ApiKeyCreatedResponse']
 type OAuthClientItem = components['schemas']['OAuthClientItem']
+
+/**
+ * A request that REJECTS (network failure, abort, parse error) never reaches
+ * the typed client's `{ data, error, response }` result shape, so it is
+ * normalised here into that same shape with a `detail`-carrying error. The
+ * rejection reason is flattened through `formatApiError` first because
+ * `useDataFetch` accepts only an error *object* (`{ detail?: unknown }`) -
+ * wrapping keeps every rejection path rendering exactly what the resolved
+ * `{ error }` path renders.
+ */
+function rejectedResult(e: unknown): {
+  data?: undefined
+  error?: { detail?: unknown }
+  response?: undefined
+} {
+  return { error: { detail: formatApiError(e) } }
+}
 
 /**
  * A GET that only the admin/operator roles may perform can come back 403 for a
@@ -354,9 +371,9 @@ const {
 } = useDataFetch<McpPageData>(
   async () => {
     const [mcpResp, keysResp, oauthResp] = await Promise.all([
-      (api as any).GET('/api/v1/api-keys/mcp-config').catch((e: unknown) => ({ error: e })),
-      (api as any).GET('/api/v1/api-keys').catch((e: unknown) => ({ error: e })),
-      (api as any).GET('/api/v1/mcp/oauth/clients').catch((e: unknown) => ({ error: e })),
+      api.GET('/api/v1/api-keys/mcp-config').catch(rejectedResult),
+      api.GET('/api/v1/api-keys').catch(rejectedResult),
+      api.GET('/api/v1/mcp/oauth/clients').catch(rejectedResult),
     ])
     if (mcpResp.error) return { error: mcpResp.error }
 
@@ -376,7 +393,12 @@ const {
         return { error: keysResp.error }
       }
     } else if (Array.isArray(keysResp.data)) {
-      apiKeys = keysResp.data as ApiKeyItem[]
+      // The generated OpenAPI type for GET /api/v1/api-keys is a bare
+      // `{ [key: string]: unknown }[]` (FastAPI serialises the rows without a
+      // response model), so the row shape is asserted at this one boundary
+      // where the data enters the page - it stays null-safe behind the
+      // Array.isArray guard above, and everything downstream is ApiKeyItem.
+      apiKeys = keysResp.data as unknown as ApiKeyItem[]
     }
 
     // The OAuth client list is deliberately NON-fatal: a 403 (viewer role) or
@@ -399,7 +421,7 @@ const {
     }
     return {
       data: {
-        mcpUrl: mcpResp.data.mcp_url,
+        mcpUrl: mcpResp.data?.mcp_url ?? '',
         apiKeys,
         oauthClients,
         oauthForbidden,
@@ -429,6 +451,29 @@ const mcpUrl = computed(() => mcpData.value?.mcpUrl ?? '')
 const apiKeys = computed(() => mcpData.value?.apiKeys ?? [])
 const oauthClients = computed(() => mcpData.value?.oauthClients ?? [])
 const oauthListError = computed(() => mcpData.value?.oauthListError ?? null)
+
+/**
+ * The page's ONE concept of "MODULO_PUBLIC_URL is configured" (FAR-1282).
+ *
+ * The server-side OAuth guard (`api/routes/mcp_oauth.py`) refuses the
+ * registration flow when the effective public URL is empty OR is the
+ * `http://localhost:8000` fallback, and `GET /api/v1/api-keys/mcp-config`
+ * reports that same value as `<public url>/mcp` (empty public URL -> `/mcp`).
+ * So strip the `/mcp` suffix and test the base against exactly the two
+ * rejecting values the server uses - `!mcpUrl` alone is not enough, because a
+ * default/unset MODULO_PUBLIC_URL comes back as `http://localhost:8000/mcp`,
+ * which is truthy but still fails the server guard.
+ *
+ * Everything that cares about that precondition reads THIS computed: the
+ * MODULO_PUBLIC_URL warning card, the Active/Local Only badge, and the OAuth
+ * register gate (passed to `McpOauthClientsCard` as `public-url-configured`).
+ */
+const publicUrlConfigured = computed(() => {
+  const raw = mcpUrl.value
+  if (!raw) return false
+  const base = raw.endsWith('/mcp') ? raw.slice(0, -'/mcp'.length) : raw
+  return base !== '' && base !== 'http://localhost:8000'
+})
 
 // Role gate: the backend requires org role admin|operator for all three OAuth
 // client endpoints, so a viewer never sees the table or the actions. The 403
@@ -586,17 +631,16 @@ async function createKey() {
   creatingKey.value = true
   createKeyError.value = null
   try {
-    const { data, error: err } = await (api as any).POST('/api/v1/api-keys', {
+    const { data, error: err } = await api.POST('/api/v1/api-keys', {
       body: { name: createKeyName.value.trim(), role: createKeyRole.value },
     })
     if (err) {
       createKeyError.value = formatApiError(err)
     } else if (data) {
-      const created = data as ApiKeyCreatedResponse
-      createdKeyName.value = created.name
+      createdKeyName.value = data.name
       createKeyDialogOpen.value = false
       keyCreatedDialogOpen.value = true
-      revealKey(created.key_value)
+      revealKey(data.key_value)
       await loadAll()
     }
   } catch (e: unknown) {
@@ -617,7 +661,7 @@ async function revokeKey() {
   revokingKey.value = true
   revokeKeyError.value = null
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/api-keys/{key_id}', {
+    const { error: err } = await api.PUT('/api/v1/api-keys/{key_id}', {
       params: { path: { key_id: revokeKeyTarget.value.id } },
       body: { is_active: false },
     })

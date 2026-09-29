@@ -978,6 +978,73 @@ describe('SettingsMcpView', () => {
     expect(registerForm?.props('loading')).toBe(false)
   })
 
+  // ��� FAR-1282: registration is gated on MODULO_PUBLIC_URL �������������
+
+  // The MCP status endpoint reports the effective public URL as `<url>/mcp`,
+  // and the server-side OAuth guard rejects an empty URL OR the
+  // `http://localhost:8000` fallback - so the UNSET case arrives as
+  // `http://localhost:8000/mcp`, which is truthy and must still gate.
+  const localhostMcpConfig = { mcp_url: 'http://localhost:8000/mcp', config_snippet: '' }
+
+  it('disables OAuth registration and explains why when the public URL falls back to localhost', async () => {
+    const wrapper = mountView(localhostMcpConfig, mockApiKeys, mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const registerBtn = wrapper.find('[data-testid="settings-mcp-register-oauth-client"]')
+    expect(registerBtn.exists()).toBe(true)
+    expect((registerBtn.element as HTMLButtonElement).disabled).toBe(true)
+
+    const explain = wrapper.find('[data-testid="settings-mcp-oauth-public-url-warning"]')
+    expect(explain.exists()).toBe(true)
+    expect(explain.text()).toContain('Set MODULO_PUBLIC_URL before registering an OAuth client')
+    expect(explain.attributes('aria-live')).toBe('polite')
+
+    // The same cause surfaces on the page-level warning card + badge.
+    expect(wrapper.text()).toContain('MODULO_PUBLIC_URL not set')
+    expect(wrapper.text()).toContain('Local Only')
+  })
+
+  it('disables OAuth registration when the MCP status URL is empty', async () => {
+    const wrapper = mountView(mockMcpConfigEmpty, mockApiKeys, mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const registerBtn = wrapper.find('[data-testid="settings-mcp-register-oauth-client"]')
+    expect((registerBtn.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-public-url-warning"]').exists()).toBe(true)
+  })
+
+  it('keeps OAuth registration enabled and shows no warning when the public URL is configured', async () => {
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const registerBtn = wrapper.find('[data-testid="settings-mcp-register-oauth-client"]')
+    expect((registerBtn.element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-public-url-warning"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('MODULO_PUBLIC_URL not set')
+    expect(wrapper.text()).toContain('Active')
+  })
+
+  it('openRegisterOauthDialog is a no-op when the public URL is not configured', async () => {
+    const wrapper = mountView(localhostMcpConfig, mockApiKeys, mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const vm = oauthVm(wrapper)
+    expect(vm.registerOauthDialogOpen).toBe(false)
+    // Belt and braces: the button is disabled, but the handler itself also
+    // refuses so no other entry point can open a doomed form.
+    vm.openRegisterOauthDialog()
+    await nextTick()
+    expect(vm.registerOauthDialogOpen).toBe(false)
+  })
+
   // ─── M4: redirect URI parsing, validation, de-duplication ─────────────
 
   it('splits redirect URIs on any whitespace, de-duplicates, and posts the result', async () => {
