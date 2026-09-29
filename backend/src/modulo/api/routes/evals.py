@@ -437,7 +437,8 @@ async def create_policy_gate(
     check is performed (criterion 14).
 
     ``validate_binding`` is called to verify the gate-to-eval binding is
-    valid (cross-tenancy, guardrail-typed, suite-scoped, node_id mismatch).
+    valid (cross-tenancy, suite-scoped, node_id mismatch) — the guardrail-typed
+    exclusion was retired by FAR-1107 chunk 8.
     Violations are logged at WARNING with structured context but the caller
     receives a generic 400 -- never the violation list or org identifiers
     (criteria 5-9).
@@ -460,7 +461,7 @@ async def create_policy_gate(
             # Load the eval to verify it exists and belongs to this org
             eval_row = await _load_eval_or_404(session, eval_id, principal)
 
-            # Validate binding (cross-tenancy, guardrail, suite-scoped, node_id mismatch)
+            # Validate binding (cross-tenancy, suite-scoped, node_id mismatch)
             pg_fields = {
                 "id": uuid.uuid4(),  # placeholder — real id assigned on insert
                 "organisation_id": principal.organisation_id,
@@ -608,7 +609,7 @@ async def update_policy_gate(
             eval_row = await _load_eval_or_404(session, eval_id, principal)
             gate = await _load_live_gate_or_404(session, eval_id, principal)
 
-            # Validate binding (cross-tenancy, guardrail, suite-scoped, node_id mismatch)
+            # Validate binding (cross-tenancy, suite-scoped, node_id mismatch)
             pg_fields = {
                 "id": gate.id,
                 "organisation_id": principal.organisation_id,
