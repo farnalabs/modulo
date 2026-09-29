@@ -9,8 +9,8 @@ Three contracts, all fail-closed over ``backend/src``:
    import is now confined to exactly that set.
 2. **A21 guard** — no ``apply_sandbox_policy`` import or call outside
    ``sandbox_policy.py`` (its host module) and ``core/runtime_provider/e2b.py``
-   (the ``apply_isolation`` wrapper). ADR 040 makes this bound form
-   end-state: it activates with the legacy-retirement slice, not before.
+   (the ``apply_isolation`` wrapper). ADR 040: this bound form is **ACTIVE**
+   as of FAR-1050 R6, which retired the legacy engine-side invocation.
 3. **Hostname ban** — ``api.e2b.app`` appears nowhere outside
    ``core/runtime_provider/e2b.py``. R6 deleted the legacy urllib log probe
    from ``node_runner`` (T6), which was the last island.
@@ -143,7 +143,8 @@ def test_a21_apply_sandbox_policy_confined_to_its_host_modules() -> None:
     """ADR 040 A21: the engine-side invocation retired with R6.
 
     ``node_runner`` imported ``apply_sandbox_policy`` until R6 removed it, so
-    the bound form only turns green at the legacy-retirement slice.
+    the bound form is ACTIVE (green) as of FAR-1050 R6 — not a pending
+    end-state.
     """
     violations: list[str] = []
     for path in _python_files():
