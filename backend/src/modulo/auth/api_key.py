@@ -353,7 +353,8 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
     """Build a serialisable dict from an OrgApiKey for API responses.
 
     Masks the secret portion of the key and adds a computed ``is_active``
-    field based on revocation and expiration state.
+    field based on revocation and expiration state. ``revoked_at`` is emitted
+    so callers can distinguish revocation from expiration without inferring it.
     """
     now = datetime.now(UTC)
     is_active = k.revoked_at is None and (k.expires_at is None or k.expires_at > now)
@@ -370,6 +371,10 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
         "created_at": k.created_at.isoformat(),
         "expires_at": k.expires_at.isoformat() if k.expires_at else None,
+        # FAR-1299: revocation is a FACT the payload must carry, not something a
+        # consumer infers from `is_active`. Emitted exactly like `expires_at`:
+        # ISO-8601 string when set, None when never revoked.
+        "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
         "is_active": is_active,
     }
 

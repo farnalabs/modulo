@@ -21,19 +21,22 @@ type MockApiKey = {
   role: string
   is_active: boolean
   expires_at: string | null
+  /** FAR-1299: serialized by `_serialize_key`; null when never revoked. */
+  revoked_at: string | null
   last_used_at: string | null
   created_at: string
 }
 
 const mockApiKeys: MockApiKey[] = [
-  { id: 'key-1', lookup_prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, expires_at: null, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z' },
-  // Inactive with no elapsed expiry: revoked, not expired.
-  { id: 'key-2', lookup_prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, expires_at: null, last_used_at: null, created_at: '2026-06-15T00:00:00Z' },
+  { id: 'key-1', lookup_prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, expires_at: null, revoked_at: null, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z' },
+  // Revoked: the payload carries `revoked_at`, so this is a FACT, not an
+  // inference from is_active.
+  { id: 'key-2', lookup_prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, expires_at: null, revoked_at: '2026-06-20T09:30:00Z', last_used_at: null, created_at: '2026-06-15T00:00:00Z' },
 ]
 
 const mockMcpConfigEmpty = { mcp_url: '', config_snippet: '' }
 const mockApiKeysNoActive: MockApiKey[] = [
-  { id: 'key-3', lookup_prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, expires_at: null, last_used_at: null, created_at: '2026-06-10T00:00:00Z' },
+  { id: 'key-3', lookup_prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, expires_at: null, revoked_at: '2026-06-12T08:00:00Z', last_used_at: null, created_at: '2026-06-10T00:00:00Z' },
 ]
 // GET /api/v1/mcp/oauth/clients returns a BARE array (not an envelope) - the
 // fixtures below mirror the real wire shape so the default mount exercises the
@@ -228,11 +231,13 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('mintable via the API')
   })
 
-  // ─── FAR-1296: an expired key is not a revoked key ────────────────────
+  // ─── FAR-1296 / FAR-1299: expired, revoked, active are three states ────
   //
   // `is_active` is derived backend state (revoked_at is None AND not expired),
-  // so `is_active: false` alone cannot say WHY a key stopped working. The
-  // payload carries `expires_at`, which separates the two causes.
+  // so `is_active: false` alone cannot say WHY a key stopped working. FAR-1299
+  // puts the fact on the wire: `revoked_at` set means an operator revoked the
+  // key, an elapsed `expires_at` means the clock did, and those two cases stay
+  // distinguishable from the payload alone.
 
   /** Three rows: one per status, in table order. */
   const threeStateKeys: MockApiKey[] = [
@@ -243,6 +248,7 @@ describe('SettingsMcpView', () => {
       role: 'operator',
       is_active: true,
       expires_at: '2099-01-01T00:00:00Z',
+      revoked_at: null,
       last_used_at: null,
       created_at: '2026-06-01T00:00:00Z',
     },
@@ -254,12 +260,13 @@ describe('SettingsMcpView', () => {
       role: 'runner',
       is_active: false,
       expires_at: '2020-01-01T00:00:00Z',
+      revoked_at: null,
       last_used_at: null,
       created_at: '2026-06-02T00:00:00Z',
     },
-    // Inactive with no elapsed expiry: only revocation explains it. The list
-    // endpoint currently filters revoked rows out, so this is the serializer's
-    // shape for such a key rather than a row the endpoint returns today.
+    // Revoked: `revoked_at` is the proof. The list endpoint still filters
+    // revoked rows out (FAR-1300 is open), so this is the serializer's shape
+    // for such a key rather than a row the endpoint returns today.
     {
       id: 'key-revoked',
       lookup_prefix: 'mod_mk_rev',
@@ -267,6 +274,7 @@ describe('SettingsMcpView', () => {
       role: 'operator',
       is_active: false,
       expires_at: '2099-06-01T00:00:00Z',
+      revoked_at: '2026-06-05T11:15:00Z',
       last_used_at: null,
       created_at: '2026-06-03T00:00:00Z',
     },
@@ -292,6 +300,34 @@ describe('SettingsMcpView', () => {
     await nextTick()
     expect(statusBadges(wrapper)).toEqual(['Expired'])
     expect(wrapper.text()).not.toContain('Revoked')
+  })
+
+  it('labels a revoked key Revoked from revoked_at, not from an is_active inference (FAR-1299)', async () => {
+    // The OLD helper derived 'revoked' as "inactive with no elapsed expiry", so
+    // a key that was revoked AND had since expired rendered Expired. The fact
+    // on the wire now decides, and revocation is the more specific cause.
+    const revokedAndExpired: MockApiKey = {
+      id: 'key-revoked-expired',
+      lookup_prefix: 'mod_mk_rxe',
+      name: 'Revoked Past Expiry Key',
+      role: 'operator',
+      is_active: false,
+      expires_at: '2020-01-01T00:00:00Z',
+      revoked_at: '2026-06-07T14:00:00Z',
+      last_used_at: null,
+      created_at: '2026-06-04T00:00:00Z',
+    }
+    const wrapper = mountView(mockMcpConfig, [revokedAndExpired], mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    expect(statusBadges(wrapper)).toEqual(['Revoked'])
+    expect(wrapper.text()).not.toContain('Expired')
+    // Severity is unchanged: revoked still renders the 'secondary' badge.
+    expect(
+      wrapper.find('[data-testid="settings-mcp-key-status"]').findComponent(Badge).props('severity'),
+    ).toBe('secondary')
   })
 
   it('gives each key status a distinct badge severity (FAR-1296)', async () => {
@@ -543,10 +579,14 @@ describe('SettingsMcpView', () => {
     await wrapper.find('[data-testid="settings-mcp-revoke-key"]').trigger('click')
     await nextTick()
 
-    // The post-revoke refetch returns the row with `is_active` flipped off.
+    // The post-revoke refetch returns the row with `is_active` flipped off and
+    // `revoked_at` stamped (FAR-1299: that timestamp is what the status badge
+    // now reads).
     mockApiResponses(
       mockMcpConfig,
-      mockApiKeys.map((k) => (k.id === 'key-1' ? { ...k, is_active: false } : k)),
+      mockApiKeys.map((k) =>
+        k.id === 'key-1' ? { ...k, is_active: false, revoked_at: '2026-06-29T10:00:00Z' } : k,
+      ),
       mockOAuthClients,
     )
 
@@ -632,7 +672,9 @@ describe('SettingsMcpView', () => {
 
     mockApiResponses(
       mockMcpConfig,
-      mockApiKeys.map((k) => (k.id === 'key-1' ? { ...k, is_active: false } : k)),
+      mockApiKeys.map((k) =>
+        k.id === 'key-1' ? { ...k, is_active: false, revoked_at: '2026-06-29T10:00:00Z' } : k,
+      ),
       mockOAuthClients,
     )
 

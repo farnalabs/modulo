@@ -317,6 +317,10 @@ interface ApiKeyItem {
   // Serialized by _serialize_key (backend/src/modulo/auth/api_key.py) alongside
   // is_active - always present on the wire, null when the key never expires.
   expires_at: string | null
+  // FAR-1299: also serialized by _serialize_key; null when the key was never
+  // revoked. The endpoint's generated response schema is `{[key: string]:
+  // unknown}[]`, so this local interface is the effective contract.
+  revoked_at: string | null
   last_used_at: string | null
   created_at: string
 }
@@ -598,27 +602,28 @@ type ApiKeyStatus = 'active' | 'expired' | 'revoked'
 /**
  * FAR-1296: derive the key's status.
  *
- * `is_active` is DERIVED backend state, not a stored flag: the serializer
- * computes `revoked_at is None and (expires_at is None or expires_at > now)`
- * (backend/src/modulo/auth/api_key.py:359). So `is_active: false` says only
- * that the key stopped working - never WHY - and labelling every inactive key
- * "Revoked" called an expired key by an admin's action.
+ * FAR-1299: `revoked_at` now rides along on the payload, so revocation is read
+ * as a FACT rather than inferred. `is_active` stays a DERIVED backend flag:
+ * the serializer computes `revoked_at is None and (expires_at is None or
+ * expires_at > now)` (backend/src/modulo/auth/api_key.py:359), so `is_active:
+ * false` on its own says only that the key stopped working - never WHY.
  *
- * The list payload carries `expires_at`, which separates the two causes:
- *
- * - `active`   - `is_active` is true.
- * - `expired`  - inactive AND the expiry has elapsed: nobody revoked it, the
+ * - `revoked`  - `revoked_at` is set: an operator revoked the key.
+ * - `expired`  - not revoked AND the expiry has elapsed: nobody revoked it, the
  *                clock did.
- * - `revoked`  - inactive with no elapsed expiry. An expiry that never came
- *                due cannot explain the inactive state, so revocation can.
+ * - `active`   - neither: `is_active` is true.
  *
- * The payload does not carry `revoked_at`, and the list endpoint filters
- * revoked rows out entirely (`include_revoked=False` - api_key.py:380/384-385),
- * so `revoked` is the sound complement of the other two rather than a directly
- * observed field. An unparseable `expires_at` on an inactive key falls to
- * `revoked`, matching the backend's own "not provably expired" reading.
+ * Revocation wins over an elapsed expiry: a key can be both (revoked after its
+ * expiry passed), and the operator action is the more specific fact.
+ *
+ * The trailing `revoked` is a defensive default, not an inference: the backend
+ * derives `is_active` from these same two fields, so an inactive key with a
+ * null `revoked_at` MUST have an elapsed expiry. It only bites on malformed
+ * data (an unparseable `expires_at`), where "not provably expired" is the
+ * honest reading.
  */
 function apiKeyStatus(key: ApiKeyItem): ApiKeyStatus {
+  if (key.revoked_at) return 'revoked'
   if (key.is_active) return 'active'
   if (key.expires_at && Date.parse(key.expires_at) <= Date.now()) return 'expired'
   return 'revoked'

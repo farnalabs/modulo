@@ -265,6 +265,48 @@ def test_serialize_key_masks_secret_and_reports_active() -> None:
     assert serialized["is_active"] is True
 
 
+def test_serialize_key_includes_revoked_at_field() -> None:
+    # FAR-1299: the key must be PRESENT on the wire so consumers can prove
+    # revocation instead of inferring it from is_active.
+    assert "revoked_at" in _serialize_key(_make_serializable_key())
+
+
+def test_serialize_key_revoked_at_none_for_active_key() -> None:
+    serialized = _serialize_key(_make_serializable_key())
+
+    assert serialized["revoked_at"] is None
+    assert serialized["is_active"] is True
+
+
+def test_serialize_key_revoked_at_none_for_expired_key() -> None:
+    # Expired is NOT revoked: the two causes stay distinguishable.
+    key = _make_serializable_key(expires_at=datetime.now(UTC) - timedelta(days=1))
+    serialized = _serialize_key(key)
+
+    assert serialized["is_active"] is False
+    assert serialized["revoked_at"] is None
+
+
+def test_serialize_key_revoked_at_iso8601_when_revoked() -> None:
+    revoked_at = datetime.now(UTC) - timedelta(hours=2)
+    serialized = _serialize_key(_make_serializable_key(revoked_at=revoked_at))
+
+    assert serialized["revoked_at"] == revoked_at.isoformat()
+    assert serialized["is_active"] is False
+
+
+def test_serialize_key_revoked_at_iso8601_when_also_expired() -> None:
+    # Both causes at once: revoked_at still reports the revocation fact.
+    revoked_at = datetime.now(UTC) - timedelta(hours=2)
+    key = _make_serializable_key(revoked_at=revoked_at, expires_at=datetime.now(UTC) - timedelta(days=1))
+
+    serialized = _serialize_key(key)
+
+    assert serialized["revoked_at"] == revoked_at.isoformat()
+    assert serialized["expires_at"] == key.expires_at.isoformat()
+    assert serialized["is_active"] is False
+
+
 def test_serialize_key_expired_is_inactive() -> None:
     key = _make_serializable_key(expires_at=datetime.now(UTC) - timedelta(days=1))
     assert _serialize_key(key)["is_active"] is False
@@ -331,6 +373,22 @@ async def test_list_api_keys_include_revoked_omits_filter() -> None:
     stmt = session.execute.await_args.args[0]
     where = str(stmt.whereclause.compile(compile_kwargs={"literal_binds": True}))
     assert "revoked_at" not in where
+
+
+@pytest.mark.asyncio
+async def test_list_api_keys_include_revoked_carries_revoked_at() -> None:
+    # FAR-1299: the serializer is exercised through the list helper so the
+    # revoked row is actually reachable; the include_revoked DEFAULT is
+    # unchanged (FAR-1300 is still an open product decision).
+    revoked_at = datetime.now(UTC) - timedelta(days=2)
+    key = _make_serializable_key(revoked_at=revoked_at)
+    session = _make_list_session([key])
+
+    keys = await list_api_keys(session, uuid.uuid4(), include_revoked=True)
+
+    assert len(keys) == 1
+    assert keys[0]["revoked_at"] == revoked_at.isoformat()
+    assert keys[0]["is_active"] is False
 
 
 @pytest.mark.asyncio
