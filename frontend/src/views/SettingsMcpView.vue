@@ -605,28 +605,28 @@ type ApiKeyStatus = 'active' | 'expired' | 'revoked'
  * FAR-1299: `revoked_at` now rides along on the payload, so revocation is read
  * as a FACT rather than inferred. `is_active` stays a DERIVED backend flag:
  * the serializer computes `revoked_at is None and (expires_at is None or
- * expires_at > now)` (backend/src/modulo/auth/api_key.py:359), so `is_active:
+ * expires_at > now)` (backend/src/modulo/auth/api_key.py:360), so `is_active:
  * false` on its own says only that the key stopped working - never WHY.
  *
  * - `revoked`  - `revoked_at` is set: an operator revoked the key.
  * - `expired`  - not revoked AND the expiry has elapsed: nobody revoked it, the
  *                clock did.
- * - `active`   - neither: `is_active` is true.
+ * - `active`   - neither.
  *
  * Revocation wins over an elapsed expiry: a key can be both (revoked after its
  * expiry passed), and the operator action is the more specific fact.
  *
- * The trailing `revoked` is a defensive default, not an inference: the backend
- * derives `is_active` from these same two fields, so an inactive key with a
- * null `revoked_at` MUST have an elapsed expiry. It only bites on malformed
- * data (an unparseable `expires_at`), where "not provably expired" is the
- * honest reading.
+ * The trailing `!is_active` arm is a fallback, not a fourth inference. The
+ * server judged the key dead, the browser has no elapsed expiry to point at
+ * (client clock behind the server, or an `expires_at` it cannot parse), and
+ * `revoked_at` is null - so "Expired" is the only label left that asserts
+ * nothing we did not observe. It must never fall back to `revoked`: that would
+ * re-introduce the FAR-1296 bug of blaming an admin for a key the clock killed.
  */
 function apiKeyStatus(key: ApiKeyItem): ApiKeyStatus {
   if (key.revoked_at) return 'revoked'
-  if (key.is_active) return 'active'
   if (key.expires_at && Date.parse(key.expires_at) <= Date.now()) return 'expired'
-  return 'revoked'
+  return key.is_active ? 'active' : 'expired'
 }
 
 function apiKeyStatusMeta(key: ApiKeyItem): { severity: 'success' | 'warn' | 'secondary'; label: string } {

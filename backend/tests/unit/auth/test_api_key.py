@@ -265,13 +265,9 @@ def test_serialize_key_masks_secret_and_reports_active() -> None:
     assert serialized["is_active"] is True
 
 
-def test_serialize_key_includes_revoked_at_field() -> None:
-    # FAR-1299: the key must be PRESENT on the wire so consumers can prove
-    # revocation instead of inferring it from is_active.
-    assert "revoked_at" in _serialize_key(_make_serializable_key())
-
-
 def test_serialize_key_revoked_at_none_for_active_key() -> None:
+    # FAR-1299: `revoked_at` is on the wire (the subscript below raises
+    # KeyError if it is not), and null for a key that was never revoked.
     serialized = _serialize_key(_make_serializable_key())
 
     assert serialized["revoked_at"] is None
@@ -377,9 +373,10 @@ async def test_list_api_keys_include_revoked_omits_filter() -> None:
 
 @pytest.mark.asyncio
 async def test_list_api_keys_include_revoked_carries_revoked_at() -> None:
-    # FAR-1299: the serializer is exercised through the list helper so the
-    # revoked row is actually reachable; the include_revoked DEFAULT is
-    # unchanged (FAR-1300 is still an open product decision).
+    # FAR-1299: the revoked row reaches the payload through the list helper.
+    # The include_revoked DEFAULT is unchanged (FAR-1300 is still an open
+    # product decision), so this passes the flag explicitly rather than
+    # changing what the endpoint returns by default.
     revoked_at = datetime.now(UTC) - timedelta(days=2)
     key = _make_serializable_key(revoked_at=revoked_at)
     session = _make_list_session([key])
