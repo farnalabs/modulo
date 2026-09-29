@@ -1025,7 +1025,6 @@ async def _run_guardrail_interception_pass(
     is_replay: bool | None,
     skipped_guardrails: list[Any],
     any_guarding: bool,
-    session: Any | None = None,
 ) -> tuple[dict[str, Any], list[Any], list[Any], bool, str, list[Any], str]:
     """Execute the interception pass and return every mutated run state field.
 
@@ -1342,7 +1341,6 @@ async def _run_guardrail_gate(
                 is_replay=request.is_replay,
                 skipped_guardrails=skipped_guardrails,
                 any_guarding=any_guarding,
-                session=session,
             )
         # NOTE (item 10 invariant): a conformance block (``blocked`` True via
         # the block above) must NOT clear the accumulated pin-skips collected
