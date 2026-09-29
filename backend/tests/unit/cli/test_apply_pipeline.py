@@ -844,12 +844,12 @@ entities:
 class TestHitlReviewWindowPayloads:
     """FAR-1257: hitl_review_window_seconds must be parsed, planned, and SENT.
 
-    The payload assertions read the RAW request body: this branch predates
-    the REST field (it ships in the same sweep), so the real
-    PipelineCreate/PipelineUpdate models on this base ignore the key and the
-    round-trip can only assert the attribute once that REST field lands —
-    the model_validate() calls below still prove the payload is not
-    REJECTED by the real request models.
+    The REST PipelineCreate/PipelineUpdate models declare the field (companion
+    PR #1072, merged before this branch), so the convergence tests round-trip
+    the sent payload through the REAL request model and rebuild the stored row
+    from its ``model_dump(exclude_unset=True)`` output. That proves the server
+    model carries the value rather than silently dropping it — the drift-free
+    re-plan below fails if the REST field is ever removed again.
     """
 
     @respx.mock
@@ -863,7 +863,8 @@ class TestHitlReviewWindowPayloads:
         assert routes["pipelines_post"].call_count == 1
         create_payload = json.loads(routes["pipelines_post"].calls.last.request.content)
         assert create_payload["hitl_review_window_seconds"] == 3600
-        PipelineCreate.model_validate(create_payload)
+        created = PipelineCreate.model_validate(create_payload)
+        assert created.hitl_review_window_seconds == 3600
 
     @respx.mock
     def test_patch_payload_includes_hitl_review_window(self) -> None:
@@ -880,13 +881,18 @@ class TestHitlReviewWindowPayloads:
         assert routes["pipeline_patch"].call_count == 1
         patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
         assert patch_payload["hitl_review_window_seconds"] == 3600
-        PipelineUpdate.model_validate(patch_payload)
+        update = PipelineUpdate.model_validate(patch_payload)
+        assert update.hitl_review_window_seconds == 3600
 
     @respx.mock
     def test_double_apply_with_hitl_review_window_converges(self) -> None:
         """Prove-the-fix: plan 'updated' against a row lacking the override;
         after the payload builder sends the value, re-planning against the
-        stored value reports 'unchanged' (no perpetual drift)."""
+        stored value reports 'unchanged' (no perpetual drift).
+
+        The stored row is rebuilt from the REAL PipelineUpdate model's
+        ``model_dump(exclude_unset=True)`` output, not the raw request body, so
+        the assertion fails if the REST model ever silently drops the field."""
         from modulo.cli.apply.models import PipelineEntity
         from modulo.cli.apply.plan import plan_entity
 
@@ -910,9 +916,15 @@ class TestHitlReviewWindowPayloads:
         assert not report["failed"]
         sent = json.loads(routes["pipeline_patch"].calls.last.request.content)
         assert sent["hitl_review_window_seconds"] == 3600
+        update = PipelineUpdate.model_validate(sent)
+        assert update.hitl_review_window_seconds == 3600
 
+        # Server stores what the REAL request model parses (PATCH exclude_unset
+        # merge semantics). If the REST field were missing the validated dump
+        # would omit the key, the stored value would stay absent, and this
+        # second plan would still report 'updated'.
         stored = dict(current_row)
-        stored.update(sent)
+        stored.update(update.model_dump(exclude_unset=True))
         second = plan_entity("pipeline", "sample", entity.managed_view(), stored)
         assert second.status == "unchanged"
 
@@ -939,9 +951,11 @@ class TestHitlReviewWindowPayloads:
         assert not report["failed"]
         sent = json.loads(routes["pipeline_patch"].calls.last.request.content)
         assert sent["hitl_review_window_seconds"] is None
+        update = PipelineUpdate.model_validate(sent)
+        assert "hitl_review_window_seconds" in update.model_dump(exclude_unset=True)
 
         stored = dict(current_row)
-        stored.update(sent)
+        stored.update(update.model_dump(exclude_unset=True))
         second = plan_entity("pipeline", "sample", entity.managed_view(), stored)
         assert second.status == "unchanged"
 
