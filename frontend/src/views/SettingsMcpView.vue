@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="mcp_server" show-disabled>
+  <FeatureGate feature-name="mcp_server" required-tier="community" show-disabled>
 
     <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.SettingsMcpView.mcp_configuration')" :subtitle="$t('views.SettingsMcpView.configure_mcp_server_settings_and_api_keys')" />
