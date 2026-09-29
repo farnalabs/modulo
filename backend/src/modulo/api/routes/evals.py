@@ -489,18 +489,16 @@ async def create_policy_gate(
             # Author-warning checks (FAR-957 §3.2): advisory only, never
             # blocks binding.  The evidence key is extracted from the eval's
             # config; if no key is found, skip the check (no warnings to
-            # surface).
+            # surface).  Only ``evidence_key`` is recognised — a bare ``key``
+            # is too ambiguous and would suppress genuine no_producer warnings.
             author_warnings: list[dict[str, str]] = []
             ev_config = eval_row.config_json or {}
             evidence_key_candidates: set[str] = set()
-            for candidate_key in ("evidence_key", "key"):
-                if candidate_key in ev_config:
-                    evidence_key_candidates.add(str(ev_config[candidate_key]))
+            if "evidence_key" in ev_config:
+                evidence_key_candidates.add(str(ev_config["evidence_key"]))
             detection = ev_config.get("detection")
-            if isinstance(detection, dict):
-                for candidate_key in ("evidence_key", "key"):
-                    if candidate_key in detection:
-                        evidence_key_candidates.add(str(detection[candidate_key]))
+            if isinstance(detection, dict) and "evidence_key" in detection:
+                evidence_key_candidates.add(str(detection["evidence_key"]))
 
             for ek in evidence_key_candidates:
                 try:
@@ -679,14 +677,11 @@ async def update_policy_gate(
             author_warnings: list[dict[str, str]] = []
             ev_config = eval_row.config_json or {}
             evidence_key_candidates: set[str] = set()
-            for candidate_key in ("evidence_key", "key"):
-                if candidate_key in ev_config:
-                    evidence_key_candidates.add(str(ev_config[candidate_key]))
+            if "evidence_key" in ev_config:
+                evidence_key_candidates.add(str(ev_config["evidence_key"]))
             detection = ev_config.get("detection")
-            if isinstance(detection, dict):
-                for candidate_key in ("evidence_key", "key"):
-                    if candidate_key in detection:
-                        evidence_key_candidates.add(str(detection[candidate_key]))
+            if isinstance(detection, dict) and "evidence_key" in detection:
+                evidence_key_candidates.add(str(detection["evidence_key"]))
 
             for ek in evidence_key_candidates:
                 try:
