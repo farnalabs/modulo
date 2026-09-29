@@ -5,7 +5,8 @@ time) and ``pipelines.hitl_review_window_seconds`` (the per-pipeline override).
 
 Lenses:
 
-* **Chain** - 0265 chains onto ``0264_pipelines_max_autonomy_ge_default`` as the
+* **Chain** - 0265 chains onto ``0264_pipelines_max_autonomy_ge_default``;
+  0266_guardrail_policy_gate_sweep (FAR-1107) chains onto 0265 as the current
   single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -32,7 +33,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0265_hitl_review_window"
+_HEAD_MIGRATION = "0266_guardrail_policy_gate_sweep"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)
