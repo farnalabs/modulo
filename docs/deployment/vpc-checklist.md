@@ -15,7 +15,8 @@
   - verify: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo env | grep OTEL_EXPORTER_OTLP`
   - expected: no output
 - [ ] **No OTel config saved in database** (if DB was migrated from non-VPC env)
-  - verify: query `otel_config` table – `otlp_endpoint` should be empty string
+  - verify: the organisation row's `otel_config_json` carries no exporter endpoint – `SELECT otel_config_json FROM organisations;`
+  - expected: no `otlp_endpoint` key, or an empty value
 - [ ] **LangSmith tracing is disabled** per-org in settings UI
   - verify: check observability settings page shows "disabled"
 

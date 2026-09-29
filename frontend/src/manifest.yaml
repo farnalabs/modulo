@@ -498,7 +498,17 @@ routes:
         sidebar_group: admin
         sidebar_order: 3
         type: form_page
-        <<: *team
+        # FAR-1269: the org HITL review window (GET/PUT
+        # /api/v1/admin/org/hitl-review-window) is not plan-gated, so this page
+        # must be reachable on EVERY tier. Community tier + an explicit
+        # ["admin"] role list is the FAR-462 pattern (same as /admin/users):
+        # the router enforces required_roles and required_tier as separate
+        # gates, so navigation stays admin-only while the tier stays
+        # community. Every team-only section on the page remains behind the
+        # in-page team_rbac FeatureGate (dimmed + upgrade overlay on
+        # Community); only the HITL review window card sits outside it.
+        <<: *community
+        required_roles: [admin]
         deprecated: false
 
     /admin/audit:
@@ -1175,6 +1185,21 @@ elements:
         type: element
         dynamic_testid: false
       - testid: cost-annotation-clamped
+        type: element
+        dynamic_testid: false
+      - testid: cost-team-empty
+        type: element
+        dynamic_testid: false
+      - testid: cost-team-table
+        type: element
+        dynamic_testid: false
+      - testid: cost-anomalies-error
+        type: element
+        dynamic_testid: false
+      - testid: cost-anomalies-empty
+        type: element
+        dynamic_testid: false
+      - testid: cost-anomalies-list
         type: element
         dynamic_testid: false
       - testid: feature-gate
@@ -3039,6 +3064,18 @@ elements:
       - testid: pipeline-editor-heartbeat-value
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run-toggle
+        type: input
+        dynamic_testid: false
       - testid: pipeline-editor-watch-log-path-label
         type: element
         dynamic_testid: false
@@ -3956,6 +3993,21 @@ elements:
         dynamic_testid: false
       - testid: lock-icon
         type: element
+        dynamic_testid: false
+      - testid: error-forwarders-empty
+        type: element
+        dynamic_testid: false
+      - testid: error-forwarders-save
+        type: button
+        dynamic_testid: false
+      - testid: error-forwarders-skeleton
+        type: element
+        dynamic_testid: false
+      - testid: error-forwarders-test
+        type: button
+        dynamic_testid: false
+      - testid: error-forwarders-toggle
+        type: button
         dynamic_testid: false
     /settings/hitl-review:
       - testid: hitl-review-pipeline-select
@@ -5124,6 +5176,9 @@ features:
             - "[x] The review page paginates server-side (page/page_size params on every fetch, minimal inline pager with Previous / 'Page X of Y' / Next shown only when total > page_size, disabled states at the bounds, aria-labelled buttons and a role=status page indicator); search/pipeline/date filters remain CLIENT-side over the loaded page (documented limitation: search matches within the current page only)"
             # FAR-1163: autonomy escalation ceiling (ADR 043 slice S0)
             - "[x] HITL autonomy resolution clamps a context-setter's autonomy_recommendation to the pipeline's max_autonomy_level ceiling (pinned into the run snapshot as the reserved `_pipeline_max_autonomy` run_context key): a recommendation may lower autonomy freely, may raise only up to the ceiling — with no explicit ceiling the effective ceiling is the pipeline default, so a recommendation can only lower — and each clamp appends a run.autonomy_recommendation_clamped audit event (review_id, requested, effective, ceiling); human_only gates still always fire"
+            # FAR-1257 + FAR-1269: the configurable review window
+            - "[x] The HITL review window is configurable at three levels (FAR-1257): a per-pipeline override, an org default (GET/PUT /api/v1/admin/org/hitl-review-window - whole seconds, 60 to 604800, explicit null clears back to inheritance) and the instance default (HITL_REVIEW_CANCEL_GRACE_SECONDS); the resolved window is stamped ONCE at gate fire time as an absolute hitl_claims.terminalize_at, so stamped rows ignore the env knob while legacy rows keep it verbatim"
+            - "[x] The org review window is editable on EVERY plan tier (FAR-1269): the org-hitl-review-window-* card on /admin/org renders OUTSIDE the team_rbac FeatureGate (the endpoint is not plan-gated) and the /admin/org route itself is community-tier with an explicit [admin] role (FAR-462 pattern), so a community admin reaches the control while every other section of the page stays behind the gate's disabled overlay"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
         status: covered
@@ -5271,6 +5326,7 @@ features:
             - "[x] Feature flags can be toggled per organisation"
             - "[x] Org-level feature-flag override governance is auditable end to end: every set/clear/toggle of an org feature_overrides entry (PUT /api/v1/admin/feature-flags/{flag}, PUT/DELETE /{flag}/org-override) appends a tamper-evident audit event to the org chain (feature_flag_override_set / feature_flag_override_cleared, resource_type org, payload {flag_name, enabled}) — fail-open, so a broken audit append never rolls back the already-committed override (backend/src/modulo/api/routes/admin_feature_flags.py, backend/tests/unit/api/test_admin_feature_flags.py)"
             - "[x] The org-settings UI ships at /admin/org: org delete requires a typed confirmation (org-delete-confirm-input), product-analytics (product-analytics-toggle) and community-objects (community-objects-toggle) toggles render, and the product-analytics error strip dismisses via shared ErrorAlert — surface documented in the manifest elements inventory; backend admin-org endpoints drive it (docs/product-map/admin/org.md)"
+            - "[x] The /admin/org page is reachable on every plan tier (FAR-1269): the route is community-tier with an explicit [admin] role list (required_roles and required_tier are enforced as separate guards), the team-only sections (org info, data export, product analytics, community objects, delete org) stay behind the team_rbac FeatureGate disabled overlay, and only the HITL review window card renders outside the gate so a community admin can configure the org review window"
             - "[x] The org-management flows ship on the real REST surfaces: self-service org profile read/rename/delete + API-key regeneration are admin-gated unit coverage (api/routes/admin.py, tests/unit/api/test_admin.py — slug immutability and operator/viewer 403 pinned); member invites are BDD-executed (system_admin_users.feature); API-key create/revoke + non-admin 403 are BDD-executed (auth/api_keys.feature); viewer denial is BDD-executed at the org-context boundary (viewmodel_current.feature)"
     feat-pipelines:
         description: Visual pipeline editor, composite editor, and node categories
@@ -5283,6 +5339,7 @@ features:
             - "[x] release_channel support allows triggers to bind to stable/canary channels"
             - "[x] diff_snapshots surfaces port-signature deltas with impact oracle"
             - "[x] Run recovery and retry are shipped across the run surface: checkpoint/resume replays a failed run from its last checkpoint (pipelines/checkpoint_resume.feature), a terminal run re-runs via POST /api/v1/runs/{run_id}/rerun, and a failed node recovers via POST /api/v1/runs/{run_id}/nodes/{node_id}/recover (run-level details under feat-runs, docs/product-map/pipelines/pipelines.md)"
+            - "[x] The node editor exposes the explicit single_pr_per_run flag (FAR-1273) on sandbox_agent nodes: a labelled, help-texted toggle in the node panel whose value is saved with the graph (default false) and arms the run-scoped one-PR-per-run gh guard at dispatch; the field is sandbox-only (rejected by the API node model and the graph validator on any other node type), it rides the typed IsolationPolicy to the provider, and a delivery_sentinel alone never arms the guard"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
     feat-plugins:

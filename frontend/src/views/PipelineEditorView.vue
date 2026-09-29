@@ -874,6 +874,23 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-heartbeat-label">{{ $t('views.PipelineEditorView.heartbeat') }}</dt>
               <dd data-testid="pipeline-editor-heartbeat-value">{{ selectedNodeData.enable_heartbeat === false ? $t('views.PipelineEditorView.disabled') : $t('views.PipelineEditorView.enabled') }}</dd>
             </div>
+            <!-- FAR-1273: explicit one-PR-per-run guard flag (sandbox_agent only) -->
+            <div data-testid="pipeline-editor-single-pr-per-run">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-single-pr-per-run-label">{{ $t('views.PipelineEditorView.single_pr_per_run') }}</dt>
+              <dd data-testid="pipeline-editor-single-pr-per-run-value">
+                <label class="flex items-start gap-2 text-xs">
+                  <input
+                    v-model="singlePrPerRun"
+                    type="checkbox"
+                    class="mt-0.5 size-3.5 shrink-0 accent-indigo-500"
+                    :aria-label="$t('views.PipelineEditorView.single_pr_per_run')"
+                    aria-describedby="single-pr-per-run-help"
+                    data-testid="pipeline-editor-single-pr-per-run-toggle"
+                  />
+                  <span id="single-pr-per-run-help" class="text-muted-foreground">{{ $t('views.PipelineEditorView.single_pr_per_run_help') }}</span>
+                </label>
+              </dd>
+            </div>
             <div v-if="selectedNodeData.watch_log_path">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-watch-log-path-label">{{ $t('views.PipelineEditorView.watch_log_path') }}</dt>
               <dd class="font-mono text-xs break-all" data-testid="pipeline-editor-watch-log-path-value">{{ selectedNodeData.watch_log_path }}</dd>
@@ -1426,6 +1443,17 @@ const flowNodes = ref<any[]>([])
 const flowEdges = ref<any[]>([])
 
 const selectedNodeData = ref<any | null>(null)
+// FAR-1273: explicit one-PR-per-run guard flag for sandbox_agent nodes. The
+// raw node value may be absent on legacy graphs, so the getter normalises to a
+// boolean for the checkbox while the setter writes the field back onto the raw
+// node (it then rides the spread-based save payload like every other model
+// field).
+const singlePrPerRun = computed<boolean>({
+  get: () => selectedNodeData.value?.single_pr_per_run === true,
+  set: (value: boolean) => {
+    if (selectedNodeData.value) selectedNodeData.value.single_pr_per_run = value
+  },
+})
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl' }

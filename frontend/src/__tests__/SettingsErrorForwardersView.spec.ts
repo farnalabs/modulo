@@ -86,11 +86,24 @@ describe('SettingsErrorForwardersView', () => {
     vi.useRealTimers()
   })
 
-  it('shows the loading spinner before the list resolves', async () => {
+  it('shows a skeleton loading state before the list resolves', async () => {
     // Hold the forwarders GET open so `loading` stays true.
     ;(api.GET as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(() => {}))
     const wrapper = mountView()
-    expect(wrapper.find('.animate-spin').exists()).toBe(true)
+    // STATE-3: a pulse skeleton, not an indeterminate spinner that can spin forever.
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="error-forwarders-skeleton"]').length).toBe(3)
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders an empty state when no forwarders are returned', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockResolvedValueOnce(apiResult({ forwarders: [] }))
+    const wrapper = mountView()
+    await flushPromises()
+    // STATE-1: never a blank content area.
+    expect(wrapper.find('[data-testid="error-forwarders-empty"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('No error forwarders available')
     wrapper.unmount()
   })
 
@@ -162,6 +175,39 @@ describe('SettingsErrorForwardersView', () => {
     expect(rollbar.find('#settingserrorforwardersview-field-6').exists()).toBe(true)
     expect(loki.find('#settingserrorforwardersview-field-1').exists()).toBe(true)
     expect(loki.text()).toContain('Comma-separated key=value pairs')
+    wrapper.unmount()
+  })
+
+  it('renders the Datadog site Select and updates the config when a site is chosen', async () => {
+    // The Datadog card's `<Select>` binds `configs.datadog.site` via v-model and
+    // renders its options through a scoped `#option` slot; this exercises both
+    // the option render path and the model-update handler (changed-lines
+    // coverage on SettingsErrorForwardersView.vue).
+    mockForwarders = [forwarder('datadog', { configured: true, enabled: true })]
+    const wrapper = mountView()
+    await flushPromises()
+
+    const datadog = cardFor(wrapper, 'Datadog')
+    const trigger = datadog.find('.p-select')
+    expect(trigger.exists()).toBe(true)
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const siteOptions = datadog.findAll('.p-select-option [data-value]')
+    expect(siteOptions.map((o) => o.attributes('data-value'))).toEqual([
+      'datadoghq.com',
+      'datadoghq.eu',
+      'us3.datadoghq.com',
+      'us5.datadoghq.com',
+      'ddog-gov.com',
+    ])
+
+    // PrimeVue selects an option on mousedown, which flows back through
+    // v-model into configs.datadog.site.
+    await datadog.find('.p-select-option [data-value="datadoghq.eu"]').trigger('mousedown')
+    await flushPromises()
+    await nextTick()
+    expect(datadog.find('.p-select-label').text()).toBe('EU (datadoghq.eu)')
     wrapper.unmount()
   })
 

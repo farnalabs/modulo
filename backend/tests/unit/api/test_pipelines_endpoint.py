@@ -1015,6 +1015,48 @@ def test_pipeline_graph_node_delivery_sentinel_round_trip() -> None:
     assert legacy.delivery_sentinel is None
 
 
+def test_pipeline_graph_node_single_pr_per_run_round_trip() -> None:
+    """FAR-1273: PipelineGraphNode carries the explicit single_pr_per_run guard
+    flag on sandbox nodes, defaults to False for legacy nodes, and survives the
+    validate -> dump -> validate save path."""
+    node = PipelineGraphNode.model_validate({**_sandbox_node_json(), "single_pr_per_run": True})
+    assert node.single_pr_per_run is True
+
+    dumped = node.model_dump(mode="json")
+    assert dumped["single_pr_per_run"] is True
+    assert PipelineGraphNode.model_validate(dumped).single_pr_per_run is True
+
+    legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
+    assert legacy.single_pr_per_run is False
+
+
+def test_pipeline_graph_node_single_pr_per_run_rejected_off_sandbox_nodes() -> None:
+    """FAR-1273: single_pr_per_run is sandbox-only — an agent/manual/composite
+    node that sets it is rejected at save time (a declared guard nothing
+    would install), while the default False stays legal on every node type."""
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set single_pr_per_run"):
+        PipelineGraphNode.model_validate(
+            {
+                "id": uuid.uuid4(),
+                "node_type": "agent",
+                "position": {"x": 0, "y": 0},
+                "agent_id": uuid.uuid4(),
+                "single_pr_per_run": True,
+            }
+        )
+
+    agent_node = PipelineGraphNode.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "node_type": "agent",
+            "position": {"x": 0, "y": 0},
+            "agent_id": uuid.uuid4(),
+            "single_pr_per_run": False,
+        }
+    )
+    assert agent_node.single_pr_per_run is False
+
+
 def test_pipeline_graph_node_idempotent_round_trip() -> None:
     """FAR-295: PipelineGraphNode carries ``idempotent`` on every executor type
     and defaults it to true for legacy nodes."""

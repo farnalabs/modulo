@@ -287,14 +287,21 @@ class WorkspaceSpec:
 
 @dataclass(frozen=True)
 class IsolationPolicy:
-    """The three named in-sandbox isolation controls (ADR 040).
+    """The named in-sandbox isolation controls (ADR 040) + the guard flag.
 
     Carrier for :meth:`RuntimeProvider.apply_isolation` — the single owner
-    of in-sandbox enforcement among these three named controls:
+    of in-sandbox enforcement among the three named controls:
 
     1. git-credential scoping (``scoped`` / ``none``, single- and multi-host),
     2. the selected-mode egress allowlist,
     3. the read-only seal.
+
+    ``single_pr_per_run`` (FAR-1273) is the explicit trigger for the FAR-1264
+    one-PR-per-run ``gh`` guard: it rides THIS typed carrier from node_runner's
+    policy call site to the provider's ``apply_isolation`` (the single carrier
+    — never a ``workspace_metadata`` key), and gates the guard install inside
+    ``apply_sandbox_policy``. It defaults to ``False``, so a policy built
+    without it installs no guard.
 
     Field semantics mirror the legacy engine-side
     ``sandbox_policy.apply_sandbox_policy`` keyword arguments exactly (the
@@ -311,6 +318,7 @@ class IsolationPolicy:
     egress_allowlist: list[dict[str, Any]] | None = None
     allowed_hosts: dict[str, str] | None = None
     command_timeout: float = 60.0
+    single_pr_per_run: bool = False
 
 
 @dataclass(frozen=True)

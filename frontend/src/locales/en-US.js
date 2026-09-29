@@ -1092,6 +1092,8 @@ export default {
       "timeout": "Timeout",
       "stall_timeout": "Stall Timeout",
       "heartbeat": "Heartbeat",
+      "single_pr_per_run": "One PR per run",
+      "single_pr_per_run_help": "Install the platform guard that allows exactly one gh pr create in this node's sandbox run — a second attempt in the same run is refused before it reaches GitHub.",
       "disabled": "Disabled",
       "watch_log_path": "Watch Log Path",
       "stdout_delta": "Stdout Delta",
@@ -1911,6 +1913,12 @@ export default {
       "days_where_spend_exceeded_2x_avg": "Days where spend exceeded 2x the rolling 7-day average",
       "no_anomalies_detected": "No anomalies detected. Spend patterns are within expected ranges.",
       "dismiss": "Dismiss",
+      "tabs_overview": "Overview",
+      "tabs_spend_limits": "Spend Limits",
+      "tabs_cost_components": "Cost Components",
+      "tabs_cost_controls": "Cost Controls",
+      "anomaly_spend_detail": "Spend: {amount} (baseline: {baseline}, {percent} above)",
+      "dismissed_anomalies_count": "{count} dismissed anomaly | {count} dismissed anomalies",
       "annotations": "Annotations",
       "refused_limit_line": "refused (limit) ${amount}",
       "day_ledger_clamped_line": "day ledger clamped at column capacity"
@@ -2616,6 +2624,8 @@ export default {
       "error_forwarders": "Error Forwarders",
       "error_forwarders_are_not_available_on_your_current_plan": "Error forwarders are not available on your current plan.",
       "configure_external_error_tracking_and_alerting_integrations": "Configure external error tracking and alerting integrations",
+      "no_error_forwarders_available": "No error forwarders available",
+      "no_error_forwarders_available_description": "No error forwarders are configured for this workspace yet. Contact an administrator to enable error forwarding.",
       "configuration_saved": "Configuration saved.",
       "not_configured": "Not configured",
       "last_test_passed": "Last test passed",
@@ -2634,6 +2644,10 @@ export default {
       "datadog_api_key_placeholder": "Enter DataDog API key",
       "site": "Site",
       "select_site": "Select site",
+      "us_datadoghq_com": "US (datadoghq.com)",
+      "eu_datadoghq_eu": "EU (datadoghq.eu)",
+      "us3_us3_datadoghq_com": "US3 (us3.datadoghq.com)",
+      "us5_us5_datadoghq_com": "US5 (us5.datadoghq.com)",
       "gov_ddog_gov_com": "Gov (ddog-gov.com)",
       "routing_key": "Routing Key",
       "pagerduty_routing_key_placeholder": "Enter PagerDuty routing key",
@@ -4159,7 +4173,11 @@ export default {
       "connection": "Provider connection error"
     },
     "eval": { "blocked": "Eval blocked", "failed": "Eval failed" },
-    "config": { "error": "Configuration error", "invalid": "Invalid configuration" }
+    "config": { "error": "Configuration error", "invalid": "Invalid configuration" },
+    "hitl": {
+      "review_expired": "HITL review expired",
+      "review_missing": "HITL review missing"
+    }
   },
   "errorCodeDescriptions": {
     "agent": {
@@ -4221,7 +4239,11 @@ export default {
       "connection": "A network error occurred while calling the LLM provider."
     },
     "eval": { "blocked": "A guardrail eval blocked the run from continuing.", "failed": "A guardrail eval failed during execution." },
-    "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." }
+    "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." },
+    "hitl": {
+      "review_expired": "The run sat unanswered at a human review gate past the review window and was cancelled.",
+      "review_missing": "The run was waiting for a human review, but its review gate was never created, so the run was cancelled automatically."
+    }
   },
   "statusDescriptions": {
     "complete": "The run finished successfully.",

@@ -90,7 +90,7 @@ no isolation, no scaling – but it's free and works immediately.
 **To add sandboxed agents:** set `MODULO_E2B_API_KEY` as an env var and restart.
 The `RuntimeProviderHub` auto-detects the key and makes E2B available for
 profiles that request it. Existing pipelines continue to work unchanged –
-the ABC hides the backend.
+the ABC (abstract base class) hides the backend.
 
 ### Limits
 
@@ -110,7 +110,7 @@ or want to deploy on your own infrastructure (Docker Compose / VM).
 ## 3. Existing Infrastructure – Integrate With What You Have
 
 **Who it's for:** teams that run their own infrastructure (Docker Compose,
-Podman, VMs), have a VPC, use AWS/GCP, have compliance requirements (SOC 2,
+Podman, VMs), have a VPC (Virtual Private Cloud), use AWS/GCP, have compliance requirements (SOC 2,
 data residency, air-gapped).
 
 **Goal:** deploy Modulo into existing infra with maximum control.
@@ -152,8 +152,8 @@ is a config change, not a code change.
 
 These are not future plans – they are built and tested today:
 
-- **SSO**: OIDC (Google, GitHub, Okta, any IdP) + SAML 2.0
-- **Team RBAC**: team-scoped resources, operator/runner/viewer roles,
+- **SSO (single sign-on)**: OIDC (Google, GitHub, Okta, any IdP) + SAML 2.0
+- **Team RBAC (role-based access control)**: team-scoped resources, operator/runner/viewer roles,
   privilege cap at org role
 - **Audit**: append-only audit log with cryptographic chaining,
   auditor viewer UI, JSONL/CSV export

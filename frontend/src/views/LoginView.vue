@@ -165,9 +165,10 @@ type OrgInfo = components['schemas']['OrgInfo']
 const loginPrefs = useLoginPrefs()
 const lastUsedMethod = ref<string | null>(loginPrefs.getLastMethod())
 
-// Budgets for the two anonymous pre-auth reads that gate the login form.
-// Neither call may strand the page: if it never settles, the `contextLoading`
-// finally below still runs because the timeout rejects the awaited promise.
+// Budgets for the two anonymous pre-auth reads. Only login-context GATES the
+// credential form; SSO discovery is a best-effort enrichment that must never
+// delay the form. Neither call may strand the page: if login-context never
+// settles, the timeout rejects the awaited promise and the form still renders.
 // Observed on staging under load — a hung login-context left the page on the
 // "Loading" state forever, so no credential form ever rendered and every
 // @regression test that signs in failed (and retried) until the job hit its
@@ -211,10 +212,10 @@ async function fetchLoginContext() {
     )
     if (!result.ok) {
       // login-context is unavailable (e.g. a transient 429 from the anonymous
-      // GET rate limit). Fall back to the single-org direct login, but still
-      // discover SSO providers — the SSO affordance must not depend on this
-      // call succeeding.
-      await discoverSsoProviders()
+      // GET rate limit). Fall back to the single-org direct login.
+      // SSO discovery is started but NOT awaited: the credential form must not
+      // wait for it (see discoverSsoProviders for the decoupling rationale).
+      void discoverSsoProviders()
       return
     }
     const data = result.data
@@ -225,7 +226,9 @@ async function fetchLoginContext() {
       displayOrgName.value = data.org.name || ''
       // Discover SSO providers for this org using the old global endpoint
       // as a fallback. The org-login endpoint is used for /login/:slug.
-      await discoverSsoProviders()
+      // Not awaited — the form renders from `contextLoading=false` below and
+      // the SSO section appears reactively when this resolves.
+      void discoverSsoProviders()
     } else {
       // Multiple orgs: jump straight to a previously-used org's login when
       // one is remembered; otherwise show the slug entry step.
@@ -240,9 +243,17 @@ async function fetchLoginContext() {
     }
   } catch {
     // Network failure resolving the login context: same fallback as a non-ok
-    // response — render the direct login and still surface SSO providers.
-    await discoverSsoProviders()
+    // response — render the direct login; SSO discovery is best-effort and
+    // must not delay the form.
+    void discoverSsoProviders()
   } finally {
+    // The credential form is gated ONLY on login-context (or its timeout). SSO
+    // discovery is deliberately excluded from this critical path: awaiting it
+    // serialised two 8s budgets (login-context then sso-providers), so a
+    // doubly-slow pre-auth path took up to 16s to render the form — longer
+    // than the E2E credential-form guard (10s), which made every signing-in
+    // @regression test fail. Rendering the form as soon as org context
+    // resolves keeps the worst case at LOGIN_CONTEXT_TIMEOUT_MS.
     contextLoading.value = false
   }
 }

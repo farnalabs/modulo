@@ -58,6 +58,19 @@ describe('manifest merge-key gating (js-yaml regression guard)', () => {
     expect(ssoRoute.required_roles).toContain('admin')
   })
 
+  it('/admin/org is community-tier with the admin role (FAR-1269: the org HITL review window is reachable on every tier)', () => {
+    // The /admin/org route itself must NOT tier-block community admins: the
+    // org HITL review window endpoint (GET/PUT
+    // /api/v1/admin/org/hitl-review-window) is not plan-gated, so the route
+    // gate has to let community in — otherwise the card outside the in-page
+    // FeatureGate is unreachable no matter where it sits in the template.
+    // required_roles stays [admin] so navigation is still admin-only.
+    const orgRoute = routes['/admin/org']
+    expect(orgRoute).toBeDefined()
+    expect(orgRoute.required_tier).toBe('community')
+    expect(orgRoute.required_roles).toContain('admin')
+  })
+
   it('at least 25 routes have a non-null required_tier (non-vacuity guard)', () => {
     const gatedRoutes = Object.values(routes).filter((route) => {
       const tier = route.required_tier

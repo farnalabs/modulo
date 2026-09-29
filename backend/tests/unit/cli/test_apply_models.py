@@ -441,9 +441,32 @@ class TestPipelineEntityContracts:
             "description": None,
             "max_concurrent_runs": 2,
             "stdout_retention_config": None,
+            "hitl_review_window_seconds": None,
             "business_owner_id": None,
             "reliability_owner_id": None,
         }
+
+    def test_hitl_review_window_round_trips_into_managed_view(self) -> None:
+        """FAR-1257: the declarative field parses, hashes into the managed
+        view, and an omitted key means null (inherit the org/instance default)."""
+        entity = PipelineEntity.model_validate({"name": "sample", "hitl_review_window_seconds": 3600})
+        assert entity.hitl_review_window_seconds == 3600
+        assert entity.managed_view()["hitl_review_window_seconds"] == 3600
+        omitted = PipelineEntity.model_validate({"name": "sample"})
+        assert omitted.hitl_review_window_seconds is None
+        assert omitted.managed_view()["hitl_review_window_seconds"] is None
+
+    @pytest.mark.parametrize("value", [59, 604801])
+    def test_hitl_review_window_out_of_bounds_rejected(self, value: int) -> None:
+        """Same 60..604800 envelope the REST Pydantic field and the DB CHECK
+        enforce (FAR-1257); a bad value fails at config load, not at apply."""
+        with pytest.raises(ValidationError):
+            PipelineEntity.model_validate({"name": "sample", "hitl_review_window_seconds": value})
+
+    @pytest.mark.parametrize("value", [60, 604800])
+    def test_hitl_review_window_bounds_accepted(self, value: int) -> None:
+        entity = PipelineEntity.model_validate({"name": "sample", "hitl_review_window_seconds": value})
+        assert entity.hitl_review_window_seconds == value
 
     def test_mixed_case_max_autonomy_level_is_normalised(self) -> None:
         """FAR-1163: a case-variant ceiling in an apply YAML must hash
@@ -560,6 +583,39 @@ class TestPipelineEntityContracts:
         apply_fields = set(ApplyGraphNode.model_fields) - {"agent"}
         api_fields = set(PipelineGraphNode.model_fields) - {"agent_id"}
         assert apply_fields == api_fields
+
+    def test_node_single_pr_per_run_accepted(self) -> None:
+        """FAR-1273: the declarative CLI model carries the explicit
+        single_pr_per_run guard flag through to the API node payload."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "pipelines": [
+                    {
+                        "name": "sample",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "id": "00000000-0000-0000-0000-0000000000a1",
+                                    "node_type": "sandbox_agent",
+                                    "agent": "worker",
+                                    "position": {"x": 0, "y": 0},
+                                    "single_pr_per_run": True,
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        }
+        cfg = _config(tx)
+        node = cfg.entities.pipelines[0].graph.nodes[0]
+        assert node.single_pr_per_run is True
+        assert node.api_node_payload()["single_pr_per_run"] is True
+
+        # Default (absent) stays false for legacy declarative configs.
+        tx["entities"]["pipelines"][0]["graph"]["nodes"][0].pop("single_pr_per_run")
+        assert _config(tx).entities.pipelines[0].graph.nodes[0].single_pr_per_run is False
 
     def test_graph_duplicate_node_ids_rejected(self) -> None:
         tx = {

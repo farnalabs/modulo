@@ -1805,3 +1805,56 @@ async def test_node_send_budget_enabled_false_with_items_path_warns():
     oversub = [i for i in result.issues if i.code == "NODE_SEND_BUDGET_OVERSUBSCRIBED"]
     assert len(oversub) == 1
     assert oversub[0].node_id == "fanout-node"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1273: single_pr_per_run is a sandbox-only node field
+# ---------------------------------------------------------------------------
+
+
+def test_single_pr_per_run_rejected_on_non_sandbox_nodes():
+    """A raw import that smuggles single_pr_per_run onto a non-sandbox node
+    fails closed at save time: the one-PR-per-run gh guard is installed only
+    inside a sandbox, so the flag there would declare a guard nothing
+    installs."""
+    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+
+    result = ValidationResult()
+    _check_sandbox_policy_fields_only_on_sandbox_nodes(
+        {
+            "nodes": [
+                {"id": _UUID_A, "node_type": "agent", "single_pr_per_run": True},
+                {"id": _UUID_B, "node_type": "manual", "single_pr_per_run": "yes"},
+            ],
+            "edges": [],
+        },
+        result,
+    )
+
+    assert not result.is_valid
+    codes = [i.code for i in result.issues]
+    assert codes == ["SANDBOX_POLICY_FIELD_ON_NON_SANDBOX", "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX"]
+    flagged = [i for i in result.issues if i.node_id == _UUID_A]
+    assert flagged and "single_pr_per_run" in flagged[0].message
+
+
+def test_single_pr_per_run_accepted_on_sandbox_nodes_and_default_elsewhere():
+    """The flag is legal on a sandbox_agent node (whatever its value) and the
+    default False/absent on other node types raises nothing."""
+    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+
+    result = ValidationResult()
+    _check_sandbox_policy_fields_only_on_sandbox_nodes(
+        {
+            "nodes": [
+                {"id": _UUID_A, "node_type": "sandbox_agent", "single_pr_per_run": True},
+                {"id": _UUID_B, "node_type": "agent", "single_pr_per_run": False},
+                {"id": "plain", "node_type": "agent"},
+            ],
+            "edges": [],
+        },
+        result,
+    )
+
+    assert result.is_valid
+    assert not result.issues

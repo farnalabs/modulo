@@ -13,13 +13,17 @@ Coverage map (internal spec section 7; criteria numbering only):
 *              BEFORE ``validate_binding`` can ever see org mismatch, so
 *              the validator's own cross-tenancy branch stays covered by
 *              tests/unit/core/test_chunk3_read_cutover.py instead)
-* criterion 6  guardrail-typed eval → generic 400 (POST + PUT variant)
+* criterion 6  guardrail-typed eval → NOW BINDABLE (FAR-1107 chunk 8 retired
+*              the ``guardrail_eval`` exclusion; POST 201 + PUT 200)
 * criterion 7  suite-scoped eval (node_id NULL) → generic 400 (POST);
 *              PUT on the (gated-but-invalid) eval → 404 contract
 * criterion 8  node_id mismatch (gate vs eval) → generic 400 (PUT), gate row untouched
 * criterion 9  structured violation context ONLY in the WARNING log on
 *              logger ``modulo.api.routes.evals`` — HTTP body carries the
-*              generic message, no exclusion names / org ids / eval id
+*              generic message, no exclusion names / org ids / eval id.
+*              Triggered via a suite-scoped eval: chunk 8 retired the
+*              guardrail_eval exclusion, so it is no longer a POST-path
+*              violation
 * criterion 10 create → delete → create replaces (exactly one live gate)
 * criterion 11 advisory-lock serialization positive + no-lock negative
 * criterion 12 DELETE soft-deletes (deleted_at/deleted_by + audit) and
@@ -347,11 +351,19 @@ async def test_pg_spec_c5_cross_tenant_eval_is_hidden_with_no_identifier_leakage
 
 
 # ---------------------------------------------------------------------------
-# criterion 6 — guardrail-typed eval rejected with generic 400
+# criterion 6 — guardrail-typed eval is now BINDABLE (exclusion retired)
+#
+# FAR-1107 chunk 8 made the Policy Gate the single enforcement authority for
+# guardrails and retired the ``guardrail_eval`` binding exclusion, so an
+# otherwise-valid binding on a guardrail-typed eval now succeeds (201/200).
+# Criterion 6's original "guardrail eval -> generic 400" contract is retired;
+# the residual exclusions are suite-scoped (criterion 7) and node_id mismatch
+# (criterion 8), covered at unit level by
+# tests/unit/core/eval_engine/test_policy_gate.py::TestC7GuardrailBindingPermitted.
 # ---------------------------------------------------------------------------
 
 
-async def test_pg_spec_c6_guardrail_eval_rejected_on_create(
+async def test_pg_spec_c6_guardrail_eval_binds_on_create(
     db_engine: AsyncEngine, client: AsyncClient, env: _Env
 ) -> None:
     node_id = uuid.uuid4()
@@ -360,18 +372,19 @@ async def test_pg_spec_c6_guardrail_eval_rejected_on_create(
     )
 
     resp = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
-    assert resp.status_code == 400, resp.text
-    assert resp.json()["detail"] == "Policy gate binding is invalid. Check the eval configuration."
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["action"] == "warn"
 
-    # The gate row must NOT persist (even soft-deleted)
+    # Chunk 8 binds guardrails, so the gate row persists live
     gates = await _load_gates(db_engine, env.org_id, eval_id, live_only=False)
-    assert len(gates) == 0
+    assert len(gates) == 1
+    assert gates[0][1] == "warn"
 
 
-async def test_pg_spec_c6_update_variant_guardrail_eval_rejected_on_update(
+async def test_pg_spec_c6_update_variant_guardrail_eval_binds_on_update(
     db_engine: AsyncEngine, client: AsyncClient, env: _Env
 ) -> None:
-    """PUT variant: a backdoor-seeded gate on a guardrail eval is also rejected."""
+    """PUT variant: a pre-seeded gate on a guardrail eval now accepts the update."""
     node_id = uuid.uuid4()
     eval_id = await _seed_eval(
         db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="guardrail", node_id=node_id
@@ -379,15 +392,15 @@ async def test_pg_spec_c6_update_variant_guardrail_eval_rejected_on_update(
     gate_id = await _seed_gate(db_engine, env.org_id, eval_id, node_id, action="warn")
 
     resp = await client.put(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "block"}, headers=env.headers)
-    assert resp.status_code == 400, resp.text
-    assert resp.json()["detail"] == "Policy gate binding is invalid. Check the eval configuration."
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["action"] == "block"
 
-    # The seeded gate is untouched (action/ version unchanged)
+    # The seeded gate is updated in place (same id, action flipped, version bumped)
     gates = await _load_gates(db_engine, env.org_id, eval_id, live_only=True)
     assert len(gates) == 1
     assert str(gates[0][0]) == str(gate_id)
-    assert gates[0][1] == "warn"
-    assert int(gates[0][2]) == 1
+    assert gates[0][1] == "block"
+    assert int(gates[0][2]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -451,10 +464,10 @@ async def test_pg_spec_c9_violation_context_only_in_logs_not_http_body(
     env: _Env,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="guardrail", node_id=node_id
-    )
+    # A suite-scoped eval (node_id NULL) is a still-live binding exclusion
+    # (FAR-1107 chunk 8 retired only the guardrail_eval exclusion), so it is
+    # the POST-path trigger for the structured-violation-log contract.
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=None)
 
     caplog.set_level(logging.WARNING, logger=_EVALS_LOGGER)
     resp = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
@@ -476,7 +489,6 @@ async def test_pg_spec_c9_violation_context_only_in_logs_not_http_body(
         str(env.org_id),
         str(env.account_id),
         str(eval_id),
-        str(node_id),
     ):
         assert banned not in body, f"leaked {banned!r} in HTTP body: {body}"
     assert body.count("Policy gate binding is invalid. Check the eval configuration.") == 1

@@ -968,6 +968,10 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
     exists for sandbox agents. A raw workflow import could smuggle these fields
     onto an agent/manual/composite node, where they would be a silent no-op —
     a declared control nothing enforces. Fail closed at save time.
+
+    FAR-1273: ``single_pr_per_run`` joins the same set — the one-PR-per-run
+    ``gh`` guard is installed only inside a sandbox, so the flag on any other
+    node type declares a guard nothing installs (same silent-no-op shape).
     """
     for node in graph_json.get("nodes", []):
         if not isinstance(node, dict) or node.get("node_type") == "sandbox_agent":
@@ -985,6 +989,13 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
                 "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
                 f"Node '{nid}' (node_type={node.get('node_type')!r}) sets git_credentials "
                 "— only sandbox_agent nodes can set read_only / git_credentials",
+                node_id=nid,
+            )
+        if node.get("single_pr_per_run") is not None and node.get("single_pr_per_run") is not False:
+            result.error(
+                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
+                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets single_pr_per_run "
+                "— only sandbox_agent nodes can set single_pr_per_run",
                 node_id=nid,
             )
 

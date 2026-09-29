@@ -15466,6 +15466,12 @@ export interface components {
             wallclock_budget_seconds?: number | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
+            /**
+             * Single Pr Per Run
+             * @description Install the run-scoped one-PR-per-run gh guard in the node's sandbox (a second 'gh pr create' in the same run is refused).
+             * @default false
+             */
+            single_pr_per_run: boolean;
             /** Env Vars */
             env_vars?: {
                 [key: string]: string;

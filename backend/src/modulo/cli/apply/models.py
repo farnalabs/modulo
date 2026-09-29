@@ -291,6 +291,11 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     git_credentials: Literal["scoped", "unscoped", "none"] | None = None
     wallclock_budget_seconds: int | None = None
     delivery_sentinel: str | None = None
+    # FAR-1273: explicit trigger for the FAR-1264 one-PR-per-run gh guard
+    # (API PipelineGraphNode twin). Default false; value rules (sandbox-only)
+    # are enforced by the REAL API node model when the executor normalises the
+    # resolved payload through it.
+    single_pr_per_run: bool = False
     env_vars: dict[str, str] | None = None
     context_files: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, ge=60, le=604800)
@@ -469,6 +474,18 @@ class PipelineEntity(BaseModel):
             "NULL = no pipeline override."
         ),
     )
+    hitl_review_window_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description=(
+            "Per-pipeline HITL review window override (60-604800s = 1 min..7 days); "
+            "null = no override (inherit the org default, then the instance default). "
+            "Managed UNCONDITIONALLY like description/max_concurrent_runs: an omitted "
+            "key means null (clears a UI/API-set override), matching the REST "
+            "PipelineCreate/PipelineUpdate field of the same name (FAR-1257)."
+        ),
+    )
     circuit_breaker_threshold: float | None = Field(
         default=None,
         gt=0,
@@ -567,6 +584,7 @@ class PipelineEntity(BaseModel):
             "description": self.description,
             "max_concurrent_runs": self.max_concurrent_runs,
             "stdout_retention_config": self.stdout_retention_config,
+            "hitl_review_window_seconds": self.hitl_review_window_seconds,
             "business_owner_id": business_owner_id,
             "reliability_owner_id": reliability_owner_id,
         }

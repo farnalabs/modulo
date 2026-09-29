@@ -91,6 +91,13 @@ class TestCoerceUuid:
         u = uuid.UUID(int=0)
         assert coerce_uuid(0) == u
 
+    def test_bool_returns_none(self) -> None:
+        # ``bool`` subclasses ``int``; without the explicit guard ``True``
+        # would coerce to ``UUID(int=1)`` and ``False`` to the nil UUID, neither
+        # of which is a valid UUID input.
+        assert coerce_uuid(True) is None
+        assert coerce_uuid(False) is None
+
     def test_bytes_form_returns_none(self) -> None:
         # Positional ``uuid.UUID`` treats bytes as the ``hex`` arg, so raw bytes
         # are intentionally downgraded to "unset" rather than decoded.

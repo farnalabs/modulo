@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import yaml from 'js-yaml'
 
 // Unit-test the extracted router guard helpers (FAR: S3776 decomposition) in
 // isolation by mocking their two external dependencies. This deterministically
@@ -148,5 +151,35 @@ describe('enforceRoleTierVisibility', () => {
       'tok',
     )
     expect(result).toEqual({ name: 'dashboard' })
+  })
+
+  it('lets a community-tier admin through /admin/org with the REAL manifest entry (FAR-1269)', async () => {
+    // Drive the guard with /admin/org's actual required_tier/required_roles
+    // from frontend/src/manifest.yaml, in the exact plan state that used to
+    // redirect community admins to the dashboard (a RESOLVED, non-empty
+    // feature map — the guard's fail-open on an empty map is not the path a
+    // real community session takes). The org HITL review window endpoint is
+    // not plan-gated, so this route must admit the community admin.
+    const manifest = yaml.load(
+      readFileSync(resolve(__dirname, '../manifest.yaml'), 'utf-8'),
+    ) as { routes: Record<string, { required_tier?: string | null; required_roles?: string[] | null }> }
+    const entry = manifest.routes['/admin/org']
+    expect(entry).toBeDefined()
+    expect(entry.required_tier).toBe('community')
+
+    decodeJwtPayload.mockReturnValue({ org_role: 'admin' })
+    planStore.features = { hitl_reviews: true }
+    // A community org is at the minimum tier only when the route's required
+    // tier is itself 'community'.
+    planStore.isAtMinimumTier.mockReturnValue(entry.required_tier === 'community')
+
+    const result = await enforceRoleTierVisibility(
+      makeRoute('admin-org', {
+        requiredRoles: entry.required_roles ?? undefined,
+        requiredTier: entry.required_tier ?? undefined,
+      }),
+      'tok',
+    )
+    expect(result).toBe(true)
   })
 })
