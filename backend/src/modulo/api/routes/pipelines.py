@@ -27,7 +27,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -124,6 +124,7 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
     rollback_to_snapshot,
     tag_snapshot,
 )
+from modulo.db.crud.run import get_dialect_name
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
@@ -2695,6 +2696,27 @@ async def _require_team_membership(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=denial_detail)
 
 
+#: Bounded wait for the in-txn row lock (the ``SELECT ... FOR UPDATE`` below),
+#: in milliseconds. Without it a contended PATCH parks a pooled connection on
+#: an UNBOUNDED lock wait; with it the wait degrades to a clear, mapped
+#: response (``api.db_error_handling`` translates SQLSTATE 55P03
+#: ``lock_not_available`` to 409) instead of a generic 503.
+#:
+#: ``set_config(..., is_local => true)`` is transaction-scoped - the SQL
+#: equivalent of ``SET LOCAL`` - so the bound also covers any row lock this
+#: mutation transaction takes AFTER the gate (same shape as the runner-capacity
+#: gate in ``core/runner_capacity.py``). That is deliberate: no part of a
+#: request-scoped mutation should hang indefinitely.
+#:
+#: A module constant, not a Settings field, mirroring
+#: ``core.run_outputs_dualwrite._MARK_RUN_FAILED_LOCK_TIMEOUT_MS``. The two
+#: existing lock-timeout settings (``runner_capacity_lock_timeout_ms``,
+#: ``runner_marker_sweep_lock_timeout_seconds``) are pinned to their own
+#: subsystems; reusing either would silently couple API PATCH contention to an
+#: operator's runner-capacity tuning.
+_MUTATION_ROW_LOCK_TIMEOUT_MS = 5000
+
+
 async def _reapply_team_gate_inside_mutation_txn(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -2708,13 +2730,32 @@ async def _reapply_team_gate_inside_mutation_txn(
     before the endpoint's mutation transaction opens, so ownership/visibility
     can change between the two (TOCTOU). Re-selects the row ``FOR UPDATE`` by
     id + organisation and re-runs the membership-or-admin matrix against the
-    locked row's CURRENT visibility/``owner_team_id`` — the same matrix the
+    locked row's CURRENT visibility/``owner_team_id`` - the same matrix the
     dependency enforces, evaluated atomically with the mutation.
+
+    The wait for that lock is BOUNDED (``_MUTATION_ROW_LOCK_TIMEOUT_MS``, set
+    via ``SET LOCAL`` semantics immediately before the select): a contended
+    mutation surfaces SQLSTATE 55P03, which ``handle_db_errors`` maps to a
+    clear 409 rather than an unbounded pooled-connection wait.
 
     Fail closed: 404 when the row is gone (the caller's crud call would 404
     anyway), 403 when the locked row is team-private and the caller is neither
     a member of its owner team nor an org admin.
     """
+    # POSTGRES-ONLY (the shared ``db.crud.run.get_dialect_name`` dialect gate -
+    # the same helper ``core.hitl_manager.gate_coalescing`` and ``db/rls.py``
+    # use, rather than a fourth local bind dance): SQLite has no ``set_config``,
+    # and the unit fixtures run on SQLite mocks. On Postgres this is
+    # transaction-scoped (is_local => true), i.e. SET LOCAL - it must run BEFORE
+    # the FOR UPDATE below to bound that wait. A bind that does not positively
+    # report ``postgresql`` skips the statement: the lock bound this guards is a
+    # safety improvement, never a correctness requirement, so the safe direction
+    # to fail is the no-op.
+    if await get_dialect_name(session) == "postgresql":
+        await session.execute(
+            text("SELECT set_config('lock_timeout', :val, true)"),
+            {"val": f"{_MUTATION_ROW_LOCK_TIMEOUT_MS}ms"},
+        )
     stmt = select(Pipeline).where(
         Pipeline.id == pipeline_id,
         Pipeline.organisation_id == principal.organisation_id,
@@ -3946,19 +3987,81 @@ class ConvertToAgentRequest(BaseModel):
 async def _load_locked_pipeline_graph(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
+    *,
+    pipeline_row: Pipeline,
 ) -> tuple[list[dict[str, Any]], list[Any]]:
-    """Load and row-lock a pipeline, returning its graph nodes + edge rows.
+    """Return the graph nodes + edge rows for an ALREADY locked pipeline.
 
-    Raises 404 when the pipeline does not exist.
+    ``pipeline_row`` is the ``FOR UPDATE`` row the caller locked with
+    ``_reapply_team_gate_inside_mutation_txn`` (which 404s a missing row AND
+    re-verifies the team gate inside this transaction). This helper takes no
+    lock of its own: the graph read and the team-gate lock must be the same
+    transaction over the same row, so the lock can never be dropped from one
+    of the two node-conversion endpoints that call it.
     """
-    pipeline_row = (
-        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
-    ).scalar_one_or_none()
-    if pipeline_row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
     edges = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
     return nodes, edges
+
+
+def _graph_nodes_as_models(nodes: list[dict[str, Any]]) -> list[PipelineGraphNode]:
+    """Stored graph node dicts -> models, for the save-time reference checks.
+
+    The sibling graph-write endpoints receive these models already validated
+    by the request body (REST, MCP and ``modulo apply`` all round-trip through
+    ``PipelineGraphUpdate``); the two node-conversion endpoints read them back
+    out of ``graph_nodes_json``, so they are (re)validated here. Strict first -
+    the same bar a request-payload node must clear - then the ``legacy_read``
+    context the graph READ path uses (FAR-874), so a stored node whose
+    TYPE-SPECIFIC rules have tightened since it was written does not fail a
+    conversion that ``replace_pipeline_graph`` would happily persist anyway.
+
+    A node that clears neither tier is a 422 naming that node (via
+    ``_safe_validation_errors``, so no ``env_vars``/credential value can leak
+    into the detail) rather than an opaque generic one - the graph cannot be
+    reference-checked, and this is a write path, so it fails closed.
+    """
+    models: list[PipelineGraphNode] = []
+    for raw in nodes:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            models.append(PipelineGraphNode.model_validate(raw))
+        except ValidationError:
+            try:
+                models.append(PipelineGraphNode.model_validate(raw, context=LEGACY_READ_CONTEXT))
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Stored graph node {raw.get('id', 'unknown')} no longer validates "
+                    f"against the current node schema: {_safe_validation_errors(exc)}",
+                ) from exc
+    return models
+
+
+def _edge_row_to_validator(edge: Any) -> dict[str, Any]:
+    """Persisted ``PipelineEdge`` row -> the GraphValidator's reduced edge shape.
+
+    The sibling endpoints build this from the request's ``GraphEdgeData`` via
+    ``_edge_data_to_validator``; the node-conversion endpoints hold the
+    PERSISTED row instead, so the same seven keys (``source``/``target``/
+    ``type``/``condition_expression``/``hitl_review_config``/ports) are derived
+    from it here. The key set is deliberately identical to that helper's - the
+    validator reads ``source``/``target`` without falling back to
+    ``source_node_id`` on every path - but the row is read directly rather than
+    round-tripped through ``PipelineGraphEdge`` so a stale stored edge can
+    never turn this advisory gate into a new 422 the siblings do not raise.
+    """
+    row = _edge_to_dict(edge)
+    return {
+        "source": str(row["source_node_id"]),
+        "target": str(row["target_node_id"]),
+        "type": row["edge_type"],
+        "condition_expression": row.get("condition_expression"),
+        "hitl_review_config": row.get("hitl_review_config"),
+        "source_port": row.get("source_port") or "out",
+        "target_port": row.get("target_port") or "in",
+    }
 
 
 async def _save_locked_graph(
@@ -3967,11 +4070,46 @@ async def _save_locked_graph(
     pipeline_id: uuid.UUID,
     org_id: uuid.UUID,
     principal: TenantPrincipal,
+    pipeline_owner_team_id: uuid.UUID | None,
     nodes: list[dict[str, Any]],
     edges: list[Any],
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
-    """Persist a locked node-conversion graph via the shared save path."""
-    return await _save_graph(
+    """Persist a locked node-conversion graph via the shared save path.
+
+    This is the single chokepoint both node-conversion endpoints write
+    through, and it runs the SAME save-time enforcement the sibling
+    graph-write endpoints run (``replace_pipeline_graph_endpoint``,
+    ``_apply_graph_update``), in the same order, around the same write:
+
+    1. ``_enforce_connector_team_bindings`` - 409 ``connector_team_mismatch``
+       for a team-private connector bound from outside its team,
+    2. ``_resolve_graph_references`` - the FAR-418 capability-scope widening
+       guard (422), unknown agent/schema ids (422) and the model-backend team
+       check (409),
+    3. the write itself (``replace_pipeline_graph`` + the Agent-row command
+       sync, via ``_save_graph``),
+    4. ``_validate_graph_save`` - save-time graph validation; its blocking
+       codes raise 422 and roll the write back.
+
+    Steps 1-2 run BEFORE the write and 4 after it, exactly as the siblings
+    order them. Without them a convert-to-agent request could persist a
+    cross-team connector binding or a scope-widening node that PATCH /graph
+    rejects.
+
+    The advisory (non-blocking) issues step 4 returns are logged rather than
+    returned in the response: this helper's ``tuple[nodes, edges]`` shape is
+    what its callers - and the unit tests that stub it - unpack, and the
+    blocking codes, which are the enforcement, still raise identically.
+    """
+    connector_bindings = extract_connector_bindings(nodes)
+    await _enforce_connector_team_bindings(session, org_id, pipeline_owner_team_id, connector_bindings)
+    _schema_pins, model_backend_pins = await _resolve_graph_references(
+        session,
+        _graph_nodes_as_models(nodes),
+        org_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+    )
+    graph = await _save_graph(
         session,
         pipeline_id,
         org_id,
@@ -3982,6 +4120,25 @@ async def _save_locked_graph(
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
     )
+    if graph is None:
+        return None
+    saved_nodes, saved_edges = graph
+    issues = await _validate_graph_save(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        validator_graph={"nodes": saved_nodes, "edges": [_edge_row_to_validator(e) for e in saved_edges]},
+        connector_bindings=connector_bindings,
+        model_backend_pins=model_backend_pins,
+    )
+    for issue in issues:
+        logger.info(
+            "graph save advisory issue (%s) on pipeline %s: %s",
+            issue.code,
+            pipeline_id,
+            issue.message,
+        )
+    return saved_nodes, saved_edges
 
 
 async def _finalize_locked_graph_save(
@@ -4032,6 +4189,29 @@ async def _finalize_locked_graph_save(
     raise
 
 
+# Team gate (shared by BOTH node-conversion endpoints) - PARITY +
+# defence-in-depth, matching replace_pipeline_graph / update_pipeline. Both
+# layers were previously absent here while the sibling graph writes had both:
+#
+# * the request-time membership-or-admin dependency gives the early 403 with
+#   the right status, and is the ONLY team layer where RLS does NOT apply - it
+#   runs on non-Postgres backends, on break-glass / execution_context sessions,
+#   and when the RLS policies are missing or misconfigured;
+# * the in-txn re-check (_reapply_team_gate_inside_mutation_txn) closes the
+#   request-time -> mutation TOCTOU atomically with the write, because the
+#   dependency's own transaction COMMITs before this one opens.
+#
+# This is NOT a fix for a live Postgres hole: migration 0124 drops the
+# OR-combined rls_org_isolation policy on `pipelines` and leaves
+# rls_team_isolation as the sole policy, so under Postgres a non-member's read
+# already returns no row and the resolver 404s before the handler runs - which
+# is exactly what the integration tests in
+# tests/integration/test_pipeline_node_conversion_team_gate.py observe.
+#
+# The plain (JWT) variant pairs with each endpoint's own ``require_permission``
+# - ``_any_credential`` is paired only with
+# ``require_permission_any_credential`` (the credential flavours must match;
+# the gate body itself is single-sourced).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
 )
@@ -4042,12 +4222,14 @@ async def convert_node_to_agent_endpoint(
     req: ConvertToAgentRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
 
-            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id, pipeline_row=locked)
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
@@ -4122,6 +4304,7 @@ async def convert_node_to_agent_endpoint(
                 pipeline_id=pipeline_id,
                 org_id=principal.organisation_id,
                 principal=principal,
+                pipeline_owner_team_id=locked.owner_team_id,
                 nodes=nodes,
                 edges=edges,
             )
@@ -4134,6 +4317,8 @@ async def convert_node_to_agent_endpoint(
     return _graph_response(saved_nodes, saved_edges)
 
 
+# Team gate: same parity + defence-in-depth rationale as the shared comment
+# above convert_node_to_agent_endpoint (request-time dependency + in-txn re-check).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
 )
@@ -4144,12 +4329,14 @@ async def revert_node_to_manual_endpoint(
     snapshot_id: Annotated[uuid.UUID, Query()],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
 
-            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id)
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id, pipeline_row=locked)
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
@@ -4215,6 +4402,7 @@ async def revert_node_to_manual_endpoint(
                 pipeline_id=pipeline_id,
                 org_id=principal.organisation_id,
                 principal=principal,
+                pipeline_owner_team_id=locked.owner_team_id,
                 nodes=nodes,
                 edges=edges,
             )

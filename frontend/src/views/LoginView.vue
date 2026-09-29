@@ -142,6 +142,7 @@ import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
 import { useLoginPrefs } from '../composables/useLoginPrefs'
+import { withTimeout } from '../lib/asyncUtils'
 import { setAccessToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
@@ -164,6 +165,16 @@ type OrgInfo = components['schemas']['OrgInfo']
 const loginPrefs = useLoginPrefs()
 const lastUsedMethod = ref<string | null>(loginPrefs.getLastMethod())
 
+// Budgets for the two anonymous pre-auth reads that gate the login form.
+// Neither call may strand the page: if it never settles, the `contextLoading`
+// finally below still runs because the timeout rejects the awaited promise.
+// Observed on staging under load — a hung login-context left the page on the
+// "Loading" state forever, so no credential form ever rendered and every
+// @regression test that signs in failed (and retried) until the job hit its
+// 90-minute timeout. Fail over to the direct login form instead.
+const LOGIN_CONTEXT_TIMEOUT_MS = 8_000
+const SSO_DISCOVERY_TIMEOUT_MS = 8_000
+
 // --- Login context state ---
 const contextLoading = ref(true)
 const multiOrg = ref(false)
@@ -185,8 +196,20 @@ const displayOrgName = ref('')
 
 async function fetchLoginContext() {
   try {
-    const res = await fetch('/api/v1/auth/login-context')
-    if (!res.ok) {
+    // Bound the body read, not just the response headers: a server that sends
+    // headers and then stalls the JSON body would otherwise leave `res.json()`
+    // outside the timeout window and strand the page just like a hung request.
+    // The whole fetch→parse sequence runs inside the timeout so the fallback
+    // below is always reached.
+    const result = await withTimeout(
+      fetch('/api/v1/auth/login-context').then(async (res) => ({
+        ok: res.ok,
+        data: res.ok ? await res.json() : null,
+      })),
+      LOGIN_CONTEXT_TIMEOUT_MS,
+      'login-context',
+    )
+    if (!result.ok) {
       // login-context is unavailable (e.g. a transient 429 from the anonymous
       // GET rate limit). Fall back to the single-org direct login, but still
       // discover SSO providers — the SSO affordance must not depend on this
@@ -194,7 +217,7 @@ async function fetchLoginContext() {
       await discoverSsoProviders()
       return
     }
-    const data = await res.json()
+    const data = result.data
     if (!data.multi_org && data.org) {
       // Single org: auto-skip to direct login (preserve existing UX)
       singleOrg.value = data.org
@@ -226,12 +249,19 @@ async function fetchLoginContext() {
 
 async function discoverSsoProviders() {
   try {
-    const res = await fetch('/api/v1/auth/sso/providers')
-    if (!res.ok) {
+    // Read the body inside the timeout window so a stalled JSON body cannot
+    // hang the page after headers have already arrived.
+    const data = await withTimeout(
+      fetch('/api/v1/auth/sso/providers').then(async (res) =>
+        res.ok ? ((await res.json()) as SsoProvidersResponse) : null,
+      ),
+      SSO_DISCOVERY_TIMEOUT_MS,
+      'sso-providers',
+    )
+    if (!data) {
       ssoState.value = 'unavailable'
       return
     }
-    const data = (await res.json()) as SsoProvidersResponse
     oidcProviders.value = data.oidc ?? []
     samlEnabled.value = Boolean(data.saml)
     ssoState.value = oidcProviders.value.length > 0 || samlEnabled.value ? 'available' : 'unavailable'

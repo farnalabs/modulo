@@ -989,6 +989,45 @@ async def hitl_overdue(_ctx: dict[str, Any]) -> dict[str, Any]:
     return {"dispatched": len(dispatched)}
 
 
+async def hitl_deadline_warning(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — warn opt-in reviewers that an UNCLAIMED HITL gate is
+    approaching its terminalisation deadline (FAR-1270), BEFORE the
+    dispatcher_reconcile terminaliser cancels the run. Idempotent per claim
+    (Redis fire-once key + in-process backstop) and opt-in filtered by the
+    shared ``hitl_email_alerts`` recipient resolver.
+    """
+    from redis.asyncio import Redis as AsyncRedis
+
+    from modulo.core.cron_helpers import _int_setting
+    from modulo.core.hitl_manager.deadline_warning import dispatch_deadline_notifications
+
+    settings = get_settings()
+    factory = _make_session_factory()
+    # Coded fallback for stand-in settings objects (FAR-746 pattern):
+    # MagicMock.__int__ silently yields 1, which would make every legacy
+    # deadline look already-expired.
+    grace_seconds = _int_setting(getattr(settings, "hitl_review_cancel_grace_seconds", None), 3600)
+
+    redis_client: AsyncRedis | None = None
+    try:
+        redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("hitl_deadline_warning: redis client unavailable — in-process fire-once backstop only")
+    try:
+        notified = await dispatch_deadline_notifications(
+            factory,
+            grace_seconds=grace_seconds,
+            redis_client=redis_client,
+        )
+    finally:
+        if redis_client is not None:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+    return {"notified": len(notified)}
+
+
 async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — batch-delete terminal runs and old LangGraph checkpoint rows.
 
@@ -1927,6 +1966,7 @@ def _system_functions() -> list[Any]:
         dispatcher_reconcile,
         claim_expiry,
         hitl_overdue,
+        hitl_deadline_warning,
         retention_cleanup,
         webhook_dedup_cleanup,
         expired_webhook_dedup_purge,
@@ -1991,6 +2031,22 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         CronJob(
             hitl_overdue,
             cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # hitl-deadline-warning: every 60s (FAR-1270) — the approaching-band
+        # width is a FRACTION of the review window (down to the 60s minimum),
+        # so the cadence — not a wider lead — is what guarantees a tick lands
+        # inside the band before the terminaliser cancels; the 5-min overdue
+        # cadence would miss every small window. unique=True so overlapping
+        # ticks cannot double-select; the per-claim Redis fire-once key is the
+        # once-only guarantee underneath.
+        CronJob(
+            hitl_deadline_warning,
+            cron=_CRON_EVERY_MINUTE,
             unique=True,
             timeout=120,
             heartbeat=30,

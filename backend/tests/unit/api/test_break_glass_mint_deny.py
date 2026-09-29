@@ -83,11 +83,12 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
         "create_eval_from_run",
     },
     # guardrail config-as-code admin surface (FAR-309 PR B per-scope invariant):
-    # the elevated read + propose/apply/reject carry the break-glass deny.
+    # the elevated read + propose/apply/import/reject carry the break-glass deny.
     "guardrail_config.py": {
         "get_guardrail_config_elevated",
         "propose_guardrail_config",
         "apply_guardrail_config",
+        "import_guardrail_config",
         "reject_guardrail_config",
         "post_guardrail_drift_check",
     },
