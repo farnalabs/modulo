@@ -4093,7 +4093,6 @@ export default {
       "cancelled": "Node cancelled"
     },
     "run": { "superseded": "Run superseded" },
-    "hitl_review_expired": "HITL review expired",
     "connector": {
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
@@ -4156,7 +4155,6 @@ export default {
       "cancelled": "The node was cancelled before completion."
     },
     "run": { "superseded": "This run was superseded by a newer run." },
-    "hitl_review_expired": "The run sat unanswered at a human review gate past the review window and was cancelled.",
     "connector": {
       "invalid_key": "The connector key is invalid or missing.",
       "permission": "The connector does not have permission to access the resource.",
