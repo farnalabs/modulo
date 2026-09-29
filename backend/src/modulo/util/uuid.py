@@ -20,12 +20,15 @@ def coerce_uuid(value: Any) -> uuid.UUID | None:
     Accepts ``None``, already-``UUID`` instances, and ``str``/``bytes``/``int``
     forms that ``uuid.UUID`` understands. Any ``TypeError``/``ValueError`` (e.g. a
     malformed UUID string from an API boundary) yields ``None`` rather than
-    raising, so callers can treat the value as unset and avoid 500s.
+    raising, so callers can treat the value as unset and avoid 500s. ``bool``
+    values yield ``None`` (``bool`` subclasses ``int`` but is never a valid UUID).
     """
     if value is None:
         return None
     if isinstance(value, uuid.UUID):
         return value
+    if isinstance(value, bool):
+        return None
     try:
         if isinstance(value, int):
             return uuid.UUID(int=value)
