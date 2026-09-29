@@ -40,7 +40,6 @@ from modulo.core.pipeline_engine.node_runner import (
     _should_apply_sandbox_policy,
     make_sandbox_agent_fn,
 )
-from modulo.core.pipeline_engine.sandbox_policy import DELIVERY_SENTINEL_SPEC_KEY
 from modulo.core.runtime_provider import (
     ExecResult,
     IsolationPolicy,
@@ -424,13 +423,13 @@ async def test_helper_builds_spec_and_policy_with_nil_fallbacks(monkeypatch: pyt
 
 
 # ---------------------------------------------------------------------------
-# FAR-1264: sentinel gating for the one-PR-per-run gh guard
+# FAR-1273: explicit single_pr_per_run gating for the one-PR-per-run gh guard
 # ---------------------------------------------------------------------------
 
 
-def test_should_apply_sandbox_policy_false_without_a_sentinel() -> None:
-    """A node with no enforcement control AND no delivery_sentinel gets NO
-    policy step (the pre-FAR-1264 behaviour, unchanged)."""
+def test_should_apply_sandbox_policy_false_without_flag_or_control() -> None:
+    """A node with no enforcement control AND no single_pr_per_run flag gets
+    NO policy step (the pre-FAR-1264 behaviour, unchanged)."""
     assert (
         _should_apply_sandbox_policy(
             read_only=False,
@@ -442,16 +441,16 @@ def test_should_apply_sandbox_policy_false_without_a_sentinel() -> None:
     )
 
 
-def test_should_apply_sandbox_policy_true_with_a_sentinel() -> None:
-    """FAR-1264: a non-empty delivery_sentinel alone runs the policy step
-    (Prompt-to-PR's shape: read_only/git/egress all default)."""
+def test_should_apply_sandbox_policy_true_with_the_explicit_flag() -> None:
+    """FAR-1273: the explicit single_pr_per_run flag alone runs the policy
+    step (Prompt-to-PR's shape: read_only/git/egress all default)."""
     assert (
         _should_apply_sandbox_policy(
             read_only=False,
             git_credentials=None,
             egress_policy=None,
             egress_allowlist=None,
-            delivery_sentinel="PR_CREATED",
+            single_pr_per_run=True,
         )
         is True
     )
@@ -489,20 +488,43 @@ def test_should_apply_sandbox_policy_keeps_the_existing_triggers() -> None:
     )
 
 
-async def test_sentinel_only_node_routes_isolation_with_sentinel_metadata(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
-    """FAR-1264 end-to-end gating: a sentinel-only node (no enforcement
-    control) NOW routes through ``provider.apply_isolation``, carrying the
-    sentinel on the per-invocation WorkspaceSpec."""
+async def test_sentinel_only_node_gets_no_guard_at_all(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """FAR-1273 regression: a node with a NON-EMPTY delivery_sentinel but NO
+    ``single_pr_per_run`` flag gets NO policy step and NO guard - the sentinel
+    keeps only its FAR-228 idempotency meaning and must never arm the
+    one-PR-per-run ``gh`` guard."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = _RecordingIsolationProvider()
     builder = _patch_isolation_builder(monkeypatch, fake)
     legacy = _legacy_must_not_run(monkeypatch)
 
     fn = make_sandbox_agent_fn(_base_node_def(read_only=False, delivery_sentinel="PR_CREATED"))
-    sandbox = await _completed_no_output_sandbox("sbx-sentinel")
-    install_fake_dispatch(monkeypatch, ref="sbx-sentinel")
+    sandbox = await _completed_no_output_sandbox("sbx-sentinel-only")
+    install_fake_dispatch(monkeypatch, ref="sbx-sentinel-only")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    builder.assert_not_awaited()
+    legacy.assert_not_awaited()
+    assert not fake.calls
+
+
+async def test_flagged_node_routes_isolation_with_the_typed_flag(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """FAR-1273 end-to-end gating: a flagged node (no enforcement control)
+    routes through ``provider.apply_isolation`` with
+    ``policy.single_pr_per_run=True`` - the TYPED carrier - and the spec
+    carries NO sentinel metadata key (the old carrier is deleted)."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    builder = _patch_isolation_builder(monkeypatch, fake)
+    legacy = _legacy_must_not_run(monkeypatch)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-flagged")
+    install_fake_dispatch(monkeypatch, ref="sbx-flagged")
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         pytest.raises(SandboxNodeFailedError),
@@ -513,24 +535,26 @@ async def test_sentinel_only_node_routes_isolation_with_sentinel_metadata(
     legacy.assert_not_awaited()
     assert len(fake.calls) == 1
     _, spec, policy = fake.calls[0]
-    assert spec.workspace_metadata.get(DELIVERY_SENTINEL_SPEC_KEY) == "PR_CREATED"
-    # Sentinel-only: every ENFORCEMENT control stays default (the policy step
-    # installs only the gh guard).
+    assert policy.single_pr_per_run is True
+    # Flag-only: every ENFORCEMENT control stays default (the policy step
+    # installs ONLY the gh guard).
     assert policy.read_only is False
     assert policy.git_credentials is None
+    # The old workspace_metadata carrier is gone: the spec is attribution only.
+    assert not spec.workspace_metadata
 
 
-async def test_sentinel_only_isolation_failure_does_not_fail_the_run(
+async def test_flagged_only_isolation_failure_does_not_fail_the_run(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
-    """The gh-guard install is best-effort by contract: when a sentinel-only
+    """The gh-guard install is best-effort by contract: when a flag-only
     node's isolation invocation cannot run (no provider), the run PROCEEDS
     exactly as it did before FAR-1264 (degrading to the prompt-level guard)
     instead of dying with a tier refusal."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     _patch_isolation_builder(monkeypatch, None)
 
-    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, delivery_sentinel="PR_CREATED"))
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
     sandbox = await _completed_no_output_sandbox("sbx-guard-only")
     install_fake_dispatch(monkeypatch, ref="sbx-guard-only")
     with (
@@ -547,13 +571,13 @@ async def test_isolation_cancellation_propagates_through_the_call_site(
 ) -> None:
     """Cancellation is re-raised, never swallowed by the best-effort swallow
     (which handles ordinary failures only): a cancelled dispatch must stay
-    cancelled through the FAR-1264 call-site guard."""
+    cancelled through the FAR-1264/1273 call-site guard."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     provider = _RecordingIsolationProvider()
     provider.apply_isolation = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
     _patch_isolation_builder(monkeypatch, provider)
 
-    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, delivery_sentinel="PR_CREATED"))
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
     sandbox = await _completed_no_output_sandbox("sbx-cancel")
     install_fake_dispatch(monkeypatch, ref="sbx-cancel")
     with (
@@ -566,7 +590,7 @@ async def test_isolation_cancellation_propagates_through_the_call_site(
 async def test_enforcement_node_isolation_failure_still_fails_closed(
     monkeypatch: pytest.MonkeyPatch, fake_file_io
 ) -> None:
-    """The best-effort swallow applies ONLY to sentinel-only invocations: a
+    """The best-effort swallow applies ONLY to flag-only invocations: a
     node that asked for an enforcement control (read_only here) keeps the
     pre-existing fail-closed tier refusal."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
@@ -582,10 +606,12 @@ async def test_enforcement_node_isolation_failure_still_fails_closed(
         await fn(_run_state())
 
 
-async def test_helper_threads_delivery_sentinel_into_spec_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_apply_isolation_via_provider`` threads the sentinel onto the
-    per-invocation WorkspaceSpec (the carrier the E2B call site reads), and
-    omits the key entirely when there is no sentinel."""
+async def test_helper_threads_single_pr_per_run_into_the_typed_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_apply_isolation_via_provider`` threads the flag onto the typed
+    ``IsolationPolicy`` (the single carrier the E2B call site reads), and the
+    default (flag omitted) is ``False`` with an untouched spec."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     fake = _RecordingIsolationProvider()
     _patch_isolation_builder(monkeypatch, fake)
@@ -598,10 +624,11 @@ async def test_helper_threads_delivery_sentinel_into_spec_metadata(monkeypatch: 
         git_credentials=None,
         egress_policy=None,
         egress_allowlist=None,
-        delivery_sentinel="PR_CREATED",
+        single_pr_per_run=True,
     )
-    _, spec, _ = fake.calls[0]
-    assert spec.workspace_metadata == {DELIVERY_SENTINEL_SPEC_KEY: "PR_CREATED"}
+    _, spec, policy = fake.calls[0]
+    assert policy.single_pr_per_run is True
+    assert not spec.workspace_metadata
 
     await _apply_isolation_via_provider(
         "sbx-plain",
@@ -612,5 +639,6 @@ async def test_helper_threads_delivery_sentinel_into_spec_metadata(monkeypatch: 
         egress_policy=None,
         egress_allowlist=None,
     )
-    _, spec, _ = fake.calls[1]
+    _, spec, policy = fake.calls[1]
+    assert policy.single_pr_per_run is False
     assert not spec.workspace_metadata

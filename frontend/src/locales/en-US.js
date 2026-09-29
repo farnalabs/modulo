@@ -1092,6 +1092,8 @@ export default {
       "timeout": "Timeout",
       "stall_timeout": "Stall Timeout",
       "heartbeat": "Heartbeat",
+      "single_pr_per_run": "One PR per run",
+      "single_pr_per_run_help": "Install the platform guard that allows exactly one gh pr create in this node's sandbox run — a second attempt in the same run is refused before it reaches GitHub.",
       "disabled": "Disabled",
       "watch_log_path": "Watch Log Path",
       "stdout_delta": "Stdout Delta",

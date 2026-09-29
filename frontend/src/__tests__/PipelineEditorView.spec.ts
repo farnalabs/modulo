@@ -2826,6 +2826,50 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     wrapper.unmount()
   })
 
+  it('exposes the single_pr_per_run flag on sandbox nodes and saves it in the payload (FAR-1273)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        agent_id: 'agent-1',
+        template_id: 'opencode',
+        agent_commands: [],
+        label: 'Sandbox',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Sandbox', description: '' } }]
+    vm.agents = [{ id: 'agent-1', name: 'Agent One', model_backend_id: 'mb-1' }]
+    vm.modelBackends = [{ id: 'mb-1', display_name: 'Claude', provider: 'anthropic' }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    // the flag is surfaced with a label and help text (i18n, no hardcoded string)
+    expect(wrapper.find('[data-testid="pipeline-editor-single-pr-per-run-label"]').exists()).toBe(true)
+    const valueRegion = wrapper.find('[data-testid="pipeline-editor-single-pr-per-run-value"]')
+    expect(valueRegion.exists()).toBe(true)
+    expect(valueRegion.text()).toContain('gh pr create')
+
+    const toggle = wrapper.find('[data-testid="pipeline-editor-single-pr-per-run-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    // a legacy node with no stored flag reads as unchecked
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+
+    await toggle.setValue(true)
+    expect(vm.rawNodes[0].single_pr_per_run).toBe(true)
+
+    await vm.saveGraph()
+    const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
+    expect(savedNode.single_pr_per_run).toBe(true)
+    wrapper.unmount()
+  })
+
   it('displays read-only commands for a non-sandbox node that has agent_commands', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()

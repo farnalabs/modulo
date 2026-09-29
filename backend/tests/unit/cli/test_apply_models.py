@@ -561,6 +561,39 @@ class TestPipelineEntityContracts:
         api_fields = set(PipelineGraphNode.model_fields) - {"agent_id"}
         assert apply_fields == api_fields
 
+    def test_node_single_pr_per_run_accepted(self) -> None:
+        """FAR-1273: the declarative CLI model carries the explicit
+        single_pr_per_run guard flag through to the API node payload."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "pipelines": [
+                    {
+                        "name": "sample",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "id": "00000000-0000-0000-0000-0000000000a1",
+                                    "node_type": "sandbox_agent",
+                                    "agent": "worker",
+                                    "position": {"x": 0, "y": 0},
+                                    "single_pr_per_run": True,
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        }
+        cfg = _config(tx)
+        node = cfg.entities.pipelines[0].graph.nodes[0]
+        assert node.single_pr_per_run is True
+        assert node.api_node_payload()["single_pr_per_run"] is True
+
+        # Default (absent) stays false for legacy declarative configs.
+        tx["entities"]["pipelines"][0]["graph"]["nodes"][0].pop("single_pr_per_run")
+        assert _config(tx).entities.pipelines[0].graph.nodes[0].single_pr_per_run is False
+
     def test_graph_duplicate_node_ids_rejected(self) -> None:
         tx = {
             "api_version": "modulo.dev/v1",

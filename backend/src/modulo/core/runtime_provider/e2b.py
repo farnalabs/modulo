@@ -513,28 +513,19 @@ class E2BRuntimeProvider(RuntimeProvider):
         engine path can enforce a workspace the legacy direct path
         provisioned. ``spec`` carries workspace attribution for callers; the
         enforcement scripts target the fixed ``/home/user`` workspace and do
-        not read it — EXCEPT the FAR-1264 delivery sentinel: the engine
-        threads the node's ``delivery_sentinel`` through
-        ``spec.workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`` (the
-        per-invocation carrier) and it gates the one-PR-per-run ``gh`` guard;
+        not read it. The FAR-1264 one-PR-per-run ``gh`` guard is gated by
+        ``policy.single_pr_per_run`` (FAR-1273: the typed ``IsolationPolicy``
+        is the SINGLE carrier — no ``workspace_metadata`` key), and
         ``spec.run_id`` scopes the guard's claim marker so a marker can never
-        leak across runs. Both are absent on a spec built without them, so
-        every existing caller and the R3 parity test are unaffected.
+        leak across runs. A policy built without the flag installs no guard,
+        so every existing caller and the R3 parity test are unaffected.
         """
         # Lazy import (house convention): sandbox_policy is dependency-free,
         # but importing it pulls the pipeline_engine package __init__ — the
         # engine process already has it loaded when this runs.
-        from modulo.core.pipeline_engine.sandbox_policy import (
-            DELIVERY_SENTINEL_SPEC_KEY,
-            apply_sandbox_policy,
-        )
+        from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
 
         sandbox = await self._resolve_sandbox(provider_ref, "apply isolation")
-        # FAR-1264: resolve the run-scoped one-PR-per-run guard inputs from
-        # the spec (type-narrowed: the metadata dict is engine-supplied, so a
-        # malformed/foreign value degrades to "no guard", never a crash).
-        _sentinel_raw = (spec.workspace_metadata or {}).get(DELIVERY_SENTINEL_SPEC_KEY)
-        _delivery_sentinel = _sentinel_raw if isinstance(_sentinel_raw, str) and _sentinel_raw else None
         _run_scope = str(spec.run_id) if spec.run_id is not None else None
         await apply_sandbox_policy(
             sandbox,
@@ -544,7 +535,7 @@ class E2BRuntimeProvider(RuntimeProvider):
             egress_allowlist=policy.egress_allowlist,
             allowed_hosts=policy.allowed_hosts,
             command_timeout=policy.command_timeout,
-            delivery_sentinel=_delivery_sentinel,
+            single_pr_per_run=policy.single_pr_per_run,
             run_scope=_run_scope,
         )
 

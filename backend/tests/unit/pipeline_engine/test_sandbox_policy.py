@@ -533,9 +533,10 @@ def test_gh_pr_guard_script_preserves_real_gh_and_embeds_marker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_sandbox_policy_sentinel_only_runs_the_guard_step() -> None:
-    """A sentinel with every enforcement control default (Prompt-to-PR's
-    shape) runs EXACTLY one step: the gh-guard install."""
+async def test_apply_sandbox_policy_flag_only_runs_the_guard_step() -> None:
+    """FAR-1273: a node with single_pr_per_run=True and every enforcement
+    control default (Prompt-to-PR's shape) runs EXACTLY one step: the
+    gh-guard install."""
     sandbox = _FakeSandbox()
     await apply_sandbox_policy(
         sandbox,
@@ -543,7 +544,7 @@ async def test_apply_sandbox_policy_sentinel_only_runs_the_guard_step() -> None:
         git_credentials=None,
         egress_policy=None,
         egress_allowlist=None,
-        delivery_sentinel="PR_CREATED",
+        single_pr_per_run=True,
         run_scope="run-abc",
     )
     assert len(sandbox.commands.runs) == 1
@@ -552,9 +553,9 @@ async def test_apply_sandbox_policy_sentinel_only_runs_the_guard_step() -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_sandbox_policy_without_sentinel_runs_no_guard_step() -> None:
-    """Regression: a node WITHOUT a sentinel gets the byte-identical
-    pre-FAR-1264 step list — no new step appears."""
+async def test_apply_sandbox_policy_without_the_flag_runs_no_guard_step() -> None:
+    """Regression: a node WITHOUT the single_pr_per_run flag gets the
+    byte-identical pre-FAR-1264 step list — no guard step appears."""
     sandbox = _FakeSandbox()
     await apply_sandbox_policy(
         sandbox,
@@ -578,7 +579,7 @@ async def test_apply_sandbox_policy_guard_step_runs_before_read_only_seal() -> N
         git_credentials="scoped",
         egress_policy=None,
         egress_allowlist=None,
-        delivery_sentinel="PR_CREATED",
+        single_pr_per_run=True,
         run_scope="run-xyz",
     )
     # git scoped -> gh guard -> read-only seal.
@@ -601,7 +602,7 @@ async def test_apply_sandbox_policy_guard_install_failure_is_best_effort() -> No
         git_credentials=None,
         egress_policy=None,
         egress_allowlist=None,
-        delivery_sentinel="PR_CREATED",
+        single_pr_per_run=True,
     )
     assert not guard_only.commands.runs
 
@@ -613,7 +614,7 @@ async def test_apply_sandbox_policy_guard_install_failure_is_best_effort() -> No
         git_credentials=None,
         egress_policy=None,
         egress_allowlist=None,
-        delivery_sentinel="PR_CREATED",
+        single_pr_per_run=True,
     )
     assert len(guard_and_seal.commands.runs) == 1
     assert "chmod" in guard_and_seal.commands.runs[0]
@@ -625,7 +626,7 @@ async def test_apply_sandbox_policy_guard_step_stderr_is_mirrored_into_the_log(
 ) -> None:
     """XS: the "no gh on PATH / NOT platform-guarded" note exits 0 with only a
     stderr payload, which the step result would otherwise discard — an
-    unguarded sentinel run must be observable in the policy log."""
+    unguarded flagged run must be observable in the policy log."""
 
     class _StderrCommands:
         async def run(self, script: str, *, user: str = "root", timeout: float = 60.0) -> SimpleNamespace:  # noqa: ASYNC109 - matches the e2b SDK signature
@@ -643,7 +644,7 @@ async def test_apply_sandbox_policy_guard_step_stderr_is_mirrored_into_the_log(
             git_credentials=None,
             egress_policy=None,
             egress_allowlist=None,
-            delivery_sentinel="PR_CREATED",
+            single_pr_per_run=True,
             run_scope="run-log",
         )
     assert "gh_guard_install_reported" in caplog.text

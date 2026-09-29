@@ -1108,7 +1108,7 @@ async def _apply_isolation_via_provider(
     egress_allowlist: list[dict[str, Any]] | None,
     allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
-    delivery_sentinel: str | None = None,
+    single_pr_per_run: bool = False,
 ) -> None:
     """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
 
@@ -1129,16 +1129,14 @@ async def _apply_isolation_via_provider(
         the same tier refusal (isolation is enforcement-critical: never
         silently skipped).
 
-    FAR-1264: ``delivery_sentinel`` (optional, default ``None`` — existing
-    callers unaffected) rides the per-invocation ``WorkspaceSpec`` under
-    ``workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`` to the E2B provider's
-    ``apply_isolation``, which threads it into ``apply_sandbox_policy`` for
-    the one-PR-per-run ``gh`` guard. ``IsolationPolicy`` does not model the
-    sentinel (it is the three enforcement controls, ADR 040), and the spec
-    built here is call-scoped attribution — never persisted to the workspace
-    in this flow — so the metadata dict is the carrier.
+    FAR-1273: ``single_pr_per_run`` (optional, default ``False`` — existing
+    callers unaffected) rides the TYPED ``IsolationPolicy`` to the E2B
+    provider's ``apply_isolation``, which threads it into
+    ``apply_sandbox_policy`` for the one-PR-per-run ``gh`` guard. The
+    ``IsolationPolicy`` is the SINGLE carrier: the pre-FAR-1273
+    ``workspace_metadata`` sentinel key is deleted, and ``spec`` here carries
+    workspace attribution only.
     """
-    from modulo.core.pipeline_engine.sandbox_policy import DELIVERY_SENTINEL_SPEC_KEY
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import (
         IsolationPolicy,
@@ -1157,14 +1155,13 @@ async def _apply_isolation_via_provider(
     # WorkspaceSpec requires profile/org UUIDs; a session-factory-less
     # dispatch has no bound profile (unit tests / direct dispatch), so the
     # missing ids fall back to the nil UUID. E2B's apply_isolation does not
-    # read spec (the three controls ride in policy) — slice R4 may tighten
-    # this once dispatch moves through create_workspace(spec).
+    # read spec (the controls and the guard flag ride in policy) — slice R4
+    # may tighten this once dispatch moves through create_workspace(spec).
     spec = WorkspaceSpec(
         environment_profile_id=_runner_binding_env_profile_id() or uuid.UUID(int=0),
         organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
         run_id=_parse_uuid_opt(run_id),
         egress_policy=egress_policy,
-        workspace_metadata=({DELIVERY_SENTINEL_SPEC_KEY: delivery_sentinel} if delivery_sentinel else {}),
     )
     policy = IsolationPolicy(
         read_only=read_only,
@@ -1173,6 +1170,7 @@ async def _apply_isolation_via_provider(
         egress_allowlist=egress_allowlist,
         allowed_hosts=allowed_hosts,
         command_timeout=command_timeout,
+        single_pr_per_run=single_pr_per_run,
     )
     try:
         await provider.apply_isolation(sandbox_id, spec, policy)
@@ -7324,6 +7322,10 @@ class _SandboxNodeConfig:
     # clamp.  Node-explicit settings always win.
     pipeline_stdout_retention_config: dict[str, Any] | None
     delivery_sentinel: str | None
+    # FAR-1273: explicit trigger for the FAR-1264 one-PR-per-run gh guard.
+    # Distinct from delivery_sentinel (FAR-228 idempotency only) — the guard
+    # arms on THIS flag and nothing else.
+    single_pr_per_run: bool
     loop_intercept_config: LoopInterceptConfig | None
     session_factory: Callable[..., Any] | None
     single_sandbox_node: bool
@@ -7672,20 +7674,24 @@ def _should_apply_sandbox_policy(
     git_credentials: str | None,
     egress_policy: str | None,
     egress_allowlist: list[dict[str, Any]] | None,
-    delivery_sentinel: str | None = None,
+    single_pr_per_run: bool = False,
 ) -> bool:
     """True when the FAR-212 sandbox policy step must run before the command.
 
-    FAR-1264: a node with a non-empty ``delivery_sentinel`` runs the step too
-    — that is what scopes the run-scoped one-PR-per-run ``gh`` guard to
-    sentinel-guarded nodes (e.g. Prompt-to-PR) even when ``read_only``,
-    ``git_credentials`` and the egress policy are all default. For such a
-    sentinel-only node the policy step installs ONLY the ``gh`` guard (every
-    enforcement step is skipped by ``apply_sandbox_policy``'s own branches),
-    and the call site treats its failure as best-effort — degrade to the
-    prompt-level guard, never wedge the dispatch.
+    FAR-1273: a node with ``single_pr_per_run=True`` runs the step too — that
+    is what scopes the run-scoped one-PR-per-run ``gh`` guard to flagged nodes
+    (e.g. Prompt-to-PR) even when ``read_only``, ``git_credentials`` and the
+    egress policy are all default. For such a flag-only node the policy step
+    installs ONLY the ``gh`` guard (every enforcement step is skipped by
+    ``apply_sandbox_policy``'s own branches), and the call site treats its
+    failure as best-effort — degrade to the prompt-level guard, never wedge
+    the dispatch.
+
+    A non-empty ``delivery_sentinel`` does NOT arm the step (FAR-1273): the
+    sentinel keeps only its FAR-228 idempotency meaning, so a sentinel-only
+    node gets no policy step at all unless an enforcement control is set.
     """
-    return bool(delivery_sentinel) or _has_enforcement_sandbox_controls(
+    return bool(single_pr_per_run) or _has_enforcement_sandbox_controls(
         read_only=read_only,
         git_credentials=git_credentials,
         egress_policy=egress_policy,
@@ -8016,6 +8022,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     stdout_retention_mode = config.stdout_retention_mode
     stdout_max_bytes = config.stdout_max_bytes
     delivery_sentinel = config.delivery_sentinel
+    single_pr_per_run = config.single_pr_per_run
     loop_intercept_config = config.loop_intercept_config
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
@@ -8956,10 +8963,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             git_credentials=git_credentials,
             egress_policy=_resolved_egress_for_policy,
             egress_allowlist=_resolved_allowlist_for_policy,
-            # FAR-1264: a sentinel-guarded node runs the policy step for the
+            # FAR-1273: a flagged node runs the policy step for the
             # one-PR-per-run gh guard even with every enforcement control
-            # default (Prompt-to-PR's shape).
-            delivery_sentinel=delivery_sentinel,
+            # default (Prompt-to-PR's shape). A delivery sentinel alone does
+            # NOT arm it.
+            single_pr_per_run=single_pr_per_run,
         ):
             # FAR-798: thread the node's validated ``allowed_hosts`` (host ->
             # per-host env-var name) into the sandbox policy so the multi-host
@@ -9001,9 +9009,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     egress_policy=_resolved_egress_for_policy,
                     egress_allowlist=_resolved_allowlist,
                     allowed_hosts=_policy_allowed_hosts,
-                    # FAR-1264: rides the per-invocation WorkspaceSpec to the
-                    # E2B policy call site (IsolationPolicy does not model it).
-                    delivery_sentinel=delivery_sentinel,
+                    # FAR-1273: rides the typed IsolationPolicy (the single
+                    # carrier) to the E2B policy call site.
+                    single_pr_per_run=single_pr_per_run,
                 )
             except asyncio.CancelledError:
                 raise
@@ -10696,6 +10704,12 @@ def _build_sandbox_node_config(
     delivery_sentinel: str | None = node_def.get("delivery_sentinel")
     delivery_sentinel = delivery_sentinel if isinstance(delivery_sentinel, str) and delivery_sentinel else None
 
+    # FAR-1273: the explicit one-PR-per-run guard flag. Strict ``is True`` so a
+    # malformed import value (e.g. the string "true") never arms an
+    # enforcement-adjacent guard — the Pydantic model already validates the
+    # type on the write path; this is the run-time belt-and-braces.
+    single_pr_per_run: bool = node_def.get("single_pr_per_run") is True
+
     # FAR-211: agent-loop interior tool-call interception (ADR 044 amendment).
     # When the node carries a ``loop_intercept`` config, a Modulo-hosted bridge
     # runs INSIDE the sandbox alongside the agent: tool calls are reported to
@@ -10752,6 +10766,7 @@ def _build_sandbox_node_config(
         stdout_max_bytes=stdout_max_bytes,
         pipeline_stdout_retention_config=pipeline_stdout_retention_config,
         delivery_sentinel=delivery_sentinel,
+        single_pr_per_run=single_pr_per_run,
         loop_intercept_config=loop_intercept_config,
         session_factory=session_factory,
         single_sandbox_node=single_sandbox_node,
