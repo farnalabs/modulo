@@ -7640,6 +7640,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/evidence-retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Evidence Retention
+         * @description Read the current evidence retention policy for the caller's org.
+         */
+        get: operations["get_evidence_retention_api_v1_admin_evidence_retention_get"];
+        /**
+         * Update Evidence Retention
+         * @description Update the evidence retention policy for the caller's org.
+         */
+        put: operations["update_evidence_retention_api_v1_admin_evidence_retention_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/evidence-retention/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purge Evidence Retention
+         * @description Trigger a manual evidence purge for the caller's org (or a target org for system admins).
+         *
+         *     Returns the count of deleted rows.
+         */
+        post: operations["purge_evidence_retention_api_v1_admin_evidence_retention_purge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/run-retention/candidates": {
         parameters: {
             query?: never;
@@ -12565,6 +12611,34 @@ export interface components {
             /** Updated At */
             updated_at?: unknown;
         };
+        /**
+         * EvidenceRetentionPolicyResponse
+         * @description Public admin response for the evidence retention policy.
+         */
+        EvidenceRetentionPolicyResponse: {
+            /**
+             * Max Age Days
+             * @default 90
+             */
+            max_age_days: number;
+            /** Max Rows */
+            max_rows?: number | null;
+            /**
+             * Batch Size
+             * @default 500
+             */
+            batch_size: number;
+            /**
+             * Lock Timeout Seconds
+             * @default 30
+             */
+            lock_timeout_seconds: number;
+            /**
+             * Current Row Count
+             * @default 0
+             */
+            current_row_count: number;
+        };
         /** ExportPreviewResponse */
         ExportPreviewResponse: {
             /** Sample Span */
@@ -15926,6 +16000,10 @@ export interface components {
             pre_version_raw?: {
                 [key: string]: unknown;
             } | null;
+            /** Warnings */
+            warnings?: {
+                [key: string]: string;
+            }[];
         };
         /**
          * PolicyGateUpdateRequest
@@ -16472,15 +16550,6 @@ export interface components {
              * @default false
              */
             confirm: boolean;
-        };
-        /** PurgeResponse */
-        PurgeResponse: {
-            /** Purged Runs */
-            purged_runs: number;
-            /** Purged Checkpoints */
-            purged_checkpoints: number;
-            /** Freed Estimated Bytes */
-            freed_estimated_bytes: number;
         };
         /** PurgeRunsRequest */
         PurgeRunsRequest: {
@@ -18762,6 +18831,29 @@ export interface components {
             /** Visibility */
             visibility?: string | null;
         };
+        /**
+         * UpdateEvidenceRetentionPolicyRequest
+         * @description Request body for updating the evidence retention policy.
+         */
+        UpdateEvidenceRetentionPolicyRequest: {
+            /**
+             * Max Age Days
+             * @default 90
+             */
+            max_age_days: number;
+            /** Max Rows */
+            max_rows?: number | null;
+            /**
+             * Batch Size
+             * @default 500
+             */
+            batch_size: number;
+            /**
+             * Lock Timeout Seconds
+             * @default 30
+             */
+            lock_timeout_seconds: number;
+        };
         /** UpdateHitlReviewWindowRequest */
         UpdateHitlReviewWindowRequest: {
             /** Hitl Review Window Seconds */
@@ -19363,6 +19455,29 @@ export interface components {
             pipeline_name: string;
             /** Node Id */
             node_id: string;
+        };
+        /**
+         * PurgeResponse
+         * @description Response from a manual evidence purge.
+         */
+        modulo__api__routes__admin_evidence_retention__PurgeResponse: {
+            /** Rows Deleted */
+            rows_deleted: number;
+            /** Batches */
+            batches: number;
+            /** Max Age Days */
+            max_age_days: number;
+            /** Max Rows */
+            max_rows?: number | null;
+        };
+        /** PurgeResponse */
+        modulo__api__routes__admin_run_retention__PurgeResponse: {
+            /** Purged Runs */
+            purged_runs: number;
+            /** Purged Checkpoints */
+            purged_checkpoints: number;
+            /** Freed Estimated Bytes */
+            freed_estimated_bytes: number;
         };
         /** MeResponse */
         modulo__api__routes__auth__MeResponse: {
@@ -37194,6 +37309,106 @@ export interface operations {
             };
         };
     };
+    get_evidence_retention_api_v1_admin_evidence_retention_get: {
+        parameters: {
+            query?: {
+                organisation_id?: unknown | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRetentionPolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_evidence_retention_api_v1_admin_evidence_retention_put: {
+        parameters: {
+            query?: {
+                organisation_id?: unknown | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEvidenceRetentionPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceRetentionPolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    purge_evidence_retention_api_v1_admin_evidence_retention_purge_post: {
+        parameters: {
+            query?: {
+                organisation_id?: unknown | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["modulo__api__routes__admin_evidence_retention__PurgeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     candidates_api_v1_admin_run_retention_candidates_get: {
         parameters: {
             query?: {
@@ -37288,7 +37503,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PurgeResponse"];
+                    "application/json": components["schemas"]["modulo__api__routes__admin_run_retention__PurgeResponse"];
                 };
             };
             /** @description Validation Error */
