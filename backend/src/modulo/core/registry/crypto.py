@@ -72,10 +72,7 @@ def sign_primitive(primitive_data: Mapping[str, object], private_key_hex: str) -
         private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
     except ValueError:
         raise ValueError("invalid private key hex") from None
-    try:
-        canonical = _canonical_json(primitive_data)
-    except ValueError as exc:
-        raise ValueError(str(exc)) from None
+    canonical = _canonical_json(primitive_data)
     sig = private_key.sign(canonical)
     return sig.hex()
 
