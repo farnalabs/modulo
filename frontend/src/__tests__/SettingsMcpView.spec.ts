@@ -443,8 +443,53 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('Are you sure you want to revoke')
   })
 
+  it('revoke sends DELETE to the key path (never PUT) and the row flips to Revoked after the refresh', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.findAll('[data-testid="settings-mcp-revoke-key"]').length).toBe(1)
+    await wrapper.find('[data-testid="settings-mcp-revoke-key"]').trigger('click')
+    await nextTick()
+
+    // The post-revoke refetch returns the row with `is_active` flipped off.
+    mockApiResponses(
+      mockMcpConfig,
+      mockApiKeys.map((k) => (k.id === 'key-1' ? { ...k, is_active: false } : k)),
+      mockOAuthClients,
+    )
+
+    const vm = wrapper.vm as any
+    await vm.revokeKey()
+    await flushPromises()
+
+    // FAR-1291: revocation is DELETE /api/v1/api-keys/{key_id}. The old code
+    // PUT `{ is_active: false }`, which `ApiKeyUpdate` silently dropped - so
+    // asserting the method AND the refreshed row both fail without the fix.
+    expect(putMock).not.toHaveBeenCalled()
+    expect(deleteMock).toHaveBeenCalledWith('/api/v1/api-keys/{key_id}', {
+      params: { path: { key_id: 'key-1' } },
+    })
+    expect(vm.revokeKeyDialogOpen).toBe(false)
+    expect(vm.revokeKeyError).toBeNull()
+
+    // The API-keys table is the FIRST table on the page (the OAuth clients
+    // card renders a second one).
+    const rows = wrapper.findAll('table')[0].findAll('tbody tr')
+    expect(rows.length).toBe(2)
+    expect(rows[0].text()).toContain('Claude Key')
+    expect(rows[0].text()).toContain('Revoked')
+    // The Revoke button is v-if="key.is_active", so it disappears once the
+    // refreshed list reports the key inactive.
+    expect(wrapper.findAll('[data-testid="settings-mcp-revoke-key"]').length).toBe(0)
+  })
+
   it('revoke API error shows error in dialog', async () => {
-    putMock.mockResolvedValueOnce({ data: undefined, error: { status: 403, detail: 'Cannot revoke own key' } })
+    deleteMock.mockResolvedValue({
+      data: undefined,
+      error: { status: 403, detail: 'Cannot revoke own key' },
+      response: { status: 403 },
+    })
     const wrapper = mountView()
     await nextTick()
     await nextTick()
@@ -455,11 +500,17 @@ describe('SettingsMcpView', () => {
     const vm = wrapper.vm as any
     await vm.revokeKey()
     await flushPromises()
-    expect(putMock).toHaveBeenCalled()
+    expect(deleteMock).toHaveBeenCalledWith('/api/v1/api-keys/{key_id}', {
+      params: { path: { key_id: 'key-1' } },
+    })
+    expect(putMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Cannot revoke own key')
+    // The dialog stays open so the user can see the failure.
+    expect(vm.revokeKeyDialogOpen).toBe(true)
   })
 
   it('revoke throw error shows error in dialog', async () => {
-    putMock.mockRejectedValueOnce(new Error('Network'))
+    deleteMock.mockRejectedValue(new Error('Network'))
     const wrapper = mountView()
     await nextTick()
     await nextTick()
@@ -469,7 +520,39 @@ describe('SettingsMcpView', () => {
     const vm = wrapper.vm as any
     await vm.revokeKey()
     await flushPromises()
-    expect(putMock).toHaveBeenCalled()
+    expect(deleteMock).toHaveBeenCalled()
+    expect(putMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Network')
+    expect(vm.revokeKeyDialogOpen).toBe(true)
+  })
+
+  it('treats a 404 on revoke as success: the key is already gone, so the dialog closes and the list refreshes', async () => {
+    deleteMock.mockResolvedValue({
+      data: undefined,
+      error: { status: 404, detail: 'API key not found' },
+      response: { status: 404 },
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-revoke-key"]').trigger('click')
+    await nextTick()
+
+    mockApiResponses(
+      mockMcpConfig,
+      mockApiKeys.map((k) => (k.id === 'key-1' ? { ...k, is_active: false } : k)),
+      mockOAuthClients,
+    )
+
+    const vm = wrapper.vm as any
+    await vm.revokeKey()
+    await flushPromises()
+
+    expect(vm.revokeKeyDialogOpen).toBe(false)
+    expect(vm.revokeKeyError).toBeNull()
+    expect(wrapper.text()).not.toContain('API key not found')
+    expect(wrapper.findAll('[data-testid="settings-mcp-revoke-key"]').length).toBe(0)
   })
 
   // ─── Empty API keys ──────────────────────────────────────────────────
