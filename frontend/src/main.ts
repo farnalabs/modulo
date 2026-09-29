@@ -96,4 +96,8 @@ async function main() {
   app.mount('#app')
 }
 
-main()
+main().catch(error => {
+  // A bootstrap failure (e.g. router.isReady() rejecting) must be visible —
+  // never left as an unhandled rejection.
+  console.error('Fatal: application bootstrap failed', error)
+})

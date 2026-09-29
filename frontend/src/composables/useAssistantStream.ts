@@ -312,7 +312,7 @@ export function useAssistantStream() {
 
   if (getCurrentInstance()) {
     onUnmounted(() => {
-      disconnectStream()
+      void disconnectStream()
     })
   }
 
