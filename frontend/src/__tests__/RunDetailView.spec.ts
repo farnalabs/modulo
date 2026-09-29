@@ -1605,6 +1605,70 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('renders distinct text for a REJECTED explicit zero (zero_report_unproven), not "not reported"', async () => {
+    // FAR-1305: the agent DID report $0.00 — the trust boundary refused it as
+    // unproven. Claiming "not reported" would be a false statement.
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          formula_applied: 'reported',
+          rate_usd: null,
+          basis: { reported: 0, node_count: 0 },
+          missing_self_report: true,
+          missing_self_report_reason: 'zero_report_unproven',
+        },
+      ],
+    })
+
+    // Distinct badge — the muted "not reported" chip must NOT appear.
+    const zeroRejected = wrapper.find('[data-testid="run-detail-zero-rejected"]')
+    expect(zeroRejected.exists()).toBe(true)
+    expect(zeroRejected.text()).toBe('$0 rejected')
+    expect(wrapper.find('[data-testid="run-detail-not-reported"]').exists()).toBe(false)
+
+    // Distinct basis line — must not repeat the "no cost reported" claim.
+    const rows = wrapper.findAll('tbody tr')
+    const targetRow = rows.find((r) => r.text().includes('Model cost'))!
+    expect(targetRow.exists()).toBe(true)
+    const basisCell = targetRow.findAll('td')[3]
+    expect(basisCell.text()).toContain('Agent reported $0.00')
+    expect(basisCell.text()).not.toContain('No model cost reported by the agent')
+
+    // Still a CLEAR non-billing state: dash, never a phantom $0.000000.
+    expect(targetRow.findAll('td')[1].text()).toBe('—')
+    wrapper.unmount()
+  })
+
+  it('keeps the plain "not reported" text when the reason is agent_not_reported', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          missing_self_report: true,
+          missing_self_report_reason: 'agent_not_reported',
+        },
+      ],
+    })
+
+    const chip = wrapper.find('[data-testid="run-detail-not-reported"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toBe('not reported')
+    expect(wrapper.find('[data-testid="run-detail-zero-rejected"]').exists()).toBe(false)
+
+    const targetRow = wrapper.findAll('tbody tr').find((r) => r.text().includes('Model cost'))!
+    expect(targetRow.findAll('td')[3].text()).toContain('No model cost reported by the agent')
+    wrapper.unmount()
+  })
+
   it('does not render the duplicate bottom #warnings section when the run carries warnings', async () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),

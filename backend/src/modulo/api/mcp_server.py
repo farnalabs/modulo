@@ -223,6 +223,11 @@ _MCP_BREAKDOWN_KEYS = frozenset(
         "amount_usd",
         "basis",
         "missing_self_report",
+        # FAR-1305: which of the two missing-self-report states applies —
+        # "agent_not_reported" (no cost key presented) vs
+        # "zero_report_unproven" (an explicit $0.00 was presented and refused).
+        # Sanitised as a string by _sanitize_cost_breakdown_entry like any other.
+        "missing_self_report_reason",
         "error",
         "total_clamped",
     }
@@ -338,7 +343,12 @@ def _format_breakdown_line(entry: dict[str, Any]) -> str:
     if source:
         parts.append(source)
     if entry.get("missing_self_report") is True:
-        parts.append("(not reported)")
+        # FAR-1305: an explicit $0.00 that was REFUSED is not "not reported" —
+        # the agent did report, the trust boundary rejected it as unproven.
+        if entry.get("missing_self_report_reason") == "zero_report_unproven":
+            parts.append("(reported $0.00, rejected as unproven)")
+        else:
+            parts.append("(not reported)")
     if entry.get("error"):
         parts.append(f"({entry['error']})")
     return " ".join(parts)
