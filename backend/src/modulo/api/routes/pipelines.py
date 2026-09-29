@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import (
     BaseModel,
     Field,
+    StrictBool,
     ValidationError,
     ValidationInfo,
     WithJsonSchema,
@@ -1137,7 +1138,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # a SEPARATE flag from ``delivery_sentinel`` (which keeps only its FAR-228
     # idempotency meaning) so a delivery marker never arms an unrelated guard.
     # Only sandbox_agent nodes may set it.
-    single_pr_per_run: bool = Field(
+    # StrictBool: the runtime reads this with ``is True`` (fail-closed), so a
+    # lax-coerced non-bool at the write boundary ("true"/1/"yes" -> True) would
+    # be silently DISARMED at run time. Reject the malformed value at save time
+    # instead — same rationale as the admin kill-switch fields.
+    single_pr_per_run: StrictBool = Field(
         default=False,
         description="Install the run-scoped one-PR-per-run gh guard in the node's sandbox "
         "(a second 'gh pr create' in the same run is refused).",

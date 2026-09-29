@@ -905,6 +905,54 @@ def test_saved_graph_defaults_to_tail():
 
 
 # ---------------------------------------------------------------------------
+# FAR-1273: the RUN-TIME single_pr_per_run gate must stay pinned fail-closed
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_node_raw_with_flag(value: Any) -> dict[str, Any]:
+    """A stored-graph-shaped sandbox node_def carrying a RAW flag value.
+
+    Built through the real API model first (so every other field is valid),
+    then the flag is overwritten with the raw value a hand-edited or imported
+    graph could carry. The config builder — not the API model — is the layer
+    under test: the API now rejects non-bools, but a raw-imported/stored graph
+    still reaches the runtime directly.
+    """
+    raw = PipelineGraphNode(**_sandbox_node_kwargs()).model_dump(mode="json")
+    raw["single_pr_per_run"] = value
+    return raw
+
+
+def test_single_pr_per_run_runtime_gate_fails_closed_on_non_bool():
+    """FAR-1273: a non-bool reaching the config builder yields False (the
+    guard never arms on malformed input).
+
+    This PINS the run-time ``is True`` belt-and-braces: relaxing it to
+    ``bool(...)`` would arm the enforcement-adjacent guard on ``"true"`` /
+    ``1`` / ``"yes"`` and these assertions would fail. Missing key and the
+    genuine ``True`` are the control pair (absent -> False, True -> True).
+    """
+    for bad in ("true", 1, "yes"):
+        config = nr._build_sandbox_node_config(
+            _sandbox_node_raw_with_flag(bad),
+            session_factory=None,
+            single_sandbox_node=True,
+        )
+        assert config.single_pr_per_run is False
+
+    raw = PipelineGraphNode(**_sandbox_node_kwargs()).model_dump(mode="json")
+    assert nr._build_sandbox_node_config(raw, session_factory=None, single_sandbox_node=True).single_pr_per_run is False
+    assert (
+        nr._build_sandbox_node_config(
+            _sandbox_node_raw_with_flag(True),
+            session_factory=None,
+            single_sandbox_node=True,
+        ).single_pr_per_run
+        is True
+    )
+
+
+# ---------------------------------------------------------------------------
 # _persist_full_stdout_artifact (FAR-811)
 # ---------------------------------------------------------------------------
 
