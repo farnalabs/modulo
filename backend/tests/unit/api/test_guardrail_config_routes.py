@@ -327,7 +327,7 @@ def test_import_is_idempotent_on_reimport(admin_client: TestClient, mock_session
     assert body["imported"] is True
     assert body["status"] == "clean"
     # Re-importing the applied config is a clean no-op — empty diff.
-    assert body["diff"] == []
+    assert not body["diff"]
 
 
 def test_import_invalid_yaml_returns_422(admin_client: TestClient) -> None:

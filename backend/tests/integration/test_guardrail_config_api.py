@@ -900,7 +900,8 @@ async def test_import_applies_config_directly(
         )
     ).json()
     assert drift["status"] == "clean"
-    assert drift["current_hash"] == drift["applied_hash"] == body["hash"]
+    assert drift["current_hash"] == drift["applied_hash"]
+    assert drift["applied_hash"] == body["hash"]
 
     get_body = (
         await integration_client.get(
@@ -972,7 +973,7 @@ async def test_import_is_idempotent_on_reimport(
     second = await _import_config(integration_client, org_a, admin_a, _CONFIG_YAML)
 
     assert second["hash"] == first["hash"]
-    assert second["diff"] == []
+    assert not second["diff"]
     assert second["status"] == "clean"
     assert await _count_guardrail_rows(db_engine, org_a) == 2
     drift = (
