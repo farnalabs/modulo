@@ -355,6 +355,59 @@ async def _create_or_replace_gate(
     return await _with_gate_advisory_lock(eval_id, session, _do_insert)
 
 
+async def _load_eval_or_404(
+    session: AsyncSession,
+    eval_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> Eval:
+    """Load an eval scoped to the principal's org, or raise 404.
+
+    Shared by every policy-gate handler so the org-scoped lookup and its
+    404 mapping are defined once (also keeps SonarCloud's copy-paste gate
+    quiet: four identical inline blocks previously counted as new-code
+    duplication).
+    """
+    result = await session.execute(
+        select(Eval).where(
+            Eval.id == eval_id,
+            Eval.organisation_id == principal.organisation_id,
+        )
+    )
+    eval_row = result.scalar_one_or_none()
+    if eval_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
+        )
+    return eval_row
+
+
+async def _load_live_gate_or_404(
+    session: AsyncSession,
+    eval_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> PolicyGate:
+    """Load the live policy gate for an eval, or raise 404.
+
+    Shared by the update / delete / read handlers (see ``_load_eval_or_404``
+    for the duplication rationale).
+    """
+    result = await session.execute(
+        select(PolicyGate).where(
+            PolicyGate.eval_id == eval_id,
+            PolicyGate.organisation_id == principal.organisation_id,
+            PolicyGate.deleted_at.is_(None),
+        )
+    )
+    gate = result.scalar_one_or_none()
+    if gate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_POLICY_GATE_NOT_FOUND,
+        )
+    return gate
+
+
 # ---------------------------------------------------------------------------
 # Policy Gate endpoints (FAR-1106, chunk 6)
 # ---------------------------------------------------------------------------
@@ -405,18 +458,7 @@ async def create_policy_gate(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             # Load the eval to verify it exists and belongs to this org
-            result = await session.execute(
-                select(Eval).where(
-                    Eval.id == eval_id,
-                    Eval.organisation_id == principal.organisation_id,
-                )
-            )
-            eval_row = result.scalar_one_or_none()
-            if eval_row is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
-                )
+            eval_row = await _load_eval_or_404(session, eval_id, principal)
 
             # Validate binding (cross-tenancy, guardrail, suite-scoped, node_id mismatch)
             pg_fields = {
@@ -562,34 +604,9 @@ async def update_policy_gate(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            # Load the eval to verify it exists
-            eval_result = await session.execute(
-                select(Eval).where(
-                    Eval.id == eval_id,
-                    Eval.organisation_id == principal.organisation_id,
-                )
-            )
-            eval_row = eval_result.scalar_one_or_none()
-            if eval_row is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
-                )
-
-            # Load the existing live gate
-            gate_result = await session.execute(
-                select(PolicyGate).where(
-                    PolicyGate.eval_id == eval_id,
-                    PolicyGate.organisation_id == principal.organisation_id,
-                    PolicyGate.deleted_at.is_(None),
-                )
-            )
-            gate = gate_result.scalar_one_or_none()
-            if gate is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_POLICY_GATE_NOT_FOUND,
-                )
+            # Load the eval and the existing live gate (404 when either is missing)
+            eval_row = await _load_eval_or_404(session, eval_id, principal)
+            gate = await _load_live_gate_or_404(session, eval_id, principal)
 
             # Validate binding (cross-tenancy, guardrail, suite-scoped, node_id mismatch)
             pg_fields = {
@@ -718,34 +735,9 @@ async def delete_policy_gate(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            # Load the eval to verify it exists
-            eval_result = await session.execute(
-                select(Eval).where(
-                    Eval.id == eval_id,
-                    Eval.organisation_id == principal.organisation_id,
-                )
-            )
-            eval_row = eval_result.scalar_one_or_none()
-            if eval_row is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
-                )
-
-            # Load the existing live gate
-            gate_result = await session.execute(
-                select(PolicyGate).where(
-                    PolicyGate.eval_id == eval_id,
-                    PolicyGate.organisation_id == principal.organisation_id,
-                    PolicyGate.deleted_at.is_(None),
-                )
-            )
-            gate = gate_result.scalar_one_or_none()
-            if gate is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_POLICY_GATE_NOT_FOUND,
-                )
+            # Load the eval and the existing live gate (404 when either is missing)
+            await _load_eval_or_404(session, eval_id, principal)
+            gate = await _load_live_gate_or_404(session, eval_id, principal)
 
             gate_id = gate.id
             gate_action = gate.action
@@ -831,34 +823,9 @@ async def get_policy_gate(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            # Load the eval to verify it exists
-            eval_result = await session.execute(
-                select(Eval).where(
-                    Eval.id == eval_id,
-                    Eval.organisation_id == principal.organisation_id,
-                )
-            )
-            eval_row = eval_result.scalar_one_or_none()
-            if eval_row is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_EVAL_DEFINITION_NOT_FOUND,
-                )
-
-            # Load the live gate
-            gate_result = await session.execute(
-                select(PolicyGate).where(
-                    PolicyGate.eval_id == eval_id,
-                    PolicyGate.organisation_id == principal.organisation_id,
-                    PolicyGate.deleted_at.is_(None),
-                )
-            )
-            gate = gate_result.scalar_one_or_none()
-            if gate is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_POLICY_GATE_NOT_FOUND,
-                )
+            # Load the eval and the live gate (404 when either is missing)
+            await _load_eval_or_404(session, eval_id, principal)
+            gate = await _load_live_gate_or_404(session, eval_id, principal)
     except HTTPException:
         raise
     except ProgrammingError:
