@@ -17,9 +17,11 @@ Covers two layers:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -28,6 +30,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.db.crud.run import (
     NOTIFICATION_CATEGORY_DUPLICATE_PR,
+    _enforce_one_pr_per_run,
+    _record_duplicate_pr_notification,
     collect_delivery_pr_urls,
     find_duplicate_pr_urls,
     update_run_status,
@@ -191,6 +195,22 @@ class TestDuplicatePrDetector:
             deep = {"nested": deep}
         urls = collect_delivery_pr_urls(deep, None, None)
         assert not urls
+
+    def test_list_and_tuple_containers_are_walked(self) -> None:
+        """Node returns arrive as list envelopes, not only dicts: a PR URL inside
+        a list or tuple is collected just like one in a mapping."""
+        outputs = {"deliver": [{"pr_url": _PR_1}]}
+        telemetry = {"deliver": ({"agent_stdout": f"{_PR_2}\n"},)}
+        urls = collect_delivery_pr_urls(outputs, telemetry, None)
+        assert urls == [_PR_1, _PR_2]
+
+    def test_self_referential_list_terminates(self) -> None:
+        """A cyclic LIST (not just a dict) terminates via the seen-id set rather
+        than recursing forever."""
+        cyclic: list[Any] = [f"{_PR_1}\n"]
+        cyclic.append(cyclic)
+        urls = collect_delivery_pr_urls(cyclic, None, None)
+        assert urls == [_PR_1]
 
 
 # ---------------------------------------------------------------------------
@@ -414,3 +434,32 @@ class TestTerminalWriteEnforcement:
         assert updated.status == "complete"
         rows = await _notifications_for(engine, run_id)
         assert not rows
+
+    async def test_missing_org_id_degrades_to_a_logged_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A run with no ``organisation_id`` cannot address an admin-scoped
+        alert: the breach is logged and the helper returns without touching the
+        session."""
+        run = SimpleNamespace(id=uuid.uuid4(), run_number=7)
+        with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+            await _record_duplicate_pr_notification(cast(AsyncSession, None), cast(Any, run), [_PR_1, _PR_2])
+
+        assert "duplicate_pr_missing_org" in caplog.text
+
+    async def test_cancellation_is_propagated_never_swallowed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A cancelled blob read must propagate: the best-effort hook re-raises
+        ``CancelledError`` instead of logging it as a miss."""
+        from unittest.mock import AsyncMock
+
+        run = SimpleNamespace(id=uuid.uuid4(), organisation_id=_ORG)
+        monkeypatch.setattr(
+            "modulo.db.crud.run.read_run_node_outputs_raw",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await _enforce_one_pr_per_run(cast(AsyncSession, None), cast(Any, run))
