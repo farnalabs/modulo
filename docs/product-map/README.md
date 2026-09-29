@@ -460,7 +460,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `steps/test_connector_crud.py`, driving the real `/api/v1/connectors`
 > create / get / list / PATCH / delete routes with only the DB CRUD + RLS
 > seams patched (the TestClient + mock-org-session pattern of the
-> `test_connector_endpoint.py` unit suite): 9 scenarios — 201 create with
+> `test_connectors_endpoint.py` unit suite): 9 scenarios — 201 create with
 > credentials Fernet-encrypted at rest and never echoed, 422 malformed REST
 > credentials / invalid REST `on_unknown` config at the boundary, 200
 > individual + paginated retrieval (redacted), PATCH re-encrypting fresh

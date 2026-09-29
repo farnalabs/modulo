@@ -1,11 +1,25 @@
 # Modulo API Client Examples
 
-Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Modulo API operations.
+Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Modulo API operations, except the login refresh/logout flow: `auth-login/` and the refresh/logout steps of `full-workflow.py` predate the cookie-based auth contract and do not run against a current server (see [Known issues](#known-issues)).
 
 ## Prerequisites
 
 - A running Modulo instance (default: `http://localhost:8000`)
 - An active user account (`MODULO_EMAIL` / `MODULO_PASSWORD`)
+- Python 3 with `httpx` for the Python examples, Node.js for the JavaScript
+  examples, and `bash` plus `jq` for the curl examples (the shell scripts use
+  `jq` to parse responses)
+
+## Authentication model
+
+`POST /api/v1/auth/login` returns the access token in the JSON body
+(`access_token`) and sets the refresh token as an httpOnly `modulo_refresh`
+cookie. The refresh token never appears in a response body (FAR-1197).
+`POST /api/v1/auth/refresh` and `POST /api/v1/auth/logout` read that cookie,
+not a request body, and are additionally guarded by a double-submit CSRF
+check: the `XSRF-TOKEN` cookie must be echoed in an `X-CSRF-Token` header,
+or the request fails with 403 (`modulo_csrf_enabled`, default on). Every
+authenticated call carries `Authorization: Bearer <access_token>`.
 
 ## Quick Start
 
@@ -105,6 +119,7 @@ bash library/curl.sh
 | POST | `/api/v1/auth/logout` | `auth-login/` |
 | GET | `/api/v1/auth/me` | `auth-login/` |
 | POST | `/api/v1/auth/ws-token` | `runs/`, `full-workflow.py` |
+| WS | `/api/v1/runs/{id}/ws?token=<ws-token>` | `runs/`, `full-workflow.py` |
 | GET | `/api/v1/pipelines` | `pipelines/` |
 | POST | `/api/v1/pipelines` | `pipelines/`, `full-workflow.py` |
 | GET | `/api/v1/pipelines/{id}` | `pipelines/` |
@@ -116,9 +131,9 @@ bash library/curl.sh
 | POST | `/api/v1/runs/{id}/cancel` | `runs/`, `full-workflow.py` |
 | GET | `/api/v1/runs/{id}/io` | `runs/`, `full-workflow.py` |
 | GET | `/api/v1/runs/{id}/hitl/pending` | `hitl/`, `full-workflow.py` |
-| POST | `/api/v1/runs/{id}/hitl/{gate}/claim` | `hitl/`, `full-workflow.py` |
-| POST | `/api/v1/runs/{id}/hitl/{gate}/approve` | `hitl/`, `full-workflow.py` |
-| POST | `/api/v1/runs/{id}/hitl/{gate}/reject` | `hitl/` |
+| POST | `/api/v1/runs/{id}/hitl/{review_id}/claim` | `hitl/`, `full-workflow.py` |
+| POST | `/api/v1/runs/{id}/hitl/{review_id}/approve` | `hitl/`, `full-workflow.py` |
+| POST | `/api/v1/runs/{id}/hitl/{review_id}/reject` | `hitl/` |
 | GET | `/api/v1/hitl/pending` | `hitl/` |
 | GET | `/api/v1/libraries` | `library/` |
 | GET | `/api/v1/libraries/{id}` | `library/` |
@@ -132,3 +147,16 @@ bash library/curl.sh
 | GET | `/api/v1/connectors` | `full-workflow.py` |
 | POST | `/api/v1/connectors` | `full-workflow.py` |
 | GET | `/api/v1/model-backends` | `full-workflow.py` |
+
+## Known issues
+
+- `auth-login/python.py`, `auth-login/js.js`, `auth-login/curl.sh` and the
+  login/refresh/logout steps of `full-workflow.py` still implement the
+  pre-FAR-1197 contract: they read `refresh_token` from the login response
+  body (the field no longer exists, so the Python example raises `KeyError`
+  and the JavaScript example throws on `.slice`) and POST the refresh token
+  back in the request body (ignored by the server). Until they are ported to
+  the cookie + CSRF flow described under [Authentication
+  model](#authentication-model), these examples fail at the login step. Every
+  other example only uses the access token from the login response and runs
+  as documented.

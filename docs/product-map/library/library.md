@@ -98,7 +98,8 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 - [x] Workflow export (`export.feature`) serialises a pipeline into a `.modulo.zip` /
       signed YAML bundle with org-private fields stripped (owner_team_id, visibility,
       credentials/ciphertexts, env secrets) and preserves the configuration surface
-      (`workflow_import_export.py`: `export_pipeline_bundle` / `export_pipeline_bundle_v2`)
+      (`core/workflow_import_export/__init__.py`: `export_pipeline_bundle` /
+      `export_pipeline_bundle_v2`)
 - [x] Workflow import (`import.feature`) is covered by executing BDD driving the real
       two-phase REST surface — `POST /api/v1/libraries/import/analyse` resolves every
       bundle reference (connector types to the org's local instances, schemas by
