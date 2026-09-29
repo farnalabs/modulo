@@ -109,36 +109,43 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       the selected-mode egress allowlist, and the read-only seal — with
       flag-gated parity to the legacy `sandbox_policy.apply_sandbox_policy`
       (enforcement-critical-raise vs egress-best-effort split) and a typed
-      `ProviderCapabilityUnsupportedError` refusal on non-overriding providers
-- [x] Run-scoped one-PR-per-run `gh` guard (FAR-1264): when the engine threads
-      a node's non-empty `delivery_sentinel` through
-      `WorkspaceSpec.workspace_metadata`, `apply_sandbox_policy` installs a
-      `gh` shim that permits exactly ONE `gh pr create` per sandbox run for the
-      `gh` binaries it managed to guard (the platform-side hard guard behind the
-      prompt-level one-PR-per-run rule, FAR-1254); every other `gh` invocation
-      passes through untouched, and a create that FAILS (non-zero exit) releases
-      its claim so a transient failure does not burn the run's only attempt.
-      **Coverage is bounded, not absolute:** the guard intercepts only
-      `gh pr create` resolved through the sandbox PATH at install time (and
-      absolute paths to those same binaries); `gh api` PR creation, a `gh` copy
-      outside the PATH, shell aliases/functions, and a `gh` installed into the
-      PATH AFTER the install are NOT intercepted, and a missing `gh` or a failed
-      install degrades to the prompt-level guard (both are logged). The install
-      is BEST-EFFORT — a failure is logged and the run degrades to
-      the prompt-level guard, never wedges the dispatch (unlike the
-      enforcement-critical steps); the gate
-      `_should_apply_sandbox_policy(..., delivery_sentinel=...)` runs the
-      policy step for sentinel-only nodes, and a sentinel-only invocation
-      failure is swallowed at the T7 call site while enforcement-control
-      nodes keep the fail-closed tier refusal. Unit-covered in
+      `ProviderCapabilityUnsupportedError` refusal on non-overriding providers;
+      the carrier also carries `single_pr_per_run` (FAR-1273), the single
+      carrier for the one-PR-per-run guard trigger
+- [x] Run-scoped one-PR-per-run `gh` guard (FAR-1264; trigger made explicit by
+      FAR-1273): when the node carries `single_pr_per_run: true`, the engine
+      threads the flag on the typed `IsolationPolicy` (the single carrier) to
+      `apply_sandbox_policy`, which installs a `gh` shim that permits exactly
+      ONE `gh pr create` per sandbox run for the `gh` binaries it managed to
+      guard (the platform-side hard guard behind the prompt-level one-PR-per-run
+      rule, FAR-1254); every other `gh` invocation passes through untouched, and
+      a create that FAILS (non-zero exit) releases its claim so a transient
+      failure does not burn the run's only attempt. **Coverage is bounded, not
+      absolute:** the guard intercepts only `gh pr create` resolved through the
+      sandbox PATH at install time (and absolute paths to those same binaries);
+      `gh api` PR creation, a `gh` copy outside the PATH, shell aliases/functions,
+      and a `gh` installed into the PATH AFTER the install are NOT intercepted,
+      and a missing `gh` or a failed install degrades to the prompt-level guard
+      (both are logged). The install is BEST-EFFORT — a failure is logged and the
+      run degrades to the prompt-level guard, never wedges the dispatch (unlike
+      the enforcement-critical steps); the gate
+      `_should_apply_sandbox_policy(..., single_pr_per_run=...)` runs the
+      policy step for flag-only nodes, and a flag-only invocation failure is
+      swallowed at the T7 call site while enforcement-control nodes keep the
+      fail-closed tier refusal. The pre-FAR-1273 trigger (any non-empty
+      `delivery_sentinel` threading through
+      `WorkspaceSpec.workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`) is gone:
+      `delivery_sentinel` keeps only its FAR-228 idempotency meaning and a
+      sentinel-only node now gets NO guard, and the metadata constant itself was
+      deleted. Unit-covered in
       `tests/unit/pipeline_engine/test_sandbox_policy.py` (shim executed
       end-to-end under `sh`: first create passes, a failed first create
       releases its claim for a retry, second refused; install idempotency
       re-writes a stale run scope) and
       `tests/unit/pipeline_engine/test_e2b_isolation_provider.py` (gating
-      predicate + call-site routing/best-effort), with the e2b call site's own
-      spec-metadata read pinned in
-      `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
+      predicate, the sentinel-only-gets-no-guard regression, and call-site
+      routing/best-effort), with the e2b call site's own policy-flag read
+      pinned in `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
 - [x] One-PR-per-run delivery contract enforced OUTSIDE the sandbox (FAR-1274):
       every terminal write that funnels through `db.crud.run` (the
       `update_run_status` ORM + fenced writers and `request_cancellation`) runs

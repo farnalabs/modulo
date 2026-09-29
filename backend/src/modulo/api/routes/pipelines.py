@@ -1131,6 +1131,17 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # marks the run's delivery as done (raw-output marker ``delivery_done``),
     # and transient retries of that node are suppressed by the idempotency gate.
     delivery_sentinel: str | None = None
+    # FAR-1273: explicit trigger for the FAR-1264 one-PR-per-run ``gh`` guard.
+    # Default false; when true the sandbox policy step installs the run-scoped
+    # shim that allows exactly ONE ``gh pr create`` per sandbox run. Deliberately
+    # a SEPARATE flag from ``delivery_sentinel`` (which keeps only its FAR-228
+    # idempotency meaning) so a delivery marker never arms an unrelated guard.
+    # Only sandbox_agent nodes may set it.
+    single_pr_per_run: bool = Field(
+        default=False,
+        description="Install the run-scoped one-PR-per-run gh guard in the node's sandbox "
+        "(a second 'gh pr create' in the same run is refused).",
+    )
     env_vars: dict[str, str] | None = None
     context_files: dict[str, str] | None = None
     timeout_seconds: int | None = Field(
@@ -1314,6 +1325,9 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         agents, and a declared-but-unenforced field on another node type would
         be a silent no-op. agent_commands / commands_concatenation_string get
         the same treatment: the runtime only reads them for sandbox nodes.
+        FAR-1273 adds ``single_pr_per_run`` to the same set: the one-PR-per-run
+        ``gh`` guard is installed only inside a sandbox, so the flag on any
+        other node type would declare a guard nothing installs.
         """
         if self.node_type == "sandbox_agent":
             return
@@ -1321,6 +1335,8 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Only sandbox_agent nodes can set read_only=True")
         if self.git_credentials is not None:
             raise ValueError("Only sandbox_agent nodes can set git_credentials")
+        if self.single_pr_per_run:
+            raise ValueError("Only sandbox_agent nodes can set single_pr_per_run=True")
         if self.agent_commands is not None:
             raise ValueError("Only sandbox_agent nodes can set agent_commands")
         if self.commands_concatenation_string != " && ":

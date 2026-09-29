@@ -291,6 +291,11 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     git_credentials: Literal["scoped", "unscoped", "none"] | None = None
     wallclock_budget_seconds: int | None = None
     delivery_sentinel: str | None = None
+    # FAR-1273: explicit trigger for the FAR-1264 one-PR-per-run gh guard
+    # (API PipelineGraphNode twin). Default false; value rules (sandbox-only)
+    # are enforced by the REAL API node model when the executor normalises the
+    # resolved payload through it.
+    single_pr_per_run: bool = False
     env_vars: dict[str, str] | None = None
     context_files: dict[str, str] | None = None
     timeout_seconds: int | None = Field(default=None, ge=60, le=604800)

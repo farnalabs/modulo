@@ -3064,6 +3064,18 @@ elements:
       - testid: pipeline-editor-heartbeat-value
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run-value
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-single-pr-per-run-toggle
+        type: input
+        dynamic_testid: false
       - testid: pipeline-editor-watch-log-path-label
         type: element
         dynamic_testid: false
@@ -5327,6 +5339,7 @@ features:
             - "[x] release_channel support allows triggers to bind to stable/canary channels"
             - "[x] diff_snapshots surfaces port-signature deltas with impact oracle"
             - "[x] Run recovery and retry are shipped across the run surface: checkpoint/resume replays a failed run from its last checkpoint (pipelines/checkpoint_resume.feature), a terminal run re-runs via POST /api/v1/runs/{run_id}/rerun, and a failed node recovers via POST /api/v1/runs/{run_id}/nodes/{node_id}/recover (run-level details under feat-runs, docs/product-map/pipelines/pipelines.md)"
+            - "[x] The node editor exposes the explicit single_pr_per_run flag (FAR-1273) on sandbox_agent nodes: a labelled, help-texted toggle in the node panel whose value is saved with the graph (default false) and arms the run-scoped one-PR-per-run gh guard at dispatch; the field is sandbox-only (rejected by the API node model and the graph validator on any other node type), it rides the typed IsolationPolicy to the provider, and a delivery_sentinel alone never arms the guard"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
     feat-plugins:
