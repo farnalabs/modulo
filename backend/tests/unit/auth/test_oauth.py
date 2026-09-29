@@ -806,6 +806,12 @@ class TestValidateRedirectUri:
         assert not is_valid_redirect_uri("https://app.example.com:notaport/cb")
         assert not is_valid_redirect_uri("https://app.example.com:99999/cb")
 
+    def test_zero_port_rejected(self) -> None:
+        """:0 is a syntactically valid port but not a usable endpoint."""
+        with pytest.raises(InvalidRedirectUriError, match="invalid port"):
+            validate_redirect_uri("https://app.example.com:0/cb")
+        assert not is_valid_redirect_uri("https://app.example.com:0/cb")
+
     def test_malformed_authority_rejected(self) -> None:
         with pytest.raises(InvalidRedirectUriError, match="malformed"):
             validate_redirect_uri("https://[::1")
@@ -908,6 +914,12 @@ class TestRedirectUriAllowed:
         assert not wrapper.check_redirect_uri("https://a.example/cb.evil.com")
         legacy = AuthlibClientWrapper(_make_oauth_client(redirect_uris="javascript:alert(1)"))
         assert not legacy.check_redirect_uri("javascript:alert(1)")
+
+    def test_get_default_redirect_uri_reads_the_stored_list(self) -> None:
+        wrapper = AuthlibClientWrapper(_make_oauth_client(redirect_uris="https://a.example/cb https://b.example/cb"))
+        assert wrapper.get_default_redirect_uri() == "https://a.example/cb"
+        empty = AuthlibClientWrapper(_make_oauth_client(redirect_uris=""))
+        assert not empty.get_default_redirect_uri()
 
 
 # ---------------------------------------------------------------------------
