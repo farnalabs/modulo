@@ -209,7 +209,7 @@ and per-destination rate limiting.
   `steps/test_connector_crud.py`, driving the real `/api/v1/connectors`
   create / get / list / PATCH / delete routes with only the DB CRUD + RLS
   seams patched (the TestClient + mock-org-session pattern of the
-   `test_connectors_endpoint.py` unit suite): 9 scenarios — create (201) with
+  `test_connectors_endpoint.py` unit suite): 9 scenarios — create (201) with
   credentials Fernet-encrypted at rest and never echoed (the captured
   ciphertext round-trips to the exact credential), malformed REST credentials
   (422) and invalid REST `on_unknown` config (422) rejected at the boundary,
