@@ -6409,8 +6409,7 @@ def test_no_fresh_mock_in_call_wrappers():
         f"Found {len(violations)} fresh Mock instance(s) wrapped in a call(...) expected argument.\n"
         "A fresh Mock inside call(...) compares by identity, so the expected call can never "
         "match the recorded one — the verification ALWAYS FAILS. Capture the double in a "
-        "variable and pass the bound name, or assert against the real expected value.\n"
-        + "\n".join(violations)
+        "variable and pass the bound name, or assert against the real expected value.\n" + "\n".join(violations)
     )
 
 
