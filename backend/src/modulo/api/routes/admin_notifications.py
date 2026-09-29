@@ -27,6 +27,7 @@ from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
+    EVENT_HITL_DEADLINE_WARNING,
     EVENT_RUN_STALLED,
     EVENT_TRIGGER_DEACTIVATED,
     endpoint_events_to_list,
@@ -62,6 +63,7 @@ AVAILABLE_EVENTS = [
     EVENT_RUN_STALLED,
     "claim_expired",
     "hitl_overdue",
+    EVENT_HITL_DEADLINE_WARNING,
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_TRIGGER_DEACTIVATED,

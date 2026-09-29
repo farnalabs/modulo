@@ -994,12 +994,16 @@ async def hitl_deadline_warning(_ctx: dict[str, Any]) -> dict[str, Any]:
     approaching its terminalisation deadline (FAR-1270), BEFORE the
     dispatcher_reconcile terminaliser cancels the run. Idempotent per claim
     (Redis fire-once key + in-process backstop) and opt-in filtered by the
-    shared ``hitl_email_alerts`` recipient resolver.
+    shared ``hitl_email_alerts`` recipient resolver. FAR-1295 adds the
+    webhook / in-app leg: the same once-only claim also gates a
+    ``Notifier`` dispatch (mirroring the ``hitl_overdue`` cron's notifier
+    wiring), so an org subscribed through the ``Notifier`` is warned too.
     """
     from redis.asyncio import Redis as AsyncRedis
 
     from modulo.core.cron_helpers import _int_setting
     from modulo.core.hitl_manager.deadline_warning import dispatch_deadline_notifications
+    from modulo.core.notifier import Notifier
 
     settings = get_settings()
     factory = _make_session_factory()
@@ -1007,6 +1011,14 @@ async def hitl_deadline_warning(_ctx: dict[str, Any]) -> dict[str, Any]:
     # MagicMock.__int__ silently yields 1, which would make every legacy
     # deadline look already-expired.
     grace_seconds = _int_setting(getattr(settings, "hitl_review_cancel_grace_seconds", None), 3600)
+
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("hitl_deadline_warning: notifier init failed — email warning still runs")
 
     redis_client: AsyncRedis | None = None
     try:
@@ -1020,6 +1032,7 @@ async def hitl_deadline_warning(_ctx: dict[str, Any]) -> dict[str, Any]:
             factory,
             grace_seconds=grace_seconds,
             redis_client=redis_client,
+            notifier=notifier,
         )
     finally:
         if redis_client is not None:

@@ -2027,6 +2027,58 @@ class TestHitlDeadlineWarning:
         redis_client.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_dispatches_with_notifier_instance(self) -> None:
+        """FAR-1295: the cron constructs the Notifier (mirroring the
+        hitl_overdue cron) and hands it to the sweep so the webhook / in-app
+        leg of the deadline warning can fire."""
+        factory = self._make_factory()
+        engine = MagicMock()
+        redis_client = AsyncMock()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=engine),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client),
+            patch("modulo.core.notifier.Notifier") as notifier_cls,
+            patch(
+                "modulo.core.hitl_manager.deadline_warning.dispatch_deadline_notifications",
+                new_callable=AsyncMock,
+                return_value=[{"claim_id": "c1"}],
+            ) as dispatch,
+        ):
+            result = await sw.hitl_deadline_warning({})
+
+        assert result == {"notified": 1}
+        dispatch.assert_awaited_once()
+        assert dispatch.await_args.kwargs["notifier"] is notifier_cls.return_value
+        notifier_cls.assert_called_once_with(engine, _settings().fernet_key)
+
+    @pytest.mark.asyncio
+    async def test_notifier_init_failure_still_dispatches_email_leg(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A Notifier init failure must be swallowed — the sweep runs with
+        ``notifier=None`` (the email leg must not depend on alerting)."""
+        factory = self._make_factory()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("redis.asyncio.Redis.from_url", return_value=AsyncMock()),
+            patch("modulo.core.notifier.Notifier", side_effect=RuntimeError("fernet boom")),
+            patch(
+                "modulo.core.hitl_manager.deadline_warning.dispatch_deadline_notifications",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as dispatch,
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.hitl_deadline_warning({})
+
+        assert result == {"notified": 0}
+        dispatch.assert_awaited_once()
+        assert dispatch.await_args.kwargs["notifier"] is None
+        assert "hitl_deadline_warning: notifier init failed" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_redis_client_failure_still_dispatches_with_memory_backstop(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -2082,6 +2134,20 @@ class TestHitlDeadlineWarning:
             patch.object(sw, "get_settings", return_value=_settings()),
             patch.object(sw, "_make_session_factory", return_value=factory),
             patch("redis.asyncio.Redis.from_url", side_effect=asyncio.CancelledError),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.hitl_deadline_warning({})
+
+    @pytest.mark.asyncio
+    async def test_notifier_init_cancellation_propagates(self) -> None:
+        """A CancelledError from Notifier construction re-raises (SAQ abort),
+        never swallowed as a generic alerting outage."""
+        factory = self._make_factory()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.notifier.Notifier", side_effect=asyncio.CancelledError),
             pytest.raises(asyncio.CancelledError),
         ):
             await sw.hitl_deadline_warning({})
