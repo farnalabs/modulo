@@ -63,6 +63,10 @@ _log = logging.getLogger(__name__)
 from modulo.db.crud.account import PREFERENCE_KEY  # noqa: E402  (db layer owns the key constant)
 
 _SUBJECT_TEMPLATE = "HITL gate awaiting review - {gate_label}"
+# FAR-1270: the approaching-deadline warning reuses this substrate (same
+# recipient resolver, same opt-in contract, same send path) with copy that
+# says WHY the reviewer must act now — the run is about to be terminalised.
+_DEADLINE_SUBJECT_TEMPLATE = "HITL review deadline approaching - {gate_label}"
 
 # Log prefix for every swallowed dispatch failure (warning level).
 _DISPATCH_FAILED_LOG = "hitl_email.dispatch_failed: %s"
@@ -260,6 +264,85 @@ async def send_hitl_email_alerts(
     try:
         settings = get_settings()
         subject, body_html, body_text = _build_email(gate_label, _run_link(settings, run_id), briefing)
+        for recipient in recipients:
+            try:
+                await asyncio.to_thread(send_email, settings, [recipient], subject, body_html, body_text)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log.warning(_DISPATCH_FAILED_LOG, exc, extra=extra)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning(_DISPATCH_FAILED_LOG, exc, extra=extra)
+
+
+def _build_deadline_email(
+    gate_label: str,
+    run_url: str,
+    pipeline_name: str,
+    minutes_remaining: int,
+) -> tuple[str, str, str]:
+    """Build the approaching-deadline warning (subject, body_html, body_text).
+
+    The copy states the consequence — an unanswered gate terminalises the
+    run as ``hitl_review_expired`` — so the recipient knows the warning is
+    time-boxed, not advisory. HTML is built from the same escaped values as
+    the plain text (single source for the interpolated fields).
+    """
+    subject = _DEADLINE_SUBJECT_TEMPLATE.format(gate_label=gate_label)
+    body_text = (
+        "A HITL gate is approaching its review deadline.\n\n"
+        f"Gate: {gate_label}\n"
+        f"Pipeline: {pipeline_name}\n"
+        f"Time left: about {minutes_remaining} minute(s)\n"
+        "If nobody reviews it before the deadline, the run is cancelled "
+        "(hitl_review_expired) to release its concurrency slot.\n\n"
+        f"Review: {run_url}"
+    )
+    body_html = (
+        "<html><body>"
+        "<p>A HITL gate is approaching its review deadline.</p>"
+        f"<p><strong>Gate:</strong> {html.escape(gate_label)}</p>"
+        f"<p><strong>Pipeline:</strong> {html.escape(pipeline_name)}</p>"
+        f"<p><strong>Time left:</strong> about {minutes_remaining} minute(s)</p>"
+        "<p>If nobody reviews it before the deadline, the run is cancelled "
+        "(hitl_review_expired) to release its concurrency slot.</p>"
+        f"<p><strong>Review:</strong> "
+        f'<a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
+        "</body></html>"
+    )
+    return subject, body_html, body_text
+
+
+async def send_hitl_deadline_alerts(
+    recipients: list[str],
+    run_id: uuid.UUID,
+    gate_label: str,
+    pipeline_name: str,
+    minutes_remaining: int,
+) -> None:
+    """Send the approaching-deadline warning to every recipient. Never raises.
+
+    Same send contract as :func:`send_hitl_email_alerts` — no session, SMTP
+    off the event loop via ``asyncio.to_thread``, per-recipient failure
+    isolation, everything logged as ``hitl_email.dispatch_failed`` and
+    swallowed so a broken email path can never fail the deadline sweep
+    (which owns the once-only marker claim separately).
+    """
+    if not recipients:
+        return
+    extra = {
+        "run_id": str(run_id),
+        "gate_label": gate_label,
+        "channel": "deadline",
+        "recipient_count": len(recipients),
+    }
+    try:
+        settings = get_settings()
+        subject, body_html, body_text = _build_deadline_email(
+            gate_label, _run_link(settings, run_id), pipeline_name, minutes_remaining
+        )
         for recipient in recipients:
             try:
                 await asyncio.to_thread(send_email, settings, [recipient], subject, body_html, body_text)
