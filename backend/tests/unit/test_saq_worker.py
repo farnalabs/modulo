@@ -2138,6 +2138,20 @@ class TestHitlDeadlineWarning:
         ):
             await sw.hitl_deadline_warning({})
 
+    @pytest.mark.asyncio
+    async def test_notifier_init_cancellation_propagates(self) -> None:
+        """A CancelledError from Notifier construction re-raises (SAQ abort),
+        never swallowed as a generic alerting outage."""
+        factory = self._make_factory()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.notifier.Notifier", side_effect=asyncio.CancelledError),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.hitl_deadline_warning({})
+
 
 class TestCancellationPropagation:
     """Cancellation must always propagate (never swallowed) so SAQ can abort a

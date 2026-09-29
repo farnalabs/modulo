@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -233,6 +234,43 @@ async def test_get_subscribed_endpoints_runs_in_explicit_transaction() -> None:
     session.begin.assert_called_once()
     begin_cm.__aenter__.assert_awaited_once()
     assert session.info["org_id"] == _ORG
+
+
+# ---------------------------------------------------------------------------
+# has_subscribers (FAR-1295)
+# ---------------------------------------------------------------------------
+
+
+async def test_has_subscribers_true_when_endpoint_matches(notifier: Notifier) -> None:
+    """An endpoint subscribed to the event makes the org a webhook subscriber."""
+    ep = _fake_endpoint(events=["hitl_deadline_warning"])
+    with patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])):
+        assert await notifier.has_subscribers(_ORG, "hitl_deadline_warning") is True
+
+
+async def test_has_subscribers_false_when_no_endpoint_matches(notifier: Notifier) -> None:
+    with patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])):
+        assert await notifier.has_subscribers(_ORG, "hitl_deadline_warning") is False
+
+
+async def test_has_subscribers_false_on_db_failure(notifier: Notifier, caplog: pytest.LogCaptureFixture) -> None:
+    """A DB failure returns ``False`` (fail toward NOT burning the once-only
+    marker) and logs, never raising into the deadline sweep."""
+    with (
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(side_effect=RuntimeError("db down"))),
+        caplog.at_level(logging.ERROR, logger="modulo.core.notifier"),
+    ):
+        assert await notifier.has_subscribers(_ORG, "hitl_deadline_warning") is False
+
+    assert "notifier.subscriber_check_failed" in caplog.text
+
+
+async def test_has_subscribers_cancellation_propagates(notifier: Notifier) -> None:
+    with (
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await notifier.has_subscribers(_ORG, "hitl_deadline_warning")
 
 
 # ---------------------------------------------------------------------------
