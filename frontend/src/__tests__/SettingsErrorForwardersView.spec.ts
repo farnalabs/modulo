@@ -178,6 +178,39 @@ describe('SettingsErrorForwardersView', () => {
     wrapper.unmount()
   })
 
+  it('renders the Datadog site Select and updates the config when a site is chosen', async () => {
+    // The Datadog card's `<Select>` binds `configs.datadog.site` via v-model and
+    // renders its options through a scoped `#option` slot; this exercises both
+    // the option render path and the model-update handler (changed-lines
+    // coverage on SettingsErrorForwardersView.vue).
+    mockForwarders = [forwarder('datadog', { configured: true, enabled: true })]
+    const wrapper = mountView()
+    await flushPromises()
+
+    const datadog = cardFor(wrapper, 'Datadog')
+    const trigger = datadog.find('.p-select')
+    expect(trigger.exists()).toBe(true)
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const siteOptions = datadog.findAll('.p-select-option [data-value]')
+    expect(siteOptions.map((o) => o.attributes('data-value'))).toEqual([
+      'datadoghq.com',
+      'datadoghq.eu',
+      'us3.datadoghq.com',
+      'us5.datadoghq.com',
+      'ddog-gov.com',
+    ])
+
+    // PrimeVue selects an option on mousedown, which flows back through
+    // v-model into configs.datadog.site.
+    await datadog.find('.p-select-option [data-value="datadoghq.eu"]').trigger('mousedown')
+    await flushPromises()
+    await nextTick()
+    expect(datadog.find('.p-select-label').text()).toBe('EU (datadoghq.eu)')
+    wrapper.unmount()
+  })
+
   it('unconfigured forwarders start collapsed and expand via the loader-level expand state', async () => {
     mockForwarders = [forwarder('loki')]
     const wrapper = mountView()
