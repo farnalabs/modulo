@@ -588,7 +588,12 @@ async def _stamp_install_id(
     # (install_collection step 10). Flushing the stamped ``collection_install_id``
     # values before that row exists would violate ``fk_agents_collection_install_id``
     # (added in migration 0223), since the FK target is not yet present.
-    with session.no_autoflush:
+    #
+    # The S9408 flag on the ``with`` is a type-inference false positive:
+    # ``AsyncSession.no_autoflush`` is a property that proxies the sync
+    # ``Session.no_autoflush`` (SQLAlchemy's ``@contextmanager`` generator),
+    # so the flagged expression DOES implement the context-manager protocol.
+    with session.no_autoflush:  # NOSONAR S9408 - proxies Session.no_autoflush (sync context manager)
         # Stamp schemas
         schema_id_map = result.get("schemas", {})
         for local_id_str in schema_id_map.values():
