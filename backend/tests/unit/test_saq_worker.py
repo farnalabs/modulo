@@ -2073,6 +2073,19 @@ class TestHitlDeadlineWarning:
 
         redis_client.aclose.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_redis_client_cancellation_propagates(self) -> None:
+        """A CancelledError from Redis client construction re-raises (SAQ
+        abort), never swallowed as a generic Redis outage."""
+        factory = self._make_factory()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch("redis.asyncio.Redis.from_url", side_effect=asyncio.CancelledError),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.hitl_deadline_warning({})
+
 
 class TestCancellationPropagation:
     """Cancellation must always propagate (never swallowed) so SAQ can abort a

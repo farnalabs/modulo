@@ -683,3 +683,14 @@ class TestDeadlineEmail:
             pytest.raises(asyncio.CancelledError),
         ):
             await send_hitl_deadline_alerts([_RUNNER_EMAIL], _RUN, _GATE, "P", 3)
+
+    async def test_build_failure_is_swallowed_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A failure BEFORE the per-recipient loop (settings / email build) is
+        logged and swallowed — the sweep has already claimed its once-only
+        marker, so raising would lose the warning AND fail the cron."""
+        with (
+            patch.object(hitl_email_alerts, "get_settings", side_effect=RuntimeError("no settings")),
+            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+        ):
+            await send_hitl_deadline_alerts([_RUNNER_EMAIL], _RUN, _GATE, "P", 3)
+        assert "hitl_email.dispatch_failed" in caplog.text

@@ -11,6 +11,8 @@ no opted-in recipients / lock denied).
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -307,6 +309,7 @@ async def _run_dispatch(
     recipients: list[str] | None = None,
     redis_client: Any = None,
     send_side_effect: Any = None,
+    resolve_side_effect: Any = None,
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], AsyncMock, AsyncMock]:
     """Run dispatch_deadline_notifications against fully mocked sessions.
@@ -328,7 +331,11 @@ async def _run_dispatch(
     factory = MagicMock(side_effect=[_cm(org_session), _cm(tx_session)])
 
     send = AsyncMock(name="send_hitl_deadline_alerts", side_effect=send_side_effect)
-    resolve = AsyncMock(name="_resolve_recipients", return_value=resolved_recipients)
+    resolve = AsyncMock(
+        name="_resolve_recipients",
+        return_value=resolved_recipients,
+        side_effect=resolve_side_effect,
+    )
 
     with (
         patch.object(dw, "set_rls_org", new=AsyncMock()),
@@ -548,3 +555,139 @@ async def test_resolve_recipients_uses_own_session_rls_and_shared_resolver() -> 
 def test_sweep_lock_key_distinct_from_siblings() -> None:
     """Three HITL system crons must never contend on one advisory lock."""
     assert dw._DEADLINE_LOCK_KEY not in (721_336_517, 721_336_518)
+
+
+# ---------------------------------------------------------------------------
+# Defensive / failure branches (FAR-1270 coverage-gate follow-up)
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatch_cancellation_from_lock_probe_propagates() -> None:
+    """A CancelledError from the advisory-lock probe re-raises so SAQ can
+    abort the job cleanly (never swallowed as a generic lock failure)."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    with pytest.raises(asyncio.CancelledError):
+        await _run_dispatch(
+            candidate_rows=[(claim, "My Pipeline")],
+            lock_failure=asyncio.CancelledError(),
+            now=now,
+        )
+
+
+async def test_dispatch_skips_rows_with_unusable_deadline_or_window() -> None:
+    """A row whose deadline OR review window cannot be derived is skipped
+    (never warned about) — the defensive arm before the band check."""
+    now = datetime.now(UTC)
+    no_deadline = _claim(expires_at=None)  # type: ignore[arg-type]
+    no_window = _claim(expires_at=now + timedelta(seconds=60 - _GRACE), created_at=now)
+    no_window.created_at = None  # type: ignore[assignment]
+
+    notified, send, _ = await _run_dispatch(
+        candidate_rows=[(no_deadline, "P"), (no_window, "P")],
+        now=now,
+    )
+    assert not notified
+    send.assert_not_awaited()
+
+
+async def test_runs_with_claimed_open_gate_empty_input_short_circuits() -> None:
+    """No band survivors → the sibling query must not run at all."""
+    session = AsyncMock(name="sibling_session")
+    assert await dw._runs_with_claimed_open_gate(session, _ORG, []) == set()
+    session.execute.assert_not_called()
+
+
+async def test_dispatch_reuses_cached_recipients_for_repeat_pipeline() -> None:
+    """Two gates on the same pipeline resolve recipients once (cache hit)."""
+    now = datetime.now(UTC)
+    first, _ = _approaching_gate(now)
+    second, _ = _approaching_gate(now)
+
+    notified, send, resolve = await _run_dispatch(
+        candidate_rows=[(first, "P"), (second, "P")],
+        now=now,
+    )
+    assert len(notified) == 2
+    resolve.assert_awaited_once()
+    assert send.await_count == 2
+
+
+async def test_dispatch_recipient_resolution_failure_is_logged_and_skipped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A resolution failure skips that entry only (logged, never raised)."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+        notified, send, _ = await _run_dispatch(
+            candidate_rows=[(claim, "P")],
+            resolve_side_effect=RuntimeError("db gone"),
+            now=now,
+        )
+    assert not notified
+    send.assert_not_awaited()
+    assert "hitl.deadline_warning.recipient_resolution_failed" in caplog.text
+
+
+async def test_dispatch_cancellation_from_recipient_resolution_propagates() -> None:
+    """Cancellation during resolution re-raises rather than being skipped."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    with pytest.raises(asyncio.CancelledError):
+        await _run_dispatch(
+            candidate_rows=[(claim, "P")],
+            resolve_side_effect=asyncio.CancelledError(),
+            now=now,
+        )
+
+
+async def test_dispatch_send_failure_is_logged_and_skipped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A send failure is logged and never re-raised into the sweep."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+        notified, _, _ = await _run_dispatch(
+            candidate_rows=[(claim, "P")],
+            send_side_effect=RuntimeError("smtp down"),
+            now=now,
+        )
+    assert not notified
+    assert "hitl.deadline_warning.send_failed" in caplog.text
+
+
+class _CancellingRedis:
+    """Redis double whose SET is cancelled mid-flight."""
+
+    async def set(self, *args: Any, **kwargs: Any) -> Any:
+        raise asyncio.CancelledError
+
+
+async def test_fire_once_cancellation_from_redis_propagates() -> None:
+    """Cancellation from the Redis claim re-raises (SAQ abort contract)."""
+    with pytest.raises(asyncio.CancelledError):
+        await dw._claim_deadline_warning(_CancellingRedis(), uuid.uuid4())
+
+
+def test_claim_in_memory_evicts_stale_markers_at_capacity() -> None:
+    """The in-process backstop evicts TTL-expired markers once full and keeps
+    fresh ones, so the map cannot grow without bound."""
+    fresh_id = uuid.uuid4()
+    stale_ids = [uuid.uuid4() for _ in range(3)]
+    now = time.monotonic()
+    ttl = dw._DEADLINE_NOTIFY_TTL_SECONDS
+    claims: dict[uuid.UUID, float] = dict.fromkeys(stale_ids, now - ttl - 10)
+    claims[fresh_id] = now
+
+    new_id = uuid.uuid4()
+    with (
+        patch.object(dw, "_MEMORY_CLAIMS", claims),
+        patch.object(dw, "_MEMORY_CLAIM_MAX", len(claims)),
+    ):
+        assert dw._claim_in_memory(new_id) is True
+
+    assert new_id in claims
+    assert fresh_id in claims
+    assert all(stale_id not in claims for stale_id in stale_ids)
