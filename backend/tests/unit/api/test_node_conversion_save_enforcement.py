@@ -430,3 +430,84 @@ async def test_missing_pipeline_row_returns_none() -> None:
 
     assert result is None
     validate.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# 7. Stored graph array entries and persisted edge rows reach the write gate
+# ---------------------------------------------------------------------------
+
+
+def test_graph_nodes_as_models_skips_non_dict_entries() -> None:
+    """A non-dict entry in the stored graph array must be skipped, not crash.
+
+    ``graph_nodes_json`` is untyped JSON, so a malformed array can hold a
+    scalar where a node dict is expected. ``_graph_nodes_as_models`` deliberately
+    skips those entries rather than raising, so the entries that ARE dicts still
+    get typed and reference-checked. This drives the skip guard directly - the
+    endpoint path filters through ``extract_connector_bindings`` first.
+    """
+    from modulo.api.routes.pipelines import _graph_nodes_as_models
+
+    models = _graph_nodes_as_models([_converted_node(), "not-a-node", 42, None])
+
+    assert len(models) == 1
+    assert str(models[0].id) == str(_NODE_ID)
+
+
+async def test_saved_edge_rows_are_mapped_to_the_validator_shape() -> None:
+    """Persisted edge rows must reach ``_validate_graph_save`` in validator shape.
+
+    The sibling graph-write endpoints build the validator's reduced edge shape
+    from the request payload; the node-conversion save holds PERSISTED rows, so
+    ``_edge_row_to_validator`` translates them. A non-empty saved-edge list is
+    the only way that helper runs, so this asserts the translation end to end -
+    including the port defaults for a row that carries neither port.
+    """
+    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    target_id = uuid.uuid4()
+
+    def _edge(*, source_port: str | None, target_port: str | None) -> MagicMock:
+        edge = MagicMock()
+        edge.id = uuid.uuid4()
+        edge.source_node_id = _NODE_ID
+        edge.target_node_id = target_id
+        edge.edge_type = "default"
+        edge.condition_expression = None
+        edge.hitl_review_config = None
+        edge.source_port = source_port
+        edge.target_port = target_port
+        return edge
+
+    explicit = _edge(source_port="out", target_port="in")
+    defaulted = _edge(source_port=None, target_port=None)
+    validate = AsyncMock(return_value=[])
+
+    with (
+        patch(f"{_PREFIX}_save_graph", new=AsyncMock(return_value=([_converted_node()], [explicit, defaulted]))),
+        patch(f"{_PREFIX}_resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch(f"{_PREFIX}_validate_graph_save", new=validate),
+    ):
+        result = await _save(session)
+
+    assert result is not None
+    edges = validate.await_args.kwargs["validator_graph"]["edges"]
+    assert edges == [
+        {
+            "source": str(_NODE_ID),
+            "target": str(target_id),
+            "type": "default",
+            "condition_expression": None,
+            "hitl_review_config": None,
+            "source_port": "out",
+            "target_port": "in",
+        },
+        {
+            "source": str(_NODE_ID),
+            "target": str(target_id),
+            "type": "default",
+            "condition_expression": None,
+            "hitl_review_config": None,
+            "source_port": "out",
+            "target_port": "in",
+        },
+    ]

@@ -4164,6 +4164,29 @@ async def _finalize_locked_graph_save(
     raise
 
 
+# Team gate (shared by BOTH node-conversion endpoints) - PARITY +
+# defence-in-depth, matching replace_pipeline_graph / update_pipeline. Both
+# layers were previously absent here while the sibling graph writes had both:
+#
+# * the request-time membership-or-admin dependency gives the early 403 with
+#   the right status, and is the ONLY team layer where RLS does NOT apply - it
+#   runs on non-Postgres backends, on break-glass / execution_context sessions,
+#   and when the RLS policies are missing or misconfigured;
+# * the in-txn re-check (_reapply_team_gate_inside_mutation_txn) closes the
+#   request-time -> mutation TOCTOU atomically with the write, because the
+#   dependency's own transaction COMMITs before this one opens.
+#
+# This is NOT a fix for a live Postgres hole: migration 0124 drops the
+# OR-combined rls_org_isolation policy on `pipelines` and leaves
+# rls_team_isolation as the sole policy, so under Postgres a non-member's read
+# already returns no row and the resolver 404s before the handler runs - which
+# is exactly what the integration tests in
+# tests/integration/test_pipeline_node_conversion_team_gate.py observe.
+#
+# The plain (JWT) variant pairs with each endpoint's own ``require_permission``
+# - ``_any_credential`` is paired only with
+# ``require_permission_any_credential`` (the credential flavours must match;
+# the gate body itself is single-sourced).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
 )
@@ -4174,30 +4197,6 @@ async def convert_node_to_agent_endpoint(
     req: ConvertToAgentRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
-    # Team gate - PARITY + defence-in-depth, matching replace_pipeline_graph /
-    # update_pipeline. Both layers were previously absent here while the
-    # sibling graph writes had both:
-    #
-    # * the request-time membership-or-admin dependency below gives the early
-    #   403 with the right status, and is the ONLY team layer where RLS does
-    #   NOT apply - it runs on non-Postgres backends, on break-glass /
-    #   execution_context sessions, and when the RLS policies are missing or
-    #   misconfigured;
-    # * the in-txn re-check (_reapply_team_gate_inside_mutation_txn) closes
-    #   the request-time -> mutation TOCTOU atomically with the write, because
-    #   the dependency's own transaction COMMITs before this one opens.
-    #
-    # This is NOT a fix for a live Postgres hole: migration 0124 drops the
-    # OR-combined rls_org_isolation policy on `pipelines` and leaves
-    # rls_team_isolation as the sole policy, so under Postgres a non-member's
-    # read already returns no row and the resolver 404s before the handler
-    # runs - which is exactly what the integration tests in
-    # tests/integration/test_pipeline_node_conversion_team_gate.py observe.
-    #
-    # The plain (JWT) variant pairs with this endpoint's own
-    # ``require_permission`` - ``_any_credential`` is paired only with
-    # ``require_permission_any_credential`` (the credential flavours must
-    # match; the gate body itself is single-sourced).
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     try:
@@ -4293,6 +4292,8 @@ async def convert_node_to_agent_endpoint(
     return _graph_response(saved_nodes, saved_edges)
 
 
+# Team gate: same parity + defence-in-depth rationale as the shared comment
+# above convert_node_to_agent_endpoint (request-time dependency + in-txn re-check).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
 )
@@ -4303,9 +4304,6 @@ async def revert_node_to_manual_endpoint(
     snapshot_id: Annotated[uuid.UUID, Query()],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
-    # Team gate: see convert_node_to_agent_endpoint - same parity +
-    # defence-in-depth rationale (request-time dependency + in-txn re-check),
-    # and both layers were absent here while the sibling graph writes had both.
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     try:
