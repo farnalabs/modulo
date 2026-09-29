@@ -280,6 +280,93 @@ def test_apply_collision_with_node_bound_row_returns_409(admin_client: TestClien
 
 
 # ---------------------------------------------------------------------------
+# POST /import (cross-org inheritance)
+# ---------------------------------------------------------------------------
+
+
+def _applied_pin_with(yaml_text: str) -> GuardrailPin:
+    """A clean APPLIED pin whose snapshot is *yaml_text* (the imported config)."""
+    return GuardrailPin(
+        org_id=_ORG_ID,
+        status="clean",
+        applied_hash="applied-hash",
+        applied_at="2026-01-01T00:00:00+00:00",
+        serialized_snapshot=yaml_text,
+    )
+
+
+def test_import_applies_config_directly(admin_client: TestClient, mock_session: AsyncMock) -> None:
+    pipeline = MagicMock()
+    pipeline.id = uuid.uuid4()
+    mock_session.execute = AsyncMock(return_value=_pipeline_result([pipeline]))
+    with _patched(pin=None):
+        resp = admin_client.post(f"{_BASE}/import", json={"config_yaml": _VALID_YAML})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["imported"] is True
+    assert body["status"] == "clean"
+    assert len(body["hash"]) == 64
+    assert body["applied_at"]
+    # The diff reports what importing changed vs the previous (empty) applied set.
+    add_entries = [c for c in body["diff"] if c["action"] == "add"]
+    assert [c["id"] for c in add_entries] == ["no-aws-keys"]
+    # The reconcile materialized the org-level row for the pipeline.
+    assert mock_session.add.call_count == 1
+
+
+def test_import_is_idempotent_on_reimport(admin_client: TestClient, mock_session: AsyncMock) -> None:
+    pipeline = MagicMock()
+    pipeline.id = uuid.uuid4()
+    mock_session.execute = AsyncMock(return_value=_pipeline_result([pipeline]))
+    with _patched(pin=_applied_pin_with(_VALID_YAML)):
+        resp = admin_client.post(f"{_BASE}/import", json={"config_yaml": _VALID_YAML})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["imported"] is True
+    assert body["status"] == "clean"
+    # Re-importing the applied config is a clean no-op — empty diff.
+    assert not body["diff"]
+
+
+def test_import_invalid_yaml_returns_422(admin_client: TestClient) -> None:
+    with _patched(pin=None):
+        resp = admin_client.post(f"{_BASE}/import", json={"config_yaml": "not: [valid: yaml"})
+
+    assert resp.status_code == 422
+
+
+def test_import_denied_for_operator(operator_client: TestClient) -> None:
+    with _patched(pin=None):
+        resp = operator_client.post(f"{_BASE}/import", json={"config_yaml": _VALID_YAML})
+
+    assert resp.status_code == 403
+    assert "Only admins" in resp.json()["detail"]
+
+
+def test_import_collision_with_node_bound_row_returns_409(admin_client: TestClient, mock_session: AsyncMock) -> None:
+    pipeline = MagicMock()
+    pipeline.id = uuid.uuid4()
+    colliding_row = MagicMock()
+    colliding_row.name = "no-aws-keys"
+    colliding_row.node_id = uuid.uuid4()
+    mock_session.execute = AsyncMock(return_value=_pipeline_result([pipeline]))
+    with (
+        _patched(pin=None),
+        patch(
+            "modulo.api.routes.guardrail_config._load_pipeline_guardrail_rows_by_name",
+            new_callable=AsyncMock,
+            return_value=(pipeline, {"no-aws-keys": colliding_row}),
+        ),
+    ):
+        resp = admin_client.post(f"{_BASE}/import", json={"config_yaml": _VALID_YAML})
+
+    assert resp.status_code == 409
+    assert "no-aws-keys" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
 # POST /reject
 # ---------------------------------------------------------------------------
 

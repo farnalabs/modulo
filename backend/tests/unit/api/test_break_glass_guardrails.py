@@ -3,7 +3,7 @@ org-global (guardrail kill-switch).
 
 A break-glass account — live or denied — must never be able to:
   * read the ELEVATED guardrail config (``guardrail.manage``)
-  * propose / apply / reject a guardrail config change
+  * propose / apply / import / reject a guardrail config change
   * disable (or read) the org guardrail kill-switch
 
 The ``deny_break_glass_mint`` DI marker on each route returns a uniform 403
@@ -157,6 +157,14 @@ def test_breakglass_denied_propose(breakglass_client: TestClient) -> None:
 
 def test_breakglass_denied_apply(breakglass_client: TestClient) -> None:
     resp = breakglass_client.post("/api/v1/guardrails/config/apply")
+    assert resp.status_code == 403
+
+
+def test_breakglass_denied_import(breakglass_client: TestClient) -> None:
+    resp = breakglass_client.post(
+        "/api/v1/guardrails/config/import",
+        json={"config_yaml": "version: 1\nguardrails: []\n"},
+    )
     assert resp.status_code == 403
 
 

@@ -12,10 +12,21 @@ from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
 _log = logging.getLogger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+# A lock timeout is NOT a database outage: the engine is healthy, this request
+# simply could not acquire the row lock because another transaction holds it.
+# 409 Conflict states both facts - the mutation did NOT apply, and re-issuing
+# it later may succeed - where the generic 503 below would read as "retry now"
+# and invite a client retry storm against the very lock that is busy.
+_MSG_LOCK_TIMEOUT = (
+    "Timed out waiting for a lock on this resource; another change is in progress. "
+    "Re-issue the request once the other change completes."
+)
 
 
 def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
@@ -25,8 +36,14 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
     module exists to enforce (IntegrityError->409, ProgrammingError->501,
     SQLAlchemyError->503, pydantic.ValidationError->422; passthrough
     re-raises for CancelledError / StorageExhaustedError / HTTPException;
-    Exception->500). The chain below preserves the original except order —
+    Exception->500). The chain below preserves the original except order -
     never reorder it (MRO: specific classes before their bases).
+
+    One WITHIN-class refinement sits on the SQLAlchemyError arm: SQLSTATE
+    55P03 (``lock_not_available`` - a bounded ``lock_timeout`` expiring) maps
+    to 409, not 503. It is a busy-row conflict rather than a database outage,
+    so the class ordering above is unchanged - only the status for that one
+    SQLSTATE differs.
     """
     try:
         raise exc
@@ -45,6 +62,16 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError as exc:
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # lock_timeout expired on a bounded row lock (55P03): the DB is
+            # healthy, this transaction just could not take the lock. Clear,
+            # non-generic answer - see _MSG_LOCK_TIMEOUT for why this is 409
+            # rather than the generic 503 the rest of this arm returns.
+            _log.warning("%s.lock_timeout", log_prefix)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_MSG_LOCK_TIMEOUT,
+            ) from None
         _log.exception("%s.db_error", log_prefix)
         log_service_unavailable(
             "db_transient",

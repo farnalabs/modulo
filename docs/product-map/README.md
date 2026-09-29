@@ -843,6 +843,24 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > that a product-map `bdd:` citation always names at least one scenario CI
 > actually executes.
 
+> **Closed this walk (2026-09-29):** reconciled the four behaviour-tracker
+> frontmatter `status:` fields with the manifest `features:` registry — the two
+> layers disagreed on the same features' coverage. `feat-guardrails`,
+> `feat-license`, `feat-plugins` and `feat-product-analytics` were sharpened to
+> `status: partial` in the manifest during the 2026-09-26 walk (each carries an
+> unshipped sub-surface — cross-org guardrail inheritance, universal license
+> gating, registry-API plugin lifecycle management, in-product analytics
+> export — tracked as an unchecked behaviour deferral), but each
+> `docs/product-map/` tracker kept `status: covered` even though its own QA
+> note said "Status stays `partial`". A reader of the graph got the opposite
+> coverage answer from the machine layer Assistant indexes from. The trackers
+> now read `partial` (`configure/guardrails.md`, `licensing/license.md`,
+> `admin/plugins.md`, `admin/product-analytics.md`), the guardrail/license
+> trackers also name the exact deferral in Known Gaps, and the new
+> `test_graph_tracker_status_matches_manifest_registry` guard makes
+> manifest↔tracker status agreement an invariant so the two layers can never
+> drift again. `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -27,7 +28,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from modulo.api.routes.pipelines import _reapply_team_gate_inside_mutation_txn
+from modulo.api.routes.pipelines import (
+    _MUTATION_ROW_LOCK_TIMEOUT_MS,
+    _reapply_team_gate_inside_mutation_txn,
+)
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking import DEFAULT_ALERT_RULES, seed_default_alert_rules_for_org
 from modulo.core.exceptions import RateLimitConflictError
@@ -558,3 +562,105 @@ class TestTeamGateInsideMutationTxn:
         )
         compiled = stmt.compile(dialect=postgresql.dialect())
         assert "FOR UPDATE" in compiled.string.upper()
+
+
+# ---------------------------------------------------------------------------
+# Bounded in-txn row lock: SET LOCAL lock_timeout BEFORE the FOR UPDATE
+# ---------------------------------------------------------------------------
+
+
+def _recording_session(dialect_name: str) -> tuple[AsyncMock, list[tuple[str, Any]]]:
+    """AsyncSession double that RECORDS every executed statement, in order.
+
+    Returns the session and an ordered ``(sql, params)`` log - statement
+    ORDER is the contract under test here (the timeout must be set before the
+    lock is requested), so a positional-free log is what the assertions read.
+    """
+    log: list[tuple[str, Any]] = []
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.in_transaction = MagicMock(return_value=True)
+    session.info = {}
+    bind = MagicMock()
+    bind.dialect.name = dialect_name
+    session.get_bind = MagicMock(return_value=bind)
+
+    row = MagicMock()
+    row.visibility = "org"
+    row.owner_team_id = None
+    row.deleted_at = None
+
+    async def _execute(stmt: object, *args: Any, **_kwargs: Any) -> MagicMock:
+        log.append((str(stmt), args[0] if args else None))
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = row
+        result.first.return_value = None
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session, log
+
+
+def _admin_principal() -> TenantPrincipal:
+    return TenantPrincipal(
+        username="lock-timeout-test",
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role="admin",
+    )
+
+
+class TestTeamGateBoundedLockWait:
+    """ITEM 5: the gate's ``FOR UPDATE`` waits are bounded, not infinite.
+
+    A contended mutation used to park a pooled connection on an unbounded row
+    lock. ``_reapply_team_gate_inside_mutation_txn`` now issues a
+    transaction-scoped (``SET LOCAL``) ``lock_timeout`` immediately BEFORE the
+    lock request; the SQLSTATE 55P03 that expires timeout then maps to 409
+    (``api.db_error_handling``).
+
+    NOTE ON SCOPE: these tests assert the STATEMENT ORDERING and the dialect
+    gate against a recording session double - they cannot make Postgres
+    actually wait. The real timeout firing against a held lock is proven by
+    ``tests/integration/test_pipeline_mutation_lock_timeout.py``.
+    """
+
+    async def test_lock_timeout_statement_precedes_the_for_update(self) -> None:
+        session, log = _recording_session("postgresql")
+        locked = await _reapply_team_gate_inside_mutation_txn(session, _admin_principal(), _PIPELINE)
+        assert locked is not None
+
+        sqls = [sql for sql, _params in log]
+        timeout_indexes = [i for i, sql in enumerate(sqls) if "lock_timeout" in sql]
+        lock_indexes = [i for i, sql in enumerate(sqls) if "FOR UPDATE" in sql.upper()]
+        assert timeout_indexes, f"no lock_timeout statement issued; statements={sqls}"
+        assert lock_indexes, f"no FOR UPDATE statement issued; statements={sqls}"
+        assert min(timeout_indexes) < min(lock_indexes), (
+            f"the lock_timeout must be SET before the FOR UPDATE requests the lock, statements={sqls}"
+        )
+
+    async def test_lock_timeout_is_set_local_and_bounded(self) -> None:
+        session, log = _recording_session("postgresql")
+        await _reapply_team_gate_inside_mutation_txn(session, _admin_principal(), _PIPELINE)
+
+        timeout_calls = [(sql, params) for sql, params in log if "lock_timeout" in sql]
+        assert len(timeout_calls) == 1, timeout_calls
+        sql, params = timeout_calls[0]
+        # is_local => true: transaction-scoped, i.e. SET LOCAL semantics.
+        assert "set_config('lock_timeout', :val, true)" in sql, sql
+        value = str(params["val"])
+        assert value == f"{_MUTATION_ROW_LOCK_TIMEOUT_MS}ms", value
+        milliseconds = int(value.removesuffix("ms"))
+        assert 0 < milliseconds <= 30_000, f"lock timeout must be bounded and positive, got {value}"
+
+    async def test_non_postgres_bind_skips_the_statement(self) -> None:
+        """SQLite (and the unit fixtures) have no ``set_config`` - gate it out."""
+        session, log = _recording_session("sqlite")
+        locked = await _reapply_team_gate_inside_mutation_txn(session, _admin_principal(), _PIPELINE)
+        assert locked is not None
+        sqls = [sql for sql, _params in log]
+        assert not [sql for sql in sqls if "lock_timeout" in sql], sqls
+        assert [sql for sql in sqls if "FOR UPDATE" in sql.upper()], sqls
