@@ -507,9 +507,17 @@ interface AdminTeamListResponse {
   items: AdminTeam[]
 }
 
-/** List the org's teams (admin). */
+/**
+ * List the org's teams (admin).
+ *
+ * The endpoint pages oldest-first by `created_at` with a default page size of
+ * 20, so on a shared instance with more than 20 accumulated teams a team the
+ * journey just created is NOT on page 1 and the journey's "created team must
+ * be returned" assertion fails on a healthy backend. Request the endpoint's
+ * maximum page size so the freshly-created (newest) team is always returned.
+ */
 export async function listTeams(apiBase: string, token: string): Promise<AdminTeamListResponse> {
-  const res = await apiFetch<AdminTeamListResponse>(apiBase, token, 'GET', '/api/v1/admin/teams')
+  const res = await apiFetch<AdminTeamListResponse>(apiBase, token, 'GET', '/api/v1/admin/teams?page_size=1000')
   if (res.status !== 200) {
     throw new Error(`[realstack] team list failed: ${res.status} ${res.text.slice(0, 300)}`)
   }

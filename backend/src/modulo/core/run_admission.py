@@ -127,15 +127,23 @@ class HitlParkError(RuntimeError):
 #     qa F13).
 #   * ``cancellation_requested = false`` — a cancellation-requested run is
 #     being cancelled; the cancel path owns its status.
-#   * EXISTS an expired UNCLAIMED undecided gate past the grace window — the
-#     incident predicate (gate open + unanswered + well past its TTL).
-#   * NOT EXISTS any undecided gate that is CLAIMED or still inside the grace
-#     window — a run must only park when EVERY one of its open gates is
+#   * EXISTS an expired UNCLAIMED undecided gate past the review deadline — the
+#     incident predicate (gate open + unanswered + past its deadline).
+#   * NOT EXISTS any undecided gate that is CLAIMED or still inside its window
+#     — a run must only park when EVERY one of its open gates is
 #     expired-unclaimed (multi-gate runs are never parked on a stale orphan).
 # The gate row itself is NOT touched here (park ≠ decide — the sweep must
 # never write ``decision``; see Linear FAR-609): it stays open and claimable.
 # The status literals are bound params (qa F15) so every write site names the
 # same constants.
+#
+# FAR-1257 review deadline: each claim carries EITHER an absolute
+# ``terminalize_at`` stamped at fire time (pipeline override > org default >
+# instance/env default) or NULL for legacy rows. Stamped rows park at
+# ``terminalize_at + :park_margin_seconds``; unstamped rows keep the exact
+# legacy ``expires_at + :grace_seconds`` arithmetic. The margin is derived in
+# :func:`_park_margin_seconds` so the TERMINALIZING deadline (``terminalize_at``
+# itself, collected by dispatcher_reconcile) always lands first.
 _PARK_RUNS_SQL = text(
     "UPDATE runs SET status = :parked_status "
     "WHERE runs.organisation_id = :oid "
@@ -147,16 +155,55 @@ _PARK_RUNS_SQL = text(
     "  AND hc.run_id = runs.id "
     "  AND hc.decision IS NULL "
     "  AND hc.account_id IS NULL "
-    "  AND hc.expires_at < now() - (:grace_seconds * interval '1 second')) "
+    "  AND ((hc.terminalize_at IS NOT NULL "
+    "        AND (hc.terminalize_at + (:park_margin_seconds * interval '1 second')) < now()) "
+    "       OR (hc.terminalize_at IS NULL "
+    # Four closing parens: ``- (:grace * interval)``, the ``OR (`` arm, the
+    # wrapping ``((`` two-arm group, and the ``EXISTS (`` itself — a missing
+    # one is a Postgres syntax error at RETURNING (caught by the FAR-1257
+    # integration test, invisible to substring unit assertions).
+    "           AND hc.expires_at < now() - (:grace_seconds * interval '1 second')))) "
     "AND NOT EXISTS ("
     "  SELECT 1 FROM hitl_claims hc2 "
     "  WHERE hc2.organisation_id = runs.organisation_id "
     "  AND hc2.run_id = runs.id "
     "  AND hc2.decision IS NULL "
     "  AND (hc2.account_id IS NOT NULL "
-    "       OR hc2.expires_at >= now() - (:grace_seconds * interval '1 second'))) "
+    "       OR (hc2.terminalize_at IS NOT NULL "
+    "           AND (hc2.terminalize_at + (:park_margin_seconds * interval '1 second')) >= now()) "
+    "       OR (hc2.terminalize_at IS NULL "
+    # Four closing parens: ``- (:grace * interval)``, the ``OR (`` arm, the
+    # wrapping ``AND (`` group, and the ``NOT EXISTS (`` itself.
+    "           AND hc2.expires_at >= now() - (:grace_seconds * interval '1 second')))) "
     "RETURNING runs.id, runs.pipeline_id, runs.organisation_id"
 )
+
+#: FAR-1257: floor on the park margin — five ``dispatcher_reconcile`` ticks
+#: (60s each). ``HITL_PARK_GRACE_SECONDS`` may be configured down to its own
+#: ``ge=60`` floor, which would otherwise let the park sweep match in the same
+#: tick as (or one tick before) the terminalizing sweep that must win. The
+#: floor makes "cancel precedes park" hold by construction even at that
+#: extreme config, at the cost of parking 4 minutes later than configured.
+_PARK_MARGIN_FLOOR_SECONDS = 300
+
+
+def _park_margin_seconds(park_grace_seconds: int) -> int:
+    """Margin between the review deadline (``terminalize_at``) and the park.
+
+    Park is measured as one full park-grace window AFTER the review deadline,
+    floored at :data:`_PARK_MARGIN_FLOOR_SECONDS`. Anchoring on the same
+    deadline the terminalizer uses is what makes the ordering structural: the
+    terminalizer collects at ``terminalize_at`` (any 60s reconcile tick
+    thereafter), the park sweep can only match ``park_margin >= 300s`` later,
+    so a run is cancelled — releasing its org slot — long before it could be
+    parked.
+
+    Under the shipped defaults this is observably identical to the legacy
+    arithmetic: the run leaves ``awaiting_human`` via the cancel sweep at
+    ``terminalize_at`` (= ``expires_at + 3600``) and is therefore no longer a
+    park candidate at all (park requires source status ``awaiting_human``).
+    """
+    return max(int(park_grace_seconds), _PARK_MARGIN_FLOOR_SECONDS)
 
 
 async def park_expired_hitl_runs(
@@ -174,8 +221,12 @@ async def park_expired_hitl_runs(
     non-terminal ``hitl_parked`` status (still in ACTIVE_RUN_STATUSES, so
     every consumer that treats awaiting_human as in-flight treats a parked
     run identically) once ALL of the run's open gates are unclaimed AND past
-    ``expires_at + grace`` (settings ``HITL_PARK_GRACE_SECONDS``, default
-    24h).
+    their review deadline. For a legacy claim (``terminalize_at`` NULL) that is
+    still ``expires_at + grace`` (settings ``HITL_PARK_GRACE_SECONDS``,
+    default 24h); for a FAR-1257-stamped claim it is ``terminalize_at`` plus
+    the margin from :func:`_park_margin_seconds`, which keeps the TERMINALIZING
+    sweep (dispatcher_reconcile, which collects at ``terminalize_at`` itself)
+    strictly ahead of this one.
 
     PARK ≠ DECIDE: the gate row is never touched here — ``decision`` stays
     NULL and the gate stays OPEN AND CLAIMABLE (a claim on an expired gate
@@ -201,6 +252,7 @@ async def park_expired_hitl_runs(
     """
     settings = get_settings()
     window = grace_seconds if grace_seconds is not None else settings.hitl_park_grace_seconds
+    park_margin = _park_margin_seconds(window)
     parked: list[Any] = []
     sweep_error: BaseException | None = None
     try:
@@ -216,6 +268,7 @@ async def park_expired_hitl_runs(
                     {
                         "oid": str(org_id),
                         "grace_seconds": window,
+                        "park_margin_seconds": park_margin,
                         "parked_status": HITL_PARKED_STATUS,
                         "awaiting_status": AWAITING_HUMAN_STATUS,
                     },

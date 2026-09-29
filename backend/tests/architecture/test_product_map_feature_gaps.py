@@ -307,6 +307,60 @@ def test_every_manifest_feature_has_a_behaviour_tracker():
     )
 
 
+#: Status values the two product-map layers are allowed to carry. A manifest
+#: feature WITH an explicit ``status:`` must agree with its behaviour-tracker;
+#: every manifest feature today carries one (32 ``covered`` + 4 ``partial``).
+def test_graph_tracker_status_matches_manifest_registry():
+    """A behaviour-tracker's ``status:`` must agree with its manifest registry status.
+
+    Both product-map layers carry a ``status:`` for features that live in the
+    manifest ``features:`` registry. The manifest is the machine-readable
+    source of truth Assistant indexes from; the ``docs/product-map/`` tracker is
+    the human-readable layer keyed by the same ``feat-*`` id. When they
+    disagree, a reader of the graph gets the opposite coverage answer from the
+    machine layer — exactly the drift the 2026-09-26 walks left behind:
+    ``feat-guardrails`` / ``feat-license`` / ``feat-plugins`` /
+    ``feat-product-analytics`` were sharpened to ``status: partial`` in the
+    manifest (an unshipped sub-surface — cross-org guardrail inheritance,
+    universal license gating, registry-API lifecycle management, in-product
+    analytics export — stays tracked as an unchecked deferral) while each
+    tracker's frontmatter still read ``status: covered`` despite its own QA
+    note saying "Status stays ``partial``". Keep the two layers honest with
+    each other. Infra-only entries that have no manifest feature are
+    unconstrained — the manifest registry is the source of truth for trackers
+    that reference it.
+    """
+    with MANIFEST_PATH.open() as handle:
+        manifest_features = yaml.safe_load(handle)["features"]
+
+    mismatches: dict[str, dict[str, object]] = {}
+    for entry in _product_map_entry_paths():
+        entry_id = _frontmatter_id(entry)
+        spec = manifest_features.get(entry_id) if isinstance(manifest_features, dict) else None
+        if entry_id is None or not isinstance(spec, dict):
+            continue
+        manifest_status = spec.get("status")
+        tracker_status = (_entry_frontmatter(entry) or {}).get("status")
+        if manifest_status == tracker_status:
+            continue
+        mismatches[entry_id] = {
+            "manifest": manifest_status,
+            "tracker": tracker_status,
+            "entry": entry.relative_to(REPO_ROOT).as_posix(),
+        }
+
+    assert not mismatches, (
+        "behaviour-tracker frontmatter 'status' disagrees with the manifest "
+        "features registry for the same feat-* id — a reader of the graph gets "
+        "the opposite coverage answer from the machine layer Assistant indexes "
+        "(aligned for the 2026-09-29 walk; keep the two layers in step):\n"
+        + "\n".join(
+            f"  {feat} -> manifest={info['manifest']!r} tracker={info['tracker']!r} in {info['entry']}"
+            for feat, info in sorted(mismatches.items())
+        )
+    )
+
+
 def test_graph_entry_feature_ids_are_unique():
     """Product-map entries key on unique ``id`` frontmatter values."""
     seen: dict[str, Path] = {}

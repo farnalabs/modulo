@@ -1783,7 +1783,10 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
     await nextTick()
 
     // Exactly one edge rendered the gate badge (the config-bearing one).
-    expect(wrapper.text().match(/HITL/g)?.length ?? 0).toBe(1)
+    // Scoped to the badge span itself rather than a whole-view /HITL/ count:
+    // the pipeline toolbar now legitimately also carries a "HITL ..." label.
+    const gateBadges = wrapper.findAll('span').filter((s) => s.text() === 'HITL')
+    expect(gateBadges).toHaveLength(1)
     wrapper.unmount()
   })
 

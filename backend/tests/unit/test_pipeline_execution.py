@@ -1491,6 +1491,7 @@ class TestSaqWorkerSettings:
             "claim_expiry",
             "connector_health_checks",
             "hitl_overdue",
+            "hitl_deadline_warning",
             "retention_cleanup",
             "webhook_dedup_cleanup",
             "expired_webhook_dedup_purge",

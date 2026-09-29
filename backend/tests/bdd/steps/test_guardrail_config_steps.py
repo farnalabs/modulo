@@ -235,6 +235,20 @@ def _bdd_apply(request) -> None:
     _capture(request, "POST", "/api/v1/guardrails/config/apply", "admin")
 
 
+@when(parsers.parse("I import the guardrail config:"))
+def _bdd_import_block(request, docstring: str) -> None:
+    role = getattr(request.node, "_role", None) or "admin"
+    _patch_route(request)
+    _capture(request, "POST", "/api/v1/guardrails/config/import", role, json={"config_yaml": docstring})
+
+
+@when(parsers.parse('I import the guardrail config "{yaml_text}"'))
+def _bdd_import_inline(request, yaml_text: str) -> None:
+    role = getattr(request.node, "_role", None) or "admin"
+    _patch_route(request)
+    _capture(request, "POST", "/api/v1/guardrails/config/import", role, json={"config_yaml": yaml_text})
+
+
 @when("I reject the guardrail config")
 def _bdd_reject(request) -> None:
     _patch_route(request)
@@ -308,6 +322,17 @@ def _bdd_apply_clean(request) -> None:
     data = request.node._resp.json()
     assert data["applied"] is True, f"Expected applied=True, got {data}"
     assert data["status"] == "clean"
+
+
+@then("the import reports a clean applied state")
+def _bdd_import_clean(request) -> None:
+    data = request.node._resp.json()
+    assert data["imported"] is True, f"Expected imported=True, got {data}"
+    assert data["status"] == "clean", f"Expected status=clean, got {data}"
+    h = data["hash"]
+    assert isinstance(h, str) and len(h) == 64, f"Expected 64-char hex hash, got {h!r}"
+    int(h, 16)
+    assert data["applied_at"], f"Expected applied_at timestamp, got {data}"
 
 
 @then("the guardrail rows were reconciled")

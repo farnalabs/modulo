@@ -1,13 +1,33 @@
 <template>
-  <FeatureGate feature-name="mcp_server" show-disabled>
+  <FeatureGate feature-name="mcp_server" required-tier="community" show-disabled>
 
     <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.SettingsMcpView.mcp_configuration')" :subtitle="$t('views.SettingsMcpView.configure_mcp_server_settings_and_api_keys')" />
 
+    <!-- The INITIAL load owns the page-level states: the spinner while it
+         runs, and the ErrorAlert with retry if it FAILS (nothing was ever
+         rendered then, so there is no last-good content to keep on screen).
+         After the first successful load, `loading` never flips again
+         (silentRefetch) and a later failure is non-fatal - see `refetchError`
+         at the top of the branch below. -->
     <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
+    <ErrorAlert v-else-if="initialLoadError" :message="initialLoadError" :on-retry="loadAll" />
 
     <template v-else>
+      <!-- A refetch failure AFTER a successful load must not replace what is
+           rendered: the last-good data stays on screen and every card (plus
+           any open one-time-secret dialog behind them) stays mounted, so a
+           client secret shown "only once" is never destroyed by a transient
+           5xx. The failure itself surfaces here instead - the existing error
+           surface in a non-page-fatal form, in an aria-live region with the
+           same retry affordance the page-level alert has. -->
+      <ErrorAlert
+        v-if="refetchError"
+        :message="refetchError"
+        :on-retry="loadAll"
+        aria-live="assertive"
+      />
+
       <!-- MCP Server Status -->
       <Card>
         <template #title>{{ $t('views.SettingsMcpView.mcp_server_status') }}</template>
@@ -50,13 +70,23 @@
               <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_keys') }}</div>
               <div class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</div>
             </div>
-            <Button data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
+            <Button v-if="!apiKeysRestricted" data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
               {{ $t('views.SettingsMcpView.create_mcp_api_key') }}
             </Button>
           </div>
         </template>
         <template #content>
         <div>
+          <div
+            v-if="apiKeysRestricted"
+            class="rounded-lg border border-muted bg-muted/30 p-4 text-sm text-muted-foreground"
+            data-testid="settings-mcp-api-keys-restricted"
+            aria-live="polite"
+          >
+            {{ $t('views.SettingsMcpView.api_keys_restricted') }}
+          </div>
+
+          <template v-else>
           <p class="mb-3 text-xs text-muted-foreground" data-testid="settings-mcp-org-scope-note">
             {{ $t('views.SettingsMcpView.api_keys_act_org_wide_note') }}
           </p>
@@ -98,6 +128,7 @@
             </tbody>
           </table>
           </div>
+          </template>
           </div>
         </template>
       </Card>
@@ -133,17 +164,20 @@
         </template>
       </Card>
 
-      <!-- Registered OAuth Clients -->
-      <Card>
-        <template #title>{{ $t('views.SettingsMcpView.registered_oauth_clients') }}</template>
-        <template #subtitle>{{ $t('views.SettingsMcpView.mcp_oauth_client_applications_registered_for_token_based_auth') }}</template>
-        <template #content>
-        <div class="space-y-4">
-          <p class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.configure_oauth_client_applications_for_mcp_token_based_auth') }}</p>
-          <Button severity="secondary" outlined size="small" disabled>{{ $t('views.SettingsMcpView.register_oauth_client_coming_in_v04') }}</Button>
-          </div>
-        </template>
-      </Card>
+      <!-- Registered OAuth Clients (extracted to McpOauthClientsCard).
+           Rendered behind the SAME data gate as every other card: the
+           post-mutation refetch is silent (silentRefetch) and a refetch
+           failure is non-fatal (see `refetchError` above), so nothing
+           unmounts while the one-time-secret reveal dialog is open - the
+           exemption this card used to carry is no longer needed, and all
+           four cards now appear and disappear together. -->
+      <McpOauthClientsCard
+        :clients="oauthClients"
+        :forbidden="oauthForbidden"
+        :list-error="oauthListError"
+        :can-manage="canManageOauth"
+        @refresh="refreshAfterOauthMutation"
+      />
     </template>
 
     <FormDialog
@@ -193,7 +227,7 @@
       </div>
     </FormDialog>
 
-    <Dialog v-model:visible="keyCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @update:visible="onKeyCreatedDialogClose">
+    <Dialog v-model:visible="keyCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @hide="onKeyCreatedDialogClose">
       <template #header>
         <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_key_created') }}</div>
       </template>
@@ -226,7 +260,7 @@
         </div>
       </div>
       <template #footer>
-        <Button data-testid="settings-mcp-key-created-done" @click="keyCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
+        <Button data-testid="settings-mcp-key-created-done" @click="dismissKeyCreatedDialog">{{ $t('views.SettingsMcpView.done') }}</Button>
       </template>
     </Dialog>
 
@@ -266,8 +300,14 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
 import Select from '../components/shared/AppSelect.vue'
+import McpOauthClientsCard from '../components/settings/McpOauthClientsCard.vue'
+import { useCurrentUser } from '../composables/useCurrentUser'
+import { useSecretReveal } from '../composables/useSecretReveal'
+import { useI18n } from 'vue-i18n'
 
 const planStore = usePlanStore()
+const { orgRole } = useCurrentUser()
+const { t } = useI18n()
 
 interface ApiKeyItem {
   id: string
@@ -282,25 +322,159 @@ interface ApiKeyItem {
 interface McpPageData {
   mcpUrl: string
   apiKeys: ApiKeyItem[]
+  oauthClients: OAuthClientItem[]
+  oauthForbidden: boolean
+  apiKeysForbidden: boolean
+  oauthListError: string | null
 }
 
 type ApiKeyCreatedResponse = components['schemas']['ApiKeyCreatedResponse']
+type OAuthClientItem = components['schemas']['OAuthClientItem']
 
-const { loading, error: loadError, data: mcpData, load: loadAll } = useDataFetch<McpPageData>(
+/**
+ * A GET that only the admin/operator roles may perform can come back 403 for a
+ * viewer (or for a stale JWT whose role was downgraded). The list response
+ * carries the HTTP status on `response`, and the api client normalises error
+ * bodies to a ProblemDetail carrying `status` - check both shapes.
+ */
+function isForbiddenResult(resp: { error?: unknown; response?: { status?: number } } | null): boolean {
+  if (!resp) return false
+  if (resp.response?.status === 403) return true
+  const err = resp.error
+  if (err && typeof err === 'object' && (err as { status?: unknown }).status === 403) return true
+  return false
+}
+
+const {
+  loading,
+  error: loadError,
+  data: mcpData,
+  fetched,
+  load: loadAll,
+} = useDataFetch<McpPageData>(
   async () => {
-    const [mcpResp, keysResp] = await Promise.all([
-      (api as any).GET('/api/v1/api-keys/mcp-config').catch(() => null),
-      (api as any).GET('/api/v1/api-keys').catch(() => null),
+    const [mcpResp, keysResp, oauthResp] = await Promise.all([
+      (api as any).GET('/api/v1/api-keys/mcp-config').catch((e: unknown) => ({ error: e })),
+      (api as any).GET('/api/v1/api-keys').catch((e: unknown) => ({ error: e })),
+      (api as any).GET('/api/v1/mcp/oauth/clients').catch((e: unknown) => ({ error: e })),
     ])
     if (mcpResp.error) return { error: mcpResp.error }
-    if (keysResp.error) return { error: keysResp.error }
-    return { data: { mcpUrl: mcpResp.data.mcp_url, apiKeys: keysResp.data as ApiKeyItem[] } }
+
+    // The API key list carries the SAME admin|operator gate as the OAuth
+    // endpoints (`GET /api/v1/api-keys` raises 403 for any role below
+    // operator), so a 403 here is a RESTRICTED STATE for this card - not a
+    // page failure. Failing the whole page on it would make the OAuth
+    // restricted panel below unreachable in production and would take the MCP
+    // server status / snippet cards down with it. Any NON-403 failure keeps
+    // the pre-existing fatal behaviour.
+    let apiKeys: ApiKeyItem[] = []
+    let apiKeysForbidden = false
+    if (keysResp.error) {
+      if (isForbiddenResult(keysResp)) {
+        apiKeysForbidden = true
+      } else {
+        return { error: keysResp.error }
+      }
+    } else if (Array.isArray(keysResp.data)) {
+      apiKeys = keysResp.data as ApiKeyItem[]
+    }
+
+    // The OAuth client list is deliberately NON-fatal: a 403 (viewer role) or
+    // any other failure must not take down the MCP config / API key cards.
+    const oauthClients: OAuthClientItem[] = []
+    let oauthForbidden = false
+    let oauthListError: string | null = null
+    if (isForbiddenResult(oauthResp)) {
+      oauthForbidden = true
+    } else if (oauthResp.error) {
+      oauthListError = formatApiError(oauthResp.error)
+    } else if (Array.isArray(oauthResp.data)) {
+      oauthClients.push(...(oauthResp.data as OAuthClientItem[]))
+    } else {
+      // A rejection already arrives as `{ error }`; this arm covers a success
+      // body that is not the array the endpoint documents (malformed JSON
+      // degrades here too). Either way it is a FAILURE, never an empty
+      // registry - "No OAuth clients registered yet." would be a lie.
+      oauthListError = t('views.SettingsMcpView.oauth_list_unexpected_response')
+    }
+    return {
+      data: {
+        mcpUrl: mcpResp.data.mcp_url,
+        apiKeys,
+        oauthClients,
+        oauthForbidden,
+        apiKeysForbidden,
+        oauthListError,
+      },
+    }
   },
-  { initialValue: { mcpUrl: '', apiKeys: [] } }
+  {
+    initialValue: {
+      mcpUrl: '',
+      apiKeys: [],
+      oauthClients: [],
+      oauthForbidden: false,
+      apiKeysForbidden: false,
+      oauthListError: null,
+    },
+    // Silent refetch: only the FIRST load flips `loading`, so the
+    // post-mutation refetches (create key, revoke key, OAuth register/revoke)
+    // update the cards in place instead of swapping the whole page for a
+    // spinner and remounting every card mid-dialog (FAR-1251).
+    silentRefetch: true,
+  },
 )
 
 const mcpUrl = computed(() => mcpData.value?.mcpUrl ?? '')
 const apiKeys = computed(() => mcpData.value?.apiKeys ?? [])
+const oauthClients = computed(() => mcpData.value?.oauthClients ?? [])
+const oauthListError = computed(() => mcpData.value?.oauthListError ?? null)
+
+// Role gate: the backend requires org role admin|operator for all three OAuth
+// client endpoints, so a viewer never sees the table or the actions. The 403
+// from the list call is the belt-and-braces fallback for a stale/downgraded
+// JWT - it forces the same restricted state. `McpOauthClientsCard` combines
+// the two itself; this view keeps only what its own API key card needs.
+const canManageOauth = computed(() => orgRole.value === 'admin' || orgRole.value === 'operator')
+const oauthForbidden = computed(() => mcpData.value?.oauthForbidden ?? false)
+// The API key list carries the identical admin|operator gate, so that card
+// degrades the same way: a viewer (role gate, or a 403 from a stale JWT) still
+// gets the MCP server status + snippet cards instead of a dead page.
+const apiKeysRestricted = computed(() => !canManageOauth.value || (mcpData.value?.apiKeysForbidden ?? false))
+
+/**
+ * Split the fetch error by WHEN it happened, because the two cases must not
+ * behave the same:
+ *
+ * - BEFORE the first successful load there is nothing rendered to preserve,
+ *   so the failure stays page-fatal: the ErrorAlert above with retry.
+ * - AFTER a successful load (`fetched` only ever flips true), the failure
+ *   came from a refetch. Replacing the page would destroy last-good state -
+ *   including a one-time client secret revealed in a dialog that can never be
+ *   shown again - so it is surfaced inline instead, with everything left
+ *   mounted on screen.
+ */
+const initialLoadError = computed(() => (fetched.value ? null : loadError.value))
+const refetchError = computed(() => (fetched.value ? loadError.value : null))
+
+/**
+ * The OAuth card emits `refresh` after a successful register/revoke so the
+ * table picks up the change. The refetch is SILENT (silentRefetch above), so
+ * it never unmounts the card or any other while a reveal dialog is open, and
+ * a failure is NOT discarded: a rejected refetch lands in `loadError`, which
+ * `refetchError` renders in the inline aria-live region without replacing the
+ * page. The catch only covers a rejection escaping `load()` itself (vue-query
+ * reports most failures through its error state rather than by rejecting) -
+ * record those the same way instead of swallowing them.
+ */
+async function refreshAfterOauthMutation(): Promise<void> {
+  try {
+    await loadAll()
+  } catch (e: unknown) {
+    loadError.value = formatApiError(e)
+  }
+}
+
 const createKeyDialogOpen = ref(false)
 const createKeyName = ref('')
 const createKeyNameTouched = ref(false)
@@ -309,11 +483,16 @@ const creatingKey = ref(false)
 const createKeyError = ref<string | null>(null)
 
 const keyCreatedDialogOpen = ref(false)
-const createdKeyValue = ref('')
 const createdKeyName = ref('')
-const keyMasked = ref(false)
-const keyMaskCountdown = ref(10)
-let keyMaskTimer: ReturnType<typeof setInterval> | null = null
+// The one-time API key itself lives in `useSecretReveal`: value, the 10s
+// countdown, auto-masking when it elapses, and the wipe on close.
+const {
+  value: createdKeyValue,
+  masked: keyMasked,
+  countdown: keyMaskCountdown,
+  reveal: revealKey,
+  onClose: closeKeySecret,
+} = useSecretReveal()
 
 const revokeKeyDialogOpen = ref(false)
 const revokeKeyTarget = ref<ApiKeyItem | null>(null)
@@ -321,6 +500,12 @@ const revokingKey = ref(false)
 const revokeKeyError = ref<string | null>(null)
 
 const copiedField = ref<string | null>(null)
+// Set when a clipboard write REJECTED. `navigator.clipboard` only exists in a
+// secure context, so a self-hosted instance on plain HTTP can never copy - and
+// for the one-time credential dialogs the clipboard is the only way to keep
+// the value. A console warning alone would lose the credential silently, so
+// the failing field carries a visible "copy manually" message instead.
+const copyFailedField = ref<string | null>(null)
 let mcpCopyTimeout: ReturnType<typeof setTimeout> | null = null
 
 const selectedMcpClient = ref('opencode')
@@ -362,31 +547,30 @@ function formatDate(iso: string): string {
   }
 }
 
-function clearKeyMaskTimer() {
-  if (keyMaskTimer !== null) {
-    clearInterval(keyMaskTimer)
-    keyMaskTimer = null
-  }
+/**
+ * Wipe the revealed API key dialog's surrounding state on close - the value
+ * is only ever shown once, so it must not outlive the dialog (same convention
+ * as AdminUsersView's `dismissCredentialState`). `useSecretReveal` owns the
+ * secret itself (see `closeKeySecret` below); this clears the bits around it.
+ */
+function dismissKeyCredentialState() {
+  createdKeyName.value = ''
+  if (copyFailedField.value === 'key-value') copyFailedField.value = null
 }
 
-function startKeyMaskCountdown() {
-  clearKeyMaskTimer()
-  keyMasked.value = false
-  keyMaskCountdown.value = 10
-  keyMaskTimer = setInterval(() => {
-    keyMaskCountdown.value--
-    if (keyMaskCountdown.value <= 0) {
-      keyMasked.value = true
-      clearKeyMaskTimer()
-    }
-  }, 1000)
+/**
+ * Bound to the Dialog's `hide` event, which PrimeVue emits for EVERY close
+ * path (mask click, X, ESC, and the prop-driven close) - unlike
+ * `update:visible`, which never fires when the parent flips the v-model.
+ */
+function onKeyCreatedDialogClose() {
+  closeKeySecret() // stop the countdown and wipe the secret
+  dismissKeyCredentialState()
 }
 
-function onKeyCreatedDialogClose(open: boolean) {
-  if (!open) {
-    clearKeyMaskTimer()
-    keyMasked.value = true
-  }
+function dismissKeyCreatedDialog() {
+  keyCreatedDialogOpen.value = false
+  onKeyCreatedDialogClose()
 }
 
 function openCreateKeyDialog() {
@@ -409,11 +593,10 @@ async function createKey() {
       createKeyError.value = formatApiError(err)
     } else if (data) {
       const created = data as ApiKeyCreatedResponse
-      createdKeyValue.value = created.key_value
       createdKeyName.value = created.name
       createKeyDialogOpen.value = false
       keyCreatedDialogOpen.value = true
-      startKeyMaskCountdown()
+      revealKey(created.key_value)
       await loadAll()
     }
   } catch (e: unknown) {
@@ -455,12 +638,12 @@ async function revokeKey() {
 function copyServerUrl() {
   copyToClipboard(mcpUrl.value || 'http://localhost:8000', 'server-url')
 }
-
 function copySnippet() {
   copyToClipboard(mcpConfigSnippet.value, 'mcp-snippet')
 }
 
 async function copyToClipboard(text: string, field: string) {
+  copyFailedField.value = null
   try {
     await navigator.clipboard.writeText(text)
     copiedField.value = field
@@ -471,13 +654,22 @@ async function copyToClipboard(text: string, field: string) {
       }
     }, 2000)
   } catch (e) {
+    // `navigator.clipboard` is undefined outside a secure context (a
+    // self-hosted instance on plain HTTP), so this is a realistic failure -
+    // and for the one-time credential dialog the clipboard is the only way
+    // to keep the value. Surface it on the field itself, not just in the
+    // console, and leave the readonly input selectable so the value can be
+    // copied by hand.
     console.warn('Failed to copy MCP config', e)
+    copiedField.value = null
+    copyFailedField.value = field
   }
 }
 
 onMounted(() => { planStore.fetchPlan() })
+// The API key reveal timer is owned by `useSecretReveal`, which clears it on
+// unmount; only the copy "Copied" flash timeout is left to clean up here.
 onUnmounted(() => {
-  clearKeyMaskTimer()
   if (mcpCopyTimeout) clearTimeout(mcpCopyTimeout)
 })
 </script>

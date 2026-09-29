@@ -1150,13 +1150,23 @@ class TestParkExpiredHitlRuns:
         assert result == {"parked": 1}
         park_stmts = [s for s in statements if "UPDATE runs SET status" in s]
         assert len(park_stmts) == 1
-        # Predicate shape: only awaiting_human runs, past the grace window,
+        # Predicate shape: only awaiting_human runs, past the review deadline,
         # with an expired UNCLAIMED undecided gate and no other open gate.
         assert "runs.status = :awaiting_status" in park_stmts[0]
         assert "cancellation_requested = false" in park_stmts[0]
         assert "hc.expires_at < now() - (:grace_seconds * interval '1 second')" in park_stmts[0]
         assert "hc.account_id IS NULL" in park_stmts[0]
         assert "hc2.account_id IS NOT NULL" in park_stmts[0]
+        # FAR-1257: TWO-armed deadline — stamped claims park at
+        # ``terminalize_at + :park_margin_seconds``; unstamped (legacy) claims
+        # keep the exact ``expires_at + :grace_seconds`` arithmetic above.
+        assert "hc.terminalize_at IS NOT NULL" in park_stmts[0]
+        assert "(hc.terminalize_at + (:park_margin_seconds * interval '1 second')) < now()" in park_stmts[0]
+        assert "(hc2.terminalize_at + (:park_margin_seconds * interval '1 second')) >= now()" in park_stmts[0]
+        # The margin is a BOUND PARAM derived in code, never a SQL literal.
+        margin_params = [p for p in engine.params_seen if "park_margin_seconds" in p]
+        assert margin_params
+        assert margin_params[0]["park_margin_seconds"] == ra._park_margin_seconds(86400)
         # qa F13: NO parked_at stamp exists anywhere — the run's hitl_parked
         # STATUS is the parked signal; the gate row is untouched (the park
         # UPDATE is the org transaction's ONLY write).
@@ -1346,3 +1356,35 @@ class TestParkExpiredHitlRuns:
         assert len(parked_events) == 2
         event_orgs = {str(r.args[2]) for r in parked_events}
         assert event_orgs == {str(ORG_ID), str(org2)}
+
+
+class TestParkMarginFAR1257:
+    """FAR-1257: the park deadline derives from the REVIEW deadline.
+
+    ``_park_margin_seconds`` is what makes "cancel precedes park" structural:
+    the terminalizer collects at ``terminalize_at`` itself, the park sweep may
+    only match ``terminalize_at + margin``, so a run is cancelled (releasing
+    its org slot) before it could ever be parked.
+    """
+
+    def test_default_park_grace_passes_through(self) -> None:
+        # Shipped default: 24h park grace -> a 24h margin after the deadline.
+        assert ra._park_margin_seconds(86400) == 86400
+
+    @pytest.mark.parametrize("grace", [604800, 3600, 3601])
+    def test_large_park_graces_pass_through(self, grace: int) -> None:
+        assert ra._park_margin_seconds(grace) == grace
+
+    @pytest.mark.parametrize("grace", [1, 60, 299])
+    def test_margin_is_floored_at_five_reconcile_ticks(self, grace: int) -> None:
+        # HITL_PARK_GRACE_SECONDS has ge=60, so a 60s park grace would let the
+        # park sweep match in the same 60s reconcile tick as the terminalizer
+        # it must never beat. The floor keeps cancel strictly first.
+        assert ra._park_margin_seconds(grace) == ra._PARK_MARGIN_FLOOR_SECONDS
+        assert ra._PARK_MARGIN_FLOOR_SECONDS == 300
+
+    def test_margin_is_always_strictly_positive(self) -> None:
+        # "Cancel precedes park BY CONSTRUCTION" � no configured value can
+        # make the margin zero or negative.
+        for grace in (0, -5, 1, 60, 86400):
+            assert ra._park_margin_seconds(grace) > 0
