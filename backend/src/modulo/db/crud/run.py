@@ -25,6 +25,7 @@ from sqlalchemy.orm import defer, selectinload
 
 from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.db.crud.base import PageResult
+from modulo.db.crud.notifications import create_notification
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.crud.run_node_outputs import (
@@ -50,6 +51,7 @@ from modulo.db.lifecycle_refs import (
     validate_ref_entry,
 )
 from modulo.db.models.journey import Journey
+from modulo.db.models.notification import Notification
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import (
@@ -2235,16 +2237,23 @@ async def _write_unclassified_classification(session: AsyncSession, run: Run) ->
 
 
 async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
-    """FAR-189 hook: classify + persist the run-outcome record for a terminal run.
+    """Terminal-write hooks: run-outcome classification (FAR-189) + the
+    one-PR-per-run delivery-contract enforcement (FAR-1274).
 
-    Best-effort and NEVER raises. Imported lazily so the classification
-    machinery stays off the hot CRUD import path (the vast majority of
-    ``update_run_status`` calls are non-terminal). The import AND the call are
-    guarded: a classifier import failure must not roll back the terminal status
-    write that already flushed — on any failure an ``unclassified`` marker is
-    written directly instead. All callers gate on ``TERMINAL_STATUSES`` before
-    invoking, so the status guard lives only in
+    Best-effort and NEVER raises (cancellation excepted). Imported lazily so
+    the classification machinery stays off the hot CRUD import path (the vast
+    majority of ``update_run_status`` calls are non-terminal). The import AND
+    the call are guarded: a classifier import failure must not roll back the
+    terminal status write that already flushed — on any failure an
+    ``unclassified`` marker is written directly instead. All callers gate on
+    ``TERMINAL_STATUSES`` before invoking, so the status guard lives only in
     ``classify_and_persist_run`` (the shared entry point).
+
+    The second hook (:func:`_enforce_one_pr_per_run`) deliberately rides THIS
+    function rather than each of the four terminal writers individually: one
+    call site means every terminalizer that funnels through ``db.crud.run``
+    gets the guarantee, and a caller that stubs out classification (tests)
+    stubs the whole terminal-hook pair.
     """
     try:
         from modulo.core.pipeline_engine.classify import classify_and_persist_run
@@ -2255,6 +2264,211 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
     except Exception:
         _log.exception("classification.import_or_call_failed run=%s", run.id)
         await _write_unclassified_classification(session, run)
+    await _enforce_one_pr_per_run(session, run)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1274 — the one-PR-per-run delivery contract, enforced OUTSIDE the sandbox
+# ---------------------------------------------------------------------------
+#
+# The FAR-1264 ``gh`` shim that refuses a second ``gh pr create`` lives INSIDE
+# the sandbox as an agent-writable claim file: it handles the observed failure
+# mode (an accidental re-run of the PR step) but cannot be made tamper-proof,
+# so it is defence in depth, not a guarantee. The platform-side guarantee is
+# DETECTION — every terminal write re-scans the run's platform-CAPTURED
+# delivery evidence for distinct GitHub pull-request URLs and records a breach
+# loudly (error log + an admin-scoped in-app notification written in the SAME
+# transaction as the terminal status) when it finds two or more.
+#
+# Why the captured stdout and NOT the delivery sentinel: FAR-1254's second
+# ``gh pr create`` did NOT re-echo the sentinel, so counting sentinel lines —
+# or reading the boolean ``delivery_done`` stamp — cannot see a second PR.
+# ``gh pr create`` DOES print the URL it created, and that stdout is persisted
+# by the engine as telemetry ``agent_stdout`` / ``agent_stderr`` /
+# ``sandbox_log_tail`` and, on the retention branches, marker ``raw_output`` —
+# text captured by the platform, which the agent cannot retro-edit the way it
+# controls its own ``output.json`` ``pr_url`` field. The scan therefore reads
+# EVERY string in the three stored blobs (captured output AND declared fields)
+# rather than the single first-match the classifier's ``pr_url`` extractor
+# keeps, which would collapse both PRs onto one URL.
+
+#: GitHub PR URL grammar for the one-PR-per-run scan (FAR-1274). Mirrors
+#: ``pipeline_engine.node_runner._PR_URL_PATTERN`` so the detector and the
+#: raw-output ``pr_url`` extractor agree on what counts as a PR URL — two
+#: copies are the same deliberate layering trade-off recorded for the
+#: idempotency-ref regex above (``modulo.db`` may not import ``modulo.core``:
+#: import-linter contract ``db-does-not-import-core``).
+_PR_URL_PATTERN = re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
+
+#: Bounded walk depth when unwrapping the stored blobs looking for PR URLs
+#: (the envelopes nest ~5 deep: artifacts -> output -> output_json -> field).
+#: Self-referential blobs terminate via the seen-id set, never a RecursionError.
+_PR_SCAN_MAX_DEPTH = 8
+
+#: Notification category for a one-PR-per-run breach (FAR-1274).
+NOTIFICATION_CATEGORY_DUPLICATE_PR = "run.duplicate_pr_delivery"
+
+#: How long the breach alert stays visible before it expires.
+_DUPLICATE_PR_NOTIFICATION_TTL = timedelta(days=7)
+
+
+def _walk_pr_urls(value: Any, depth: int, seen: set[int], urls: list[str], seen_urls: set[str]) -> None:
+    """Collect distinct GitHub PR URLs from every string in the *value* tree.
+
+    Bounded by *_PR_SCAN_MAX_DEPTH* and cycle-safe (dicts/lists are tracked by
+    ``id``), so a self-referential or pathologically nested blob terminates.
+    Strings are matched with :data:`_PR_URL_PATTERN` (``findall``); non-string
+    scalars are ignored.
+    """
+    if depth > _PR_SCAN_MAX_DEPTH:
+        return
+    if isinstance(value, str):
+        for match in _PR_URL_PATTERN.findall(value):
+            if match not in seen_urls:
+                seen_urls.add(match)
+                urls.append(match)
+        return
+    if isinstance(value, dict):
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        for item in value.values():
+            _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
+        return
+    if isinstance(value, (list, tuple)):
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        for item in value:
+            _walk_pr_urls(item, depth + 1, seen, urls, seen_urls)
+
+
+def collect_delivery_pr_urls(
+    outputs: Any,
+    telemetry: Any,
+    markers: Any,
+) -> list[str]:
+    """Every distinct GitHub PR URL across the run's delivery evidence (FAR-1274).
+
+    Scans the three blobs the platform persists for a run — the node returns
+    (``outputs``), the per-node telemetry (``agent_stdout`` and friends, the
+    platform-captured transcript), and the FAR-188 raw-output retention
+    markers (``raw_output`` + the declared ``pr_url``) — for PR URLs, in
+    first-seen order and deduplicated. A URL the agent only DECLARED (its
+    ``output.json`` ``pr_url``) counts too, so evidence survives even when the
+    transcript was truncated away.
+
+    Pure and DB-free: unit-testable without a database.
+    """
+    urls: list[str] = []
+    seen_urls: set[str] = set()
+    seen_ids: set[int] = set()
+    for blob in (outputs, telemetry, markers):
+        _walk_pr_urls(blob, 0, seen_ids, urls, seen_urls)
+    return urls
+
+
+def find_duplicate_pr_urls(
+    outputs: Any,
+    telemetry: Any,
+    markers: Any,
+) -> list[str]:
+    """The one-PR-per-run breach verdict: two-or-more distinct PR URLs, else ``[]``.
+
+    ``[]`` is both "no PR at all" and "exactly one PR" — only a MULTI-PR result
+    is a breach (a run referencing the same URL from output + marker + declared
+    field is still one PR).
+    """
+    urls = collect_delivery_pr_urls(outputs, telemetry, markers)
+    return urls if len(urls) >= 2 else []
+
+
+async def _record_duplicate_pr_notification(session: AsyncSession, run: Run, pr_urls: list[str]) -> None:
+    """Write the loud, durable breach alert (FAR-1274) — admin, error level.
+
+    Created through the db-layer ``create_notification`` (NOT the core
+    ``Notifier``) for two reasons: the terminalization chokepoint lives here in
+    ``modulo.db`` and the import-linter contract forbids ``modulo.db`` importing
+    ``modulo.core``; and creating the row in the CALLER'S transaction makes the
+    alert atomic with the terminal status write — a rolled-back terminalization
+    can never leave a phantom alert behind (the Notifier opens its own session).
+
+    Idempotent per run: a re-terminalization (retry policy re-runs the run)
+    finds the earlier alert by ``(org, category, action_url)`` and does not
+    stack a second one.
+    """
+    org_id = getattr(run, "organisation_id", None)
+    if org_id is None:
+        _log.error(
+            "delivery_contract.duplicate_pr_missing_org run=%s pr_urls=%s",
+            run.id,
+            pr_urls,
+        )
+        return
+    action_url = f"/runs/{run.id}"
+    existing = await session.execute(
+        select(Notification.id)
+        .where(
+            Notification.organisation_id == org_id,
+            Notification.category == NOTIFICATION_CATEGORY_DUPLICATE_PR,
+            Notification.action_url == action_url,
+        )
+        .limit(1)
+    )
+    if existing.scalar_one_or_none() is not None:
+        return
+    run_number = getattr(run, "run_number", None)
+    label = f"run #{run_number}" if isinstance(run_number, int) else f"run {run.id}"
+    await create_notification(
+        session,
+        org_id=org_id,
+        scope="admin",
+        level="error",
+        category=NOTIFICATION_CATEGORY_DUPLICATE_PR,
+        title=f"Multiple PRs detected in one run — {label}",
+        body=(
+            f"The one-PR-per-run delivery contract was breached: {label} captured "
+            f"{len(pr_urls)} distinct pull-request URLs in its delivery evidence: "
+            f"{', '.join(pr_urls)}. Detection is platform-side (FAR-1274); the "
+            "in-sandbox gh guard is defence in depth. Review the run and close "
+            "the duplicate pull request(s)."
+        ),
+        action_url=action_url,
+        dismiss_strategy="org_admin",
+        dismissible_at_scope=True,
+        expires_at=datetime.now(UTC) + _DUPLICATE_PR_NOTIFICATION_TTL,
+    )
+
+
+async def _enforce_one_pr_per_run(session: AsyncSession, run: Run) -> None:
+    """FAR-1274: detect a run whose captured evidence holds >1 PR URL, loudly.
+
+    Reads the run's three stored blobs (one batched reader call, the same one
+    the classifier uses) and, on a breach, logs at ERROR level and writes the
+    admin-scoped notification in the SAME transaction. Best-effort and NEVER
+    raises (cancellation excepted): detection must never wedge or roll back a
+    terminal status write. A blob read that fails (RLS precheck, DB blip)
+    degrades to a logged miss — the guarantee is detection-of-retained-evidence,
+    so a read failure is a gap, not a reason to fail the run.
+    """
+    try:
+        blobs = await read_run_node_outputs_raw(
+            session,
+            run_id=run.id,
+            organisation_id=getattr(run, "organisation_id", None),
+        )
+        pr_urls = find_duplicate_pr_urls(blobs.outputs, blobs.telemetry, blobs.markers)
+        if not pr_urls:
+            return
+        _log.error(
+            "delivery_contract.duplicate_pr",
+            extra={"run_id": str(run.id), "pr_count": len(pr_urls), "pr_urls": pr_urls},
+        )
+        await _record_duplicate_pr_notification(session, run, pr_urls)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("delivery_contract.enforcement_failed run=%s", run.id)
 
 
 def _apply_run_claim_fields(run: Run, status: str, update: _RunStatusUpdate) -> None:
