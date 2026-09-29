@@ -317,6 +317,10 @@ interface ApiKeyItem {
   // Serialized by _serialize_key (backend/src/modulo/auth/api_key.py) alongside
   // is_active - always present on the wire, null when the key never expires.
   expires_at: string | null
+  // FAR-1299: the revocation FACT, emitted like expires_at. null until an
+  // operator revokes the key; it is NOT derivable from is_active ALONE, which
+  // is computed and says only that the key stopped working, never why.
+  revoked_at: string | null
   last_used_at: string | null
   created_at: string
 }
@@ -596,7 +600,7 @@ function formatDate(iso: string): string {
 type ApiKeyStatus = 'active' | 'expired' | 'revoked'
 
 /**
- * FAR-1296: derive the key's status.
+ * FAR-1296: derive the key's status. FAR-1299: derive it from FACTS.
  *
  * `is_active` is DERIVED backend state, not a stored flag: the serializer
  * computes `revoked_at is None and (expires_at is None or expires_at > now)`
@@ -604,24 +608,44 @@ type ApiKeyStatus = 'active' | 'expired' | 'revoked'
  * that the key stopped working - never WHY - and labelling every inactive key
  * "Revoked" called an expired key by an admin's action.
  *
- * The list payload carries `expires_at`, which separates the two causes:
+ * FAR-1299: the payload now carries `revoked_at`, so "Revoked" is an OBSERVED
+ * fact rather than the complement of the expiry check:
  *
- * - `active`   - `is_active` is true.
- * - `expired`  - inactive AND the expiry has elapsed: nobody revoked it, the
- *                clock did.
- * - `revoked`  - inactive with no elapsed expiry. An expiry that never came
- *                due cannot explain the inactive state, so revocation can.
+ * - `revoked` - `revoked_at` is set: an operator revoked this key, full stop.
+ *   Checked FIRST, so a key that was both revoked and later expired (or whose
+ *   `expires_at` is unparseable, which `Date.parse` makes NaN and so never
+ *   `<= now`) still reports the action that actually disabled it.
+ * - `expired` - `revoked_at` is null AND the expiry has elapsed: nobody revoked
+ *                it, the clock did.
+ * - `active`  - `revoked_at` is null and the expiry has not elapsed.
  *
- * The payload does not carry `revoked_at`, and the list endpoint filters
- * revoked rows out entirely (`include_revoked=False` - api_key.py:380/384-385),
- * so `revoked` is the sound complement of the other two rather than a directly
- * observed field. An unparseable `expires_at` on an inactive key falls to
- * `revoked`, matching the backend's own "not provably expired" reading.
+ * `is_active` is deliberately NOT consulted: it is the very DERIVED flag that
+ * cannot separate the two causes, and FAR-1299's requirement is to read the
+ * fact rather than infer it. The two cannot disagree on a real row anyway —
+ * the serializer derives `is_active` from `revoked_at`
+ * (backend/src/modulo/auth/api_key.py:359).
+ *
+ * Two consequences worth knowing, both bounded by the list route's own filter
+ * (`return await list_api_keys(session, principal.organisation_id)` at
+ * backend/src/modulo/api/routes/api_keys.py:459, which never passes
+ * `include_revoked`, so the query drops `revoked_at IS NOT NULL` rows):
+ *
+ * 1. Today the payload can never carry a set `revoked_at`, so the first branch
+ *    is forward-looking. Whether revoked keys should be VISIBLE is FAR-1300,
+ *    still open; when that filter relaxes they arrive with `revoked_at` set and
+ *    this branch starts firing.
+ * 2. A row that is `is_active: false` with `revoked_at: null` and no elapsed
+ *    expiry cannot be produced by that query either, so the 'active' fallback
+ *    never labels a dead key live in practice.
+ *
+ * The Revoke button above still keys off `key.is_active` (it is v-if'd on it),
+ * which stays correct for the same reason: the serializer derives that flag
+ * from the same `revoked_at`.
  */
 function apiKeyStatus(key: ApiKeyItem): ApiKeyStatus {
-  if (key.is_active) return 'active'
+  if (key.revoked_at) return 'revoked'
   if (key.expires_at && Date.parse(key.expires_at) <= Date.now()) return 'expired'
-  return 'revoked'
+  return 'active'
 }
 
 function apiKeyStatusMeta(key: ApiKeyItem): { severity: 'success' | 'warn' | 'secondary'; label: string } {
