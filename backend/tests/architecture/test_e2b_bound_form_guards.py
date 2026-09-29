@@ -143,8 +143,7 @@ def test_a21_apply_sandbox_policy_confined_to_its_host_modules() -> None:
     """ADR 040 A21: the engine-side invocation retired with R6.
 
     ``node_runner`` imported ``apply_sandbox_policy`` until R6 removed it, so
-    the bound form is ACTIVE (green) as of FAR-1050 R6 — not a pending
-    end-state.
+    the bound form is ACTIVE (green) as of FAR-1050 R6.
     """
     violations: list[str] = []
     for path in _python_files():
