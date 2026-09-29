@@ -16,25 +16,25 @@
       </div>
 
       <div v-if="loading" data-testid="settings-observability-loading" class="space-y-6">
-        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse">
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
           <div class="mb-4 h-5 w-40 bg-muted rounded" />
           <div class="mb-1 h-4 w-32 bg-muted rounded" />
           <div class="h-9 w-full bg-muted rounded" />
         </div>
-        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse">
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
           <div class="mb-4 flex items-center justify-between">
             <div class="h-5 w-32 bg-muted rounded" />
             <div class="h-8 w-28 bg-muted rounded" />
           </div>
           <div class="h-9 w-full bg-muted rounded" />
         </div>
-        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse">
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
           <div class="mb-4 h-5 w-36 bg-muted rounded" />
           <div class="mb-1 h-4 w-40 bg-muted rounded" />
           <div class="h-9 w-full bg-muted rounded" />
           <div class="mt-2 h-3 w-2/3 bg-muted rounded" />
         </div>
-        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse">
+        <div class="rounded-lg border bg-card p-6 shadow-sm animate-pulse" aria-hidden="true">
           <div class="mb-4 h-5 w-28 bg-muted rounded" />
           <div class="flex items-center gap-3">
             <div class="h-6 w-11 rounded-full bg-muted" />
