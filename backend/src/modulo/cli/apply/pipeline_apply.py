@@ -312,6 +312,10 @@ def apply_pipelines(
                         # this key, so the create path must carry the
                         # declared value (explicit null = no override).
                         "stdout_retention_config": entity.stdout_retention_config,
+                        # Always sent (incl. explicit null): managed
+                        # unconditionally like stdout_retention_config —
+                        # omission means null (inherit org/instance default).
+                        "hitl_review_window_seconds": entity.hitl_review_window_seconds,
                         "max_autonomy_level": entity.max_autonomy_level,
                         "business_owner_id": business_owner_id,
                         "reliability_owner_id": reliability_owner_id,
@@ -352,6 +356,11 @@ def apply_pipelines(
                     # accepts null; the PATCH route uses exclude_unset so an
                     # explicit null clears the stored override).
                     "stdout_retention_config": entity.stdout_retention_config,
+                    # Always sent (including explicit null): managed
+                    # unconditionally like stdout_retention_config, so the
+                    # declared null must be able to CLEAR a UI/API-set
+                    # per-pipeline override (PipelineUpdate accepts null).
+                    "hitl_review_window_seconds": entity.hitl_review_window_seconds,
                     "business_owner_id": business_owner_id,
                     "reliability_owner_id": reliability_owner_id,
                 }

@@ -96,8 +96,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0262_hitl_gate_to_review_vocabulary (FAR-1104) chains off 0261, and
 # 0263_evidence_layer (FAR-966) chains off 0262, and
 # 0265_hitl_review_window (FAR-1257) chains off
-# 0264_pipelines_max_autonomy_ge_default as the chain head.
-_CHAIN_HEAD_MIGRATION = "0265_hitl_review_window"
+# 0264_pipelines_max_autonomy_ge_default, and
+# 0266_guardrail_policy_gate_sweep (FAR-1107) chains off 0265 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0266_guardrail_policy_gate_sweep"
 
 
 def _source(name: str) -> str:

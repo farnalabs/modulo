@@ -281,8 +281,8 @@ regression that silently weakens the suite:
   ``assert_any_call`` fresh mocks can never match any recorded call either.
   This is the expected-argument twin of the assert-test-expression Mock lens:
   it is almost always a leftover from inlining a double while debugging.
-   Configure the double and pass the configured instance (or use a bound
-   name), or assert on the real expected value
+  Configure the double and pass the configured instance (or use a bound
+  name), or assert on the real expected value
  - a freshly-constructed Mock nested *inside* a ``call(...)`` wrapper passed
    as an *expected* argument to a mock verification — ``<mock>.assert_called_with(
    call(Mock()))``, ``assert_has_calls([call(MagicMock())])``,
@@ -420,6 +420,29 @@ regression that silently weakens the suite:
    same — configure the double (``return_value``/``side_effect``) and verify
    through ``assert_called*``/attribute checks instead of comparing to a
    constructor call
+ - ``mock.side_effect = Mock()`` (and the ``magic``/``async``/``spec`` twins) —
+   a *freshly-constructed* Mock assigned to the ``side_effect`` slot of a
+   double, in either the attribute-assignment spelling
+   (``mock.side_effect = Mock()``) or a mock constructor whose own
+   ``side_effect=`` keyword is another fresh constructor
+   (``Mock(side_effect=MagicMock())``). ``side_effect`` is documented as a
+   callable, an iterable, or an exception class/instance, and a Mock instance
+   is a *callable*: calling the double invokes it and returns *its* fresh
+   ``return_value`` — a brand-new Mock on every call — so the double never
+   raises and never returns what the author intended, and any ``assert`` on
+   the returned value silently inspects a fresh identity-equal-to-nothing
+   double. This is the assignment twin of the fresh-Mock-in-call-
+   assertion lens, which deliberately leaves ``side_effect = Mock()`` alone
+   (a negative control there); the author intends either to raise
+   (``side_effect = <exception class/instance>``), to return a value
+   (``return_value = ...``), or to dispatch through a *bound, configured*
+   delegate (``side_effect = helper``). Only constructor *calls* are flagged
+   — a class reference (``side_effect = MagicMock``) is the deliberate
+   factory spell and is left alone — and ``PropertyMock`` is excluded
+   (it is the one constructor this file blesses in the ``side_effect`` slot),
+   as are ``patch(..., side_effect=...)`` calls and sequences/iterables
+   (``side_effect = [Mock(), Mock()]``), which are their own documented
+   patterns
  - an ``assert x in <mock>`` / ``assert x not in <mock>`` membership probe whose
    container side is a ``unittest.mock`` double — a mock factory call
    (``MagicMock()``/``AsyncMock()``/``Mock()`` or the ``mocker.``/
@@ -6287,6 +6310,173 @@ def test_fresh_mock_in_call_assertions_lens_flags_impossible_expectations():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _fresh_mock_in_call_assertions(tree), f"lens should NOT flag:\n{source}"
+
+
+#: Mock constructors that are dead as a ``side_effect`` value. ``PropertyMock``
+#: is deliberately excluded: this file's Mock-constructor lens documents it as
+#: the one double that IS valid in the ``return_value``/``side_effect`` slot.
+_SIDE_EFFECT_DEAD_CONSTRUCTORS = _MOCK_CONSTRUCTOR_NAMES - {"PropertyMock"}
+
+
+def _is_side_effect_dead_constructor_call(node: ast.AST) -> bool:
+    """True when ``node`` is a call to a fresh-Mock constructor that has no
+    business sitting in a ``side_effect`` slot — the plain
+    ``Mock``/``MagicMock``/``AsyncMock``/``NonCallableMock`` family in any
+    spelling (bare, ``mock.``, ``mocker.``, ``unittest.mock.``), excluding
+    ``PropertyMock`` (blessed in this position). Mirrors the recognition shape
+    of :func:`_is_mock_constructor_call` with that one constructor removed."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in _SIDE_EFFECT_DEAD_CONSTRUCTORS
+    if isinstance(func, ast.Attribute):
+        return func.attr in _SIDE_EFFECT_DEAD_CONSTRUCTORS
+    return False
+
+
+def _fresh_mock_side_effect_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every double whose ``side_effect``
+    slot is assigned a *freshly-constructed* Mock.
+
+    Two shapes are covered:
+
+    - an attribute assignment ``<double>.side_effect = <fresh Mock call>``
+      (``mock.side_effect = Mock()``, ``self.client.session.side_effect =
+      MagicMock()``) — any attribute target whose terminal attribute is
+      ``side_effect``;
+    - a Mock constructor whose own ``side_effect=`` keyword value is itself a
+      fresh Mock constructor (``Mock(side_effect=MagicMock())``).
+
+    ``side_effect`` is documented as a callable, an iterable, or an exception
+    class/instance, and a Mock instance is a callable: calling the double
+    invokes it and returns *its* ``return_value`` — a brand-new Mock every
+    call — so the double returns a fresh identity-equal-to-nothing double
+    instead of raising or returning the intended value. Only constructor
+    *calls* are flagged: a class reference (``side_effect = MagicMock``),
+    a bound configured delegate (``side_effect = helper``), an iterable
+    (``side_effect = [Mock(), Mock()]``), ``patch(..., side_effect=...)``,
+    and ``PropertyMock`` are their own legitimate patterns and are left
+    alone. No name resolution is involved, mirroring the sibling
+    Mock-constructor lenses."""
+    found: list[tuple[int, str]] = []
+
+    def _report(lineno: int, detail: str) -> None:
+        found.append(
+            (
+                lineno,
+                (
+                    f"{detail} — a fresh Mock in the side_effect slot is callable, so calling the "
+                    "double returns its return_value (a brand-new Mock every call) instead of the "
+                    "intended value or exception"
+                ),
+            )
+        )
+
+    for node in _all_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if not (isinstance(target, ast.Attribute) and target.attr == "side_effect"):
+                    continue
+                if _is_side_effect_dead_constructor_call(node.value):
+                    _report(node.lineno, ast.unparse(node.value))
+            continue
+        if isinstance(node, ast.AnnAssign):
+            if not (isinstance(node.target, ast.Attribute) and node.target.attr == "side_effect"):
+                continue
+            if node.value is not None and _is_side_effect_dead_constructor_call(node.value):
+                _report(node.lineno, ast.unparse(node.value))
+            continue
+        if not isinstance(node, ast.Call):
+            continue
+        if not _is_side_effect_dead_constructor_call(node):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "side_effect" and _is_side_effect_dead_constructor_call(kw.value):
+                _report(node.lineno, ast.unparse(node))
+    return found
+
+
+def test_no_fresh_mock_side_effect():
+    """A freshly-constructed Mock assigned to a double's ``side_effect`` slot —
+    ``mock.side_effect = Mock()``, ``Mock(side_effect=MagicMock())`` — is a
+    dead delegation. ``side_effect`` is documented as a callable, an iterable,
+    or an exception class/instance, and a Mock instance *is* a callable, so
+    calling the double invokes it and returns *its* ``return_value``: a
+    brand-new Mock on every call, never the object (or exception) the author
+    intended. Any ``assert`` on the returned value then silently inspects a
+    fresh identity-equal-to-nothing double, and a mutation-testing run
+    believes the delegation works when the double never raises and never
+    returns the configured thing. This is the assignment twin of the
+    fresh-Mock-in-call-assertion lens, which deliberately leaves
+    ``side_effect = Mock()`` alone (a negative control there). Raise through
+    ``side_effect = <exception instance>``, return through
+    ``return_value = ...``, or delegate through a *bound configured* double
+    (``side_effect = helper``). Only constructor calls are flagged — the
+    class-reference factory spelling (``side_effect = MagicMock``),
+    ``PropertyMock``, iterables/sequences, and ``patch(...)`` calls are their
+    own documented patterns and are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _fresh_mock_side_effect_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} fresh Mock instance(s) in a side_effect slot.\n"
+        "A fresh Mock in side_effect is callable, so calling the double returns the mock's "
+        "own return_value (a brand-new Mock each call) instead of the intended value or "
+        "exception. Raise through side_effect=<exception instance>, return through "
+        "return_value=..., or delegate through a bound configured double.\n" + "\n".join(violations)
+    )
+
+
+def test_fresh_mock_side_effect_lens_flags_dead_delegation():
+    """Synthetic positive/negative control for the fresh-Mock-side_effect lens:
+    it must flag a fresh Mock constructor assigned to a ``side_effect`` slot
+    (attribute assignment or constructor keyword, any constructor spelling)
+    and ignore the legitimate ``side_effect`` values — class references,
+    exceptions, functions, iterables/sequences of mocks, bound configured
+    doubles, ``patch(...)`` calls, ``PropertyMock``, and ``return_value``
+    assignments."""
+    positive_sources = [
+        "def test_foo():\n    mock.side_effect = Mock()\n",
+        "def test_foo():\n    mock.side_effect = MagicMock()\n",
+        "def test_foo():\n    mock.side_effect = AsyncMock()\n",
+        "def test_foo():\n    mocker.run.side_effect = NonCallableMock()\n",
+        "def test_foo():\n    self.client.session.side_effect = mock.MagicMock()\n",
+        "def test_foo():\n    _mock_canary.side_effect = unittest.mock.AsyncMock()\n",
+        "def test_foo():\n    mock.side_effect = mocker.Mock(spec=HTTPResponse)\n",
+        "def test_foo():\n    double = Mock(side_effect=MagicMock())\n",
+        "def test_foo():\n    magic = MagicMock(side_effect=Mock())\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _fresh_mock_side_effect_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock.side_effect = Mock\n",
+        "def test_foo():\n    mock.side_effect = error\n",
+        "def test_foo():\n    mock.side_effect = _health_side_effect\n",
+        "def test_foo():\n    mock.side_effect = ValueError('boom')\n",
+        "def test_foo():\n    mock.side_effect = ValueError\n",
+        "def test_foo():\n    mock.side_effect = [Mock(), MagicMock()]\n",
+        "def test_foo():\n    mock.side_effect = lambda *a, **k: 42\n",
+        "def test_foo():\n    mock.side_effect = helper\n",
+        "def test_foo():\n    session.execute = AsyncMock(side_effect=mock_execute)\n",
+        "def test_foo():\n    mocker.patch('x', side_effect=ValueError)\n",
+        "def test_foo():\n    mocker.patch('x', side_effect=[Mock(), Mock()])\n",
+        "def test_foo():\n    mocker.patch('x', side_effect=Mock())\n",
+        "def test_foo():\n    mock.return_value = Mock()\n",
+        "def test_foo():\n    type(mock).prop = PropertyMock(return_value=7)\n",
+        "def test_foo():\n    mock.side_effect = PropertyMock(return_value=2)\n",
+        "def test_foo():\n    with patch('m.x', new=AsyncMock()) as m:\n        m.assert_called_once()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _fresh_mock_side_effect_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 #: Mock verification methods whose expected arguments can legally be wrapped in

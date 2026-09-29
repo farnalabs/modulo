@@ -156,5 +156,10 @@ If your OTel collector uses a different metric prefix (e.g. `acme_modulo_` inste
 ## Notes
 
 - All dashboards default to a 30-second auto-refresh and a 24-hour window
+- The metric names listed above are the contract the dashboards query: they
+  must be present in Prometheus, exported through the OTel pipeline (see
+  `configs/otel-collector.yml` in `docs/deployment.md` §Observability Stack).
+  If panels show no data, verify the collector exports these exact names
+  before editing the dashboard queries.
 - The Claim Token Expiry panel uses a stacked time-series bar chart (not a native calendar heatmap) – install the [Discrete](https://grafana.com/grafana/plugins/natel-discrete-panel/) or [Status History](https://grafana.com/grafana/plugins/marcusolsson-status-history-panel/) panel plugin for a true calendar heatmap view
 - Cost dashboards use `increase(...[$__interval])` which works with Prometheus counter metrics – ensure your metrics are counters, not gauges
