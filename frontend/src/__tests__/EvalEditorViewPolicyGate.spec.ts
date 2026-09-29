@@ -896,4 +896,511 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     // Error state should be cleared.
     expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
   })
+
+  // jsdom does not move document.activeElement on .focus(), so the trap tests
+  // pin the active element and spy on the two end controls' focus() instead.
+  function withActiveElement<T>(el: HTMLElement, fn: () => T): T {
+    Object.defineProperty(document, 'activeElement', { configurable: true, get: () => el })
+    try {
+      return fn()
+    } finally {
+      delete (document as unknown as { activeElement?: unknown }).activeElement
+    }
+  }
+
+  // Coverage — the Tab focus trap actually wraps focus in both directions.
+  it('wraps forward Tab from the last control to the first (finding 3)', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const first = buttons[0].element as HTMLElement
+    const last = buttons[buttons.length - 1].element as HTMLElement
+    const firstFocus = vi.spyOn(first, 'focus')
+
+    withActiveElement(last, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    })
+
+    expect(firstFocus).toHaveBeenCalled()
+  })
+
+  it('wraps backward Tab from the first control to the last (finding 3)', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const first = buttons[0].element as HTMLElement
+    const last = buttons[buttons.length - 1].element as HTMLElement
+    const lastFocus = vi.spyOn(last, 'focus')
+
+    withActiveElement(first, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    })
+
+    expect(lastFocus).toHaveBeenCalled()
+  })
+
+  it('keeps focus put when Tab is pressed from neither end', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'block', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
+    const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
+    const outside = wrapper.find('[data-testid="eval-editor-save"]').element as HTMLElement
+
+    withActiveElement(outside, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    })
+
+    expect(firstFocus).not.toHaveBeenCalled()
+    expect(lastFocus).not.toHaveBeenCalled()
+  })
+
+  // Coverage — the dirty-confirm dialog's Tab focus trap wraps both ways.
+  it('wraps focus within the dirty-confirm dialog in both directions', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const first = buttons[0].element as HTMLElement
+    const last = buttons[buttons.length - 1].element as HTMLElement
+    const firstFocus = vi.spyOn(first, 'focus')
+    const lastFocus = vi.spyOn(last, 'focus')
+
+    withActiveElement(last, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    })
+    expect(firstFocus).toHaveBeenCalled()
+
+    withActiveElement(first, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    })
+    expect(lastFocus).toHaveBeenCalled()
+  })
+
+  // Coverage — gate GET without id/version falls back to null / 1.
+  it('falls back to null id and version 1 when the gate payload omits them', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ action: 'block' })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    expect(blockChecked(wrapper)).toBe(true)
+    // action present → exists, even with no id
+    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(true)
+  })
+
+  // Coverage — eval-create response without an id skips the gate phase.
+  it('skips the gate phase when the created eval has no id', async () => {
+    responders.evalPost = ok({})
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await wrapper.find('[data-testid="eval-editor-name"]').setValue('No Id')
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
+    await flush()
+
+    expect(apiPOST.mock.calls.filter((c) => c[0] === GATE_URL)).toHaveLength(0)
+  })
+
+  // Coverage — gate update response without id/version keeps prior identity.
+  it('keeps the gate identity when the update payload omits id/version', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 2 })
+    responders.gatePut = ok({})
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
+    await flush()
+
+    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(blockChecked(wrapper)).toBe(false) // form reset → create-mode default
+  })
+
+  // Coverage — gate create response without id/version falls back.
+  it('falls back when the gate create payload omits id/version', async () => {
+    responders.evalPost = ok({ id: 'new-eval' })
+    responders.gatePost = ok({})
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await wrapper.find('[data-testid="eval-editor-name"]').setValue('Fresh')
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
+    await flush()
+
+    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+  })
+
+  // Coverage — retry success with a bare payload exercises the nullish fallbacks.
+  it('retries successfully with a bare gate payload', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 2 })
+    responders.gatePut = fail(500, 'gate write failed')
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
+    await flush()
+    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(true)
+
+    responders.gatePut = ok({})
+    await wrapper.find('[data-test-id="policy-gate-retry"]').trigger('click')
+    await flush()
+    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+  })
+
+  // Coverage — non-Tab, non-Escape keys fall through the dialog key handlers.
+  it('ignores other keys in both dialog key handlers', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    const gateDialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    gateDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
+    expect(gateDialog.exists()).toBe(true)
+
+    await (wrapper.vm as unknown as { cancelGateDelete: () => void }).cancelGateDelete()
+    await nextTick()
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    const dirtyDialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    dirtyDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
+    expect(dirtyDialog.exists()).toBe(true)
+  })
+
+  // Coverage — the focus trap returns early when a dialog has no focusable children.
+  it('returns early from the trap when the dialog has no focusable children', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    const gateDialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    gateDialog.element.innerHTML = ''
+    gateDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+
+    await (wrapper.vm as unknown as { cancelGateDelete: () => void }).cancelGateDelete()
+    await nextTick()
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    const dirtyDialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    dirtyDialog.element.innerHTML = ''
+    dirtyDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+
+    expect(dirtyDialog.exists()).toBe(true)
+  })
+
+  // Coverage — shift+Tab from a non-first control does not wrap.
+  it('does not wrap shift+Tab when focus is not on the first control', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
+    const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
+
+    withActiveElement(buttons[buttons.length - 1].element as HTMLElement, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    })
+
+    expect(firstFocus).not.toHaveBeenCalled()
+    expect(lastFocus).not.toHaveBeenCalled()
+  })
+
+  // Coverage — the dirty dialog does not wrap forward from a non-last control.
+  it('does not wrap forward Tab in the dirty dialog when focus is not on the last control', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
+    const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
+
+    withActiveElement(buttons[0].element as HTMLElement, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    })
+
+    expect(firstFocus).not.toHaveBeenCalled()
+    expect(lastFocus).not.toHaveBeenCalled()
+  })
+
+  // Coverage — dialog key handlers are no-ops when their element ref is unset.
+  it('does not wrap shift+Tab in the dirty dialog when focus is not on the first control', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
+    const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
+
+    withActiveElement(buttons[buttons.length - 1].element as HTMLElement, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    })
+
+    expect(firstFocus).not.toHaveBeenCalled()
+    expect(lastFocus).not.toHaveBeenCalled()
+  })
+
+  it('ignores Tab when the dialog refs are unset', async () => {
+    const wrapper = mountView()
+    await flush()
+    const vm = wrapper.vm as unknown as {
+      onGateDialogKeydown: (e: KeyboardEvent) => void
+      onDirtyDialogKeydown: (e: KeyboardEvent) => void
+    }
+    expect(() => vm.onGateDialogKeydown(new KeyboardEvent('keydown', { key: 'Tab' }))).not.toThrow()
+    expect(() => vm.onDirtyDialogKeydown(new KeyboardEvent('keydown', { key: 'Tab' }))).not.toThrow()
+  })
+
+  // Coverage — resolveDirtyConfirm with no pending promise is a harmless no-op.
+  it('resolveDirtyConfirm with no pending promise is a no-op', async () => {
+    const wrapper = mountView()
+    await flush()
+    const vm = wrapper.vm as unknown as { resolveDirtyConfirm: (v: boolean) => void }
+    expect(() => vm.resolveDirtyConfirm(false)).not.toThrow()
+  })
+
+  // Coverage — delete/retry guard clauses when there is no editing eval.
+  it('deletePolicyGate is a no-op when no eval is being edited', async () => {
+    const wrapper = mountView()
+    await flush()
+    const vm = wrapper.vm as unknown as { deletePolicyGate: () => Promise<void> }
+    await vm.deletePolicyGate()
+    expect(apiDELETE).not.toHaveBeenCalled()
+  })
+
+  it('retryPolicyGate is a no-op when there is no eval id to retry', async () => {
+    const wrapper = mountView()
+    await flush()
+    const vm = wrapper.vm as unknown as { retryPolicyGate: () => Promise<void> }
+    await vm.retryPolicyGate()
+    expect(apiPUT).not.toHaveBeenCalled()
+  })
+
+  // Coverage — resetForm resolves an in-flight dirty-confirm promise.
+  it('resolves a pending dirty-confirm when the form resets', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+
+    // A pipeline change resets the form while the confirm promise is pending.
+    await (wrapper.vm as unknown as { onPipelineChange: () => Promise<void> }).onPipelineChange()
+    await flush()
+
+    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(false)
+  })
+
+  // Coverage — a network-level failure loading the gate falls back to "no gate".
+  it('treats a gate-load network failure as no gate known', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    const base = apiGET.getMockImplementation() as (
+      url: string,
+      init?: { params?: { path?: Record<string, string> } },
+    ) => Promise<unknown>
+    apiGET.mockImplementation(async (url: string, init?: { params?: { path?: Record<string, string> } }) => {
+      if (url === GATE_URL) throw new Error('network down')
+      return base(url, init)
+    })
+
+    await openEditor(wrapper, 'eval-1')
+
+    expect(warnChecked(wrapper)).toBe(true)
+    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
+  })
+
+  // Coverage — the eval-save request throwing is reported as a form error.
+  it('surfaces a form error when the eval save request throws', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+    apiPUT.mockImplementation(async (url: string) => {
+      if (url === EVAL_PUT_URL) throw new Error('eval network down')
+      if (url === GATE_URL) return responders.gatePut
+      return ok({})
+    })
+
+    await wrapper.find('[data-testid="eval-editor-name"]').setValue('Changed')
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
+    await flush()
+
+    expect(wrapper.text()).toContain('eval network down')
+  })
+
+  // Coverage — the gate-save request throwing is treated as a gate failure.
+  it('treats a gate-save network failure as the retryable gate error state', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+    apiPUT.mockImplementation(async (url: string) => {
+      if (url === GATE_URL) throw new Error('gate network down')
+      if (url === EVAL_PUT_URL) return responders.evalPut
+      return ok({})
+    })
+
+    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await nextTick()
+    await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
+    await flush()
+
+    const errBox = wrapper.find('[data-test-id="policy-gate-error"]')
+    expect(errBox.exists()).toBe(true)
+    expect(errBox.find('[data-test-id="policy-gate-retry"]').exists()).toBe(true)
+  })
+
+  // Coverage — delete treats a 404 as "already deleted" and a 5xx as an error.
+  it('treats a 404 on gate delete as already-deleted', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+    responders.gateDelete = fail(404, 'Policy gate not found')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-test-id="policy-gate-confirm-delete"]').trigger('click')
+    await flush()
+
+    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Policy gate not found')
+  })
+
+  it('surfaces a form error when gate delete fails for a non-404 reason', async () => {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok({ id: 'g1', action: 'warn', version: 1 })
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+    responders.gateDelete = fail(500, 'delete exploded')
+
+    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-test-id="policy-gate-confirm-delete"]').trigger('click')
+    await flush()
+
+    expect(wrapper.text()).toContain('delete exploded')
+  })
 })
