@@ -97,9 +97,11 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0263_evidence_layer (FAR-966) chains off 0262, and
 # 0265_hitl_review_window (FAR-1257) chains off
 # 0264_pipelines_max_autonomy_ge_default, and
-# 0266_guardrail_policy_gate_sweep (FAR-1107) chains off 0265, and
-# 0267_notification_hot_query_indexes chains off 0266 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0267_notification_hot_query_indexes"
+# 0266_guardrail_policy_gate_sweep (FAR-1107) chains off 0265,
+# 0267_notification_hot_query_indexes chains off 0266,
+# 0268_webhook_lookup_expiry_indexes chains off 0267, and
+# 0269_webhook_dedup_check_constraints chains off 0268 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0269_webhook_dedup_check_constraints"
 
 
 def _source(name: str) -> str:
