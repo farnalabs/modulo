@@ -219,7 +219,12 @@ async def purge_evidence(
     The sweep:
     1. Acquires a per-org advisory lock (idempotent — second invoker exits).
     2. Iterates in batches: selects oldest evidence rows older than
-       ``max_age_days``, then deletes them within a transaction per batch.
+       ``max_age_days``, then deletes each batch inside a SAVEPOINT **within
+       the caller's transaction**.  It deliberately never commits mid-sweep:
+       a COMMIT would end the caller's transaction and discard the
+       transaction-local ``app.organisation_id`` RLS GUC, so every batch
+       after the first would see no tenant scope (the run-retention sweep
+       uses the same single-transaction shape).
     3. When ``max_rows`` is set, also deletes oldest rows exceeding the
        count limit (after the age purge).
     4. Emits a structured log event and an OTel counter per batch.
@@ -243,8 +248,9 @@ async def purge_evidence(
     try:
         # Phase 1: age-based purge
         while True:
-            # Select oldest eligible rows (re-evaluate cutoff per batch for
-            # safety — rows written after a prior batch's SELECT are not matched).
+            # Select oldest eligible rows for the sweep's fixed cutoff. Rows
+            # written after the sweep began fall outside the cutoff and are
+            # left for the next sweep.
             result = await session.execute(
                 select(Evidence.id)
                 .where(
@@ -258,10 +264,11 @@ async def purge_evidence(
             if not ids:
                 break
 
-            # Delete within a savepoint for transaction-per-batch.
+            # Delete within a SAVEPOINT — the caller's transaction (and its
+            # transaction-local RLS scope) is preserved; there is no per-batch
+            # COMMIT.
             async with session.begin_nested():
                 await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))
-            await session.commit()
 
             batch_count = len(ids)
             total_deleted += batch_count
@@ -304,9 +311,10 @@ async def purge_evidence(
                 if not ids:
                     break
 
+                # Same single-transaction contract as Phase 1: SAVEPOINT, no
+                # per-batch COMMIT.
                 async with session.begin_nested():
                     await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))
-                await session.commit()
 
                 batch_count = len(ids)
                 total_deleted += batch_count

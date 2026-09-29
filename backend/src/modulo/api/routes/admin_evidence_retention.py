@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status  # nosemgrep: loopvar-shadows-import
@@ -78,21 +78,31 @@ class PurgeResponse(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 
-def _resolve_org_id(principal: TenantPrincipal, organisation_id: uuid.UUID | None) -> uuid.UUID | None:
+def _resolve_org_id(principal: TenantPrincipal, organisation_id: uuid.UUID | None) -> uuid.UUID:
     """Resolve the effective org scope for the request.
 
-    A system admin may target any org via ``organisation_id`` (None = all orgs,
-    cross-tenant). An org admin is always bound to their own organisation — a
-    mismatched ``organisation_id`` is rejected rather than silently ignored.
+    An org admin is always bound to their own organisation — a mismatched
+    ``organisation_id`` is rejected rather than silently ignored. A system
+    admin must name the target ``organisation_id``: these operations are
+    per-organisation, so a missing target is a 422 rather than an unscoped
+    (cross-tenant) sweep.
     """
     if principal.is_system_admin:
-        return organisation_id
-    if organisation_id is not None and organisation_id != principal.organisation_id:
+        org_id = organisation_id
+    elif organisation_id is not None and organisation_id != principal.organisation_id:
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Org admins may only operate on their own organisation",
         )
-    return principal.organisation_id
+    else:
+        org_id = principal.organisation_id
+
+    if org_id is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="organisation_id is required — evidence-retention operations are per-organisation.",
+        )
+    return org_id
 
 
 # ── Routes ───────────────────────────────────────────────────────────────
@@ -101,7 +111,7 @@ def _resolve_org_id(principal: TenantPrincipal, organisation_id: uuid.UUID | Non
 @router.get("")
 async def get_evidence_retention(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    organisation_id: Annotated[Any | None, Query()] = None,
+    organisation_id: Annotated[uuid.UUID | None, Query()] = None,
     principal: TenantPrincipal = require_system_or_org_admin(_PERMISSION),
 ) -> EvidenceRetentionPolicyResponse:
     """Read the current evidence retention policy for the caller's org."""
@@ -146,7 +156,7 @@ async def get_evidence_retention(
 async def update_evidence_retention(
     req: UpdateEvidenceRetentionPolicyRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    organisation_id: Annotated[Any | None, Query()] = None,
+    organisation_id: Annotated[uuid.UUID | None, Query()] = None,
     principal: TenantPrincipal = require_system_or_org_admin(_PERMISSION),
 ) -> EvidenceRetentionPolicyResponse:
     """Update the evidence retention policy for the caller's org."""
@@ -217,7 +227,7 @@ async def update_evidence_retention(
 @router.post("/purge", status_code=http_status.HTTP_200_OK)
 async def purge_evidence_retention(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    organisation_id: Annotated[Any | None, Query()] = None,
+    organisation_id: Annotated[uuid.UUID | None, Query()] = None,
     principal: TenantPrincipal = require_system_or_org_admin(_PERMISSION),
 ) -> PurgeResponse:
     """Trigger a manual evidence purge for the caller's org (or a target org for system admins).

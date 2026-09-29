@@ -410,6 +410,52 @@ async def _load_live_gate_or_404(
     return gate
 
 
+async def _collect_author_warnings(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    eval_row: Eval,
+    eval_id: uuid.UUID,
+) -> list[dict[str, str]]:
+    """Run the FAR-957 §3.2 author-warning checks for an eval's evidence keys.
+
+    Advisory only — the checks never block binding. Only ``evidence_key`` is
+    recognised (top-level or under ``detection``); a bare ``key`` is too
+    ambiguous and would suppress genuine no_producer warnings. A check failure
+    is logged and swallowed so telemetry/advisory trouble can never break the
+    gate write.
+    """
+    ev_config = eval_row.config_json or {}
+    evidence_key_candidates: set[str] = set()
+    if "evidence_key" in ev_config:
+        evidence_key_candidates.add(str(ev_config["evidence_key"]))
+    detection = ev_config.get("detection")
+    if isinstance(detection, dict) and "evidence_key" in detection:
+        evidence_key_candidates.add(str(detection["evidence_key"]))
+
+    author_warnings: list[dict[str, str]] = []
+    for ek in evidence_key_candidates:
+        try:
+            warnings_list = await check_author_warnings(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_id=eval_row.pipeline_id,
+                evidence_key=ek,
+                binding_node_id=eval_row.node_id,
+            )
+            author_warnings.extend(w.to_dict() for w in warnings_list)
+        except Exception:
+            _log.warning(
+                "policy_gate.author_warnings_check_failed",
+                extra={
+                    "org_id": str(principal.organisation_id),
+                    "eval_id": str(eval_id),
+                    "evidence_key": ek,
+                },
+                exc_info=True,
+            )
+    return author_warnings
+
+
 # ---------------------------------------------------------------------------
 # Policy Gate endpoints (FAR-1106, chunk 6)
 # ---------------------------------------------------------------------------
@@ -487,39 +533,8 @@ async def create_policy_gate(
                 ) from exc
 
             # Author-warning checks (FAR-957 §3.2): advisory only, never
-            # blocks binding.  The evidence key is extracted from the eval's
-            # config; if no key is found, skip the check (no warnings to
-            # surface).  Only ``evidence_key`` is recognised — a bare ``key``
-            # is too ambiguous and would suppress genuine no_producer warnings.
-            author_warnings: list[dict[str, str]] = []
-            ev_config = eval_row.config_json or {}
-            evidence_key_candidates: set[str] = set()
-            if "evidence_key" in ev_config:
-                evidence_key_candidates.add(str(ev_config["evidence_key"]))
-            detection = ev_config.get("detection")
-            if isinstance(detection, dict) and "evidence_key" in detection:
-                evidence_key_candidates.add(str(detection["evidence_key"]))
-
-            for ek in evidence_key_candidates:
-                try:
-                    warnings_list = await check_author_warnings(
-                        session,
-                        org_id=principal.organisation_id,
-                        pipeline_id=eval_row.pipeline_id,
-                        evidence_key=ek,
-                        binding_node_id=eval_row.node_id,
-                    )
-                    author_warnings.extend(w.to_dict() for w in warnings_list)
-                except Exception:
-                    _log.warning(
-                        "policy_gate.author_warnings_check_failed",
-                        extra={
-                            "org_id": str(principal.organisation_id),
-                            "eval_id": str(eval_id),
-                            "evidence_key": ek,
-                        },
-                        exc_info=True,
-                    )
+            # blocks binding.
+            author_warnings = await _collect_author_warnings(session, principal, eval_row, eval_id)
 
             gate_fields = {
                 "action": req.action,
@@ -674,35 +689,7 @@ async def update_policy_gate(
             # blocks binding.  Wired into the update path (F4) because a
             # re-bind to a newly-racy key must surface the same advisory
             # warnings as a fresh create.
-            author_warnings: list[dict[str, str]] = []
-            ev_config = eval_row.config_json or {}
-            evidence_key_candidates: set[str] = set()
-            if "evidence_key" in ev_config:
-                evidence_key_candidates.add(str(ev_config["evidence_key"]))
-            detection = ev_config.get("detection")
-            if isinstance(detection, dict) and "evidence_key" in detection:
-                evidence_key_candidates.add(str(detection["evidence_key"]))
-
-            for ek in evidence_key_candidates:
-                try:
-                    warnings_list = await check_author_warnings(
-                        session,
-                        org_id=principal.organisation_id,
-                        pipeline_id=eval_row.pipeline_id,
-                        evidence_key=ek,
-                        binding_node_id=eval_row.node_id,
-                    )
-                    author_warnings.extend(w.to_dict() for w in warnings_list)
-                except Exception:
-                    _log.warning(
-                        "policy_gate.author_warnings_check_failed",
-                        extra={
-                            "org_id": str(principal.organisation_id),
-                            "eval_id": str(eval_id),
-                            "evidence_key": ek,
-                        },
-                        exc_info=True,
-                    )
+            author_warnings = await _collect_author_warnings(session, principal, eval_row, eval_id)
 
             # Snapshot pre_version_raw: KEY SET must equal the set of mutable
             # fields (currently `action` only) — not a hardcoded list (criteria 17/18).

@@ -28,6 +28,10 @@ from modulo.db.models.evidence import PRODUCER_TYPES, Evidence
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _BACKEND_ROOT / "src" / "modulo"
 _MIGRATION_FILE = _BACKEND_ROOT / "src" / "modulo" / "db" / "migrations" / "versions" / "0263_evidence_layer.py"
+# The single sanctioned deletion path for evidence rows (FAR-961 §2.4). Kept in
+# lockstep with tests/architecture/test_evidence_deletion_carveout.py so the
+# append-only E1 gate and the deletion carve-out gate cannot drift.
+_EVIDENCE_SANCTIONED_DELETION = _SRC_ROOT / "core" / "evidence_retention.py"
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
@@ -50,12 +54,30 @@ def test_e1_model_exposes_no_mutation_helper(forbidden_name: str) -> None:
 
 def test_e1_no_production_call_site_builds_update_or_delete_against_evidence() -> None:
     """No module under ``src/modulo`` builds an UPDATE or DELETE statement
-    with the ``Evidence`` model.  Append-only has no UPDATE/DELETE writer."""
-    call_pattern = re.compile(r"\b(?:update|delete)\s*\(\s*Evidence\b")
+    with the ``Evidence`` model — with one reviewed carve-out.
+
+    DELETE is sanctioned only in the retention sweep
+    (``core/evidence_retention.py``, FAR-961 §2.4); UPDATE is never sanctioned
+    (the append-only contract has no update writer). The carve-out is owned by
+    ``tests/architecture/test_evidence_deletion_carveout.py`` — this gate must
+    agree with it, or the two append-only gates drift.
+    """
+    update_pattern = re.compile(r"\bupdate\s*\(\s*Evidence\b")
+    delete_pattern = re.compile(r"\bdelete\s*\(\s*Evidence\b")
+    sanctioned = _EVIDENCE_SANCTIONED_DELETION.resolve()
+
+    # The gate is only meaningful while the sanctioned module still owns the
+    # deletion path — a silent relocation must fail loudly here.
+    assert sanctioned.is_file()
+    assert delete_pattern.search(sanctioned.read_text(encoding="utf-8"))
+
     offenders: list[str] = []
     for py_file in _SRC_ROOT.rglob("*.py"):
         source = py_file.read_text(encoding="utf-8")
-        if call_pattern.search(source):
+        # UPDATE is never sanctioned; DELETE only in the sanctioned module.
+        forbidden_update = update_pattern.search(source) is not None
+        forbidden_delete = py_file.resolve() != sanctioned and delete_pattern.search(source) is not None
+        if forbidden_update or forbidden_delete:
             offenders.append(str(py_file))
     assert not offenders
 
