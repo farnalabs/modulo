@@ -66,6 +66,40 @@ class TestPlanDecisionTable:
         decision = plan_entity("pipeline", "sample", view, current)
         assert decision.status == "updated"
 
+    def test_pipeline_unmanaged_runtime_limits_ignore_live_values(self) -> None:
+        """FAR-1294: a config that declares neither limit does not manage them,
+        so UI/API-tuned values are never hashed and never produce drift."""
+        view = {"description": "Sample pipeline", "max_concurrent_runs": 3}
+        current = {
+            "description": "Sample pipeline",
+            "max_concurrent_runs": 3,
+            "node_timeout_seconds": 1800,
+            "max_duration_seconds": 21600,
+        }
+        decision = plan_entity("pipeline", "sample", view, current)
+        assert decision.status == "unchanged"
+
+    def test_pipeline_declared_node_timeout_drift_is_updated(self) -> None:
+        view = {"description": "Sample pipeline", "max_concurrent_runs": 3, "node_timeout_seconds": 600}
+        current = {"description": "Sample pipeline", "max_concurrent_runs": 3, "node_timeout_seconds": 1800}
+        decision = plan_entity("pipeline", "sample", view, current)
+        assert decision.status == "updated"
+
+    def test_pipeline_declared_max_duration_match_is_unchanged(self) -> None:
+        view = {"description": "Sample pipeline", "max_concurrent_runs": 3, "max_duration_seconds": 7200}
+        current = {"description": "Sample pipeline", "max_concurrent_runs": 3, "max_duration_seconds": 7200}
+        decision = plan_entity("pipeline", "sample", view, current)
+        assert decision.status == "unchanged"
+
+    def test_pipeline_declared_max_duration_against_legacy_null_is_updated(self) -> None:
+        """A legacy row that still reads back NULL (the migration has not run
+        everywhere yet) is real drift against a declared value: the apply
+        converges it to the declared cap instead of hashing equal forever."""
+        view = {"description": "Sample pipeline", "max_concurrent_runs": 3, "max_duration_seconds": 7200}
+        current = {"description": "Sample pipeline", "max_concurrent_runs": 3, "max_duration_seconds": None}
+        decision = plan_entity("pipeline", "sample", view, current)
+        assert decision.status == "updated"
+
     def test_trigger_unchanged_with_canonicalised_spend_limit(self) -> None:
         view = {
             "trigger_type": "cron",

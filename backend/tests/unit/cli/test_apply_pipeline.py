@@ -960,6 +960,192 @@ class TestHitlReviewWindowPayloads:
         assert second.status == "unchanged"
 
 
+RUNTIME_LIMITS_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      node_timeout_seconds: 600
+      max_duration_seconds: 7200
+"""
+
+
+class TestRuntimeLimitPayloads:
+    """FAR-1294: node_timeout_seconds / max_duration_seconds must be parsed,
+    planned, and SENT on both the create and the update payload.
+
+    Both columns are NOT NULL (server defaults 300 / 3600) and the REST
+    PipelineUpdate rejects an explicit null for either, so the fields are
+    managed ONLY when the config declares them: an omitted key must leave a
+    UI/API-tuned value untouched instead of 422-ing mid-apply. The tests
+    round-trip the sent payloads through the REAL request models and rebuild
+    the stored row from ``model_dump(exclude_unset=True)``, so a future
+    removal of either REST field fails here instead of silently dropping the
+    value.
+    """
+
+    @respx.mock
+    def test_create_payload_includes_runtime_limits(self) -> None:
+        routes = _mock_current_with_pipelines([])
+        config = parse_apply_documents(RUNTIME_LIMITS_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        assert routes["pipelines_post"].call_count == 1
+        create_payload = json.loads(routes["pipelines_post"].calls.last.request.content)
+        assert create_payload["node_timeout_seconds"] == 600
+        assert create_payload["max_duration_seconds"] == 7200
+        created = PipelineCreate.model_validate(create_payload)
+        assert created.node_timeout_seconds == 600
+        assert created.max_duration_seconds == 7200
+
+    @respx.mock
+    def test_patch_payload_includes_runtime_limits(self) -> None:
+        """A live row carrying other limits drifts, and the PATCH carries both
+        declared values."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        existing["node_timeout_seconds"] = 1800
+        existing["max_duration_seconds"] = 21600
+        routes = _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(RUNTIME_LIMITS_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated == ["sample"]
+        assert routes["pipeline_patch"].call_count == 1
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert patch_payload["node_timeout_seconds"] == 600
+        assert patch_payload["max_duration_seconds"] == 7200
+        update = PipelineUpdate.model_validate(patch_payload)
+        assert update.node_timeout_seconds == 600
+        assert update.max_duration_seconds == 7200
+
+    @respx.mock
+    def test_double_apply_with_runtime_limits_converges(self) -> None:
+        """Prove-the-fix: plan 'updated' against a row with different limits;
+        after the payload builder sends them, re-planning against the stored
+        values reports 'unchanged' (no perpetual drift)."""
+        from modulo.cli.apply.models import PipelineEntity
+        from modulo.cli.apply.plan import plan_entity
+
+        entity = PipelineEntity.model_validate(
+            {
+                "name": "sample",
+                "description": "Sample pipeline",
+                "max_concurrent_runs": 3,
+                "node_timeout_seconds": 600,
+                "max_duration_seconds": 7200,
+            }
+        )
+        current_row = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        current_row["node_timeout_seconds"] = 1800
+        current_row["max_duration_seconds"] = 21600
+        first = plan_entity("pipeline", "sample", entity.managed_view(), current_row)
+        assert first.status == "updated"
+
+        routes = _mock_current_with_pipelines([dict(current_row)])
+        config = parse_apply_documents(RUNTIME_LIMITS_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        sent = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        update = PipelineUpdate.model_validate(sent)
+        assert update.model_dump(exclude_unset=True)["node_timeout_seconds"] == 600
+        assert update.model_dump(exclude_unset=True)["max_duration_seconds"] == 7200
+
+        stored = dict(current_row)
+        stored.update(update.model_dump(exclude_unset=True))
+        second = plan_entity("pipeline", "sample", entity.managed_view(), stored)
+        assert second.status == "unchanged"
+
+    @respx.mock
+    def test_omitted_limits_leave_live_values_untouched(self) -> None:
+        """Opt-in semantics: a config that declares neither limit writes
+        neither key (an explicit null would be rejected by PipelineUpdate), so
+        a UI-tuned node timeout / duration cap survives the apply untouched."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        existing["node_timeout_seconds"] = 1800
+        existing["max_duration_seconds"] = 21600
+        routes = _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(GRAPHLESS_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        unchanged = [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"]
+        assert unchanged == ["sample"]
+        assert routes["pipeline_patch"].call_count == 0
+
+    @respx.mock
+    def test_declared_limits_absent_from_create_payload_when_omitted(self) -> None:
+        """A created pipeline takes the server defaults (300 / 3600) — the
+        create payload carries neither key, so no null can reach the columns the
+        platform refuses to null."""
+        routes = _mock_current_with_pipelines([])
+        config = parse_apply_documents(GRAPHLESS_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        create_payload = json.loads(routes["pipelines_post"].calls.last.request.content)
+        assert "node_timeout_seconds" not in create_payload
+        assert "max_duration_seconds" not in create_payload
+        created = PipelineCreate.model_validate(create_payload)
+        assert created.node_timeout_seconds == 300
+        assert created.max_duration_seconds == 3600
+
+    @pytest.mark.parametrize("field", ["node_timeout_seconds", "max_duration_seconds"])
+    def test_rest_update_model_rejects_null_runtime_limit(self, field: str) -> None:
+        """The invariant the opt-in design rests on, pinned on the REST side:
+        PipelineUpdate refuses an explicit null for both, so a config that
+        declared one could never be applied. If this ever stops raising, the
+        entity's null rejection should be revisited (it would be a
+        config-load failure for a value the platform accepts)."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PipelineUpdate.model_validate({field: None})
+
+    def test_cli_bounds_match_the_rest_create_model(self) -> None:
+        """Bounds are mirrored by hand from the API, so pin the floor on both
+        sides: 0 is rejected by the CLI entity and by PipelineCreate, 1 is
+        accepted by both. A bound added on one side only would show up as a
+        mid-apply 422 otherwise."""
+        from pydantic import ValidationError
+
+        from modulo.cli.apply.models import PipelineEntity
+
+        for field in ("node_timeout_seconds", "max_duration_seconds"):
+            with pytest.raises(ValidationError):
+                PipelineEntity.model_validate({"name": "sample", field: 0})
+            with pytest.raises(ValidationError):
+                PipelineCreate.model_validate({"name": "sample", field: 0})
+        assert PipelineEntity.model_validate({"name": "sample", "node_timeout_seconds": 1}).node_timeout_seconds == 1
+        assert PipelineCreate.model_validate({"name": "sample", "max_duration_seconds": 1}).max_duration_seconds == 1
+
+    def test_yaml_boolean_limit_fails_to_load(self) -> None:
+        """The real config path: YAML 1.1 parses ``on`` as True, which must
+        fail the load instead of becoming a one-second kill switch."""
+        from modulo.cli.apply.loader import ApplyLoadError
+
+        with pytest.raises(ApplyLoadError, match="not a boolean"):
+            parse_apply_documents(
+                """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      max_duration_seconds: on
+"""
+            )
+
+
 class TestGraphSecretEnvVarConvergence:
     """FAR-1181 review (MAJOR) / FAR-1232: read-path masking must not make
     declarative apply drift forever on graph env_vars.
