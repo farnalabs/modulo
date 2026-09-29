@@ -117,15 +117,18 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       threads the flag on the typed `IsolationPolicy` (the single carrier) to
       `apply_sandbox_policy`, which installs a `gh` shim that permits exactly
       ONE `gh pr create` per sandbox run for the `gh` binaries it managed to
-      guard (the platform-side hard guard behind the prompt-level one-PR-per-run
-      rule, FAR-1254); every other `gh` invocation passes through untouched, and
+      guard (a bounded defence-in-depth layer behind the prompt-level
+      one-PR-per-run rule, FAR-1254 — not a hard guard); every other `gh`
+      invocation passes through untouched, and
       a create that FAILS (non-zero exit) releases its claim so a transient
       failure does not burn the run's only attempt. **Coverage is bounded, not
       absolute:** the guard intercepts only `gh pr create` resolved through the
       sandbox PATH at install time (and absolute paths to those same binaries);
       `gh api` PR creation, a `gh` copy outside the PATH, shell aliases/functions,
-      and a `gh` installed into the PATH AFTER the install are NOT intercepted,
-      and a missing `gh` or a failed install degrades to the prompt-level guard
+      and a `gh` installed into the PATH AFTER the install are NOT intercepted;
+      nor is any non-E2B dispatch — only the E2B provider implements
+      `apply_isolation`, so `runner_docker` / `local` runs get NO guard. A
+      missing `gh` or a failed install degrades to the prompt-level guard
       (both are logged). The install is BEST-EFFORT — a failure is logged and the
       run degrades to the prompt-level guard, never wedges the dispatch (unlike
       the enforcement-critical steps); the gate
@@ -137,7 +140,12 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `WorkspaceSpec.workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`) is gone:
       `delivery_sentinel` keeps only its FAR-228 idempotency meaning and a
       sentinel-only node now gets NO guard, and the metadata constant itself was
-      deleted. Unit-covered in
+      deleted. **Migration required:** existing sentinel-only pipelines (the
+      live Prompt-to-PR nodes among them) must be migrated to the explicit flag
+      — set `single_pr_per_run: true` on each such node; until then no shim is
+      installed for them, and every dispatch logs the
+      `sandbox_agent.single_pr_per_run_flag_missing` warning (node id +
+      pipeline id) so the disarm stays observable. Unit-covered in
       `tests/unit/pipeline_engine/test_sandbox_policy.py` (shim executed
       end-to-end under `sh`: first create passes, a failed first create
       releases its claim for a retry, second refused; install idempotency

@@ -8958,6 +8958,30 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # capability derivation certifies.
         _resolved_egress_for_policy = _egress_resolved.policy
         _resolved_allowlist_for_policy = _egress_resolved.allowlist
+        # FAR-1273: OBSERVABLE DISARM. The guard's trigger moved from the
+        # delivery sentinel to the explicit ``single_pr_per_run`` flag, so a
+        # stored graph that predates the flag (e.g. a live Prompt-to-PR node
+        # carrying only ``delivery_sentinel``) loses the in-sandbox guard the
+        # moment this code deploys. Warn at the guard's own decision point so
+        # the disarm is visible in logs/metrics (node id + pipeline id), and
+        # FAIL OPEN: the run proceeds unchanged. Deliberately do NOT re-arm on
+        # the sentinel — that would defeat the ticket; the operator must set
+        # the flag (no JSON-rewriting data migration was shipped).
+        if delivery_sentinel and not single_pr_per_run:
+            _log.warning(
+                "sandbox_agent.single_pr_per_run_flag_missing",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "pipeline_id": pipeline_id,
+                    "detail": (
+                        "node carries a non-empty delivery_sentinel but NOT "
+                        "single_pr_per_run: the one-PR-per-run gh guard is not "
+                        "installed for this run (set single_pr_per_run=true on "
+                        "the node to arm it)"
+                    ),
+                },
+            )
         if _should_apply_sandbox_policy(
             read_only=read_only,
             git_credentials=git_credentials,
