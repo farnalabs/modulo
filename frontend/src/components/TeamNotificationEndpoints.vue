@@ -328,6 +328,7 @@ const availableEvents = [
   "run_failed",
   "claim_expired",
   "hitl_overdue",
+  "hitl_deadline_warning",
 ];
 
 const endpoints = ref<NotificationEndpointResponse[]>([]);

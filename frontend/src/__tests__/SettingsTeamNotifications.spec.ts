@@ -142,6 +142,39 @@ describe('TeamNotificationEndpoints', () => {
     }))
   })
 
+  it('offers hitl_deadline_warning in the picker and round-trips the subscription', async () => {
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await nextTick()
+
+    // The FAR-1295 approaching-deadline event must be subscribable.
+    const deadlineBox = wrapper
+      .findAll('label')
+      .find((label) => label.text().trim() === 'hitl_deadline_warning')
+      ?.find('input[type="checkbox"]')
+    expect(deadlineBox).toBeDefined()
+    await deadlineBox?.setValue(true)
+
+    await wrapper.find('[data-testid="team-notif-add-url"]').setValue('https://example.com/deadline-hook')
+    await wrapper.find('[data-testid="team-notif-add-save"]').trigger('click')
+    await flush()
+
+    const { api } = await import('../lib/api/client')
+    expect(api.POST).toHaveBeenCalledWith(
+      '/api/v1/notifications',
+      expect.objectContaining({
+        body: expect.objectContaining({
+          url: 'https://example.com/deadline-hook',
+          events: expect.arrayContaining(['hitl_deadline_warning']),
+        }),
+      }),
+    )
+  })
+
   it('deletes an endpoint with confirmation', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },

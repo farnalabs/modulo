@@ -7,6 +7,7 @@ Event categories and their notification config:
   - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
   - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
   - hitl_overdue      → level: warning, scope: admin
+  - hitl_deadline_warning → level: warning, scope: admin (FAR-1295)
   - hitl_approve_sweep_suspected → level: warning, scope: admin (FAR-611)
   - eval_regression   → level: warning, scope: org
   - feedback_pending  → level: info,   scope: user (target_user_id assigned)
@@ -34,6 +35,7 @@ from modulo.core.notifier import (
     EVENT_GUARDRAIL_UNEXPECTED_SKIP,
     EVENT_HITL_APPROVE_SWEEP,
     EVENT_HITL_AWAITING,
+    EVENT_HITL_DEADLINE_WARNING,
     EVENT_HITL_OVERDUE,
     EVENT_ORG_TRIGGERS_AUTO_PAUSED,
     EVENT_RUN_FAILED,
@@ -103,6 +105,19 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismiss_strategy": "org_admin",
         "dismissible_at_scope": True,
         "ttl_hours": 168,
+    },
+    # FAR-1295 — approaching-deadline warning (the webhook / in-app leg of the
+    # FAR-1270 email sweep). Mirrors hitl_overdue's operator-alert shape
+    # (warning / admin scope / org-admin dismissal); the TTL matches
+    # claim_expired (24h) because the warning is only actionable until the
+    # deadline passes, after which the terminaliser owns the gate.
+    EVENT_HITL_DEADLINE_WARNING: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.deadline_warning",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
     },
     EVENT_HITL_APPROVE_SWEEP: {
         "level": "warning",
@@ -210,6 +225,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
     EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
     EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
+    EVENT_HITL_DEADLINE_WARNING: "HITL review deadline approaching — {pipeline_name}",
     EVENT_HITL_APPROVE_SWEEP: "HITL approve sweep suspected",
     EVENT_HITL_REVIEW_REMOVED: "HITL review weakened — {pipeline_name}",
     EVENT_HITL_REVIEW_REMOVAL_DENIED: "HITL review removal denied",
@@ -233,6 +249,10 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
     EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
     EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
+    EVENT_HITL_DEADLINE_WARNING: (
+        'HITL gate "{gate_label}" on "{pipeline_name}" is due in {minutes_remaining} minutes. '
+        "Unreviewed, the run is cancelled at the deadline."
+    ),
     EVENT_HITL_APPROVE_SWEEP: (
         "{approve_count} HITL reviews across {distinct_pipeline_count} pipelines were approved by "
         "actor {actor} within {window_seconds} seconds — possible bulk-approve sweep."
@@ -271,6 +291,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_BUDGET_EXCEEDED: _RUN_DETAIL_URL,
     EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
     EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,
+    EVENT_HITL_DEADLINE_WARNING: _RUN_DETAIL_URL,
     EVENT_HITL_REVIEW_REMOVED: None,
     EVENT_HITL_APPROVE_SWEEP: None,
     EVENT_HITL_REVIEW_REMOVAL_DENIED: None,

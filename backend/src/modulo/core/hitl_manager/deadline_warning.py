@@ -47,16 +47,32 @@ Design decisions (FAR-1270):
   periodic, so a bare fail-open would re-email every tick during an
   outage). ``hitl_claims.overdue_notified_at`` is deliberately NOT reused —
   it is the ``hitl_overdue`` path's marker and sharing it would suppress
-  that working escalation (and vice versa). No schema change.
+  that working escalation (and vice versa). No schema change. The ONE claim
+  guards BOTH delivery channels (FAR-1295): the claim is taken before the
+  email send and before the ``Notifier`` dispatch, so a gate can never
+  produce a second email NOR a second webhook / in-app notification on a
+  later tick.
+
+- **Channels (FAR-1295).** Two independent legs fire after that single
+  claim: the email leg (unchanged — ``hitl_email_alerts`` recipients) and
+  the ``Notifier`` leg (webhook endpoints + the in-app notification the
+  ``NotificationEventMapper`` creates), dispatched as
+  ``EVENT_HITL_DEADLINE_WARNING``. The marker is claimed when AT LEAST ONE
+  channel can deliver: email recipients resolved non-empty, OR the org has
+  a subscribed webhook endpoint (``Notifier.has_subscribers``). When
+  neither channel can deliver the marker is left unset — a later opt-in or
+  endpoint subscription can still warn while the band is open. A failure of
+  one leg never suppresses the other (each is isolated per entry).
 
 - **Skip conditions:** gates already CLAIMED or DECIDED (SQL predicate),
   runs not ``awaiting_human`` or cancellation-requested (the cancel path
   owns those), deadlines already past (the terminaliser owns those), gates
   not yet inside the lead band, runs with any CLAIMED open sibling gate
   (the terminaliser will not cancel a run that has live human work — a
-  warning would be a false alarm), gates whose recipients are empty (the
-  opt-in decides; the once-only marker is left unset so a later opt-in can
-  still warn), and gates already claimed by the fire-once key.
+  warning would be a false alarm), gates with NO delivery channel (email
+  recipients empty AND no subscribed webhook endpoint; the once-only marker
+  is left unset so a later opt-in or subscription can still warn), and
+  gates already claimed by the fire-once key.
 """
 
 from __future__ import annotations
@@ -72,6 +88,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.core.hitl_email_alerts import resolve_hitl_email_recipients, send_hitl_deadline_alerts
+from modulo.core.notifier import EVENT_HITL_DEADLINE_WARNING
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -190,6 +207,7 @@ async def dispatch_deadline_notifications(
     *,
     grace_seconds: int,
     redis_client: Any | None = None,
+    notifier: Any | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Warn opt-in reviewers about gates approaching their terminalisation deadline.
@@ -198,13 +216,17 @@ async def dispatch_deadline_notifications(
     caller). Each org's selection runs in its own transaction guarded by
     ``pg_try_advisory_xact_lock`` so concurrent ticks on multiple workers
     never double-select; the per-gate ``SET NX EX`` fire-once key is the
-    second line of defence and the actual once-only guarantee. Email
-    dispatch happens OUTSIDE the selection transaction (SMTP must never pin
-    a pooled connection), after recipients are resolved in their own short
-    transaction.
+    second line of defence and the actual once-only guarantee — ONE claim
+    guards BOTH channels (email and ``Notifier`` webhook / in-app), so the
+    two can never double-fire for the same gate (FAR-1295). Notification
+    dispatch happens OUTSIDE the selection transaction (SMTP and webhook
+    I/O must never pin a pooled connection), after recipients are resolved
+    in their own short transaction. ``notifier=None`` (init failure in the
+    cron) simply disables the webhook / in-app leg — the email leg still
+    runs.
 
-    Returns the entries actually emailed (claim_id, run_id, review_id,
-    pipeline_name, gate_label, deadline, minutes_remaining).
+    Returns the entries notified on at least one channel (claim_id, run_id,
+    review_id, pipeline_name, gate_label, deadline, minutes_remaining).
     """
     if grace_seconds < 0:
         raise ValueError(f"grace_seconds must be non-negative, got {grace_seconds}")
@@ -212,7 +234,9 @@ async def dispatch_deadline_notifications(
     resolved_now = now if now is not None else datetime.now(UTC)
     all_notified: list[dict[str, Any]] = []
     for org_id in await _fetch_org_ids(factory):
-        all_notified.extend(await _process_org_deadline(org_id, factory, grace_seconds, redis_client, resolved_now))
+        all_notified.extend(
+            await _process_org_deadline(org_id, factory, grace_seconds, redis_client, notifier, resolved_now)
+        )
     return all_notified
 
 
@@ -228,6 +252,7 @@ async def _process_org_deadline(
     factory: async_sessionmaker[AsyncSession],
     grace_seconds: int,
     redis_client: Any | None,
+    notifier: Any | None,
     now: datetime,
 ) -> list[dict[str, Any]]:
     """Sweep one org: lock, select approaching gates, then notify outside the txn."""
@@ -243,7 +268,7 @@ async def _process_org_deadline(
     if not entries:
         return []
 
-    return await _notify_entries(factory, org_id, entries, redis_client)
+    return await _notify_entries(factory, org_id, entries, redis_client, notifier)
 
 
 async def _try_acquire_deadline_lock(session: AsyncSession, org_id: uuid.UUID) -> bool:
@@ -361,16 +386,24 @@ async def _notify_entries(
     org_id: uuid.UUID,
     entries: list[dict[str, Any]],
     redis_client: Any | None,
+    notifier: Any | None,
 ) -> list[dict[str, Any]]:
-    """Resolve recipients, claim the once-only marker, and send — per entry.
+    """Resolve both channels, claim the once-only marker, then fire both legs.
 
-    Order matters: recipients resolve BEFORE the marker is claimed, so an
-    org where nobody opted in never burns the once-only marker (a later
-    opt-in can still warn while the band is open). The marker is claimed
-    BEFORE the send: this is an at-most-once warning (a send failure after
-    the claim is logged and not retried — losing a warning degrades to
-    today's silent-cancel behaviour, while a retry loop would double-email).
+    Order matters: the email recipients AND the webhook-subscription check
+    resolve BEFORE the marker is claimed, so an org where NO channel can
+    deliver never burns the once-only marker (a later opt-in or endpoint
+    subscription can still warn while the band is open). The marker is
+    claimed BEFORE either send: this is an at-most-once warning (a send
+    failure after the claim is logged and not retried — losing a warning
+    degrades to today's silent-cancel behaviour, while a retry loop would
+    double-deliver). Because ONE claim gates both legs, the email and the
+    webhook / in-app legs cannot double-fire for the same gate (FAR-1295):
+    whichever tick wins the ``SET NX EX`` claim fires each leg exactly once,
+    and every later tick is blocked. Each leg is isolated — an email failure
+    never suppresses the webhook leg, and vice versa.
     """
+    webhook_subscribed = await _org_has_webhook_subscriber(notifier, org_id)
     notified: list[dict[str, Any]] = []
     recipient_cache: dict[uuid.UUID, list[str]] = {}
     for entry in entries:
@@ -382,6 +415,10 @@ async def _notify_entries(
             except asyncio.CancelledError:
                 raise
             except Exception:
+                # Skip the whole entry: without resolved recipients we cannot
+                # know whether the email channel is live, and claiming the
+                # marker now could burn it with the email leg never sent.
+                # The next tick inside the band retries both channels.
                 _log.exception(
                     "hitl.deadline_warning.recipient_resolution_failed",
                     extra={"org_id": str(org_id), "run_id": str(entry["run_id"])},
@@ -389,7 +426,7 @@ async def _notify_entries(
                 continue
             recipient_cache[pipeline_id] = recipients
 
-        if not recipients:
+        if not recipients and not webhook_subscribed:
             _log.info(
                 "hitl.deadline_warning.no_recipients",
                 extra={"org_id": str(org_id), "run_id": str(entry["run_id"]), "pipeline_id": str(pipeline_id)},
@@ -403,24 +440,98 @@ async def _notify_entries(
             )
             continue
 
-        try:
-            await send_hitl_deadline_alerts(
-                recipients,
-                entry["run_id"],
-                entry["gate_label"],
-                entry["pipeline_name"],
-                entry["minutes_remaining"],
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception(
-                "hitl.deadline_warning.send_failed",
-                extra={"org_id": str(org_id), "run_id": str(entry["run_id"])},
-            )
-            continue
-        notified.append(entry)
+        email_sent = await _send_deadline_email(recipients, entry, org_id)
+        webhook_sent = await _dispatch_deadline_event(notifier, org_id, entry)
+        if email_sent or webhook_sent:
+            notified.append(entry)
     return notified
+
+
+async def _send_deadline_email(recipients: list[str], entry: dict[str, Any], org_id: uuid.UUID) -> bool:
+    """Email leg: send to the resolved recipients; True when it fired.
+
+    Empty recipients short-circuit without calling the sender (the marker is
+    already claimed by then, so the webhook leg decides whether the entry is
+    notified).
+    """
+    if not recipients:
+        return False
+    try:
+        await send_hitl_deadline_alerts(
+            recipients,
+            entry["run_id"],
+            entry["gate_label"],
+            entry["pipeline_name"],
+            entry["minutes_remaining"],
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "hitl.deadline_warning.send_failed",
+            extra={"org_id": str(org_id), "run_id": str(entry["run_id"])},
+        )
+        return False
+    return True
+
+
+async def _dispatch_deadline_event(notifier: Any | None, org_id: uuid.UUID, entry: dict[str, Any]) -> bool:
+    """Webhook / in-app leg: dispatch ``EVENT_HITL_DEADLINE_WARNING``; True when it fired.
+
+    The ``Notifier`` posts to every subscribed endpoint AND creates the
+    in-app notification via the ``NotificationEventMapper`` — one dispatch
+    covers both surfaces. Failures are logged, never raised into the sweep
+    (the email leg has already been given its chance by the shared claim).
+    """
+    if notifier is None:
+        return False
+    try:
+        await notifier.dispatch_event(
+            org_id=org_id,
+            event_type=EVENT_HITL_DEADLINE_WARNING,
+            payload={
+                "run_id": str(entry["run_id"]),
+                "review_id": entry["review_id"],
+                "pipeline_id": str(entry["pipeline_id"]),
+                "pipeline_name": entry["pipeline_name"],
+                "gate_label": entry["gate_label"],
+                "minutes_remaining": entry["minutes_remaining"],
+                "deadline": entry["deadline"].isoformat(),
+            },
+            run_id=str(entry["run_id"]),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "hitl.deadline_warning.webhook_dispatch_failed",
+            extra={"org_id": str(org_id), "run_id": str(entry["run_id"])},
+        )
+        return False
+    return True
+
+
+async def _org_has_webhook_subscriber(notifier: Any | None, org_id: uuid.UUID) -> bool:
+    """Whether the org has an active endpoint subscribed to the deadline event.
+
+    Resolved ONCE per org before the entry loop (every entry shares the
+    event type). ``notifier=None`` (cron init failure) means no webhook leg
+    at all; a check failure returns ``False`` so the once-only marker is NOT
+    burned on an unverifiable channel — the next tick inside the band
+    retries.
+    """
+    if notifier is None:
+        return False
+    try:
+        return bool(await notifier.has_subscribers(org_id, EVENT_HITL_DEADLINE_WARNING))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "hitl.deadline_warning.webhook_subscriber_check_failed",
+            extra={"org_id": str(org_id)},
+        )
+        return False
 
 
 async def _resolve_recipients(

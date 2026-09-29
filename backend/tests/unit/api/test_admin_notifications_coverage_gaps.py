@@ -979,3 +979,28 @@ def test_list_available_events(api: tuple[TestClient, AsyncMock]) -> None:
     data = resp.json()
     assert "hitl_awaiting" in data
     assert len(data) == len(admin_notifications.AVAILABLE_EVENTS)
+
+
+# --- FAR-1295 — the approaching-deadline warning is a subscribable event ---
+
+
+def test_hitl_deadline_warning_is_listed_in_available_events(api: tuple[TestClient, AsyncMock]) -> None:
+    """The webhook / in-app leg's event must be offered by the registry."""
+    client, _ = api
+    resp = client.get("/api/v1/admin/notifications/available-events")
+    assert resp.status_code == 200
+    assert "hitl_deadline_warning" in resp.json()
+
+
+def test_hitl_deadline_warning_subscription_round_trips(api: tuple[TestClient, AsyncMock]) -> None:
+    """Round-trip: the create validator accepts the event, the endpoint
+    persists it, and the response echoes the subscription back."""
+    client, session = api
+    resp = client.post(
+        "/api/v1/admin/notifications",
+        json={"url": "https://hooks.example.com/deadline", "events": ["hitl_deadline_warning"]},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["events"] == ["hitl_deadline_warning"]
+    persisted = session.add.call_args.args[0]
+    assert persisted.events == ["hitl_deadline_warning"]
