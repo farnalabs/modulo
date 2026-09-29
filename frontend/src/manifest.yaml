@@ -3967,6 +3967,21 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: error-forwarders-empty
+        type: element
+        dynamic_testid: false
+      - testid: error-forwarders-save
+        type: button
+        dynamic_testid: false
+      - testid: error-forwarders-skeleton
+        type: element
+        dynamic_testid: false
+      - testid: error-forwarders-test
+        type: button
+        dynamic_testid: false
+      - testid: error-forwarders-toggle
+        type: button
+        dynamic_testid: false
     /settings/hitl-review:
       - testid: hitl-review-pipeline-select
         type: select
