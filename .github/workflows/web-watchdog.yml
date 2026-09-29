@@ -1,6 +1,13 @@
 # "Recover: Web Machine" - auto-recovery watchdog for the web (app process
 # group) machines.
 #
+# Covers BOTH web apps: app-modulo (prod) and staging-modulo. Staging was added
+# 2026-09-29 (matrix). Its app machine wedged mid-@regression-run under the
+# real-stack journey load; with no app_liveness check and no watchdog coverage
+# every signing-in test failed (503s, then a full login cascade) and the Deploy
+# pipeline stayed blocked. deploy/fly/fly.staging.toml now defines the same
+# [checks.app_liveness] block prod has, which this workflow keys on.
+#
 # Why this workflow exists
 # ------------------------
 # A Fly machine can be alive but wedged: the app's HTTP server stops answering
@@ -75,9 +82,13 @@ permissions:
 
 jobs:
   watchdog:
-    name: Detect wedged app machine, restart if guards pass
+    name: Detect wedged app machine (${{ matrix.app }}), restart if guards pass
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [app-modulo, staging-modulo]
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
     steps:
@@ -103,7 +114,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          APP="app-modulo"
+          APP="${{ matrix.app }}"
           FRESHNESS_SECS=900          # 15-minute boot grace period
           MAX_RESTARTS_PER_RUN=5      # hard cap against pathological states
 
@@ -143,7 +154,7 @@ jobs:
           if [ -z "$MACHINES_JSON" ]; then
             echo "::warning::fly machines list failed or returned nothing - machine state unknown; no action taken (next run retries)."
             {
-              echo "### Recover: Web Machine"
+              echo "### Recover: Web Machine - ${APP}"
               echo ""
               echo "no-op: app machine state could not be determined (flyctl query failed) - no action taken; the next scheduled run retries."
             } >> "$SUMMARY"
@@ -172,7 +183,7 @@ jobs:
             # is unknown, so never claim "all healthy" here.
             echo "::warning::jq filter failed (exit ${JQ_RC}) on the flyctl machines output - machine state could not be determined; no action taken (next run retries)."
             {
-              echo "### Recover: Web Machine"
+              echo "### Recover: Web Machine - ${APP}"
               echo ""
               echo "no-op: app machine state could not be determined (flyctl output could not be parsed/filtered) - no action taken; the next scheduled run retries."
             } >> "$SUMMARY"
@@ -191,7 +202,7 @@ jobs:
           RESTARTED=0
 
           {
-            echo "### Recover: Web Machine"
+            echo "### Recover: Web Machine - ${APP}"
             echo ""
           } >> "$SUMMARY"
 
