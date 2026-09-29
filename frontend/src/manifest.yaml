@@ -4207,6 +4207,9 @@ elements:
       - testid: settings-mcp-revoke-key
         type: button
         dynamic_testid: false
+      - testid: settings-mcp-key-status
+        type: element
+        dynamic_testid: false
       - testid: settings-mcp-create-key-name
         type: input
         dynamic_testid: false

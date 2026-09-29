@@ -13,14 +13,27 @@ const mockMcpConfig = {
   config_snippet: '',
 }
 
-const mockApiKeys = [
-  { id: 'key-1', lookup_prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z' },
-  { id: 'key-2', lookup_prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, last_used_at: null, created_at: '2026-06-15T00:00:00Z' },
+/** Wire shape of one row from `GET /api/v1/api-keys` (`_serialize_key`). */
+type MockApiKey = {
+  id: string
+  lookup_prefix: string
+  name: string
+  role: string
+  is_active: boolean
+  expires_at: string | null
+  last_used_at: string | null
+  created_at: string
+}
+
+const mockApiKeys: MockApiKey[] = [
+  { id: 'key-1', lookup_prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, expires_at: null, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z' },
+  // Inactive with no elapsed expiry: revoked, not expired.
+  { id: 'key-2', lookup_prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, expires_at: null, last_used_at: null, created_at: '2026-06-15T00:00:00Z' },
 ]
 
 const mockMcpConfigEmpty = { mcp_url: '', config_snippet: '' }
-const mockApiKeysNoActive = [
-  { id: 'key-3', lookup_prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, last_used_at: null, created_at: '2026-06-10T00:00:00Z' },
+const mockApiKeysNoActive: MockApiKey[] = [
+  { id: 'key-3', lookup_prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, expires_at: null, last_used_at: null, created_at: '2026-06-10T00:00:00Z' },
 ]
 // GET /api/v1/mcp/oauth/clients returns a BARE array (not an envelope) - the
 // fixtures below mirror the real wire shape so the default mount exercises the
@@ -56,6 +69,7 @@ vi.mock('../lib/jwt', () => ({
 import { api } from '../lib/api/client'
 import { decodeJwtPayload } from '../lib/jwt'
 import SettingsMcpView from '../views/SettingsMcpView.vue'
+import Badge from 'primevue/badge'
 import McpOauthClientsCard from '../components/settings/McpOauthClientsCard.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
@@ -212,6 +226,83 @@ describe('SettingsMcpView', () => {
     expect(note.exists()).toBe(true)
     expect(wrapper.text()).toContain('API keys act org-wide')
     expect(wrapper.text()).toContain('mintable via the API')
+  })
+
+  // ─── FAR-1296: an expired key is not a revoked key ────────────────────
+  //
+  // `is_active` is derived backend state (revoked_at is None AND not expired),
+  // so `is_active: false` alone cannot say WHY a key stopped working. The
+  // payload carries `expires_at`, which separates the two causes.
+
+  /** Three rows: one per status, in table order. */
+  const threeStateKeys: MockApiKey[] = [
+    {
+      id: 'key-active',
+      lookup_prefix: 'mod_mk_act',
+      name: 'Active Key',
+      role: 'operator',
+      is_active: true,
+      expires_at: '2099-01-01T00:00:00Z',
+      last_used_at: null,
+      created_at: '2026-06-01T00:00:00Z',
+    },
+    // Inactive purely because its expiry elapsed - never revoked by anyone.
+    {
+      id: 'key-expired',
+      lookup_prefix: 'mod_mk_exp',
+      name: 'Expired Key',
+      role: 'runner',
+      is_active: false,
+      expires_at: '2020-01-01T00:00:00Z',
+      last_used_at: null,
+      created_at: '2026-06-02T00:00:00Z',
+    },
+    // Inactive with no elapsed expiry: only revocation explains it. The list
+    // endpoint currently filters revoked rows out, so this is the serializer's
+    // shape for such a key rather than a row the endpoint returns today.
+    {
+      id: 'key-revoked',
+      lookup_prefix: 'mod_mk_rev',
+      name: 'Revoked Key',
+      role: 'operator',
+      is_active: false,
+      expires_at: '2099-06-01T00:00:00Z',
+      last_used_at: null,
+      created_at: '2026-06-03T00:00:00Z',
+    },
+  ]
+
+  function statusBadges(wrapper: ReturnType<typeof mountView>): string[] {
+    return wrapper.findAll('[data-testid="settings-mcp-key-status"]').map((c) => c.text().trim())
+  }
+
+  it('renders Active, Expired and Revoked as three distinct states (FAR-1296)', async () => {
+    const wrapper = mountView(mockMcpConfig, threeStateKeys, mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(statusBadges(wrapper)).toEqual(['Active', 'Expired', 'Revoked'])
+  })
+
+  it('labels an expired key Expired, not Revoked (FAR-1296)', async () => {
+    const expiredOnly = [threeStateKeys[1]]
+    const wrapper = mountView(mockMcpConfig, expiredOnly, mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(statusBadges(wrapper)).toEqual(['Expired'])
+    expect(wrapper.text()).not.toContain('Revoked')
+  })
+
+  it('gives each key status a distinct badge severity (FAR-1296)', async () => {
+    const wrapper = mountView(mockMcpConfig, threeStateKeys, mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    const severities = wrapper
+      .findAll('[data-testid="settings-mcp-key-status"]')
+      .map((c) => c.findComponent(Badge).props('severity'))
+    expect(severities).toEqual(['success', 'warn', 'secondary'])
   })
 
   it('opens create key dialog with name and role fields', async () => {
