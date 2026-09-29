@@ -47,6 +47,7 @@ from modulo.api.routes.admin_assistant import router as admin_assistant_router
 from modulo.api.routes.admin_capacity import router as admin_capacity_router
 from modulo.api.routes.admin_dev_mode import router as admin_dev_mode_router
 from modulo.api.routes.admin_email import router as admin_email_router
+from modulo.api.routes.admin_evidence_retention import router as admin_evidence_retention_router
 from modulo.api.routes.admin_feature_flags import router as admin_feature_flags_router
 from modulo.api.routes.admin_housekeeping import router as admin_housekeeping_router
 from modulo.api.routes.admin_license import router as admin_license_router
@@ -1218,6 +1219,7 @@ app.include_router(admin_orgs_router)
 app.include_router(admin_assistant_router)
 app.include_router(admin_monitor_config_router)
 app.include_router(admin_rotation_router)
+app.include_router(admin_evidence_retention_router)
 app.include_router(admin_run_retention_router)
 app.include_router(in_app_notifications_router)
 app.include_router(notifications_router)

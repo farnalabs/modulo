@@ -159,6 +159,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
+        name="admin_evidence_retention",
+        description="Configure evidence retention policies and manual purge",
+        tier="team",
+    ),
+    FeatureFlag(
         name="error_forwarders",
         description="Dispatch errors to external services via webhooks",
         tier="team",

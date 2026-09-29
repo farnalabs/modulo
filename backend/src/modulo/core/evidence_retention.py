@@ -1,0 +1,344 @@
+"""Evidence retention — policy CRUD and batched purge sweep (FAR-961, chunk 9a).
+
+The retention policy is stored in ``Organisation.settings_json`` under the
+``evidence_retention`` key (mirroring the run-retention pattern).  The purge
+sweep is the **single sanctioned deletion path** for evidence rows — no other
+module may delete from the ``evidence`` table (append-only carve-out, §2.4).
+
+Concurrency: the sweep acquires a per-org ``pg_advisory_lock`` via the
+``db.repositories.locks`` abstraction.  A second invocation that cannot
+acquire the lock within the configurable timeout logs a warning and exits
+cleanly (idempotent).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.db.models.evidence import Evidence
+from modulo.db.models.organisation import Organisation
+
+_log = logging.getLogger(__name__)
+
+# ── Policy defaults ──────────────────────────────────────────────────────
+
+DEFAULT_MAX_AGE_DAYS: int = 90
+DEFAULT_BATCH_SIZE: int = 500
+DEFAULT_LOCK_TIMEOUT_SECONDS: float = 30.0
+DEFAULT_LOCK_POLL_INTERVAL: float = 0.05
+
+# Settings-json key inside ``Organisation.settings_json``.
+_POLICY_KEY = "evidence_retention"
+
+# Advisory lock namespace — arbitrary int8 within pg_advisory_lock's range.
+# Derived from "evidence_retention" to avoid collisions.
+_LOCK_KEY_NAMESPACE = 20250929
+
+
+def _org_lock_key(org_id_bytes: bytes) -> tuple[int, int]:
+    """Derive two int4 keys from an org UUID for pg_advisory_lock."""
+    digest = hashlib.md5(org_id_bytes, usedforsecurity=False).digest()
+    k1 = int.from_bytes(digest[:4], "big", signed=True)
+    k2 = int.from_bytes(digest[4:8], "big", signed=True)
+    return (k1, k2)
+
+
+# ── Policy dataclass ─────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class EvidenceRetentionPolicy:
+    """Retention policy for evidence rows."""
+
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS
+    max_rows: int | None = None  # None = unlimited
+    batch_size: int = DEFAULT_BATCH_SIZE
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"max_age_days": self.max_age_days}
+        if self.max_rows is not None:
+            d["max_rows"] = self.max_rows
+        if self.batch_size != DEFAULT_BATCH_SIZE:
+            d["batch_size"] = self.batch_size
+        if self.lock_timeout_seconds != DEFAULT_LOCK_TIMEOUT_SECONDS:
+            d["lock_timeout_seconds"] = self.lock_timeout_seconds
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> EvidenceRetentionPolicy:
+        if not d or not isinstance(d, dict):
+            return cls()
+        max_age = d.get("max_age_days", DEFAULT_MAX_AGE_DAYS)
+        if not isinstance(max_age, int) or max_age < 1:
+            max_age = DEFAULT_MAX_AGE_DAYS
+        max_rows_raw = d.get("max_rows")
+        max_rows: int | None = None
+        if max_rows_raw is not None:
+            if isinstance(max_rows_raw, int) and max_rows_raw > 0:
+                max_rows = max_rows_raw
+            elif isinstance(max_rows_raw, str) and max_rows_raw.isdigit():
+                max_rows = int(max_rows_raw)
+        batch_size = d.get("batch_size", DEFAULT_BATCH_SIZE)
+        if not isinstance(batch_size, int) or batch_size < 1:
+            batch_size = DEFAULT_BATCH_SIZE
+        lock_timeout = d.get("lock_timeout_seconds", DEFAULT_LOCK_TIMEOUT_SECONDS)
+        if not isinstance(lock_timeout, (int, float)) or lock_timeout <= 0:
+            lock_timeout = DEFAULT_LOCK_TIMEOUT_SECONDS
+        return cls(
+            max_age_days=max_age,
+            max_rows=max_rows,
+            batch_size=batch_size,
+            lock_timeout_seconds=float(lock_timeout),
+        )
+
+
+# ── Policy CRUD (reads/writes Organisation.settings_json) ────────────────
+
+
+async def load_policy(session: AsyncSession, org_id: Any) -> EvidenceRetentionPolicy:
+    """Load the evidence retention policy for an org."""
+    result = await session.execute(select(Organisation.settings_json).where(Organisation.id == org_id).limit(1))
+    row = result.scalar_one_or_none()
+    if isinstance(row, dict):
+        return EvidenceRetentionPolicy.from_dict(row.get(_POLICY_KEY))
+    return EvidenceRetentionPolicy()
+
+
+def _merge_org_setting(org: Organisation, key: str, value: object) -> None:
+    """Merge *value* into ``org.settings_json`` under *key* without dropping other keys."""
+    settings: dict[str, Any] = dict(org.settings_json) if org.settings_json else {}
+    settings[key] = value
+    org.settings_json = settings
+
+
+async def save_policy(
+    session: AsyncSession,
+    org_id: Any,
+    policy: EvidenceRetentionPolicy,
+) -> None:
+    """Persist the evidence retention policy for an org."""
+    result = await session.execute(select(Organisation).where(Organisation.id == org_id).limit(1))
+    org = result.scalar_one_or_none()
+    if org is None:
+        raise ValueError(f"Organisation {org_id} not found")
+    _merge_org_setting(org, _POLICY_KEY, policy.to_dict())
+    await session.flush()
+
+
+# ── Purge sweep ──────────────────────────────────────────────────────────
+
+
+@dataclass
+class PurgeResult:
+    """Result of an evidence retention purge sweep."""
+
+    rows_deleted: int = 0
+    batches: int = 0
+    max_age_days: int = 0
+    max_rows: int | None = None
+
+
+async def _acquire_advisory_lock(
+    session: AsyncSession,
+    org_id: Any,
+    lock_timeout: float,
+) -> bool:
+    """Acquire a per-org advisory lock. Returns True if acquired."""
+    org_bytes = org_id.bytes if hasattr(org_id, "bytes") else bytes(org_id)
+    k1, k2 = _org_lock_key(org_bytes)
+    deadline = asyncio.get_running_loop().time() + lock_timeout
+
+    while True:
+        result = await session.execute(
+            text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+            {"k1": k1, "k2": k2},
+        )
+        if result.scalar_one():
+            return True
+
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+
+        await asyncio.sleep(DEFAULT_LOCK_POLL_INTERVAL)
+
+
+async def _release_advisory_lock(session: AsyncSession, org_id: Any) -> None:
+    """Release the per-org advisory lock."""
+    org_bytes = org_id.bytes if hasattr(org_id, "bytes") else bytes(org_id)
+    k1, k2 = _org_lock_key(org_bytes)
+    await session.execute(
+        text("SELECT pg_advisory_unlock(:k1, :k2)"),
+        {"k1": k1, "k2": k2},
+    )
+
+
+def _record_deletion_metrics(org_id: Any, rows_deleted: int) -> None:
+    """Emit deletion count via OTel counter (no-op when no meter is wired).
+
+    The counter name ``modulo_evidence_retention_deletions_total`` matches
+    the Prometheus exposition name required by the spec (§2.8, criterion 5).
+    """
+    try:
+        from opentelemetry import metrics
+
+        provider = metrics.get_meter_provider()
+        if provider is None:
+            return
+        meter = provider.get_meter("modulo.evidence_retention", version="0.1.0")
+        counter = meter.create_counter(
+            name="modulo_evidence_retention_deletions_total",
+            description="Evidence rows deleted by retention sweep",
+            unit="1",
+        )
+        counter.add(rows_deleted, {"organisation_id": str(org_id)})
+    except Exception:  # noqa: S110
+        # Telemetry must never break the sweep.
+        pass
+
+
+async def purge_evidence(
+    session: AsyncSession,
+    org_id: Any,
+    policy: EvidenceRetentionPolicy | None = None,
+) -> PurgeResult:
+    """Execute the evidence retention purge sweep for an org.
+
+    This is the **single sanctioned deletion path** for evidence rows
+    (append-only carve-out, §2.4).  No other module may delete from the
+    ``evidence`` table.
+
+    The sweep:
+    1. Acquires a per-org advisory lock (idempotent — second invoker exits).
+    2. Iterates in batches: selects oldest evidence rows older than
+       ``max_age_days``, then deletes them within a transaction per batch.
+    3. When ``max_rows`` is set, also deletes oldest rows exceeding the
+       count limit (after the age purge).
+    4. Emits a structured log event and an OTel counter per batch.
+    """
+    if policy is None:
+        policy = await load_policy(session, org_id)
+
+    # Acquire the advisory lock.
+    locked = await _acquire_advisory_lock(session, org_id, policy.lock_timeout_seconds)
+    if not locked:
+        _log.warning(
+            "evidence.retention.lock_timeout",
+            extra={"org_id": str(org_id), "timeout_seconds": policy.lock_timeout_seconds},
+        )
+        return PurgeResult(max_age_days=policy.max_age_days, max_rows=policy.max_rows)
+
+    total_deleted = 0
+    batches = 0
+    cutoff = datetime.now(UTC) - timedelta(days=policy.max_age_days)
+
+    try:
+        # Phase 1: age-based purge
+        while True:
+            # Select oldest eligible rows (re-evaluate cutoff per batch for
+            # safety — rows written after a prior batch's SELECT are not matched).
+            result = await session.execute(
+                select(Evidence.id)
+                .where(
+                    Evidence.organisation_id == org_id,
+                    Evidence.created_at < cutoff,
+                )
+                .order_by(Evidence.created_at, Evidence.id)
+                .limit(policy.batch_size)
+            )
+            ids = result.scalars().all()
+            if not ids:
+                break
+
+            # Delete within a savepoint for transaction-per-batch.
+            async with session.begin_nested():
+                await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))
+            await session.commit()
+
+            batch_count = len(ids)
+            total_deleted += batch_count
+            batches += 1
+
+            _log.info(
+                "evidence.retention.batch_deleted",
+                extra={
+                    "org_id": str(org_id),
+                    "batch_size": policy.batch_size,
+                    "rows_deleted": batch_count,
+                    "max_age_days": policy.max_age_days,
+                    "max_rows": policy.max_rows,
+                },
+            )
+            _record_deletion_metrics(org_id, batch_count)
+
+        # Phase 2: row-count purge (if max_rows is set)
+        if policy.max_rows is not None:
+            while True:
+                # Count current rows for this org.
+                count_result = await session.execute(
+                    select(func.count()).select_from(Evidence).where(Evidence.organisation_id == org_id)
+                )
+                current_count = count_result.scalar() or 0
+                if current_count <= policy.max_rows:
+                    break
+
+                # Delete the oldest rows that exceed the limit.
+                excess = current_count - policy.max_rows
+                delete_count = min(excess, policy.batch_size)
+
+                result = await session.execute(
+                    select(Evidence.id)
+                    .where(Evidence.organisation_id == org_id)
+                    .order_by(Evidence.created_at, Evidence.id)
+                    .limit(delete_count)
+                )
+                ids = result.scalars().all()
+                if not ids:
+                    break
+
+                async with session.begin_nested():
+                    await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))
+                await session.commit()
+
+                batch_count = len(ids)
+                total_deleted += batch_count
+                batches += 1
+
+                _log.info(
+                    "evidence.retention.batch_deleted",
+                    extra={
+                        "org_id": str(org_id),
+                        "batch_size": policy.batch_size,
+                        "rows_deleted": batch_count,
+                        "max_age_days": policy.max_age_days,
+                        "max_rows": policy.max_rows,
+                    },
+                )
+                _record_deletion_metrics(org_id, batch_count)
+
+    finally:
+        await _release_advisory_lock(session, org_id)
+
+    return PurgeResult(
+        rows_deleted=total_deleted,
+        batches=batches,
+        max_age_days=policy.max_age_days,
+        max_rows=policy.max_rows,
+    )
+
+
+# ── Evidence row count helper ────────────────────────────────────────────
+
+
+async def count_evidence_rows(session: AsyncSession, org_id: Any) -> int:
+    """Return the total evidence row count for an org."""
+    result = await session.execute(select(func.count()).select_from(Evidence).where(Evidence.organisation_id == org_id))
+    return result.scalar() or 0
