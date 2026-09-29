@@ -188,14 +188,14 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_NODE_DEFAULT_TIMEOUT_SECONDS` | No | `1200` | Default node execution timeout when graph node has no explicit timeout |
 | `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `4` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies (raised 2 → 4 by FAR-812 so a zero-node run survives a transient dispatch wobble) |
 | `SAQ_CAPACITY_RETRY_BUDGET` | No | `3` | Per-run capacity-retry budget: a claimed run past this many total claims is terminal-failed regardless of TTL (min 0, max 20) |
-| `HITL_REVIEW_CANCEL_GRACE_SECONDS` | No | `3600` | Seconds after an open HITL gate expires unanswered before the gate is auto-cancelled (min 60, max 604800) |
+| `HITL_REVIEW_CANCEL_GRACE_SECONDS` | No | `3600` | Instance layer of the three-level HITL review window (per-pipeline override > org default > instance default, FAR-1257): seconds after an open HITL gate expires unanswered before the gate is auto-cancelled (min 60, max 604800). The effective window is resolved once at gate fire time and stamped as the absolute `hitl_claims.terminalize_at` — org default via `GET/PUT /api/v1/admin/org/hitl-review-window` on `/admin/org` (reachable on every plan tier, FAR-1269), per-pipeline override in the pipeline editor. Stamped rows ignore this knob; it applies verbatim only to legacy unstamped rows |
 | `SLOT_RECONCILE_STALE_SECONDS` | No | `1800` | Stale heartbeat window for slot reconciliation sweep (force-releases leaked slots) |
 | `HEARTBEAT_STALE_RETRY_BUDGET` | No | `3` | Heartbeat-stale auto-retry budget for the slot-reconcile sweep: a `running` run swept as heartbeat-stale is reset to `pending` for re-dispatch while its `claim_count` is ≤ this budget; only a claim beyond it terminal-fails (raised 1 → 3 by FAR-812 to absorb a transient dispatch wobble in a zero-node run) |
 | `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
 | `DISPATCHER_RECONCILE_BUDGET_SECONDS` | No | `95` | Per-tick time budget (seconds) for the dispatcher reconcile loop (min 10, max 119) |
 | `DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile terminalizer SQL (min 1, max 1000) |
 | `DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile daily-facts compensator SQL (min 1, max 1000) |
-| `HITL_PARK_GRACE_SECONDS` | No | `86400` | Seconds after an open HITL gate expires unanswered before the run is parked to `hitl_parked` (non-terminal, releases pipeline capacity). Min 60, max 604800 |
+| `HITL_PARK_GRACE_SECONDS` | No | `86400` | Seconds after the HITL review deadline before the run is parked to `hitl_parked` (non-terminal, releases pipeline capacity). Since FAR-1257 the deadline is one full park-grace window after `hitl_claims.terminalize_at`, floored at a 300s margin so the terminalizing (cancel) sweep always acts first; legacy unstamped rows keep the `expires_at + grace` arithmetic. Min 60, max 604800 |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
 only dispatch path, so the readiness gate is always active. The deploy-time

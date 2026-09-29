@@ -182,16 +182,19 @@ describe('LoginView - login-context integration', () => {
     })
   })
 
-  it('renders the login form when login-context hangs (timeout fallback)', async () => {
+  it('renders the login form within ONE timeout budget when login-context hangs', async () => {
     // A login-context request that never settles must not strand the page on
     // the loading state — the bounded fallback renders the credential form so
     // a hung pre-auth read cannot take the whole @regression suite with it.
+    // The form must render as soon as login-context times out, NOT after a
+    // second SSO-discovery timeout: awaiting SSO discovery serialised two 8s
+    // budgets (16s worst case), which exceeded the E2E credential-form guard
+    // (10s) and made every signing-in @regression test fail. SSO discovery is
+    // now fire-and-forget, so one 8s advance must be enough.
     vi.useFakeTimers()
     vi.spyOn(global, 'fetch').mockImplementation(() => new Promise<Response>(() => {}))
 
     const wrapper = mountView()
-    // login-context times out, then the SSO discovery fallback also times out.
-    await vi.advanceTimersByTimeAsync(9_000)
     await vi.advanceTimersByTimeAsync(9_000)
     await nextTick()
 
@@ -214,9 +217,8 @@ describe('LoginView - login-context integration', () => {
     )
 
     const wrapper = mountView()
-    // login-context's body read times out, then the SSO fallback's body read
-    // times out too.
-    await vi.advanceTimersByTimeAsync(9_000)
+    // login-context's body read times out; the form must render within that
+    // one budget (SSO discovery is fire-and-forget and cannot delay it).
     await vi.advanceTimersByTimeAsync(9_000)
     await nextTick()
 

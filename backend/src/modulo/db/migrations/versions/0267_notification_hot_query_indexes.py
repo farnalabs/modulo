@@ -1,7 +1,7 @@
 """improve-database(notification): TTL + visibility + dismissal lookup indexes.
 
-Revision ID: 0266_notification_hot_query_indexes
-Revises: 0265_hitl_review_window
+Revision ID: 0267_notification_hot_query_indexes
+Revises: 0266_guardrail_policy_gate_sweep
 Create Date: 2026-09-29
 
 Covers ``backend/src/modulo/db/models/notification.py`` (notifications,
@@ -45,8 +45,8 @@ from __future__ import annotations
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0266_notification_hot_query_indexes"
-down_revision: str | None = "0265_hitl_review_window"
+revision: str = "0267_notification_hot_query_indexes"
+down_revision: str | None = "0266_guardrail_policy_gate_sweep"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

@@ -9,7 +9,7 @@ Because it is **verb-agnostic**, the connector does not infer meaning from the
 HTTP verb. You declare the method; the node surface fixes the access-control
 gate:
 
-| Node surface | ACL operation | Declared method |
+| Node surface | ACL (access control) operation | Declared method |
 |---|---|---|
 | `query()` – read | `read` | `GET` (default), `HEAD` |
 | `write()` – write | `write` | `POST` (default), `PUT`, `PATCH`, `DELETE` |
@@ -41,7 +41,7 @@ Jinja2 against the runtime variables supplied per call
 | `passthrough` | `bool` | `false` | Force a single-record `{"body", "content_type", "status_code", "headers"}` wrap of the raw body. |
 | `max_response_size` | `int` | `10485760` | Max response body bytes before the read aborts (10 MiB default). |
 | `timeout_seconds` | `float` | `30.0` | Per-request timeout (connect + read/write) for the pooled client. |
-| `verify_tls` | `bool` | `true` | Whether the client verifies the server certificate. Disable only for a self-hosted registry with a self-signed cert – the SSRF guard still blocks loopback/metadata targets regardless. |
+| `verify_tls` | `bool` | `true` | Whether the client verifies the server certificate. Disable only for a self-hosted registry with a self-signed cert – the SSRF (Server-Side Request Forgery) guard still blocks loopback/metadata targets regardless. |
 | `idempotency_header` | `str` | `null` | Header that makes a non-`GET`/`HEAD` request safe to retry; a fresh UUID is injected per attempt. |
 | `on_unknown` | `str` | `fail_open` | Per-op idempotency gate mode for the UNKNOWN (couldn't-confirm-delivery) case (FAR-458): `fail_open` (re-fire on ambiguity, possible duplicate), `fail_closed` (suppress on ambiguity, possible silent miss), or `off` (never deduplicated, write always fires). A confirmed-delivered write is suppressed in every mode except `off`. |
 | `fan_out` | `dict` | `null` | Fan-out / iterator mode (FAR-411). When `enabled` is true and `items_path` resolves to a sequence, `write()` fans out one request per item. Sub-fields: `enabled` (bool), `items_path` (JMESPath into `payload.data`), `max_cardinality` (fail-closed cap, default 1000), `per_item_timeout` (per-item HTTP timeout), `max_retries` (per-item retries). |

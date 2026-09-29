@@ -6,8 +6,9 @@ time) and ``pipelines.hitl_review_window_seconds`` (the per-pipeline override).
 Lenses:
 
 * **Chain** - 0265 chains onto ``0264_pipelines_max_autonomy_ge_default``;
-  0266_notification_hot_query_indexes chains onto 0265 as the single linear
-  head.
+  0266_guardrail_policy_gate_sweep (FAR-1107) chains onto 0265, and
+  0267_notification_hot_query_indexes chains onto 0266 as the current single
+  linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
   Postgres; batch mode on SQLite) and creates the partial sweep index;
@@ -33,7 +34,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0266_notification_hot_query_indexes"
+_HEAD_MIGRATION = "0267_notification_hot_query_indexes"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)
@@ -78,7 +79,7 @@ def _executed_sql(op: MagicMock) -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0266(self) -> None:
+    def test_single_head_is_0263(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

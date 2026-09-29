@@ -188,8 +188,15 @@ class TestC2EvalResultIdIdentity:
         outcome = resolve_policy_gate(snap)
         assert outcome.eval_result_id is None
 
-    def test_undefined_guardrail_populated_when_result_exists(self) -> None:
-        """Source (b): guardrail re-check -> eval_result_id populated if present."""
+    def test_guardrail_result_id_surfaces_like_regex(self) -> None:
+        """FAR-1107 chunk-8 criterion 4: the guardrail re-check is retired.
+
+        A guardrail-type eval with a present result now resolves DEFINED
+        (the chunk-8 resolver wiring deleted the ``guardrail_recheck``
+        branch), so ``eval_result_id`` surfaces exactly as it does for a
+        regex eval -- including on a passing result, which the retired
+        re-check would have deferred as undefined.
+        """
         er = EvalResultView(id=_UUID_E, passed=True)
         snap = _snapshot(
             pg=_pg_view(),
@@ -197,6 +204,9 @@ class TestC2EvalResultIdIdentity:
             er=er,
         )
         outcome = resolve_policy_gate(snap)
+        assert outcome.result is True
+        assert outcome.action == "continue"
+        assert outcome.error is None
         assert outcome.eval_result_id == _UUID_E
 
     def test_undefined_node_mismatch_populated_when_result_exists(self) -> None:
@@ -224,14 +234,23 @@ class TestC3ErrorSourceToken:
         outcome = resolve_policy_gate(snap)
         assert outcome.error == "no_eval_result"
 
-    def test_source_b_token(self) -> None:
+    def test_source_b_retired_guardrail_resolves_normally(self) -> None:
+        """FAR-1107 chunk-8 criterion 4: source (b) no longer exists.
+
+        The ``guardrail_recheck`` undefined token is deleted: a guardrail
+        eval with a failing result resolves DEFINED to the gate's configured
+        action -- the resolver is the enforcement authority for guardrail
+        evals too.
+        """
         snap = _snapshot(
             pg=_pg_view(),
             ev=_eval_view(eval_type="guardrail"),
             er=_result_view(passed=False),
         )
         outcome = resolve_policy_gate(snap)
-        assert outcome.error == "guardrail_recheck"
+        assert outcome.result is False
+        assert outcome.action == "warn"
+        assert outcome.error is None
 
     def test_source_c_token_node_id_none(self) -> None:
         """Eval.node_id is None -> node_id mismatch (suite-scoped)."""
@@ -319,12 +338,16 @@ class TestC6CrossTenancy:
         assert str(_UUID_C) not in payload_str
 
     def test_multi_violation_no_short_circuit(self) -> None:
-        """Pass three simultaneous exclusions; assert ALL are present (no short-circuit).
+        """Pass two simultaneous exclusions; assert BOTH are present (no short-circuit).
 
         Note: suite_scoped (eval.node_id=None) and node_id_mismatch
         (eval.node_id != pg.node_id, eval.node_id is not None) are mutually
-        exclusive -- you cannot trigger both in one call.  This test triggers
-        cross_tenancy + guardrail_eval + node_id_mismatch simultaneously.
+        exclusive -- you cannot trigger both in one call.  Chunk 1's
+        third simultaneous violation (exclusion 3, ``guardrail_eval``) was
+        retired by FAR-1107 chunk 8, so the no-short-circuit proof now
+        triggers the remaining two via a guardrail-typed eval -- which
+        binds normally apart from those exclusions -- and asserts the
+        validator still collects BOTH without stopping at the first.
         """
         pg = {
             "id": uuid.uuid4(),
@@ -340,23 +363,28 @@ class TestC6CrossTenancy:
         with pytest.raises(PolicyGateBindingViolationError) as exc_info:
             validate_binding(pg, ev)
         names = {v["exclusion"] for v in exc_info.value.violations}
-        assert names == {"cross_tenancy", "guardrail_eval", "node_id_mismatch"}
-        assert len(names) == 3, "All three violations must be collected (no short-circuit)"
+        assert names == {"cross_tenancy", "node_id_mismatch"}
+        assert len(names) == 2, "Both violations must be collected (no short-circuit)"
 
 
 # ---------------------------------------------------------------------------
-# C7: validate_binding raises on guardrail-typed eval
+# C7: exclusion 3 retired -- guardrail-type evals may bind (FAR-1107 chunk 8)
 # ---------------------------------------------------------------------------
 
 
-class TestC7GuardrailEval:
-    def test_guardrail_detected(self) -> None:
+class TestC7GuardrailBindingPermitted:
+    def test_guardrail_binding_permitted(self) -> None:
+        """A same-org, same-node guardrail Eval binds: validate_binding raises nothing.
+
+        Chunk 1 exclusion 3 (``guardrail_eval``) blocked guardrail-type evals
+        from binding to a PolicyGate. The chunk-8 resolver wiring makes the
+        resolver the enforcement authority for guardrails, so a valid
+        binding must succeed: validate_binding returns None and no
+        violation is recorded (criterion 7).
+        """
         pg = {"id": uuid.uuid4(), "organisation_id": _UUID_A, "node_id": _UUID_B}
         ev = {"id": uuid.uuid4(), "organisation_id": _UUID_A, "node_id": _UUID_B, "eval_type": "guardrail"}
-        with pytest.raises(PolicyGateBindingViolationError) as exc_info:
-            validate_binding(pg, ev)
-        names = [v["exclusion"] for v in exc_info.value.violations]
-        assert "guardrail_eval" in names
+        assert validate_binding(pg, ev) is None
 
 
 # ---------------------------------------------------------------------------
@@ -390,15 +418,22 @@ class TestC9NodeIdMismatch:
 
 
 # ---------------------------------------------------------------------------
-# C10: Guardrail exclusion at evaluation time (two-call structure)
+# C10: guardrail re-check retired -- guardrail evals resolve normally
+# (FAR-1107 chunk 8, criterion 4)
 # ---------------------------------------------------------------------------
 
 
-class TestC10GuardrailReCheck:
-    """Two-call: non-guardrail snapshot -> normal; guardrail snapshot -> undefined."""
+class TestC10GuardrailResolvesNormally:
+    """Two-call structure: guardrail snapshots resolve like any other eval.
+
+    The chunk-1 guardrail re-check is deleted. A guardrail snapshot with a
+    PASSING result resolves to continue; with a FAILING result resolves to
+    the gate's configured action. Neither is undefined, and non-guardrail
+    snapshots resolve unchanged.
+    """
 
     def test_non_guardrail_normal(self) -> None:
-        """Non-guardrail eval + matching node_id + passed result -> defined."""
+        """Regression half: non-guardrail eval + matching node_id -> defined."""
         snap = _snapshot(
             pg=_pg_view(node_id=_UUID_B),
             ev=_eval_view(node_id=_UUID_B, eval_type="regex"),
@@ -409,16 +444,29 @@ class TestC10GuardrailReCheck:
         assert outcome.action == "continue"
         assert outcome.error is None
 
-    def test_guardrail_undefined(self) -> None:
-        """Guardrail eval + matching node_id -> undefined (source b)."""
+    def test_guardrail_passing_resolves_continue(self) -> None:
+        """Guardrail eval + matching node_ids + passing result -> continue."""
         snap = _snapshot(
             pg=_pg_view(node_id=_UUID_B),
             ev=_eval_view(node_id=_UUID_B, eval_type="guardrail"),
             er=_result_view(passed=True),
         )
         outcome = resolve_policy_gate(snap)
-        assert outcome.result is None
-        assert outcome.error == "guardrail_recheck"
+        assert outcome.result is True
+        assert outcome.action == "continue"
+        assert outcome.error is None
+
+    def test_guardrail_failing_resolves_gate_action(self) -> None:
+        """Guardrail eval + matching node_ids + failing result -> gate action."""
+        snap = _snapshot(
+            pg=_pg_view(node_id=_UUID_B, action="block"),
+            ev=_eval_view(node_id=_UUID_B, eval_type="guardrail"),
+            er=_result_view(passed=False),
+        )
+        outcome = resolve_policy_gate(snap)
+        assert outcome.result is False
+        assert outcome.action == "block"
+        assert outcome.error is None
 
 
 # ---------------------------------------------------------------------------
