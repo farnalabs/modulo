@@ -301,6 +301,62 @@ describe('AdminOrgSettingsView', () => {
     wrapper.unmount()
   })
 
+  // -- FAR-1269: the org window must be reachable on EVERY tier -------------
+  //
+  // The GET/PUT /api/v1/admin/org/hitl-review-window contract is not
+  // plan-gated, so the control has to work with team_rbac OFF. This mounts
+  // the REAL FeatureGate (never stubbed) in its community-tier state and
+  // asserts the control sits outside the dimmed, pointer-events-none disabled
+  // subtree. It fails on the pre-FAR-1269 markup, where the card lived inside
+  // the gate and rendered only as an unclickable ghost.
+
+  async function mountCommunityTierView() {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { team_rbac: false }, currentTier: 'community' })
+    const wrapper = mount(AdminOrgSettingsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('keeps the org HITL review window reachable and interactive on the community tier', async () => {
+    const wrapper = await mountCommunityTierView()
+
+    // The team gate must genuinely be in its DISABLED state here, otherwise
+    // this test would silently run in the enabled state and prove nothing.
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(true)
+
+    const input = wrapper.find('[data-testid="org-hitl-review-window-value"]')
+    const save = wrapper.find('[data-testid="org-hitl-review-window-save"]')
+    expect(input.exists()).toBe(true)
+    expect(save.exists()).toBe(true)
+
+    // Neither control may live inside the disabled (pointer-events-none)
+    // subtree - that is exactly the pre-FAR-1269 failure mode.
+    expect(input.element.closest('.pointer-events-none')).toBeNull()
+    expect(save.element.closest('.pointer-events-none')).toBeNull()
+    expect(
+      wrapper.find('[data-testid="feature-gate-disabled"] [data-testid="org-hitl-review-window-value"]').exists(),
+    ).toBe(false)
+
+    // Every OTHER section stays gated behind the disabled overlay - the card
+    // moved out, the rest of the page did not.
+    const disabled = wrapper.find('[data-testid="feature-gate-disabled"]')
+    expect(disabled.find('[data-testid="community-objects-toggle"]').exists()).toBe(true)
+    expect(disabled.text()).toContain('Delete Organisation')
+
+    // Interactive end to end: type, save, and the API is called with the
+    // converted seconds payload.
+    await input.setValue('15')
+    await save.trigger('click')
+    await flushPromises()
+    expect(windowPutBodies()).toEqual([{ hitl_review_window_seconds: 900 }])
+    wrapper.unmount()
+  })
+
   it('renders without crashing', async () => {
     const wrapper = await mountView()
     expect(wrapper.exists()).toBe(true)
