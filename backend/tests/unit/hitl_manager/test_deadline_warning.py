@@ -594,7 +594,7 @@ async def test_dispatch_skips_rows_with_unusable_deadline_or_window() -> None:
 async def test_runs_with_claimed_open_gate_empty_input_short_circuits() -> None:
     """No band survivors → the sibling query must not run at all."""
     session = AsyncMock(name="sibling_session")
-    assert await dw._runs_with_claimed_open_gate(session, _ORG, []) == set()
+    assert not await dw._runs_with_claimed_open_gate(session, _ORG, [])
     session.execute.assert_not_called()
 
 
