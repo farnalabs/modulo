@@ -804,6 +804,35 @@ class TestOauthAuthorizeHandler:
         )
         assert response.status_code == 400
 
+    async def test_redirect_uri_not_registered_is_rejected(self) -> None:
+        client = MagicMock()
+        client.redirect_uris = "https://app.example.com/callback"
+        response = await self._call(
+            params={**self._VALID_PARAMS, "redirect_uri": "https://app.example.com/callback/extra"},
+            patches={
+                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
+                "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
+            },
+        )
+        assert response.status_code == 400
+        assert response.body is not None
+        assert b"redirect_uri not allowed" in response.body
+
+    async def test_legacy_row_with_forbidden_redirect_uri_is_rejected(self) -> None:
+        """FAR-1281: a client row stored before registration validation existed."""
+        client = MagicMock()
+        client.redirect_uris = "javascript:alert(1)"
+        response = await self._call(
+            params={**self._VALID_PARAMS, "redirect_uri": "javascript:alert(1)"},
+            patches={
+                "modulo.api.mcp_server._get_session_factory": {"return_value": _mock_factory(_mock_session())},
+                "modulo.auth.oauth.get_oauth_client_by_client_id": {"new": AsyncMock(return_value=client)},
+            },
+        )
+        assert response.status_code == 400
+        assert response.body is not None
+        assert b"redirect_uri not allowed" in response.body
+
     async def test_programming_error_returns_501(self) -> None:
         session = _mock_session()
         session.begin.side_effect = ProgrammingError("stmt", {}, Exception("boom"))

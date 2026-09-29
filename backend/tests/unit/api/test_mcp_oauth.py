@@ -200,6 +200,131 @@ class TestRegisterOAuthClient:
             )
         assert resp.status_code == 400
 
+    def test_create_accepts_loopback_http_redirect_uris(self, admin_client: TestClient) -> None:
+        """http:// is fine for loopback so local development keeps working."""
+        with (
+            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            mock_client = MagicMock()
+            mock_client.id = uuid.uuid4()
+            mock_client.client_id = "abc123def4567890"
+            mock_client.name = "Local App"
+            mock_create.return_value = (mock_client, "raw_secret_40_chars_long_here")
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={
+                    "name": "Local App",
+                    "redirect_uris": ["http://localhost:5173/cb", "http://127.0.0.1:8080/cb"],
+                    "scopes": ["trigger:run"],
+                },
+            )
+        assert resp.status_code == 201
+        assert mock_create.call_args.kwargs["redirect_uris"] == "http://localhost:5173/cb http://127.0.0.1:8080/cb"
+
+    def test_create_stores_valid_redirect_uris_verbatim(self, admin_client: TestClient) -> None:
+        """What is validated is exactly what is stored (space-joined, lossless)."""
+        with (
+            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            mock_client = MagicMock()
+            mock_client.id = uuid.uuid4()
+            mock_client.client_id = "abc123def4567890"
+            mock_client.name = "App"
+            mock_create.return_value = (mock_client, "raw_secret_40_chars_long_here")
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={
+                    "name": "App",
+                    "redirect_uris": ["https://a.example/cb?next=%2Fhome", "https://b.example/cb"],
+                    "scopes": ["trigger:run"],
+                },
+            )
+        assert resp.status_code == 201
+        stored = mock_create.call_args.kwargs["redirect_uris"]
+        assert stored.split() == ["https://a.example/cb?next=%2Fhome", "https://b.example/cb"]
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "/relative/cb",
+            "app.example.com/cb",
+            "javascript:alert(document.domain)",
+            "data:text/html;base64,PHNjcmlwdD4=",
+            "file:///etc/passwd",
+            "myapp://cb",
+            "https://*.example.com/cb",
+            "*",
+            "https://a.example/cb#frag",
+            "https://user:pw@a.example/cb",
+            "http://a.example/cb",
+            "https://a.example.com/call back",
+            "https://a.example.com/cb\nhttps://evil.example/cb",
+        ],
+        ids=[
+            "relative-path",
+            "scheme-less",
+            "javascript-scheme",
+            "data-scheme",
+            "file-scheme",
+            "custom-scheme",
+            "wildcard-host",
+            "bare-wildcard",
+            "fragment",
+            "userinfo",
+            "non-loopback-http",
+            "internal-space",
+            "embedded-newline",
+        ],
+    )
+    def test_create_rejects_invalid_redirect_uris_with_400(self, admin_client: TestClient, uri: str) -> None:
+        """Every previously-accepted invalid value is now a structured 400."""
+        with (
+            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"name": "App", "redirect_uris": [uri], "scopes": ["trigger:run"]},
+            )
+        assert resp.status_code == 400, resp.text
+        assert "invalid_redirect_uri" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_create_rejects_whitespace_entry_before_storage(self, admin_client: TestClient) -> None:
+        """A URI with an internal space would round-trip as TWO URIs — reject it."""
+        with (
+            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={
+                    "name": "App",
+                    "redirect_uris": ["https://a.example/cb", "https://b.example/call back"],
+                    "scopes": ["trigger:run"],
+                },
+            )
+        assert resp.status_code == 400
+        assert "whitespace" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_create_400_names_every_offending_entry(self, admin_client: TestClient) -> None:
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org"):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={
+                    "name": "App",
+                    "redirect_uris": ["https://a.example/cb", "javascript:alert(1)", "/relative"],
+                    "scopes": ["trigger:run"],
+                },
+            )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "javascript:alert(1)" in detail
+        assert "/relative" in detail
+
     def test_create_requires_public_url(self, admin_client: TestClient) -> None:
         def _settings_no_url() -> Settings:
             return Settings(
