@@ -104,7 +104,7 @@ function connect(): void {
   _disconnecting = false
   clearReconnectTimer()
   connectionState.value = 'connecting'
-  doConnect()
+  void doConnect()
 }
 
 function handleConnectError(timeoutId: ReturnType<typeof setTimeout>, e: unknown): void {
