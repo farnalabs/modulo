@@ -620,7 +620,12 @@ def evaluate_guardrails(
                 eval_type=str(eval_def.eval_type),
                 deleted_at=None,
             )
-            er_view = EvalResultView(id=result.id, passed=result.passed)
+            # The snapshot's ``passed`` must reflect violation semantics, not
+            # the raw result.passed.  For regex detection, a hit (violation)
+            # produces passed=True — but the resolver needs passed=False to
+            # recognise a violation.  _interpret_violation translates
+            # hit-semantics into violation-semantics.
+            er_view = EvalResultView(id=result.id, passed=not is_violation)
             snapshot = EvalPolicySnapshot(
                 policy_gate=pg_view,
                 eval=ev_view,
@@ -747,7 +752,12 @@ def _detect_block(
                 eval_type=str(eval_def.eval_type),
                 deleted_at=None,
             )
-            er_view = EvalResultView(id=result.id, passed=result.passed)
+            # Translate detection-type-specific semantics into the resolver's
+            # violation-polarity: regex hit (passed=True) → snapshot passed=False;
+            # json_schema failure (passed=False) → snapshot passed=False.
+            detection_type, _ = _resolve_detection(eval_def)
+            snapshot_passed = not _interpret_violation(detection_type, result)
+            er_view = EvalResultView(id=result.id, passed=snapshot_passed)
             snapshot = EvalPolicySnapshot(
                 policy_gate=pg_view,
                 eval=ev_view,

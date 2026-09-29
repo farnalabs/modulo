@@ -359,6 +359,127 @@ class TestC6RetryForbidden:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# F1 — regex guardrails wired to a block gate are never enforced
+#
+# A regex detection's violation records ``passed=True`` (hit semantics — a
+# regex "hit" IS the violation, yet the underlying eval passes). The old
+# snapshot wiring read ``result.passed`` directly, so the resolver saw
+# ``passed=True`` → ``continue`` → no enforcement.  Only json_schema
+# guardrails were enforced.  These tests FAIL before the fix and PASS after.
+# ---------------------------------------------------------------------------
+
+_REGEX_VIOLATION_PAYLOAD: dict[str, Any] = {"secret": "my-api-key-12345"}
+_REGEX_CLEAN_PAYLOAD: dict[str, Any] = {"secret": "hello"}
+
+
+def _regex_guardrail(
+    *,
+    name: str = "regex-gr",
+    action: str = "block",
+    pattern: str = r"api-key-\d+",
+    field: str = "secret",
+    failure_behaviour: str = "block",
+    node_id: str | None = str(_NODE_ID),
+) -> EvalDefinition:
+    """Build a regex-detection guardrail EvalDefinition."""
+    config: dict[str, Any] = {
+        "action": action,
+        "interception_point": "input",
+        "type": "regex",
+        "pattern": pattern,
+        "field": field,
+    }
+    return EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        node_id=node_id,
+        name=name,
+        eval_type=EvalType.GUARDRAIL,
+        config=config,
+        failure_behaviour=failure_behaviour,
+    )
+
+
+class TestF1RegexBlockGateEnforced:
+    """Regex guardrails wired to a block gate MUST raise GuardrailBlockedError.
+
+    Before the fix, regex violations (``passed=True`` hit semantics) were read
+    as PASSING by the resolver → ``outcome.action = "continue"`` → no
+    enforcement.  After the fix, the snapshot's ``passed`` is derived from
+    ``_interpret_violation`` so regex hits are correctly translated to
+    ``passed=False`` in the snapshot.
+    """
+
+    def test_regex_block_gate_blocks_violating_payload(self: Any) -> None:
+        engine = EvalEngine()
+        d = _regex_guardrail(name="regex-block", action="block")
+        with pytest.raises(GuardrailBlockedError) as excinfo:
+            evaluate_guardrails(
+                engine,
+                [d],
+                dict(_REGEX_VIOLATION_PAYLOAD),
+                policy_gates={d.id: _gate("block")},
+            )
+        assert type(excinfo.value) is GuardrailBlockedError
+        assert excinfo.value.eval_name == "regex-block"
+
+    def test_regex_warn_gate_does_not_raise(self: Any) -> None:
+        engine = EvalEngine()
+        d = _regex_guardrail(name="regex-warn", action="block")
+        # Gate says "warn" — resolver must resolve to warn, not block.
+        results = evaluate_guardrails(
+            engine,
+            [d],
+            dict(_REGEX_VIOLATION_PAYLOAD),
+            policy_gates={d.id: _gate("warn")},
+        )
+        assert len(results) == 1
+        # For regex, a hit means passed=True (the raw result).
+        assert results[0].passed is True
+
+    def test_json_schema_block_still_enforced(self: Any) -> None:
+        """Regression guard: json_schema guardrails must remain enforced."""
+        engine = EvalEngine()
+        d = _guardrail(name="js-block", action="block")
+        with pytest.raises(GuardrailBlockedError) as excinfo:
+            evaluate_guardrails(
+                engine,
+                [d],
+                dict(_VIOLATION_PAYLOAD),
+                policy_gates={d.id: _gate("block")},
+            )
+        assert type(excinfo.value) is GuardrailBlockedError
+        assert excinfo.value.eval_name == "js-block"
+
+    def test_regex_interception_pass_reports_blocked(self: Any) -> None:
+        """Non-raising interception path: regex block gate reports blocked."""
+        engine = EvalEngine()
+        d = _regex_guardrail(name="regex-block", action="block")
+        outcome = asyncio.run(
+            run_interception_pass_async(
+                engine,
+                [d],
+                dict(_REGEX_VIOLATION_PAYLOAD),
+                policy_gates={d.id: _gate("block")},
+            )
+        )
+        assert outcome.blocked is True
+        assert outcome.blocking_eval_name == "regex-block"
+
+
+# ---------------------------------------------------------------------------
+# F2 — evidence-write authorisation (unit half)
+#
+# ``assert_guardrail_evidence_write_authorised`` has no production caller.
+# The guardrail module does not persist evidence rows to the evidence table;
+# the closest real write seam is ``_persist_guardrail_eval_results`` in
+# ``db/crud/run.py``.  The unit tests below prove the authorisation function
+# works correctly; wiring it into the production path is out of the allowlist
+# and reported in the delivery notes.
+# ---------------------------------------------------------------------------
+
+
 class TestC9EvidenceWriteAuthorisationUnit:
     def test_connector_key_is_authorised(self: Any) -> None:
         assert assert_guardrail_evidence_write_authorised("connector_github.status") is None
