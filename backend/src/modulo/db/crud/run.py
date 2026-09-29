@@ -1034,36 +1034,12 @@ async def _run_guardrail_interception_pass(
     ``(payload, results, redactions, blocked, block_message, skipped,
     blocking_eval_name)`` in assignment order.
 
-    When *session* is provided, PolicyGate rows are looked up for guardrail
-    evals and passed to the resolver (chunk 8).
+    The ingestion edge uses the direct ``config_json.action`` check — the
+    Policy Gate resolver is NOT wired here (§1/§3.3: the ingestion edge is
+    a pre-run safety gate, not a per-node policy evaluation).
     """
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import run_interception_pass_async
-
-    # Chunk 8: look up PolicyGate rows for guardrail evals (resolver wiring).
-    policy_gates_map: dict[uuid.UUID, Any] | None = None
-    if session is not None:
-        from sqlalchemy import select
-
-        from modulo.db.models.policy_gate import PolicyGate
-
-        eval_ids = [d.id for d in guardrail_defs]
-        if eval_ids:
-            gate_rows = (
-                (
-                    await session.execute(
-                        select(PolicyGate).where(
-                            PolicyGate.eval_id.in_(eval_ids),
-                            PolicyGate.organisation_id == org_id,
-                            PolicyGate.deleted_at.is_(None),
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if gate_rows:
-                policy_gates_map = {row.eval_id: row for row in gate_rows}
 
     start_wall = time.perf_counter()
     try:
@@ -1073,7 +1049,6 @@ async def _run_guardrail_interception_pass(
             payload,
             detection_only=bool(is_replay),
             skipped=skipped_guardrails,
-            policy_gates=policy_gates_map,
         )
     except asyncio.CancelledError:
         raise

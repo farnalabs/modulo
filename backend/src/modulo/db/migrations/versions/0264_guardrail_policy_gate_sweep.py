@@ -75,6 +75,7 @@ def upgrade() -> None:
                 """
                 INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version, created_at)
                 VALUES (gen_random_uuid(), :org_id, :eval_id, :node_id, :action, 1, now())
+                ON CONFLICT (eval_id) WHERE deleted_at IS NULL DO NOTHING
                 """
             ),
             {"org_id": org_id, "eval_id": eval_id, "node_id": node_id, "action": action},

@@ -45,14 +45,12 @@ from modulo.core.eval_engine import (
     EvalEngine,
     EvalType,
 )
-from modulo.core.eval_engine.evidence_layer import EvidenceWriteAuthorisationError
 from modulo.core.guardrails import (
     GuardrailBlockedError,
     GuardrailConfigError,
     _resolve_detection,
     _sanitise_guardrail_detail,
     _validate_guardrail_definition,
-    assert_guardrail_evidence_write_authorised,
     evaluate_guardrails,
     run_interception_pass_async,
 )
@@ -302,7 +300,8 @@ class TestC3ResolverAuthorityRegardlessOfPin:
 class TestC5InterceptionPassNonRaising:
     """``run_interception_pass_async`` reports blocks, never raises them."""
 
-    def test_resolver_block_reports_blocked(self: Any) -> None:
+    def test_block_guardrail_reports_blocked(self: Any) -> None:
+        """The ingestion edge uses the direct config_json.action check."""
         engine = EvalEngine()
         d = _guardrail(name="block-gr", action="block")
         outcome = asyncio.run(
@@ -310,19 +309,10 @@ class TestC5InterceptionPassNonRaising:
                 engine,
                 [d],
                 dict(_VIOLATION_PAYLOAD),
-                policy_gates={d.id: _gate("block")},
             )
         )
         assert outcome.blocked is True
         assert outcome.blocking_eval_name == "block-gr"
-
-    def test_unwired_block_fallback_reports_blocked(self: Any) -> None:
-        # Chunk-1 shape (no gate row): the config fallback reports the block
-        # through the same non-raising outcome envelope.
-        engine = EvalEngine()
-        d = _guardrail(name="block-gr", action="block")
-        outcome = asyncio.run(run_interception_pass_async(engine, [d], dict(_VIOLATION_PAYLOAD), policy_gates={}))
-        assert outcome.blocked is True
 
     def test_passing_payload_reports_not_blocked(self: Any) -> None:
         engine = EvalEngine()
@@ -332,7 +322,6 @@ class TestC5InterceptionPassNonRaising:
                 engine,
                 [d],
                 dict(_CLEAN_PAYLOAD),
-                policy_gates={d.id: _gate("block")},
             )
         )
         assert outcome.blocked is False
@@ -453,7 +442,7 @@ class TestF1RegexBlockGateEnforced:
         assert excinfo.value.eval_name == "js-block"
 
     def test_regex_interception_pass_reports_blocked(self: Any) -> None:
-        """Non-raising interception path: regex block gate reports blocked."""
+        """Non-raising interception path: regex block guardrail reports blocked."""
         engine = EvalEngine()
         d = _regex_guardrail(name="regex-block", action="block")
         outcome = asyncio.run(
@@ -461,7 +450,6 @@ class TestF1RegexBlockGateEnforced:
                 engine,
                 [d],
                 dict(_REGEX_VIOLATION_PAYLOAD),
-                policy_gates={d.id: _gate("block")},
             )
         )
         assert outcome.blocked is True
@@ -471,22 +459,11 @@ class TestF1RegexBlockGateEnforced:
 # ---------------------------------------------------------------------------
 # F2 — evidence-write authorisation (unit half)
 #
-# ``assert_guardrail_evidence_write_authorised`` has no production caller.
-# The guardrail module does not persist evidence rows to the evidence table;
-# the closest real write seam is ``_persist_guardrail_eval_results`` in
-# ``db/crud/run.py``.  The unit tests below prove the authorisation function
-# works correctly; wiring it into the production path is out of the allowlist
-# and reported in the delivery notes.
+# RESIDUAL (FAR-1107 chunk 8, F3): ``assert_guardrail_evidence_write_authorised``
+# was removed because no production code path writes Evidence rows
+# (``connector_*`` / ``capability_*`` keys) to the Evidence table.  The
+# closest seam is ``_persist_guardrail_eval_results`` in ``db/crud/run.py``,
+# which writes ``EvalResult`` rows — not Evidence rows.  Chunk 7's dormancy
+# is NOT lifted by this chunk; the owning chunk for the first evidence-write
+# call site is TBD.
 # ---------------------------------------------------------------------------
-
-
-class TestC9EvidenceWriteAuthorisationUnit:
-    def test_connector_key_is_authorised(self: Any) -> None:
-        assert assert_guardrail_evidence_write_authorised("connector_github.status") is None
-
-    def test_capability_key_is_authorised(self: Any) -> None:
-        assert assert_guardrail_evidence_write_authorised("capability_registry.snapshots") is None
-
-    def test_foreign_namespace_key_is_rejected(self: Any) -> None:
-        with pytest.raises(EvidenceWriteAuthorisationError):
-            assert_guardrail_evidence_write_authorised("runs_telemetry.abc")

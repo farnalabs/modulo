@@ -206,7 +206,8 @@ async def _load_dto_and_binding(engine: AsyncEngine, eval_id: uuid.UUID) -> tupl
 
 class TestC11NonRaisingInterceptionOutcome:
     @pytest.mark.asyncio
-    async def test_wired_block_gate_reports_blocked_without_raising(self, db_engine: AsyncEngine) -> None:
+    async def test_block_guardrail_reports_blocked_without_raising(self, db_engine: AsyncEngine) -> None:
+        """The ingestion edge uses the direct config_json.action check (§1/§3.3)."""
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         eval_id = await _seed_bound_guardrail(
             db_engine,
@@ -217,35 +218,32 @@ class TestC11NonRaisingInterceptionOutcome:
             config_action="block",
             gate_action="block",
         )
-        definition, binding = await _load_dto_and_binding(db_engine, eval_id)
+        definition, _binding = await _load_dto_and_binding(db_engine, eval_id)
 
-        outcome = await run_interception_pass_async(
-            EvalEngine(), [definition], dict(_VIOLATION), policy_gates={definition.id: binding}
-        )
+        outcome = await run_interception_pass_async(EvalEngine(), [definition], dict(_VIOLATION))
 
         assert outcome.blocked is True
         assert outcome.blocking_eval_name == definition.name
 
     @pytest.mark.asyncio
-    async def test_wired_warn_gate_suppresses_block_even_with_block_config(self, db_engine: AsyncEngine) -> None:
-        """Discriminator: the binding wins over a block-valued config action."""
+    async def test_block_config_always_blocks_on_ingestion_edge(self, db_engine: AsyncEngine) -> None:
+        """The ingestion edge ignores the gate action — config_json.action is authoritative there."""
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         eval_id = await _seed_bound_guardrail(
             db_engine,
             org_id,
             pipe_id,
             acc_id,
-            eval_name="gr-c11-warn",
+            eval_name="gr-c11-warn-gate",
             config_action="block",
             gate_action="warn",
         )
-        definition, binding = await _load_dto_and_binding(db_engine, eval_id)
+        definition, _binding = await _load_dto_and_binding(db_engine, eval_id)
 
-        outcome = await run_interception_pass_async(
-            EvalEngine(), [definition], dict(_VIOLATION), policy_gates={definition.id: binding}
-        )
+        outcome = await run_interception_pass_async(EvalEngine(), [definition], dict(_VIOLATION))
 
-        assert outcome.blocked is False
+        # Ingestion edge blocks on config action, not gate action.
+        assert outcome.blocked is True
 
 
 class TestC12RaisingPathsShareExactType:
@@ -287,14 +285,13 @@ class TestC12RaisingPathsShareExactType:
             config_action="block",
             gate_action="block",
         )
-        definition, binding = await _load_dto_and_binding(db_engine, eval_id)
+        definition, _binding = await _load_dto_and_binding(db_engine, eval_id)
 
         with pytest.raises(GuardrailBlockedError) as raised:
             run_guardrail_pass(
                 EvalEngine(),
                 [definition],
                 dict(_VIOLATION),
-                policy_gates={definition.id: binding},
             )
 
         assert type(raised.value) is GuardrailBlockedError

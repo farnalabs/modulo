@@ -60,36 +60,6 @@ from modulo.core.eval_engine import (
     GuardrailMisroutedError,
 )
 
-
-def assert_guardrail_evidence_write_authorised(key: str) -> None:
-    """Validate that the guardrail module is authorised to write *key*.
-
-    The guardrail module is a ``system_state`` producer writing
-    ``connector_*`` and ``capability_*`` keys (chunk 8, §5.5). Every
-    evidence write from this module MUST call this function before
-    persisting the row.
-
-    **Dormancy residual (FAR-1107 chunk 8, F2):** no production code path
-    currently writes evidence rows (``connector_*`` / ``capability_*``
-    keys) to the ``Evidence`` table.  The closest seam is
-    ``_persist_guardrail_eval_results`` in ``db/crud/run.py``, which
-    writes ``EvalResult`` rows — not ``Evidence`` rows.  The Evidence
-    table's model and migration exist (chunk 7), but the write path that
-    populates it from guardrail evaluations has not been implemented.
-    This function therefore has zero production callers today.  The
-    owning chunk for the first evidence-write call site is **chunk 8
-    itself** (§5.5 obligation CO-4); the wiring will land when the
-    guardrail module gains a code path that persists ``Evidence`` rows
-    (``connector_*`` / ``capability_*`` keys under ``system_state``).
-
-    Raises ``EvidenceWriteAuthorisationError`` if the key is outside the
-    guardrail module's allowed namespace.
-    """
-    from modulo.core.eval_engine.evidence_layer import assert_write_authorisation
-
-    assert_write_authorisation("system_state", key)
-
-
 _log = logging.getLogger(__name__)
 
 
@@ -605,7 +575,6 @@ def evaluate_guardrails(
 
     results: list[EvalResult] = []
     violations: list[tuple[EvalDefinition, EvalResult]] = []
-    warn_violations: list[tuple[EvalDefinition, EvalResult, str]] = []
     for eval_def in definitions:
         result = _detect_one(engine, payload, eval_def)
         results.append(result)
@@ -662,7 +631,6 @@ def evaluate_guardrails(
                         "guardrail": eval_def.name,
                     },
                 )
-                warn_violations.append((eval_def, result, outcome.action))
             elif outcome.action == "block":
                 violations.append((eval_def, result))
             elif outcome.action == "warn":
@@ -670,7 +638,6 @@ def evaluate_guardrails(
                     "guardrails.resolver_warn",
                     extra={"guardrail": eval_def.name, "detail": result.detail},
                 )
-                warn_violations.append((eval_def, result, outcome.action))
             # outcome.action == "continue" → no action (passing result)
         # No gate row — fall back to direct config_json.action check.
         elif eval_def.config.get("action") == GuardrailAction.BLOCK:
@@ -731,65 +698,21 @@ class DetectionLoopOutcome:
 def _detect_block(
     definitions: Sequence[EvalDefinition],
     results: Sequence[EvalResult],
-    *,
-    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> BlockDecision:
     """Determine the block decision from aligned (definitions, results).
 
-    When *policy_gates* is provided, uses the resolver for guardrails with
-    a gate row; falls back to the direct ``config_json.action`` check otherwise.
+    The ingestion edge uses the direct ``config_json.action`` check — the
+    Policy Gate resolver is NOT wired here (§1/§3.3: the ingestion edge is
+    a pre-run safety gate, not a per-node policy evaluation).
     """
-    from modulo.core.eval_engine.policy_gate import (
-        EvalPolicySnapshot,
-        EvalResultView,
-        EvalView,
-        PolicyGateView,
-        resolve_policy_gate,
-    )
-
     for eval_def, result in zip(definitions, results, strict=True):
-        gate_row = (policy_gates or {}).get(eval_def.id)
-        if gate_row is not None:
-            pg_view = PolicyGateView(
-                id=gate_row.id,
-                organisation_id=gate_row.organisation_id,
-                version=gate_row.version,
-                node_id=gate_row.node_id,
-                action=gate_row.action,
+        detection_type, _ = _resolve_detection(eval_def)
+        if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
+            return BlockDecision(
+                blocked=True,
+                block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
+                blocking_eval_name=eval_def.name,
             )
-            ev_view = EvalView(
-                id=eval_def.id,
-                organisation_id=eval_def.org_id,
-                node_id=uuid.UUID(str(eval_def.node_id)) if eval_def.node_id else None,
-                eval_type=str(eval_def.eval_type),
-                deleted_at=None,
-            )
-            # Translate detection-type-specific semantics into the resolver's
-            # violation-polarity: regex hit (passed=True) → snapshot passed=False;
-            # json_schema failure (passed=False) → snapshot passed=False.
-            detection_type, _ = _resolve_detection(eval_def)
-            snapshot_passed = not _interpret_violation(detection_type, result)
-            er_view = EvalResultView(id=result.id, passed=snapshot_passed)
-            snapshot = EvalPolicySnapshot(
-                policy_gate=pg_view,
-                eval=ev_view,
-                eval_result=er_view,
-            )
-            outcome = resolve_policy_gate(snapshot)
-            if outcome.result is False and outcome.action == "block":
-                return BlockDecision(
-                    blocked=True,
-                    block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
-                    blocking_eval_name=eval_def.name,
-                )
-        else:
-            detection_type, _ = _resolve_detection(eval_def)
-            if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
-                return BlockDecision(
-                    blocked=True,
-                    block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
-                    blocking_eval_name=eval_def.name,
-                )
     return BlockDecision()
 
 
@@ -937,8 +860,6 @@ def run_guardrail_pass(
     engine: EvalEngine,
     definitions: Sequence[EvalDefinition],
     payload: dict[str, Any],
-    *,
-    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> GuardrailPassResult:
     """Two-phase guardrail pass over an immutable pre-act payload (raising).
 
@@ -957,7 +878,6 @@ def run_guardrail_pass(
         definitions,
         payload,
         detection_only=False,
-        policy_gates=policy_gates,
     )
     if outcome.blocked:
         raise GuardrailBlockedError(outcome.blocking_eval_name or "<guardrail>", outcome.block_message)
@@ -1084,7 +1004,6 @@ def run_interception_pass(
     payload: dict[str, Any],
     *,
     detection_only: bool = False,
-    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> GuardrailInterceptionOutcome:
     """Non-raising two-phase guardrail pass for the ingestion edge (sync).
 
@@ -1096,9 +1015,6 @@ def run_interception_pass(
 
     *detection_only* (replays) skips both the block decision and the
     redaction act — replays are detection-only (item 10).
-
-    When *policy_gates* is provided, the Policy Gate resolver is the
-    enforcement authority for guardrails with a gate row (chunk 8).
 
     NOTE: this unbounded sync variant is the test/contract surface. The
     production seam (``create_run`` / ``guardrail_override``) uses
@@ -1113,10 +1029,9 @@ def run_interception_pass(
         definitions,
         pre_act,
         raise_on_block=False,
-        policy_gates=policy_gates,
     )
 
-    decision = _detect_block(definitions, results, policy_gates=policy_gates)
+    decision = _detect_block(definitions, results)
     return _assemble_outcome(
         definitions,
         pre_act,
@@ -1288,7 +1203,6 @@ async def run_interception_pass_async(
     timeout_seconds: float | None = None,
     max_payload_bytes: int = DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES,
     skipped: Sequence[GuardrailSkip] = (),
-    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> GuardrailInterceptionOutcome:
     """Async two-phase guardrail pass with per-guardrail hard timeouts (item 7).
 
@@ -1344,7 +1258,6 @@ async def run_interception_pass_async(
         decision = _detect_block(
             detection_outcome.evaluated_defs,
             detection_outcome.results,
-            policy_gates=policy_gates,
         )
     return _assemble_outcome(
         definitions,
@@ -1805,7 +1718,6 @@ __all__ = [
     "RedactionEntry",
     "alert_unexpected_guardrail_skip",
     "apply_redaction_masks",
-    "assert_guardrail_evidence_write_authorised",
     "audit_guardrail_skip",
     "build_guardrail_summary",
     "check_payload_within_budget",
