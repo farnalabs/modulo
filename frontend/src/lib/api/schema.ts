@@ -8407,6 +8407,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/guardrails/config/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Guardrail Config
+         * @description Import an org guardrail config directly as the APPLIED state (admin only).
+         *
+         *     Cross-org inheritance: an admin imports the config YAML exported from
+         *     ANOTHER organisation (or a backup) and the imported set becomes this org's
+         *     applied guardrail config in ONE step — there is no propose/review round-trip
+         *     because the source org already reviewed the policy. The elevated read
+         *     (``GET /guardrails/config/elevated``) is the export side: it returns the
+         *     full unmasked YAML an operator copies into this endpoint.
+         *
+         *     Semantics mirror ``apply``: the live ``eval_type='guardrail'`` rows (plus
+         *     the org-level knobs) are reconciled to the imported set, collisions with
+         *     node-bound rows fail closed with 409 before any mutation, and the pin is
+         *     stored as a CLEAN applied snapshot. The transport is the YAML itself —
+         *     cross-org isolation is preserved by RLS (no cross-org identifiers, no FK
+         *     reads across org boundaries), so an admin can only ever import content that
+         *     was placed in front of them; they can never read another org's rows.
+         */
+        post: operations["import_guardrail_config_api_v1_guardrails_config_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/guardrails/config/drift": {
         parameters: {
             query?: never;
@@ -12842,6 +12877,22 @@ export interface components {
             expected_skips: number;
             /** Unexpected Skips */
             unexpected_skips: number;
+        };
+        /** GuardrailImportResponse */
+        GuardrailImportResponse: {
+            /** Imported */
+            imported: boolean;
+            /** Hash */
+            hash: string;
+            /** Applied At */
+            applied_at: string;
+            /**
+             * Status
+             * @default clean
+             */
+            status: string;
+            /** Diff */
+            diff?: components["schemas"]["GuardrailChangeResponse"][];
         };
         /** GuardrailOverrideRequest */
         GuardrailOverrideRequest: {
@@ -38498,6 +38549,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GuardrailRejectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_guardrail_config_api_v1_guardrails_config_import_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProposeGuardrailConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailImportResponse"];
                 };
             };
             /** @description Validation Error */
