@@ -1533,7 +1533,26 @@ export default {
       "config_json_hint": "(JSON)",
       "pass_threshold_aria": "Pass threshold",
       "threshold": "threshold: {value}",
-      "node_prefix": "node: {id}"
+      "node_prefix": "node: {id}",
+      "policyGate": {
+        "heading": "Policy Gate",
+        "actionWarnLabel": "Warn",
+        "actionBlockLabel": "Block",
+        "actionWarnDescription": "Log and continue — the gate records a warning but the pipeline run proceeds.",
+        "actionBlockDescription": "Halt the run — the pipeline is stopped and the gate records a block decision.",
+        "deleteConfirm": "Are you sure you want to delete this policy gate?",
+        "deleteConfirmBlockWarning": "This gate is set to block runs. Deleting it will stop blocking.",
+        "errorState": "Gate save failed. The eval was saved successfully.",
+        "retry": "Retry",
+        "badgeWarn": "warn",
+        "badgeBlock": "block",
+        "deleteAriaLabel": "Delete policy gate",
+        "retryAriaLabel": "Retry saving policy gate",
+        "unsavedChangesConfirm": "You have unsaved policy gate changes. Discard them?",
+        "dirtyConfirmAriaLabel": "Unsaved changes confirmation",
+        "dirtyConfirmStay": "Keep editing",
+        "dirtyConfirmProceed": "Discard"
+      }
     },
     "RunDetailView": {
       "known_fix_heading": "Known fixes",
