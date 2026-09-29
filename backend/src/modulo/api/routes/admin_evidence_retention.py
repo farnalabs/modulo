@@ -5,8 +5,7 @@ PUT  /api/v1/admin/evidence-retention — update the policy.
 POST /api/v1/admin/evidence-retention/purge — trigger a manual purge.
 
 Auth: org admins operate within their own org; system admins may target any org.
-Feature-gated on ``admin_evidence_retention`` (team tier), permission
-``evidence_retention.manage`` (admin).
+Permission ``evidence_retention.manage`` (admin).
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.dependencies import (
     get_db_session,
-    require_feature,
     require_system_or_org_admin,
 )
 from modulo.auth.jwt import TenantPrincipal
@@ -100,7 +98,7 @@ def _resolve_org_id(principal: TenantPrincipal, organisation_id: uuid.UUID | Non
 # ── Routes ───────────────────────────────────────────────────────────────
 
 
-@router.get("", dependencies=[require_feature("admin_evidence_retention")])
+@router.get("")
 async def get_evidence_retention(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     organisation_id: Annotated[Any | None, Query()] = None,
@@ -144,7 +142,7 @@ async def get_evidence_retention(
     )
 
 
-@router.put("", status_code=http_status.HTTP_200_OK, dependencies=[require_feature("admin_evidence_retention")])
+@router.put("", status_code=http_status.HTTP_200_OK)
 async def update_evidence_retention(
     req: UpdateEvidenceRetentionPolicyRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -209,7 +207,7 @@ async def update_evidence_retention(
     )
 
 
-@router.post("/purge", status_code=http_status.HTTP_200_OK, dependencies=[require_feature("admin_evidence_retention")])
+@router.post("/purge", status_code=http_status.HTTP_200_OK)
 async def purge_evidence_retention(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     organisation_id: Annotated[Any | None, Query()] = None,

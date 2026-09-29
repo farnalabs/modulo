@@ -51,6 +51,7 @@ from modulo.api.team_scope import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.eval_engine.author_warnings import check_author_warnings
 from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_DIVERGENCE_THRESHOLD,
     DEFAULT_MIN_RUNS,
@@ -275,6 +276,7 @@ class PolicyGateResponse(BaseModel):
     action: str
     version: int
     pre_version_raw: dict[str, Any] | None = None
+    warnings: list[dict[str, str]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +486,43 @@ async def create_policy_gate(
                     detail="Policy gate binding is invalid. Check the eval configuration.",
                 ) from exc
 
+            # Author-warning checks (FAR-957 §3.2): advisory only, never
+            # blocks binding.  The evidence key is extracted from the eval's
+            # config; if no key is found, skip the check (no warnings to
+            # surface).
+            author_warnings: list[dict[str, str]] = []
+            ev_config = eval_row.config_json or {}
+            evidence_key_candidates: set[str] = set()
+            for candidate_key in ("evidence_key", "key"):
+                if candidate_key in ev_config:
+                    evidence_key_candidates.add(str(ev_config[candidate_key]))
+            detection = ev_config.get("detection")
+            if isinstance(detection, dict):
+                for candidate_key in ("evidence_key", "key"):
+                    if candidate_key in detection:
+                        evidence_key_candidates.add(str(detection[candidate_key]))
+
+            for ek in evidence_key_candidates:
+                try:
+                    warnings_list = await check_author_warnings(
+                        session,
+                        org_id=principal.organisation_id,
+                        pipeline_id=eval_row.pipeline_id,
+                        evidence_key=ek,
+                        binding_node_id=eval_row.node_id or uuid.uuid4(),
+                    )
+                    author_warnings.extend(w.to_dict() for w in warnings_list)
+                except Exception:
+                    _log.warning(
+                        "policy_gate.author_warnings_check_failed",
+                        extra={
+                            "org_id": str(principal.organisation_id),
+                            "eval_id": str(eval_id),
+                            "evidence_key": ek,
+                        },
+                        exc_info=True,
+                    )
+
             gate_fields = {
                 "action": req.action,
                 "node_id": eval_row.node_id or uuid.uuid4(),
@@ -560,6 +599,7 @@ async def create_policy_gate(
         action=gate.action,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
+        warnings=author_warnings,
     )
 
 
