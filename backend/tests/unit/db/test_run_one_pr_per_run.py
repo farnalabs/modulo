@@ -42,6 +42,7 @@ from modulo.db.crud.run import (
     SINGLE_PR_PER_RUN_FLAG,
     _enforce_one_pr_per_run,
     _record_duplicate_pr_notification,
+    _run_declares_single_pr_per_run,
     collect_delivery_pr_urls,
     find_duplicate_pr_urls,
     format_pr_url_list,
@@ -294,6 +295,28 @@ class TestSnapshotScopeGate:
         assert not graph_declares_single_pr_per_run(None)
         assert not graph_declares_single_pr_per_run("not-a-dict")
         assert not graph_declares_single_pr_per_run({"no_nodes": []})
+
+    def test_flag_deeper_than_the_scan_bound_is_not_found(self) -> None:
+        """A flag nested deeper than the bounded scan is never found — the walk
+        stops at *_SINGLE_PR_FLAG_SCAN_DEPTH* instead of recursing without
+        limit, so a pathological graph cannot hang detection."""
+        deep: Any = {SINGLE_PR_PER_RUN_FLAG: True}
+        for _ in range(8):
+            deep = {"nested": deep}
+        assert not graph_declares_single_pr_per_run({"nodes": [deep]})
+
+    def test_flag_inside_a_list_value_on_a_node_is_found(self) -> None:
+        """The walk descends list-valued node fields too, not only dicts, so a
+        contract declared inside a step/config list still arms detection."""
+        graph = {"nodes": [{"id": "deliver", "steps": [{"config": {SINGLE_PR_PER_RUN_FLAG: True}}]}]}
+        assert graph_declares_single_pr_per_run(graph)
+
+    async def test_run_without_a_frozen_snapshot_is_not_armed(self) -> None:
+        """A run carrying no ``snapshot_id`` (detached / pre-snapshot) is not
+        armed: the gate returns before touching the session."""
+        run = SimpleNamespace(snapshot_id=None)
+        session = cast(AsyncSession, SimpleNamespace())
+        assert await _run_declares_single_pr_per_run(session, cast(Any, run)) is False
 
 
 # ---------------------------------------------------------------------------
