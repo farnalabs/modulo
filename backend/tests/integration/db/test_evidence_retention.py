@@ -256,7 +256,7 @@ async def test_purge_leaves_other_orgs_rows_untouched(
     result = await purge_evidence(db_session, org, EvidenceRetentionPolicy(max_age_days=90))
 
     assert result.rows_deleted == 1
-    assert await _org_keys(db_session, org) == set()
+    assert not await _org_keys(db_session, org)
     assert await _org_keys(db_session, foreign_org) == {"theirs.old"}
 
 

@@ -25,6 +25,9 @@ SRC_ROOT = BACKEND_ROOT / "src" / "modulo"
 _SANCTIONED_RELPATH = "core/evidence_retention.py"
 _ORM_PATTERNS = ("delete(Evidence", "session.delete(Evidence", "Evidence.__table__.delete")
 _RAW_SQL_PATTERN = re.compile(r"DELETE\s+FROM\s+evidence\b", re.IGNORECASE)
+# Catch reassignment patterns like ``t = Evidence.__table__; t.delete()``
+# or ``tbl = Evidence.__table__\ntbl.delete()``.
+_TABLE_DELETE_RE = re.compile(r"Evidence\.__table__.*\.delete", re.DOTALL)
 
 
 def _scan_tree(root: Path) -> list[str]:
@@ -38,6 +41,10 @@ def _scan_tree(root: Path) -> list[str]:
         matched = [pattern for pattern in _ORM_PATTERNS if pattern in source]
         if _RAW_SQL_PATTERN.search(source):
             matched.append("DELETE FROM evidence (raw SQL)")
+        if _TABLE_DELETE_RE.search(source) and "Evidence.__table__.delete" not in source:
+            # Only flag the regex match when the literal pattern didn't
+            # already catch it — avoids double-counting the obvious case.
+            matched.append("Evidence.__table__...delete (reassignment)")
         if matched:
             violations.append(f"{rel}: forbidden evidence deletion via {matched}")
     return violations
@@ -129,3 +136,40 @@ def test_real_source_tree_has_no_evidence_deletions_outside_retention() -> None:
     violations = _scan_tree(SRC_ROOT)
 
     assert not violations
+
+
+def test_scanner_catches_reassignment_table_delete_pattern(tmp_path: Path) -> None:
+    """F6: a reassignment like ``t = Evidence.__table__; t.delete()`` must be caught."""
+    root = _plant_tree(
+        tmp_path,
+        {
+            "core/evidence_retention.py": "",
+            "api/sneaky.py": (
+                "from modulo.db.models.evidence import Evidence\n\n"
+                "def wipe():\n"
+                "    t = Evidence.__table__\n"
+                "    t.delete()\n"
+            ),
+        },
+    )
+
+    violations = _scan_tree(root)
+
+    assert len(violations) == 1
+    assert "api/sneaky.py" in violations[0]
+
+
+def test_scanner_still_catches_direct_table_delete(tmp_path: Path) -> None:
+    """The original literal pattern must still work after widening."""
+    root = _plant_tree(
+        tmp_path,
+        {
+            "core/evidence_retention.py": "",
+            "api/b.py": "def truncate():\n    return Evidence.__table__.delete()\n",
+        },
+    )
+
+    violations = _scan_tree(root)
+
+    assert len(violations) == 1
+    assert "Evidence.__table__.delete" in violations[0]

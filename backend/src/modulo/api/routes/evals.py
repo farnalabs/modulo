@@ -466,7 +466,7 @@ async def create_policy_gate(
             pg_fields = {
                 "id": uuid.uuid4(),  # placeholder — real id assigned on insert
                 "organisation_id": principal.organisation_id,
-                "node_id": eval_row.node_id or uuid.uuid4(),  # must be non-None for validation
+                "node_id": eval_row.node_id,
             }
             ev_fields = {
                 "id": eval_row.id,
@@ -509,7 +509,7 @@ async def create_policy_gate(
                         org_id=principal.organisation_id,
                         pipeline_id=eval_row.pipeline_id,
                         evidence_key=ek,
-                        binding_node_id=eval_row.node_id or uuid.uuid4(),
+                        binding_node_id=eval_row.node_id,
                     )
                     author_warnings.extend(w.to_dict() for w in warnings_list)
                 except Exception:
@@ -525,7 +525,7 @@ async def create_policy_gate(
 
             gate_fields = {
                 "action": req.action,
-                "node_id": eval_row.node_id or uuid.uuid4(),
+                "node_id": eval_row.node_id,
             }
 
             try:
@@ -672,6 +672,43 @@ async def update_policy_gate(
                     detail="Policy gate binding is invalid. Check the eval configuration.",
                 ) from exc
 
+            # Author-warning checks (FAR-957 §3.2): advisory only, never
+            # blocks binding.  Wired into the update path (F4) because a
+            # re-bind to a newly-racy key must surface the same advisory
+            # warnings as a fresh create.
+            author_warnings: list[dict[str, str]] = []
+            ev_config = eval_row.config_json or {}
+            evidence_key_candidates: set[str] = set()
+            for candidate_key in ("evidence_key", "key"):
+                if candidate_key in ev_config:
+                    evidence_key_candidates.add(str(ev_config[candidate_key]))
+            detection = ev_config.get("detection")
+            if isinstance(detection, dict):
+                for candidate_key in ("evidence_key", "key"):
+                    if candidate_key in detection:
+                        evidence_key_candidates.add(str(detection[candidate_key]))
+
+            for ek in evidence_key_candidates:
+                try:
+                    warnings_list = await check_author_warnings(
+                        session,
+                        org_id=principal.organisation_id,
+                        pipeline_id=eval_row.pipeline_id,
+                        evidence_key=ek,
+                        binding_node_id=eval_row.node_id,
+                    )
+                    author_warnings.extend(w.to_dict() for w in warnings_list)
+                except Exception:
+                    _log.warning(
+                        "policy_gate.author_warnings_check_failed",
+                        extra={
+                            "org_id": str(principal.organisation_id),
+                            "eval_id": str(eval_id),
+                            "evidence_key": ek,
+                        },
+                        exc_info=True,
+                    )
+
             # Snapshot pre_version_raw: KEY SET must equal the set of mutable
             # fields (currently `action` only) — not a hardcoded list (criteria 17/18).
             mutable_fields = {"action"}
@@ -734,6 +771,7 @@ async def update_policy_gate(
         action=gate.action,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
+        warnings=author_warnings,
     )
 
 

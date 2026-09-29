@@ -484,3 +484,19 @@ def test_metrics_recording_never_raises(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(otel_metrics, "get_meter_provider", _explode)
 
     assert _record_deletion_metrics(uuid.uuid4(), 5) is None
+
+
+# ---------------------------------------------------------------------------
+# F1: save_policy raises ValueError for missing org → route maps to 404
+# ---------------------------------------------------------------------------
+
+
+async def test_save_policy_missing_org_raises_value_error(session: AsyncSession) -> None:
+    """save_policy raises ValueError when the org doesn't exist.
+
+    The route (admin_evidence_retention) must catch this and map to 404,
+    not 500.  This test verifies the ValueError contract that the route
+    relies on.
+    """
+    with pytest.raises(ValueError, match="not found"):
+        await save_policy(session, uuid.uuid4(), EvidenceRetentionPolicy())

@@ -146,10 +146,11 @@ async def get_evidence_retention(
 async def update_evidence_retention(
     req: UpdateEvidenceRetentionPolicyRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    organisation_id: Annotated[Any | None, Query()] = None,
     principal: TenantPrincipal = require_system_or_org_admin(_PERMISSION),
 ) -> EvidenceRetentionPolicyResponse:
     """Update the evidence retention policy for the caller's org."""
-    org_id = _resolve_org_id(principal, None)
+    org_id = _resolve_org_id(principal, organisation_id)
 
     new_policy = EvidenceRetentionPolicy(
         max_age_days=req.max_age_days,
@@ -163,6 +164,12 @@ async def update_evidence_retention(
             await set_rls_org(session, org_id)
             await save_policy(session, org_id, new_policy)
             row_count = await count_evidence_rows(session, org_id)
+    except ValueError as exc:
+        _log.warning("evidence_retention.update.org_not_found", extra={"org_id": str(org_id)})
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
     except IntegrityError:
         _log.exception("evidence_retention.update.integrity_error")
         raise HTTPException(

@@ -67,27 +67,27 @@ def _is_system_state_key(key: str) -> bool:
 def _extract_evidence_keys_from_eval(eval_row: Eval) -> set[str]:
     """Extract evidence key patterns from an eval definition's config.
 
+    Only the ``evidence_key`` field is treated as a genuine evidence-key
+    reference.  A bare ``key`` field is too ambiguous — it appears in many
+    non-evidence configs (thresholds, feature keys, etc.) and treating it as
+    a producer would suppress genuine ``no_producer`` warnings (the
+    dangerous direction — criterion 16 is about not over-warning, but
+    over-SUPPRESSING is worse).
+
     Eval configs may reference evidence keys directly or via key-prefix
     patterns.  Returns the set of concrete key strings found.
     """
     keys: set[str] = set()
     config = eval_row.config_json or {}
 
-    # Direct key reference
+    # Direct evidence-key reference (unambiguous)
     if "evidence_key" in config:
         keys.add(str(config["evidence_key"]))
 
-    # Key patterns in config
-    if "key" in config:
-        keys.add(str(config["key"]))
-
-    # Nested key references (common in guardrail configs)
+    # Nested key references (common in guardrail detection configs)
     detection = config.get("detection")
-    if isinstance(detection, dict):
-        if "evidence_key" in detection:
-            keys.add(str(detection["evidence_key"]))
-        if "key" in detection:
-            keys.add(str(detection["key"]))
+    if isinstance(detection, dict) and "evidence_key" in detection:
+        keys.add(str(detection["evidence_key"]))
 
     return keys
 
@@ -95,18 +95,16 @@ def _extract_evidence_keys_from_eval(eval_row: Eval) -> set[str]:
 def _extract_evidence_keys_from_node(node: dict[str, Any]) -> set[str]:
     """Extract evidence key patterns from a pipeline graph node.
 
-    Nodes may configure evidence-producing commands or hooks that write
-    specific keys.
+    Only ``evidence_key`` is treated as a genuine evidence-key reference.
+    A bare ``key`` field in node config is ambiguous (e.g. feature keys,
+    threshold names) and could suppress a valid ``no_producer`` warning.
     """
     keys: set[str] = set()
 
     # Agent/sandbox nodes may have evidence-producing config
     config = node.get("config", {})
-    if isinstance(config, dict):
-        if "evidence_key" in config:
-            keys.add(str(config["evidence_key"]))
-        if "key" in config:
-            keys.add(str(config["key"]))
+    if isinstance(config, dict) and "evidence_key" in config:
+        keys.add(str(config["evidence_key"]))
 
     # Agent commands may reference evidence keys
     commands = node.get("agent_commands", [])
@@ -165,7 +163,7 @@ async def check_author_warnings(
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
     evidence_key: str,
-    binding_node_id: uuid.UUID,
+    binding_node_id: uuid.UUID | None = None,
 ) -> list[AuthorWarning]:
     """Check for racy/indeterminate evidence key warnings (§3.2).
 
@@ -173,17 +171,27 @@ async def check_author_warnings(
     were detected.  The check NEVER raises — all failures produce warnings
     (the safe direction).
 
+    When ``binding_node_id`` is ``None`` the gate's position in the pipeline
+    graph is indeterminate — temporal-ordering and ordering-related warnings
+    cannot be resolved, so a warning is emitted (the safe direction per §3.2).
+
     Parameters:
         session: Database session.
         org_id: Organisation ID.
         pipeline_id: Pipeline ID.
         evidence_key: The evidence key being bound to a gate.
-        binding_node_id: The node where the gate is being bound.
+        binding_node_id: The node where the gate is being bound (or None
+            when the binding position is unknown).
 
     Returns:
         List of AuthorWarning objects (advisory, non-blocking).
     """
     warnings: list[AuthorWarning] = []
+
+    # When the binding node is indeterminate, temporal-ordering cannot be
+    # resolved — warn (the safe direction per §3.2: "if the producer set
+    # cannot be determined → warn").
+    indeterminate_binding = binding_node_id is None
 
     try:
         # Load the pipeline graph
@@ -265,17 +273,25 @@ async def check_author_warnings(
 
         # ── Condition (b): temporal ordering ───────────────────────────────
         # Only check if we found a producer with a known node_id
-        if (
-            producer_found
-            and producer_node_id is not None
-            and _is_producer_downstream(producer_node_id, binding_node_id, edges)
-        ):
-            warnings.append(
-                AuthorWarning(
-                    "temporal_ordering",
-                    f"Key '{evidence_key}' producer node runs after the gate's binding node.",
+        if producer_found and producer_node_id is not None:
+            if indeterminate_binding:
+                # Binding node is unknown — ordering cannot be resolved → warn.
+                warnings.append(
+                    AuthorWarning(
+                        "temporal_ordering",
+                        f"Key '{evidence_key}' producer node is known but binding "
+                        f"node is indeterminate — temporal ordering cannot be verified.",
+                    )
                 )
-            )
+            else:
+                assert binding_node_id is not None  # guarded by not indeterminate_binding
+                if _is_producer_downstream(producer_node_id, binding_node_id, edges):
+                    warnings.append(
+                        AuthorWarning(
+                            "temporal_ordering",
+                            f"Key '{evidence_key}' producer node runs after the gate's binding node.",
+                        )
+                    )
 
         # ── Condition (c): recent undefined ────────────────────────────────
         # Query the evidence store for recent undefined outcomes on this key.

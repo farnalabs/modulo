@@ -351,3 +351,100 @@ def test_warning_to_dict_shape() -> None:
     warning = AuthorWarning("no_producer", "Key 'k' has no guaranteed producer.")
 
     assert warning.to_dict() == {"code": "no_producer", "message": "Key 'k' has no guaranteed producer."}
+
+
+# ---------------------------------------------------------------------------
+# F2: null binding node emits temporal_ordering warning (safe direction)
+# ---------------------------------------------------------------------------
+
+
+async def test_null_binding_node_warns_when_producer_known(session: AsyncSession) -> None:
+    """When binding_node_id is None the gate's position is indeterminate.
+
+    Per §3.2 the safe direction is to warn — the temporal ordering cannot
+    be verified, so a false warning (advisory) is preferred over a missed
+    warning (governance gap).
+    """
+    producer_node = uuid.uuid4()
+    org_id, pipeline_id = await _seed_pipeline(session, edges=[(uuid.uuid4(), producer_node)])
+    await _seed_eval(
+        session,
+        org_id,
+        pipeline_id,
+        config={"evidence_key": "unknown_pos.key"},
+        node_id=producer_node,
+    )
+
+    warnings = await check_author_warnings(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        evidence_key="unknown_pos.key",
+        binding_node_id=None,  # indeterminate binding position
+    )
+
+    codes = _codes(warnings)
+    assert "temporal_ordering" in codes
+    # Must NOT silently skip the warning
+    assert "indeterminate" in warnings[0].message.lower() or "cannot be verified" in warnings[0].message.lower()
+
+
+async def test_null_binding_node_no_warning_when_no_producer(session: AsyncSession) -> None:
+    """When there is no producer AND the binding is indeterminate, only
+    no_producer fires — temporal_ordering is irrelevant (nothing to order).
+    """
+    org_id, pipeline_id = await _seed_pipeline(session)
+
+    warnings = await check_author_warnings(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        evidence_key="orphan.key",
+        binding_node_id=None,
+    )
+
+    codes = _codes(warnings)
+    assert "no_producer" in codes
+    assert "temporal_ordering" not in codes
+
+
+# ---------------------------------------------------------------------------
+# F3: tightened producer heuristic — bare "key" field does NOT register
+# ---------------------------------------------------------------------------
+
+
+async def test_bare_key_field_does_not_suppress_no_producer(session: AsyncSession) -> None:
+    """A node config like ``{"key": "rate-limit-threshold"}`` must NOT be
+    treated as an evidence-key producer.  Only ``evidence_key`` is a
+    genuine evidence-key reference.  A bare ``key`` field is too ambiguous
+    and would suppress a valid no_producer warning.
+    """
+    org_id, pipeline_id = await _seed_pipeline(
+        session,
+        nodes=[{"id": str(uuid.uuid4()), "config": {"key": "rate-limit-threshold"}}],
+    )
+
+    warnings = await _check(session, org_id, pipeline_id, "rate-limit-threshold")
+
+    # Must NOT be suppressed — no_producer should fire
+    assert _codes(warnings) == {"no_producer"}
+
+
+async def test_bare_key_in_eval_config_does_not_suppress_no_producer(session: AsyncSession) -> None:
+    """Same for eval configs: ``{"key": "feature-flag"}`` is not evidence."""
+    org_id, pipeline_id = await _seed_pipeline(session)
+    await _seed_eval(session, org_id, pipeline_id, config={"key": "feature-flag"})
+
+    warnings = await _check(session, org_id, pipeline_id, "feature-flag")
+
+    assert _codes(warnings) == {"no_producer"}
+
+
+async def test_bare_key_in_detection_does_not_suppress_no_producer(session: AsyncSession) -> None:
+    """``{"detection": {"key": "threshold"}}`` is not an evidence-key reference."""
+    org_id, pipeline_id = await _seed_pipeline(session)
+    await _seed_eval(session, org_id, pipeline_id, config={"detection": {"key": "threshold"}})
+
+    warnings = await _check(session, org_id, pipeline_id, "threshold")
+
+    assert _codes(warnings) == {"no_producer"}

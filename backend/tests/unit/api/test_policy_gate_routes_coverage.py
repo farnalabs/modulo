@@ -156,12 +156,18 @@ def _queue_execute(session: AsyncMock, results: list[MagicMock]) -> None:
     session.execute = AsyncMock(side_effect=_execute)
 
 
-def _eval_row(*, node_id: uuid.UUID | None = _NODE_ID, eval_type: str = "regex") -> MagicMock:
+def _eval_row(
+    *,
+    node_id: uuid.UUID | None = _NODE_ID,
+    eval_type: str = "regex",
+    config_json: dict | None = None,
+) -> MagicMock:
     row = MagicMock()
     row.id = _EVAL_ID
     row.organisation_id = _ORG_ID
     row.node_id = node_id
     row.eval_type = eval_type
+    row.config_json = config_json or {}
     return row
 
 
@@ -534,6 +540,38 @@ def test_update_gate_unexpected_error_returns_500(client: tuple[TestClient, Asyn
     resp = http.put(_GATE_URL, json={"action": "block"})
 
     assert resp.status_code == 500, resp.text
+
+
+# ---------------------------------------------------------------------------
+# F4: update path returns author warnings (FAR-957)
+# ---------------------------------------------------------------------------
+
+
+def test_update_gate_returns_author_warnings(client: tuple[TestClient, AsyncMock]) -> None:
+    """F4: the update path must run check_author_warnings and return the
+    warnings in PolicyGateResponse.warnings — not create-only.
+    """
+    from modulo.core.eval_engine.author_warnings import AuthorWarning
+
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row(config_json={"evidence_key": "racy.key"})),
+            _result(scalar_one_or_none=_gate_row()),
+        ],
+    )
+    fake_warnings = [AuthorWarning("temporal_ordering", "Producer runs after gate.")]
+    with patch(
+        "modulo.api.routes.evals.check_author_warnings",
+        new_callable=AsyncMock,
+        return_value=fake_warnings,
+    ):
+        resp = http.put(_GATE_URL, json={"action": "block"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["warnings"] == [{"code": "temporal_ordering", "message": "Producer runs after gate."}]
 
 
 # ---------------------------------------------------------------------------
