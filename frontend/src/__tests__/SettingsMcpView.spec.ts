@@ -523,6 +523,23 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('MCP config unavailable')
   })
 
+  it('falls back to an empty MCP URL when the config response body is missing', async () => {
+    // The generated client types `data` as optional, so a 200 whose body
+    // omits the config must degrade to the "not configured" state instead of
+    // throwing while dereferencing `mcpResp.data.mcp_url`.
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: undefined, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      return Promise.resolve({ data: mockNoOAuthClients, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('MODULO_PUBLIC_URL not set')
+    expect(wrapper.text()).toContain('Local Only')
+  })
+
   it('shows error when api-keys endpoint fails', async () => {
     getMock.mockImplementation((path: string) => {
       if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
