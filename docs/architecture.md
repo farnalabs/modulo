@@ -114,6 +114,7 @@ Features:
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
 - `manual` node type – same as HITL but human provides full output
 - `hitl` node type (FAR-402 P1) – a draggable human-in-the-loop gate; compiles to the same synthetic-gate path as a legacy edge-level HITL gate. `manual` remains the non-gating human-output step.
+- Review window (FAR-1257) and approaching-deadline warning (FAR-1270) – the effective window is resolved ONCE at gate fire (pipeline override > org default > `HITL_CLAIM_TTL_SECONDS` + `HITL_REVIEW_CANCEL_GRACE_SECONDS`, clamped to 60s..7d) and stamped as `hitl_claims.terminalize_at`; the dispatcher-reconcile terminaliser cancels the run at that deadline, and a fire-once `hitl_deadline_warning` cron emails the gate-fire recipients at the halfway lead so a human can act first. Both mechanisms are described under "Run admission and healing" below.
 
 **Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "review_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `review_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honoured ONLY by the gate/node its stamp names: every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
 
@@ -350,20 +351,46 @@ worker pool stays bounded by parked runs). A capacity-deferred run stays
 `pipeline_capacity` / `org_capacity_limited`) and is re-dispatched when a slot
 frees; `pipeline.max_concurrent_runs` must be >= 1 (create/update reject 0 and
 negatives; 0 would silently wedge admission forever; pausing admission is the
-org triggers pause). Four independent mechanisms keep that gate healthy:
+org triggers pause). Several independent mechanisms keep those gates healthy:
 
 - **Slot reconciliation sweep:** a system cron (every 5 min) terminalises
   `running` runs whose heartbeat is stale past `SLOT_RECONCILE_STALE_SECONDS`
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
+- **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
+  `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
+  gate is still UNCLAIMED and UNDECIDED past the resolved review window:
+  `cancelled` / `hitl_review_expired`, which releases the org concurrency slot
+  (pipeline capacity was already released when the run left `running`). The
+  window is resolved once at fire time (pipeline override > org default >
+  `HITL_CLAIM_TTL_SECONDS` + `HITL_REVIEW_CANCEL_GRACE_SECONDS`, clamped to
+  60s..7d) and stamped as `hitl_claims.terminalize_at`, so stamped rows ignore
+  the grace knob while legacy unstamped rows keep the old arithmetic. A run
+  with ANY claimed or still-in-window undecided gate is left alone (live human
+  work), cancellation-requested runs belong to the cancel path, and analytics
+  classifies these runs as `excluded` / `hitl_timeout` rather than a deliberate
+  `operator_or_hitl_cancelled` cancel.
+- **HITL approaching-deadline warning (FAR-1270):** a dedicated
+  `hitl_deadline_warning` SAQ cron (every 60s) emails the same recipients the
+  gate-fire alert uses while an unclaimed, undecided gate is still inside its
+  lead band, `min(max(window / 2, 60s), window, 3600s)` before the deadline, so
+  someone can approve/reject BEFORE the terminaliser cancels. At most ONE
+  warning per gate (Redis `SET NX` fire-once marker, in-process backstop when
+  Redis is down), skipped when the gate is already claimed or decided, already
+  past its deadline, covered by a claimed open sibling gate, or has no opted-in
+  recipients.
 - **HITL park-on-expiry sweep:** a system cron (every 5 min) parks a run whose
-  open HITL gate expired UNANSWERED past `HITL_PARK_GRACE_SECONDS` (default
-  24h): the run moves `awaiting_human` to `hitl_parked` (a non-terminal status
-  that holds no pipeline capacity). The STATUS itself is the parked signal
-  the HITL UI reads to show "expired, parked". Park is not decide: the gate row
-  stays OPEN AND CLAIMABLE (a claim takes a fresh TTL), and the moment a
-  decision commits
+  open HITL gate expired UNANSWERED: the run moves `awaiting_human` to
+  `hitl_parked` (a non-terminal status that holds no pipeline capacity). The
+  deadline is `HITL_PARK_GRACE_SECONDS` (default 24h) after expiry for legacy
+  unstamped rows, but since FAR-1257 the sweep anchors on the review deadline
+  (`terminalize_at` + a positive margin), so the terminaliser above always acts
+  first and parking is unreachable for the unclaimed-expired class at stamped
+  rows (a parked run still holds the org slot, which is why the terminaliser
+  exists). The STATUS itself is the parked signal the HITL UI reads to show
+  "expired, parked". Park is not decide: the gate row stays OPEN AND CLAIMABLE
+  (a claim takes a fresh TTL), and the moment a decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
   re-enters normal admission: approve resumes from the checkpoint through the
   normal resume path, reject terminalises via the reject path. Each park is

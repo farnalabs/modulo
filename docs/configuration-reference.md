@@ -99,7 +99,7 @@ Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visit
 
 Point `MODULO_DEMO_USER` at a **dedicated** account: if it names an existing account, boot re-stamps that account's password to the demo password. Regardless, the demo endpoint only ever mints a session scoped to the `demo` organisation with the `viewer` role; an authenticating account without a viewer membership in the demo org (e.g. a privileged account) answers the same 404 as the kill switch.
 
-The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent: it creates the `demo` organisation, the user, and benign sample data at boot, or immediately via `python -m modulo.db.seed_demo`: five schemas, six agents, four pipelines with editor-valid graphs (UUID node ids, first-class edges) — including the Demo Governance Pipeline (Implement → PR risk level → Human review when risk > 0.50 → Open PR, with a conditional edge straight to Open PR when risk ≤ 0.50) — twenty synthetic runs carrying per-node execution traces and costs, three triggers (including "Ticket ready" on the governance pipeline) and a "Delivery lifecycle" lifecycle map. Every boot converges existing demo rows to the current seed, so an upgrade repairs demo data seeded by an older release. Rate limiting: 10 requests/hour per IP on the demo endpoint.
+The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent: it creates the `demo` organisation, the user, and benign sample data at boot, or immediately via `python -m modulo.db.seed_demo`: five schemas, six agents, four pipelines with editor-valid graphs (UUID node ids, first-class edges), including the Demo Governance Pipeline (Implement → PR risk level → Human review when risk > 0.50 → Open PR, with a conditional edge straight to Open PR when risk ≤ 0.50); twenty synthetic runs carrying per-node execution traces and costs, three triggers (including "Ticket ready" on the governance pipeline) and a "Delivery lifecycle" lifecycle map. Every boot converges existing demo rows to the current seed, so an upgrade repairs demo data seeded by an older release. Rate limiting: 10 requests/hour per IP on the demo endpoint.
 
 ---
 
@@ -131,6 +131,7 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | `MODULO_WS_TOKEN_TTL_SECONDS` | No | `60` | WebSocket auth token TTL in seconds |
 | `MODULO_ACCESS_TOKEN_MINUTES` | No | `15` | Access token TTL in minutes (min 5, max 1440) |
 | `MODULO_REFRESH_TOKEN_TTL_HOURS` | No | `24` | Refresh-token lifetime in hours (min 1, max 168). The refresh token slides on every rotation, so this is the idle-logout window: an abandoned session cannot refresh after it lapses. |
+| `REFRESH_REUSE_GRACE_SECONDS` | No | `30` | Refresh-token reuse grace window in seconds (min 0, max 120). A refresh presented with a stale family sequence within this window after the most recent rotation is treated as a benign retry/replay rather than a theft signal, so the token family is not blacklisted. `0` disables the grace: any reuse blacklists the family immediately. |
 | `DEBUG` | No | `false` | Enable debug mode (test/staging environments) |
 | `MODULO_DEV_MODE` | No | `false` | Enable preview / in-development features |
 
@@ -166,7 +167,7 @@ Client sync for the hosted community library of pipeline primitives.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SAQ_RUNS_QUEUE` | No | `runs` | Runs-queue name (`staging-runs` on staging for isolation) |
-| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when the DEPLOYMENT has no live SAQ workers on a configured queue, or no fresh system-cron heartbeat anywhere in it (deployment-scoped after FAR-1158/ADR 043 — not "this machine" — applied after the boot/probe grace). Set `false` to relax to alert-only: the condition is logged and alerted but never 503s readiness. The cutover deploy-hold was retired 2026-08-05 – this readiness gate is the only gate left |
+| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when the DEPLOYMENT has no live SAQ workers on a configured queue, or no fresh system-cron heartbeat anywhere in it (deployment-scoped after FAR-1158/ADR 043: not "this machine"; applied after the boot/probe grace). Set `false` to relax to alert-only: the condition is logged and alerted but never 503s readiness. The cutover deploy-hold was retired 2026-08-05 – this readiness gate is the only gate left |
 | `SAQ_AUTH_PASSWORD` | Yes (system worker) | – | Fail-closed web UI auth password; refuse to boot without it |
 | `SAQ_AUTH_USERNAME` | Yes (system worker) | – | Fail-closed web UI auth user; maps to the `AUTH_USER` env SAQ's web reads |
 | `SAQ_RUN_RETRIES` | No | `5` | SAQ retries per run job – `N` is N total attempts (N-1 retries) |
@@ -175,6 +176,7 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_RUN_CLAIM_CAP` | No | `20` | Per-claim cap on SAQ claim attempts for `dispatcher='saq'` runs |
 | `SAQ_SETUP_GRACE_SECONDS` | No | `600` | Zombie-run protection: a run must dispatch at least one node within this window or the watchdog fails it |
 | `SAQ_CLAIMED_NODELESS_MINUTES` | No | `35` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed. Reduced from `45` by FAR-199 (bounds wedged-fleet accumulation); must stay above the 1800s max node timeout so a slow-but-healthy first node is never false-failed |
+| `SAQ_NODELESS_EARLY_DETECT_MINUTES` | No | `15` | Early re-dispatch window (minutes) for a claimed-but-nodeless run whose heartbeat is still fresh: catches a wedged executor before the full `SAQ_CLAIMED_NODELESS_MINUTES` window elapses (min 5, max 120). Effective only when it is **below** `SAQ_CLAIMED_NODELESS_MINUTES`; at or above that value the early-detect branch is disabled with a load-time warning and the run waits the full window. Zero nodes have executed, so nothing double-executes |
 | `SAQ_JOB_HEARTBEAT` | No | `300` | SAQ job heartbeat knob (per-job `heartbeat`) |
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
 | `SAQ_NEVER_DISPATCHED_WINDOW` | No | `300` | Legacy never-dispatched sweep window (non-SAQ rows only) |
@@ -188,14 +190,15 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_NODE_DEFAULT_TIMEOUT_SECONDS` | No | `1200` | Default node execution timeout when graph node has no explicit timeout |
 | `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `4` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies (raised 2 → 4 by FAR-812 so a zero-node run survives a transient dispatch wobble) |
 | `SAQ_CAPACITY_RETRY_BUDGET` | No | `3` | Per-run capacity-retry budget: a claimed run past this many total claims is terminal-failed regardless of TTL (min 0, max 20) |
-| `HITL_REVIEW_CANCEL_GRACE_SECONDS` | No | `3600` | Instance layer of the three-level HITL review window (per-pipeline override > org default > instance default, FAR-1257): seconds after an open HITL gate expires unanswered before the gate is auto-cancelled (min 60, max 604800). The effective window is resolved once at gate fire time and stamped as the absolute `hitl_claims.terminalize_at` — org default via `GET/PUT /api/v1/admin/org/hitl-review-window` on `/admin/org` (reachable on every plan tier, FAR-1269), per-pipeline override in the pipeline editor. Stamped rows ignore this knob; it applies verbatim only to legacy unstamped rows |
+| `HITL_REVIEW_CANCEL_GRACE_SECONDS` | No | `3600` | Instance layer of the three-level HITL review window (per-pipeline override > org default > instance default, FAR-1257): seconds after an open HITL gate expires unanswered before the gate is auto-cancelled, `cancelled` / `hitl_review_expired`, releasing the org concurrency slot (min 60, max 604800). The effective window is resolved once at gate fire time (pipeline override > org default > `HITL_CLAIM_TTL_SECONDS` (900) + this value, clamped to 60..604800) and stamped as the absolute `hitl_claims.terminalize_at`: org default via `GET/PUT /api/v1/admin/org/hitl-review-window` on `/admin/org` (reachable on every plan tier, FAR-1269), per-pipeline override in the pipeline editor. Stamped rows ignore this knob (the stamp is the deadline); it applies verbatim only to legacy unstamped rows. The deprecated name `HITL_GATE_CANCEL_GRACE_SECONDS` is still read when the new name is unset, with a rename warning logged at boot |
 | `SLOT_RECONCILE_STALE_SECONDS` | No | `1800` | Stale heartbeat window for slot reconciliation sweep (force-releases leaked slots) |
 | `HEARTBEAT_STALE_RETRY_BUDGET` | No | `3` | Heartbeat-stale auto-retry budget for the slot-reconcile sweep: a `running` run swept as heartbeat-stale is reset to `pending` for re-dispatch while its `claim_count` is ≤ this budget; only a claim beyond it terminal-fails (raised 1 → 3 by FAR-812 to absorb a transient dispatch wobble in a zero-node run) |
 | `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
 | `DISPATCHER_RECONCILE_BUDGET_SECONDS` | No | `95` | Per-tick time budget (seconds) for the dispatcher reconcile loop (min 10, max 119) |
 | `DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile terminalizer SQL (min 1, max 1000) |
 | `DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile daily-facts compensator SQL (min 1, max 1000) |
-| `HITL_PARK_GRACE_SECONDS` | No | `86400` | Seconds after the HITL review deadline before the run is parked to `hitl_parked` (non-terminal, releases pipeline capacity). Since FAR-1257 the deadline is one full park-grace window after `hitl_claims.terminalize_at`, floored at a 300s margin so the terminalizing (cancel) sweep always acts first; legacy unstamped rows keep the `expires_at + grace` arithmetic. Min 60, max 604800 |
+| `DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK` | No | `500` | Cross-org row budget per reconcile tick (min 50, max 10000): the TOTAL rows processed across all orgs (terminalisers + the reconcile scan) so one tick always finishes inside `DISPATCHER_RECONCILE_BUDGET_SECONDS`; overflow drains on subsequent ticks |
+| `HITL_PARK_GRACE_SECONDS` | No | `86400` | Park-on-expiry grace (min 60, max 604800): seconds after the HITL review deadline before the run moves `awaiting_human` → `hitl_parked` (non-terminal, releases pipeline capacity; the gate stays open and claimable, park is not decide). Since FAR-1257 the park sweep anchors on the review deadline (`hitl_claims.terminalize_at`) plus one full park-grace window, floored at a 300s margin, so the terminalizing (cancel) sweep always acts first; legacy unstamped rows keep the `expires_at + grace` arithmetic |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
 only dispatch path, so the readiness gate is always active. The deploy-time
@@ -308,6 +311,7 @@ LOAD.
 | `MODULO_MONITOR_DOMAINS` | No | `""` | Space-separated CSP connect-src expressions (e.g. custom Grafana Faro collectors) |
 | `MODULO_ARTIFACTS_ENABLED` | No | `true` | Enable pipeline artifact storage |
 | `MODULO_ARTIFACTS_DIR` | No | `""` | Base directory for artifact files. Empty defaults to `<backend>/.data/artifacts` resolved by the store factory. |
+| `MODULO_WORKSPACE_INPUTS_ENABLED` | No | `false` | Managed workspace inputs (MWI) kill-switch. When OFF (default), a `sandbox_agent` node that declares `workspace_inputs` short-circuits with `sandbox.workspace_inputs_disabled` and provisions nothing; existing sandbox behaviour is unchanged. Operators enable it explicitly once MWI is ready for production use |
 
 ---
 
@@ -321,6 +325,7 @@ via the admin API. Unknown/absent keys default to safe values.
 |-----|------|---------|-------------|
 | `sandbox_concurrency_limit` | `int` (1–100) or `null` | `null` (unlimited) | Max concurrently `running` sandbox-agent runs for the org across all pipelines. Runs beyond the cap stay `pending` with `error_code='org_capacity_limited'` and are retried by the background accelerator. Managed via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`. |
 | `run_concurrency_limit` | `int` (1–100) or `null` | `null` (unlimited) | Max concurrently executing/claimed runs for the org across ALL pipelines (sandbox-agent and otherwise). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried by the background accelerator. Independent of `sandbox_concurrency_limit` – both are org-wide caps, and both produce the same `org_capacity_limited` marker on deferred runs. Managed via `GET`/`PUT /api/v1/admin/org/run-concurrency`. |
+| `hitl_review_window_seconds` | `int` (60–604800) or `null` | `null` (instance default) | Org default HITL review window: how long a fired review may sit unclaimed/undecided before the run is terminalised `cancelled` / `hitl_review_expired`. A pipeline-level `hitl_review_window_seconds` wins over this; `null` clears the key and inherits the instance default. The terminaliser itself has no per-org opt-out and no "0 = disabled". Managed via `GET`/`PUT /api/v1/admin/org/hitl-review-window`, where an omitted field is a 422 and only an explicit `null` clears the org default |
 
 ---
 
