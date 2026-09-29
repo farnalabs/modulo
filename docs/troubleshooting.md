@@ -22,11 +22,11 @@ Common issues, their causes, and resolutions.
 
 | Symptom | Cause | Resolution | Log Pattern |
 |---|---|---|---|
-| `401 Unauthorized` on every request | Invalid, expired, or malformed JWT | Re-login with `POST /api/v1/auth/login` to obtain a fresh token | `401: Token has expired` or `401: Invalid token` |
+| `401 Unauthorized` on every request | Invalid, expired, or malformed JWT (JSON Web Token) | Re-login with `POST /api/v1/auth/login` to obtain a fresh token | `401: Token has expired` or `401: Invalid token` |
 | `403 Forbidden` | User role lacks required permission | Check user role (`admin`/`operator`/`runner`/`viewer`); upgrade role via admin API if needed | `403: Insufficient permissions` |
 | Login succeeds but no data returned | No organisation has been created | Create an org via the admin API (`POST /api/v1/admin/orgs`) | No error – empty responses from all API calls |
 | `Invalid API key` | Wrong key, expired, or revoked | Create a new API key in admin settings; verify the key prefix matches the expected pattern | `401: Invalid API key` |
-| SSO login redirect fails | OIDC/SAML provider misconfiguration | Check provider settings (client ID, client secret, discovery URL); verify `redirect_uri` matches the provider's allowlist | `OIDCError: redirect_uri_mismatch` |
+| SSO login redirect fails | OIDC (OpenID Connect) / SAML (Security Assertion Markup Language) provider misconfiguration | Check provider settings (client ID, client secret, discovery URL); verify `redirect_uri` matches the provider's allowlist | `OIDCError: redirect_uri_mismatch` |
 
 ---
 
@@ -71,7 +71,7 @@ Common issues, their causes, and resolutions.
 | Symptom | Cause | Resolution | Log Pattern |
 |---|---|---|---|
 | Webhook not firing | Endpoint auto-disabled after repeated failures | Re-enable the endpoint in notification settings; check endpoint availability | `Endpoint <url> disabled after <N> consecutive failures` |
-| HMAC validation failing | HMAC secret mismatch between sender and receiver | Rotate the HMAC secret in notification settings and update the receiver | `HMAC signature mismatch` |
+| HMAC validation failing | HMAC (hash-based message authentication code) secret mismatch between sender and receiver | Rotate the HMAC secret in notification settings and update the receiver | `HMAC signature mismatch` |
 | Duplicate webhook calls | Retry mechanism delivering the same event multiple times | Check the delivery log for retry count; dedup is content-hash based (SHA-256 of the raw payload in `webhook_dedup_hashes`) so identical payloads collapse into one run | Multiple delivery log entries for the same payload hash |
 | `Flood protection triggered` | Too many identical webhooks in a short window | Check deduplication configuration; verify the webhook source is not sending duplicate payloads | `429: Flood protection – too many identical webhooks` |
 
@@ -90,7 +90,7 @@ Common issues, their causes, and resolutions.
 
 ## 8. Known Limitations
 
-- **SQLite mode**: No RLS enforcement, no advisory locks, no flood protection. Development only – not for production.
+- **SQLite mode**: No RLS (Row-Level Security) enforcement, no advisory locks, no flood protection. Development only – not for production.
 - **Claim tokens**: Single-use with a 15-minute TTL. Expired tokens cannot be refreshed – re-claim the gate.
 - **WebSocket ring buffer**: Limited to 100 events per run. Older events are not available for reconnect replay.
 - **Postgres required for production**: SQLite is development-only. Postgres is the only supported production database. See [`docs/system-requirements.md`](./system-requirements.md).

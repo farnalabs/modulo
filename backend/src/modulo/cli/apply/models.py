@@ -474,6 +474,18 @@ class PipelineEntity(BaseModel):
             "NULL = no pipeline override."
         ),
     )
+    hitl_review_window_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description=(
+            "Per-pipeline HITL review window override (60-604800s = 1 min..7 days); "
+            "null = no override (inherit the org default, then the instance default). "
+            "Managed UNCONDITIONALLY like description/max_concurrent_runs: an omitted "
+            "key means null (clears a UI/API-set override), matching the REST "
+            "PipelineCreate/PipelineUpdate field of the same name (FAR-1257)."
+        ),
+    )
     circuit_breaker_threshold: float | None = Field(
         default=None,
         gt=0,
@@ -572,6 +584,7 @@ class PipelineEntity(BaseModel):
             "description": self.description,
             "max_concurrent_runs": self.max_concurrent_runs,
             "stdout_retention_config": self.stdout_retention_config,
+            "hitl_review_window_seconds": self.hitl_review_window_seconds,
             "business_owner_id": business_owner_id,
             "reliability_owner_id": reliability_owner_id,
         }

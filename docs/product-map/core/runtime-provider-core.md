@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/core/runtime_provider/
   - backend/src/modulo/db/models/environment_profile.py
   - backend/src/modulo/db/crud/environment_profile.py
+  - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/api/routes/environment_profiles.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/connectors/shell/__init__.py
@@ -32,6 +33,7 @@ unit-tests:
   - backend/tests/unit/pipeline_engine/test_e2b_isolation_provider.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
+  - backend/tests/unit/db/test_run_one_pr_per_run.py
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
   - backend/tests/bdd/features/runtime_providers/provider_matrix.feature
@@ -144,6 +146,39 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       predicate, the sentinel-only-gets-no-guard regression, and call-site
       routing/best-effort), with the e2b call site's own policy-flag read
       pinned in `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
+- [x] One-PR-per-run delivery contract enforced OUTSIDE the sandbox (FAR-1274):
+      every terminal write that funnels through `db.crud.run` (the
+      `update_run_status` ORM + fenced writers and `request_cancellation`) runs
+      `_enforce_one_pr_per_run`, which re-scans the run's **platform-captured**
+      delivery evidence — the stored blobs' strings, i.e. the persisted
+      transcript (`agent_stdout` / `agent_stderr` / `sandbox_log_tail`, marker
+      `raw_output`) plus the agent-declared `pr_url` fields — for distinct
+      GitHub pull-request URLs. Two or more distinct URLs breach the contract
+      and are recorded LOUDLY: an `error`-level, admin-scoped in-app
+      notification (category `run.duplicate_pr_delivery`, deep-linked to the
+      run) written in the **same transaction** as the terminal status — so a
+      rolled-back terminalization leaves no phantom alert — plus an
+      `error`-level `delivery_contract.duplicate_pr` log line. The alert is
+      idempotent per run (a re-terminalization does not stack a second row).
+      Detection deliberately does **not** use the delivery sentinel: FAR-1254's
+      second `gh pr create` did not re-echo it, so sentinel counting (and the
+      boolean `delivery_done` stamp) cannot see the second PR, while `gh`'s own
+      stdout echo of the created URL is captured by the platform and needs no
+      agent cooperation. **Bounded, not absolute** (extends the FAR-1264
+      bound above): detection reads only RETAINED evidence, so a PR whose URL
+      never reached captured output or a declared field (created outside the
+      sandbox, transcript truncated past the retention cap without its
+      `stdout_artifact`, output suppressed) is not detected; conversely a run
+      that merely *references* two PR URLs in its output is flagged for
+      review (the alert is worded as a suspected breach, not a verdict); and
+      terminalizers that write `status` via raw SQL (the cron/SAQ failure
+      sweeps) bypass this hook exactly as they bypass the FAR-189 inline
+      classify hook. The in-sandbox FAR-1264 `gh` shim stays as defence in
+      depth. Unit-covered in
+      `tests/unit/db/test_run_one_pr_per_run.py` (the FAR-1254 shape caught
+      from the transcript alone; single-PR happy path silent; same-transaction
+      rollback drops the alert; re-terminalization idempotency; a failed
+      blob read never blocks the terminal write)
 - [x] File-I/O primitives (FAR-1050 R2a): `read_file` / `write_file` /
       `list_files` / `get_info` (+ the frozen `WorkspaceFileInfo` value object)
       on the ABC — exec-based binary-safe defaults (base64 over the text exec
