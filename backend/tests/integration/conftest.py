@@ -528,22 +528,22 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
         from sqlalchemy import event
 
         engine = original_get_engine()
+        if engine in instrumented_engines:
+            return engine
 
-        if engine not in instrumented_engines:
+        @event.listens_for(engine.sync_engine, "checkout")
+        def _set_role_on_checkout(
+            dbapi_connection: object,
+            _connection_record: object,
+            _connection_proxy: object,
+        ) -> None:
+            cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+            try:
+                cursor.execute(f'SET ROLE "{role}"')
+            finally:
+                cursor.close()
 
-            @event.listens_for(engine.sync_engine, "checkout")
-            def _set_role_on_checkout(
-                dbapi_connection: object,
-                _connection_record: object,
-                _connection_proxy: object,
-            ) -> None:
-                cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
-                try:
-                    cursor.execute(f'SET ROLE "{role}"')
-                finally:
-                    cursor.close()
-
-            instrumented_engines.add(engine)
+        instrumented_engines.add(engine)
 
         return engine
 
