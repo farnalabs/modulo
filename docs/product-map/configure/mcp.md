@@ -66,9 +66,10 @@ applications. Built on the auth + model-backend core.
       OAuth clients (`POST/GET/DELETE /api/v1/mcp/oauth/clients`) and approve
       pending browser consent (`POST /api/v1/mcp/oauth/consent/approve`), with
       the authorize/token/refresh protocol endpoints served by the MCP sub-app
-- [x] Completion setup handoff: `POST /api/v1/mcp-setup` consumes a one-time
-      setup token from an MCP tool response, configures the returned API key on
-      the target model backend, and completes the setup flow
+- [x] Completion setup handoff: `POST /api/v1/model-backends/{backend_id}/complete-setup`
+      (`api/routes/mcp_setup.py`, `tests/unit/api/test_mcp_setup.py`) consumes a
+      one-time setup token from an MCP tool response, configures the returned API
+      key on the target model backend, and completes the setup flow
 - [x] The `/settings/mcp` view lists the MCP URL, creates API keys with a
       selectable role (`settings-mcp-create-key`), revokes keys, and shows the
       generated key value for copying — the configured key is what external

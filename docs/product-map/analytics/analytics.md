@@ -39,8 +39,10 @@ reports resolve against a consistent fact model.
       (`tests/unit/test_analytics_delta.py`, `test_analytics_guardrails.py`)
 - [x] The analytics service executes queries against the aggregated fact model
       (`tests/unit/test_analytics_service.py`, `test_analytics_service_execution.py`)
-- [x] `/analytics` and `/api/v1/analytics` expose the aggregated surface over the HTTP
-      API (`backend/tests/integration/test_analytics_endpoint.py`)
+- [x] `/analytics` (UI route) and `GET /api/v1/analytics/query` expose the
+      aggregated surface over the HTTP API (`/export`, `/scan`, `/concurrency`,
+      `/guardrails` hang off the same `/api/v1/analytics` router prefix)
+      (`backend/tests/integration/test_analytics_endpoint.py`)
 - [x] The REST surface is permission-gated (`analytics.query`), org-context-required
       (a principal without an org context is 403), feature-gated (`analytics_page`,
       402 when disabled) and refuses unauthenticated callers (401);
