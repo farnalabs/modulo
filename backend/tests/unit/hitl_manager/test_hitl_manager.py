@@ -255,6 +255,50 @@ async def test_create_gate_without_stamp_leaves_gate_config_null():
     await mgr.create_gate(session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
     added = session.add.call_args[0][0]
     assert added.gate_config_json is None
+    # FAR-1257: no terminalize_at argument -> NULL, which keeps the legacy
+    # ``expires_at + grace`` fallback in the sweep for unstamped rows.
+    assert added.terminalize_at is None
+
+
+async def test_create_gate_stamps_passed_terminalize_at():
+    """FAR-1257: the executor's resolved ABSOLUTE review deadline rides onto
+    the claim row verbatim — the sweep's predicate collapses to
+    ``terminalize_at < now()`` for this row and never re-reads config."""
+    session = _session_get(return_value=None)
+    mgr = HITLManager()
+    deadline = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=4500)
+    await mgr.create_gate(
+        session,
+        run_id=_RUN,
+        review_id=_GATE,
+        pipeline_id=_PIPELINE,
+        org_id=_ORG,
+        terminalize_at=deadline,
+    )
+    added = session.add.call_args[0][0]
+    assert added.terminalize_at == deadline
+
+
+async def test_create_gate_terminalize_at_does_not_move_expires_at():
+    """FAR-1257: ``expires_at`` is the claim TTL (reset by the claim-expiry
+    job); stamping the terminalization deadline must not touch it — the two
+    are independent columns by design."""
+    session = _session_get(return_value=None)
+    mgr = HITLManager()
+    before = datetime.now(UTC)
+    await mgr.create_gate(
+        session,
+        run_id=_RUN,
+        review_id=_GATE,
+        pipeline_id=_PIPELINE,
+        org_id=_ORG,
+        terminalize_at=before + timedelta(days=7),
+    )
+    added = session.add.call_args[0][0]
+    # expires_at is still the 15-minute claim TTL, not the 7-day deadline.
+    ttl = added.expires_at - before
+    assert timedelta(minutes=14) < ttl < timedelta(minutes=16)
+    assert added.terminalize_at == before + timedelta(days=7)
 
 
 async def test_create_review_idempotent_if_exists():

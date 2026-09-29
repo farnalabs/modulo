@@ -561,6 +561,10 @@ async def export_pipeline_bundle(
                 "graph_nodes_json": stripped_nodes,
                 "run_context_defaults": dict(pipeline.run_context_defaults or {}),
                 "node_timeout_seconds": pipeline.node_timeout_seconds,
+                # FAR-1257: nullable override survives the round-trip (absent on
+                # bundles exported before this column existed -> import inherits
+                # the org/instance default, the shipped behaviour).
+                "hitl_review_window_seconds": getattr(pipeline, "hitl_review_window_seconds", None),
                 "retry_policy": dict(pipeline.retry_policy or {}),
                 "visibility": "org",  # Always strip team scoping
                 "business_owner_email": business_owner_email,
@@ -2151,6 +2155,10 @@ async def _create_imported_pipeline(
                     visibility="org",
                     owner_team_id=ctx.owner_team_id,
                     node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
+                    # FAR-1257: deliberately a bare ``.get`` (NOT ``or ...``) —
+                    # None IS the meaningful "no override" value here, and an
+                    # absent key on a pre-FAR-1257 bundle maps to the same None.
+                    hitl_review_window_seconds=pipeline_info.get("hitl_review_window_seconds"),
                     run_context_defaults=pipeline_info.get("run_context_defaults"),
                     business_owner_id=business_owner_id,
                     reliability_owner_id=reliability_owner_id,

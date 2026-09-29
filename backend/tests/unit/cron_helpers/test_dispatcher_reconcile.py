@@ -2592,6 +2592,39 @@ class TestTerminalizeExpiredHitlReviews:
         assert "hc2.expires_at >= now() - (:grace_seconds * interval '1 second')" in sql
 
     @pytest.mark.asyncio
+    async def test_predicate_has_the_terminalize_at_and_legacy_arms(self) -> None:
+        """FAR-1257: the deadline is TWO-armed. A stamped claim is collected
+        on its absolute ``terminalize_at``; an unstamped (legacy) claim keeps
+        the shipped ``expires_at + grace`` arithmetic. The NOT-EXISTS arm
+        mirrors the same two arms, so an in-window stamped gate spares the run
+        exactly like an in-grace legacy one — and a CLAIMED stamped gate still
+        spares it via ``account_id IS NOT NULL``."""
+        _returned, session = await self._run()
+        sql = str(session.executed[-1][0])
+        # EXISTS arm: stamped deadline OR legacy fallback.
+        assert "hc.terminalize_at IS NOT NULL AND hc.terminalize_at < now()" in sql
+        assert "hc.terminalize_at IS NULL" in sql
+        # NOT EXISTS arm: the exact complement (still inside the window).
+        assert "hc2.terminalize_at IS NOT NULL AND hc2.terminalize_at >= now()" in sql
+        assert "hc2.terminalize_at IS NULL" in sql
+        # The grace knob still feeds ONLY the legacy arms (stamped rows ignore it).
+        assert sql.count(":grace_seconds") == 2
+
+    @pytest.mark.asyncio
+    async def test_error_code_and_cancel_reason_are_unchanged(self) -> None:
+        """F6a/error-code preservation: the sweep still writes the SAME
+        ``hitl_review_expired`` code, reason and system actor — FAR-1257 adds
+        a deadline, not a new status or vocabulary."""
+        _returned, session = await self._run()
+        _stmt, params = session.executed[-1]
+        assert params["code"] == "hitl_review_expired"
+        assert params["reason"] == "hitl_review_expired"
+        assert params["actor"] == "system"
+        # FAR-746 batch cap still bound (never None/uncapped).
+        assert isinstance(params["max_rows"], int)
+        assert params["max_rows"] > 0
+
+    @pytest.mark.asyncio
     async def test_returns_terminalized_ids_and_warns_per_run(self, caplog: pytest.LogCaptureFixture) -> None:
         expired = [uuid.uuid4(), uuid.uuid4()]
         with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):

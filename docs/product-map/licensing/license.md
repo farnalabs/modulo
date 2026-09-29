@@ -32,7 +32,7 @@ bdd:
   - backend/tests/bdd/features/admin/test_tier_catalog_steps.py
 depends-on:
   - feat-teams
-status: covered
+status: partial
 ---
 
 # Feature Licensing and Plan Tiers
@@ -85,13 +85,27 @@ and feature-flag inspection endpoints.
 
 ## Known Gaps
 
-None acknowledged: the previously-tracked "`stripe_webhook.py` and `admin_tiers.py`
-are cited as adjacents but not behaviour-covered" gap was closed by the 2026-09-23
-product-map walk — the tier catalogue now has executing BDD coverage
-(`admin/tier_catalog.feature`) and the Stripe purchase webhook ships a dedicated
-executing BDD surface (`licensing/stripe_billing.feature`), both cited above.
+- **License-driven gating is not applied to EVERY registered `feat-*` surface**
+  — `require_feature` / `get_plan_context` gate the licensed Team-tier surfaces
+  (SSO providers, `/api/v1/teams`, audit export, admin spend limits), not the
+  whole feature registry (tracked as the manifest `feat-license` unchecked
+  deferral). The previously-tracked "`stripe_webhook.py` and `admin_tiers.py`
+  are cited as adjacents but not behaviour-covered" gap was closed by the
+  2026-09-23 product-map walk — the tier catalogue now has executing BDD
+  coverage (`admin/tier_catalog.feature`) and the Stripe purchase webhook ships
+  a dedicated executing BDD surface (`licensing/stripe_billing.feature`), both
+  cited above.
 
 ## QA History
+
+- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+  tracker frontmatter `status:` with the manifest `feat-license` registry: the
+  entry now reads `status: partial` (matching the manifest's unchecked
+  "license-driven gating is not applied to EVERY registered `feat-*` surface"
+  deferral, now also named in Known Gaps) instead of `covered`. The two layers
+  previously disagreed on the same feature's coverage — a reader of the graph
+  got the opposite answer from the machine layer Assistant reads from the
+  manifest.
 
 - 2026-09-25: **Improve Architecture product-map walk** — sharpened the
   manifest `feat-license` registry entry: the shipped composition-root gating

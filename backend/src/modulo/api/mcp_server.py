@@ -1750,7 +1750,9 @@ async def list_pipelines_tool(
     "Optional business_owner_id / reliability_owner_id (account UUIDs) assign the accountability "
     "owners (FAR-1161); each assignee must be an active member of this organisation and, when "
     "visibility is 'team', a member of the owner team — an ineligible owner is rejected with a "
-    "validation error, never silently dropped. Omit or pass null for unassigned."
+    "validation error, never silently dropped. Omit or pass null for unassigned. "
+    "Optional hitl_review_window_seconds (60-604800) sets the per-pipeline HITL review window "
+    "override. Omit or pass null to inherit the org default, then the instance default."
 )
 @_RETRY_DB
 async def create_pipeline(
@@ -1760,6 +1762,7 @@ async def create_pipeline(
     max_concurrent_runs: int = 5,
     lock_wait_timeout_seconds: int = 300,
     node_timeout_seconds: int = 300,
+    hitl_review_window_seconds: int | None = None,
     default_autonomy_level: str = "manual_approval",
     max_autonomy_level: str | None = None,
     folder_id: str | None = None,
@@ -1773,6 +1776,16 @@ async def create_pipeline(
             parsed_folder_id = uuid.UUID(folder_id)
         except ValueError:
             return {"error": "invalid_folder_id", "detail": f"Invalid folder_id UUID: {folder_id}"}
+    # FAR-1257: same 60..604800 envelope as the REST/Pydantic layer and
+    # ck_pipelines_hitl_review_window — validate up front so an out-of-range
+    # value is a clean tool error, not a DB IntegrityError.
+    if hitl_review_window_seconds is not None and not (60 <= hitl_review_window_seconds <= 604800):
+        return {
+            "error": "validation_failed",
+            "detail": (
+                f"hitl_review_window_seconds must be between 60 and 604800 seconds, got {hitl_review_window_seconds}"
+            ),
+        }
     threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
     if threshold_error is not None:
         return threshold_error
@@ -1830,6 +1843,7 @@ async def create_pipeline(
                 max_concurrent_runs=max_concurrent_runs,
                 lock_wait_timeout_seconds=lock_wait_timeout_seconds,
                 node_timeout_seconds=node_timeout_seconds,
+                hitl_review_window_seconds=hitl_review_window_seconds,
                 default_autonomy_level=default_autonomy_level,
                 max_autonomy_level=max_autonomy_level,
                 folder_id=parsed_folder_id,

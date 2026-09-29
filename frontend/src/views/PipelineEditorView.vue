@@ -154,6 +154,30 @@
                 <option value="fully_autonomous">{{ $t('views.PipelineEditorView.autonomy_fully_autonomous') }}</option>
               </select>
             </div>
+            <!-- FAR-1257: per-pipeline HITL review window override. Empty =
+                 clear the override (inherit the org default); the value is
+                 seconds, the same envelope the API enforces (60..604800). -->
+            <div class="flex items-center gap-1" v-tooltip.bottom="$t('views.PipelineEditorView.hitl_review_window_help')">
+              <label
+                for="pipeline-hitl-review-window"
+                class="whitespace-nowrap text-[10px] text-muted-foreground"
+                :title="$t('views.PipelineEditorView.hitl_review_window_help')"
+              >{{ $t('views.PipelineEditorView.hitl_review_window_label') }}:</label>
+              <input id="pipeline-hitl-review-window"
+                v-model="hitlReviewWindowInput"
+                type="number"
+                min="60"
+                max="604800"
+                step="1"
+                inputmode="numeric"
+                :placeholder="$t('views.PipelineEditorView.hitl_review_window_inherit')"
+                :aria-describedby="'pipeline-hitl-review-window-help'"
+                class="w-24 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                @change="updateHitlReviewWindow"
+                data-testid="pipeline-editor-hitl-review-window"
+              />
+              <span id="pipeline-hitl-review-window-help" class="sr-only">{{ $t('views.PipelineEditorView.hitl_review_window_help') }}</span>
+            </div>
             <div class="relative">
               <button
                 type="button"
@@ -1045,6 +1069,19 @@
             />
             <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
           </div>
+          <!-- FAR-1257 advisory (NON-BLOCKING): a human-only gate nobody can be
+               notified about will simply age out at the review window and the
+               run gets cancelled. Warn, never gate the save. aria-live (not
+               role="status") so assistive tech announces it without SonarCloud
+               Web:S6819. -->
+          <p
+            v-if="ownerlessGateAdvisory"
+            class="rounded-lg border border-warning/40 bg-warning/10 p-2 text-xs text-warning"
+            aria-live="polite"
+            data-testid="pipeline-editor-ownerless-gate-advisory"
+          >
+            {{ $t('views.PipelineEditorView.ownerless_gate_advisory') }}
+          </p>
           <hr class="border-t" />
           <div>
             <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
@@ -1500,6 +1537,75 @@ const { orgRole } = useCurrentUser()
 // Mirrors the backend reset gate: POST /admin/costs/circuit-breaker/{id}/reset
 // requires the org-admin `cost.manage` permission (no plan gate).
 const canResetCircuitBreaker = computed(() => orgRole.value === 'admin')
+
+// FAR-1257: per-pipeline HITL review window override (seconds; 60..604800).
+// '' = no override (inherit the org default). Empty on save sends an explicit
+// null so the backend's exclude_unset path CLEARS the column rather than
+// leaving it untouched.
+const HITL_WINDOW_MIN_SECONDS = 60
+const HITL_WINDOW_MAX_SECONDS = 604800
+const hitlReviewWindowInput = ref<string | number>('')
+
+function syncHitlReviewWindowFromPipeline() {
+  const stored = (pipeline.value as { hitl_review_window_seconds?: number | null } | null)?.hitl_review_window_seconds
+  hitlReviewWindowInput.value = stored ?? ''
+}
+
+async function updateHitlReviewWindow() {
+  const raw = String(hitlReviewWindowInput.value ?? '').trim()
+  let seconds: number | null
+  if (raw === '') {
+    seconds = null
+  } else {
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < HITL_WINDOW_MIN_SECONDS || parsed > HITL_WINDOW_MAX_SECONDS) {
+      saveGraphError.value = t('views.PipelineEditorView.hitl_review_window_out_of_range', {
+        min: HITL_WINDOW_MIN_SECONDS,
+        max: HITL_WINDOW_MAX_SECONDS,
+      })
+      // Never display a value the server would reject — restore the stored one.
+      syncHitlReviewWindowFromPipeline()
+      return
+    }
+    seconds = parsed
+  }
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { hitl_review_window_seconds: seconds },
+      signal,
+    }))
+    if (pipeline.value) pipeline.value.hitl_review_window_seconds = seconds
+    hitlReviewWindowInput.value = seconds ?? ''
+    saveGraphError.value = null
+  } catch (e: unknown) {
+    saveGraphError.value = t('views.PipelineEditorView.hitl_review_window_update_failed', { error: formatApiError(e) })
+    syncHitlReviewWindowFromPipeline()
+  }
+}
+
+// FAR-1257: does ANYONE own this pipeline? A human-only gate with no required
+// team on an unowned pipeline has no assignable reviewer — it can only age out
+// at the review window. Advisory only; never used to block a save.
+const pipelineHasOwner = computed(() => {
+  const p = pipeline.value as {
+    owner_team_id?: string | null
+    business_owner_id?: string | null
+    reliability_owner_id?: string | null
+  } | null
+  if (!p) return false
+  if (p.owner_team_id) return true
+  if (p.business_owner_id) return true
+  if (p.reliability_owner_id) return true
+  return false
+})
+
+const ownerlessGateAdvisory = computed(() => {
+  if (!selectedEdgeData.value) return false
+  if (!edgeForm.hitl_enabled || !edgeForm.human_only) return false
+  if (pipelineHasOwner.value) return false
+  return !selectedEdgeData.value.hitl_review_config?.required_team_id
+})
 
 const retryPolicyOpen = ref(false)
 const retryPolicySaving = ref(false)
@@ -2491,6 +2597,7 @@ async function loadPipeline() {
     maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
     circuitBreakerInput.value = data?.circuit_breaker_threshold ?? ''
     maxAutonomyInput.value = (data as any)?.max_autonomy_level ?? null
+    syncHitlReviewWindowFromPipeline()
     syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })

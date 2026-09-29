@@ -33,7 +33,8 @@ Decision table (spec, keyed on status — never prose):
 
 | status          | outcome                                        |
 |-----------------|------------------------------------------------|
-| cancelled       | ``excluded`` (operator/HITL-cancelled — never countable, even with an unparseable reason) |
+| cancelled       | ``excluded`` (operator/HITL-cancelled — never countable, even with an unparseable |
+|                 | reason); reason ``hitl_timeout`` when collected by the FAR-1257 review-window sweep |
 | budget_exceeded | ``excluded`` (and breaks the FAR-190 walk)      |
 | router_no_match | ``excluded`` (FAR-415 — its own reason, never budget_exceeded) |
 | failed / eval_failed / stalled | ``no_delivery`` (COUNTABLE — infra/sandbox crash elevated to failed counts, PO) |
@@ -89,6 +90,14 @@ REASON_SOURCE_ERROR = "source_error"
 REASON_PARSE_ERROR = "parse_error"
 REASON_NO_DELIVERY = "no_delivery"
 REASON_CANCELLED = "operator_or_hitl_cancelled"
+# FAR-1257: a ``cancelled`` run the HITL review-window terminalizer collected
+# (dispatcher_reconcile, ``error_code``/``cancel_reason`` =
+# ``hitl_review_expired`` -> canonical ``hitl.review_expired``). Still the SAME
+# ``excluded`` verdict — never countable, never a delivery — but with its own
+# reason so reporting can tell "a human let the review window lapse" apart from
+# "an operator deliberately cancelled". No new ``runs.status`` was added for
+# this; status stays ``cancelled``.
+REASON_HITL_TIMEOUT = "hitl_timeout"
 REASON_BUDGET_EXCEEDED = "budget_exceeded"
 REASON_COMPENSATION_FAILED = "compensation_failed"
 REASON_ROUTER_NO_MATCH = "router_no_match"
@@ -388,6 +397,46 @@ def _derive_no_delivery_reason(
 # --- the pure classifier ----------------------------------------------------
 
 
+def _is_hitl_timeout(error_code: str | None, cancel_reason: str | None) -> bool:
+    """True when a ``cancelled`` run was collected by the review-window sweep.
+
+    FAR-1257. Either of the two stamps the terminalizer writes is sufficient,
+    because a legacy row may carry only one of them:
+
+    * ``runs.cancel_reason`` (the FAR-1233 WHY stamp) — a CLOSED vocabulary
+      (``ck_runs_cancel_reason``), so it is compared against the literal
+      ``hitl_review_expired`` directly. It is NOT an error code, and routing it
+      through the error-code registry would emit a spurious
+      ``harness.unknown.fallback`` signal for every ordinary
+      ``user_requested``/``agent_requested`` cancel.
+    * ``runs.error_code`` — canonicalised through ``error_codes`` to
+      ``hitl.review_expired`` (both the raw ``hitl_review_expired`` alias and
+      the canonical dotted spelling match). A ``"hitl"`` pre-filter keeps the
+      registry call off the common operator-cancel codes entirely, so this
+      reason never perturbs the unmapped-fallback signal stream.
+
+    ``map_legacy_code`` (the code-level mapping) is used rather than
+    ``class_for``: ``class_for`` returns the *error class* tag (``"hitl"``),
+    not a canonical code, so it cannot express "this exact code" — and only the
+    exact canonical code keeps a future sibling ``hitl.*`` code from being
+    bucketed as a timeout.
+
+    A registry failure degrades to "not a timeout" — the pre-FAR-1257
+    ``operator_or_hitl_cancelled`` reason, never an exception out of the pure
+    classifier.
+    """
+    if cancel_reason is not None and cancel_reason == "hitl_review_expired":
+        return True
+    if not error_code or "hitl" not in error_code.lower():
+        return False
+    try:
+        from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+        return map_legacy_code(error_code) == "hitl.review_expired"
+    except Exception:
+        return False
+
+
 def classify_run(
     status: str,
     error_code: str | None,
@@ -396,6 +445,7 @@ def classify_run(
     telemetry_json: Any = None,
     raw_output_markers: Any = None,
     work_intact: bool | None = None,
+    cancel_reason: str | None = None,
 ) -> ClassificationResult:
     """The decision table (FAR-189 spec §6) — pure and unit-testable.
 
@@ -409,6 +459,10 @@ def classify_run(
     For ``complete``: the run is ``delivered`` iff it has a valid ``pr_url`` OR
     any raw-output marker carries ``delivery_done`` (FAR-228 — a side-effecting
     delivery, e.g. an email, recorded even though the node later failed/retried).
+
+    ``cancel_reason`` (FAR-1257) refines ONLY the ``cancelled`` reason: a run
+    the review-window terminalizer collected gets ``hitl_timeout`` instead of
+    ``operator_or_hitl_cancelled``. The verdict stays ``excluded`` either way.
     """
     from modulo.db.models.run import TERMINAL_STATUSES
 
@@ -422,7 +476,11 @@ def classify_run(
     # router_no_match run as a budget attribution (FAR-415).
     if status in _EXCLUDED_STATUSES:
         if status == "cancelled":
-            reason = REASON_CANCELLED
+            # FAR-1257: discriminate a review-window timeout from a deliberate
+            # operator/HITL cancel on the run's OWN terminalization facts (the
+            # reason never changes the excluded verdict — see FAR-415's
+            # sibling: one status, its own reason, no cross-bucket leakage).
+            reason = REASON_HITL_TIMEOUT if _is_hitl_timeout(error_code, cancel_reason) else REASON_CANCELLED
         elif status == "router_no_match":
             reason = REASON_ROUTER_NO_MATCH
         else:
@@ -707,6 +765,11 @@ async def classify_and_persist_run(
             telemetry_json=blobs.telemetry,
             raw_output_markers=blobs.markers,
             work_intact=run.work_intact,
+            # FAR-1233 WHY stamp: lets the cancelled branch tell a review-window
+            # timeout (hitl_timeout) from a deliberate cancel. ``getattr`` keeps
+            # this resilient to stand-in run rows (tests, partial mocks) built
+            # before the column existed.
+            cancel_reason=getattr(run, "cancel_reason", None),
         )
     except asyncio.CancelledError:
         raise

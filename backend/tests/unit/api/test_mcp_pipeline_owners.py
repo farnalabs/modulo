@@ -190,6 +190,15 @@ class TestCreatePipelineOwnerParams(_AuthContext):
         assert result["error"] == "invalid_id"
         assert result["field"] == "reliability_owner_id"
 
+    @pytest.mark.parametrize("bad", [0, 59, 604801, -1])
+    async def test_out_of_range_review_window_rejected_before_db(self, bad: int) -> None:
+        """FAR-1257: the MCP create tool enforces the same 60..604800 envelope
+        as the REST/Pydantic layer and the DB CHECK, up front, so an out-of-range
+        value is a clean tool error rather than a DB IntegrityError."""
+        result = await ms.create_pipeline(name="p", hitl_review_window_seconds=bad)
+        assert result["error"] == "validation_failed"
+        assert "60 and 604800" in result["detail"]
+
     async def test_success_serialises_owner_ids(self) -> None:
         pipeline = MagicMock()
         pipeline.id = _PIPELINE_ID

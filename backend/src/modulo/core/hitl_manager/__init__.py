@@ -47,6 +47,7 @@ from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, HITL_CLAIMABLE_RUN_STATUSES, Run
 from modulo.db.models.team_membership import TeamMembership
+from modulo.settings import HITL_CLAIM_TTL_SECONDS
 
 if TYPE_CHECKING:
     from modulo.core.pipeline_engine.hitl_context import HitlReviewContext
@@ -172,7 +173,15 @@ class DecisionPayloadError(HITLError, ValueError):
 # ---------------------------------------------------------------------------
 
 _TOKEN_BYTES = 32
-_DEFAULT_EXPIRY_MINUTES = 15
+# FAR-1257: the claim-TTL constant is owned by ``modulo.settings`` — a near-leaf
+# module BOTH ``core`` and ``db`` may import — because ``db.crud.hitl_review_config``
+# composes the instance default review window from it (import-linter contract
+# ``db-does-not-import-core``). Deriving the minutes from the shared seconds
+# value keeps ``expires_at`` and the fire-time window on ONE source.
+_DEFAULT_EXPIRY_MINUTES = HITL_CLAIM_TTL_SECONDS // 60
+#: The claim-TTL component of the default HITL review window, in seconds
+#: (re-exported from ``settings`` so core callers keep one obvious import).
+DEFAULT_EXPIRY_SECONDS = HITL_CLAIM_TTL_SECONDS
 _DECISION_APPROVED = "approved"
 _DECISION_REJECTED = "rejected"
 _DECISION_DELIVER_MANUAL = "deliver_manual"
@@ -208,6 +217,7 @@ class HITLManager:
         required_team_id: uuid.UUID | None = None,
         context_json: HitlReviewContext | dict[str, Any] | None = None,
         gate_config_json: dict[str, Any] | None = None,
+        terminalize_at: datetime | None = None,
     ) -> HitlClaim:
         """Insert a new unclaimed gate row. Idempotent if called again for same key.
 
@@ -227,6 +237,17 @@ class HITLManager:
         rows without a stamp keep the walk as fallback). Same idempotent
         contract as ``context_json``: a replay never overwrites the first
         fire's stamp.
+
+        ``terminalize_at`` (FAR-1257) is the ABSOLUTE deadline the
+        dispatcher_reconcile terminalizer collects this run at, stamped once
+        from the resolved review window (pipeline override > org default >
+        instance/env default). It is deliberately separate from
+        ``expires_at`` (the claim TTL, which the claim-expiry job resets on
+        every claim) — overloading ``expires_at`` would make the
+        terminalization deadline move whenever a claim is re-armed. ``None``
+        (the default, and every legacy row) keeps the legacy
+        ``expires_at + grace`` fallback in the sweep. Same idempotent
+        contract: a replay never restamps the first fire's deadline.
         """
         # Check for existing row first (unique constraint: run_id + review_id).
         # Race: a concurrent caller may insert between our check and flush.
@@ -241,6 +262,7 @@ class HITLManager:
             pipeline_id=pipeline_id,
             required_team_id=required_team_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=_DEFAULT_EXPIRY_MINUTES),
+            terminalize_at=terminalize_at,
             context_json=context_json,
             gate_config_json=gate_config_json,
         )

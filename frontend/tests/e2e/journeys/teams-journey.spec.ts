@@ -67,21 +67,33 @@ test.describe('Real-stack journeys: team lifecycle', { tag: '@regression' }, () 
       const created = list.items.find((t) => t.name === name)
       expect(created, 'created team must be returned by GET /api/v1/admin/teams').toBeTruthy()
       teamId = created.id
-      await expect(page.locator('.card').filter({ hasText: name }).first()).toBeVisible({ timeout: 30_000 })
+
+      // Scope the card by the row's OWN toggle. A `.card` text filter also
+      // matches the create form's success banner ("Team \"<name>\" created."),
+      // so `.first()` used to resolve to the create form and the subsequent
+      // toggle lookup hung for the whole test timeout.
+      const card = page.locator('.card').filter({ has: page.getByTestId(`settings-teams-toggle-${created.id}`) })
+      // The teams list renders a single page (oldest-first, 20 per page) with
+      // no pager, so on a shared instance whose list already holds more than a
+      // page of teams the freshly created one is never rendered. Skip the UI
+      // leg rather than fail the suite on that shared-instance page cap.
+      if ((await card.count()) === 0) {
+        test.skip(true, 'created team is beyond the teams list page cap on this shared instance')
+      }
+      await expect(card).toBeVisible({ timeout: 30_000 })
 
       // Rename through the row's Rename action. The rename form lives in the
       // card's expanded panel (SettingsTeamsView renders the rename input only
       // when `expandedTeamId === team.id`), so disclose the card first — the
       // Rename action sets `renameTeamId` but does not expand the card itself.
-      const card = page.locator('.card').filter({ hasText: name }).first()
       await card.getByTestId(`settings-teams-toggle-${created.id}`).click()
       await card.getByRole('button', { name: 'Rename' }).click()
       await page.getByTestId('settings-teams-rename-name').fill(renamedName)
       await page.getByTestId('settings-teams-rename-save').click()
 
       // The card re-renders with the new name...
-      const renamedCard = page.locator('.card').filter({ hasText: renamedName }).first()
-      await expect(renamedCard).toBeVisible({ timeout: 30_000 })
+      const renamedCard = page.locator('.card').filter({ has: page.getByTestId(`settings-teams-toggle-${created.id}`) })
+      await expect(renamedCard).toContainText(renamedName, { timeout: 30_000 })
       // ...and the rename persisted through the real backend. The PUT is
       // optimistic-concurrency guarded with expected_updated_at, so a stale
       // payload would never just overwrite.

@@ -27,6 +27,15 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             name="ck_pipelines_lock_wait_timeout",
         ),
         CheckConstraint("node_timeout_seconds > 0", name="ck_pipelines_node_timeout"),
+        # FAR-1257: per-pipeline HITL review window override (seconds). NULL =
+        # no override (inherit the org default, then the instance/env default).
+        # The 60..604800 envelope (1 min .. 7 days) is the SAME one Pydantic
+        # enforces on the API surfaces and resolve_hitl_review_window_seconds
+        # applies at resolution time — migration 0263.
+        CheckConstraint(
+            "hitl_review_window_seconds IS NULL OR hitl_review_window_seconds BETWEEN 60 AND 604800",
+            name="ck_pipelines_hitl_review_window",
+        ),
         CheckConstraint(
             "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_autonomy_level",
@@ -35,6 +44,23 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             "max_autonomy_level IS NULL OR "
             "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_max_autonomy_level",
+        ),
+        # 0264: the ordering invariant itself (levels are NOT lexicographically
+        # ordered, hence the CASE rank map). A NULL ceiling always passes the
+        # first arm; a NULL default makes the comparison NULL, which a CHECK
+        # treats as satisfied - matching validate_autonomy_ceiling's
+        # "NULL default ranks as manual_approval" fallback.
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "(CASE default_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END) <= "
+            "(CASE max_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END)",
+            name="ck_pipelines_max_autonomy_ge_default",
         ),
     )
 
@@ -62,6 +88,12 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
     node_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
+    # FAR-1257: per-pipeline HITL review window override (seconds), mirroring
+    # ``node_timeout_seconds``'s plumbing but NULLABLE — NULL means "no
+    # override, inherit the org default then the instance/env default". The
+    # chain resolves ONCE at gate fire time and is stamped as an absolute
+    # ``hitl_claims.terminalize_at``. CHECK ck_pipelines_hitl_review_window.
+    hitl_review_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=3600, server_default="3600")
     max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -81,7 +113,8 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # FAR-1163 S0: hard ceiling on the autonomy level any HITL-gate resolution
     # may reach. NULL = effective ceiling is default_autonomy_level (a
     # context-setter recommendation can then only LOWER autonomy). Migration
-    # 0256; CHECK ck_pipelines_max_autonomy_level above.
+    # 0256; CHECKs ck_pipelines_max_autonomy_level (vocabulary) and
+    # ck_pipelines_max_autonomy_ge_default (>= default, migration 0264) above.
     max_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,

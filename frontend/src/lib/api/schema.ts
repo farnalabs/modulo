@@ -610,6 +610,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/hitl-review-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Get Hitl Review Window */
+        get: operations["admin_get_hitl_review_window_api_v1_admin_org_hitl_review_window_get"];
+        /** Admin Update Hitl Review Window */
+        put: operations["admin_update_hitl_review_window_api_v1_admin_org_hitl_review_window_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/org/work-item-agent-minting": {
         parameters: {
             query?: never;
@@ -6705,6 +6723,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evals/{eval_id}/policy-gate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Policy Gate
+         * @description Read a PolicyGate for an eval.
+         *
+         *     Returns the gate's action and version.  Returns 404 when no gate exists
+         *     (criterion 13).  The gate inherits the eval's edit permission — no
+         *     separate permission check is performed (criterion 14).
+         */
+        get: operations["get_policy_gate_api_v1_evals__eval_id__policy_gate_get"];
+        /**
+         * Update Policy Gate
+         * @description Update a PolicyGate's action (admin only).
+         *
+         *     The gate inherits the eval's edit permission — no separate permission
+         *     check is performed (criterion 14).
+         *
+         *     Version increments on each edit (1→2→3).  ``pre_version_raw`` captures
+         *     ALL currently-mutable fields as ``{"action": <value>}`` — the snapshot
+         *     key set equals the set of mutable fields (criteria 17/18).
+         *
+         *     ``validate_binding`` is called to verify the gate-to-eval binding is
+         *     still valid after the update.  Violations are logged at WARNING with
+         *     structured context but the caller receives a generic 400 (criteria 5-9).
+         */
+        put: operations["update_policy_gate_api_v1_evals__eval_id__policy_gate_put"];
+        /**
+         * Create Policy Gate
+         * @description Create a PolicyGate for an eval (admin only).
+         *
+         *     The gate inherits the eval's edit permission — no separate permission
+         *     check is performed (criterion 14).
+         *
+         *     ``validate_binding`` is called to verify the gate-to-eval binding is
+         *     valid (cross-tenancy, guardrail-typed, suite-scoped, node_id mismatch).
+         *     Violations are logged at WARNING with structured context but the caller
+         *     receives a generic 400 -- never the violation list or org identifiers
+         *     (criteria 5-9).
+         *
+         *     Concurrent creates are serialised via a transaction-scoped advisory lock
+         *     (section 4.4/5).  A ``UniqueViolation`` while holding the lock → 409.
+         *     A lock-acquisition timeout (SQLSTATE 57014) → 503.
+         */
+        post: operations["create_policy_gate_api_v1_evals__eval_id__policy_gate_post"];
+        /**
+         * Delete Policy Gate
+         * @description Soft-delete a PolicyGate (admin only).
+         *
+         *     The gate inherits the eval's edit permission — no separate permission
+         *     check is performed (criterion 14).
+         *
+         *     Sets ``deleted_at`` / ``deleted_by`` on the gate row.  The row remains
+         *     (soft-deleted) but is no longer live.
+         *
+         *     If the gate has existing ``PolicyGateDecision`` rows, the FK RESTRICT
+         *     raises ``IntegrityError`` → mapped to a typed 409 naming the
+         *     remediation (criterion 4a / §4.3a).
+         */
+        delete: operations["delete_policy_gate_api_v1_evals__eval_id__policy_gate_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evals": {
         parameters: {
             query?: never;
@@ -8401,6 +8489,41 @@ export interface paths {
          *     same admin-only check as apply and the direct eval-definition API.
          */
         post: operations["reject_guardrail_config_api_v1_guardrails_config_reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/guardrails/config/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Guardrail Config
+         * @description Import an org guardrail config directly as the APPLIED state (admin only).
+         *
+         *     Cross-org inheritance: an admin imports the config YAML exported from
+         *     ANOTHER organisation (or a backup) and the imported set becomes this org's
+         *     applied guardrail config in ONE step — there is no propose/review round-trip
+         *     because the source org already reviewed the policy. The elevated read
+         *     (``GET /guardrails/config/elevated``) is the export side: it returns the
+         *     full unmasked YAML an operator copies into this endpoint.
+         *
+         *     Semantics mirror ``apply``: the live ``eval_type='guardrail'`` rows (plus
+         *     the org-level knobs) are reconciled to the imported set, collisions with
+         *     node-bound rows fail closed with 409 before any mutation, and the pin is
+         *     stored as a CLEAN applied snapshot. The transport is the YAML itself —
+         *     cross-org isolation is preserved by RLS (no cross-org identifiers, no FK
+         *     reads across org boundaries), so an admin can only ever import content that
+         *     was placed in front of them; they can never read another org's rows.
+         */
+        post: operations["import_guardrail_config_api_v1_guardrails_config_import_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12843,6 +12966,22 @@ export interface components {
             /** Unexpected Skips */
             unexpected_skips: number;
         };
+        /** GuardrailImportResponse */
+        GuardrailImportResponse: {
+            /** Imported */
+            imported: boolean;
+            /** Hash */
+            hash: string;
+            /** Applied At */
+            applied_at: string;
+            /**
+             * Status
+             * @default clean
+             */
+            status: string;
+            /** Diff */
+            diff?: components["schemas"]["GuardrailChangeResponse"][];
+        };
         /** GuardrailOverrideRequest */
         GuardrailOverrideRequest: {
             /** Input Data */
@@ -13082,6 +13221,22 @@ export interface components {
             subject_path?: string | null;
             /** @description FAR-860: typed response contract. Absent/None = today's approve/reject behaviour (backward-compatible). kind='choice' declares agent-defined options; the human's answer is injected into run state as hitl_answer_<review_id> for downstream conditional edges. */
             response_contract?: components["schemas"]["HitlResponseContract"] | null;
+        };
+        /**
+         * HitlReviewWindowResponse
+         * @description Public admin response for the org default HITL review window.
+         *
+         *     ``is_default`` marks the ABSENT-key case so the UI can render the effective
+         *     instance default rather than implying an explicit org setting exists.
+         */
+        HitlReviewWindowResponse: {
+            /** Hitl Review Window Seconds */
+            hitl_review_window_seconds?: number | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
         };
         /** HousekeepingCategory */
         HousekeepingCategory: {
@@ -15064,6 +15219,11 @@ export interface components {
              * @default 300
              */
             node_timeout_seconds: number;
+            /**
+             * Hitl Review Window Seconds
+             * @description Per-pipeline HITL review window override (60-604800s = 1 min..7 days). How long a fired review may sit unclaimed/undecided before the run is cancelled to release its concurrency slot. Precedence: this value > the org default (settings) > the instance/env default. null = no override (inherit). Resolved once at gate fire time.
+             */
+            hitl_review_window_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;
@@ -15504,6 +15664,8 @@ export interface components {
             lock_wait_timeout_seconds: number;
             /** Node Timeout Seconds */
             node_timeout_seconds: number;
+            /** Hitl Review Window Seconds */
+            hitl_review_window_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults: {
                 [key: string]: unknown;
@@ -15620,6 +15782,11 @@ export interface components {
             lock_wait_timeout_seconds?: number | null;
             /** Node Timeout Seconds */
             node_timeout_seconds?: number | null;
+            /**
+             * Hitl Review Window Seconds
+             * @description Per-pipeline HITL review window override (60-604800s). Omit to leave unchanged; null clears the override (inherit the org/instance default).
+             */
+            hitl_review_window_seconds?: number | null;
             /** Run Context Defaults */
             run_context_defaults?: {
                 [key: string]: unknown;
@@ -15720,6 +15887,46 @@ export interface components {
             health_detail: string;
             /** Health Checked At */
             health_checked_at?: string | null;
+        };
+        /**
+         * PolicyGateCreateRequest
+         * @description Request body for POST /api/v1/evals/{eval_id}/policy-gate.
+         */
+        PolicyGateCreateRequest: {
+            /** Action */
+            action: string;
+        };
+        /**
+         * PolicyGateResponse
+         * @description Response body for GET /api/v1/evals/{eval_id}/policy-gate.
+         */
+        PolicyGateResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Action */
+            action: string;
+            /** Version */
+            version: number;
+            /** Pre Version Raw */
+            pre_version_raw?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * PolicyGateUpdateRequest
+         * @description Request body for PUT /api/v1/evals/{eval_id}/policy-gate.
+         */
+        PolicyGateUpdateRequest: {
+            /** Action */
+            action: string;
         };
         /**
          * PollingConfigUpdate
@@ -18548,6 +18755,11 @@ export interface components {
             /** Visibility */
             visibility?: string | null;
         };
+        /** UpdateHitlReviewWindowRequest */
+        UpdateHitlReviewWindowRequest: {
+            /** Hitl Review Window Seconds */
+            hitl_review_window_seconds: number | null;
+        };
         /** UpdateOrgRequest */
         UpdateOrgRequest: {
             /** Name */
@@ -20765,6 +20977,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SandboxConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_hitl_review_window_api_v1_admin_org_hitl_review_window_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HitlReviewWindowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_hitl_review_window_api_v1_admin_org_hitl_review_window_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHitlReviewWindowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HitlReviewWindowResponse"];
                 };
             };
             /** @description Validation Error */
@@ -34248,6 +34526,221 @@ export interface operations {
             };
         };
     };
+    get_policy_gate_api_v1_evals__eval_id__policy_gate_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyGateResponse"];
+                };
+            };
+            /** @description Policy gate not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_policy_gate_api_v1_evals__eval_id__policy_gate_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyGateUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyGateResponse"];
+                };
+            };
+            /** @description Bad Request — binding validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Policy gate not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict — concurrent gate update */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable — lock timeout */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_policy_gate_api_v1_evals__eval_id__policy_gate_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyGateCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyGateResponse"];
+                };
+            };
+            /** @description Bad Request — binding validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Eval not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict — concurrent gate creation */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable — lock timeout */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_policy_gate_api_v1_evals__eval_id__policy_gate_delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Policy gate not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict — gate has decision records */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_eval_definitions_api_v1_evals_get: {
         parameters: {
             query?: {
@@ -38498,6 +38991,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GuardrailRejectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_guardrail_config_api_v1_guardrails_config_import_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProposeGuardrailConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailImportResponse"];
                 };
             };
             /** @description Validation Error */

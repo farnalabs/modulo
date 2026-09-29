@@ -77,6 +77,16 @@ class HitlClaim(OrgScoped):
     # migration; generic JSON keeps SQLite/MariaDB parity (same pattern as
     # context_json).
     gate_config_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
+    # FAR-1257: the ABSOLUTE terminalization deadline, stamped ONCE at fire time
+    # by ``HITLManager.create_gate`` from the resolved review window (pipeline
+    # override > org default > instance/env default). The FAR-648 terminalizer's
+    # deadline predicate is ``terminalize_at < now()`` for stamped rows; NULL
+    # (legacy rows fired before this column existed) falls back to the legacy
+    # ``expires_at + grace`` arithmetic. Deliberately separate from
+    # ``expires_at``: that column is the claim TTL and the claim-expiry job
+    # RESETS it on every claim, so overloading it would move the
+    # terminalization deadline whenever a claim is re-armed.
+    terminalize_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # NOTE (qa F13): no ``parked_at`` column. The park sweep (run_admission.
     # park_expired_hitl_runs) marks a parked run via the RUN's ``hitl_parked``
     # status — the gate row is untouched (park ≠ decide) and a separate stamp
