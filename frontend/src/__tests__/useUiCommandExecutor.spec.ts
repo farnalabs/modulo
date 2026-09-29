@@ -10,6 +10,7 @@ import {
 } from '../composables/useUiCommandExecutor'
 import { spotlight } from '../composables/useSpotlight'
 import router from '@/router'
+import { formatApiError } from '../lib/api/formatError'
 
 vi.mock('@/router', () => ({
   default: { push: vi.fn(async () => undefined) },
@@ -18,6 +19,13 @@ vi.mock('@/router', () => ({
 vi.mock('../composables/useSpotlight', () => ({
   spotlight: { highlight: vi.fn(), dismiss: vi.fn() },
 }))
+
+// Keep the real formatter as the default implementation; individual tests
+// override it to force executeSingle to reject, exercising the backstop.
+vi.mock('../lib/api/formatError', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api/formatError')>()
+  return { ...actual, formatApiError: vi.fn(actual.formatApiError) }
+})
 
 class FakeBroadcastChannel {
   static instance: FakeBroadcastChannel | null = null
@@ -684,6 +692,66 @@ describe('useUiCommandExecutor command surface', () => {
     await vi.advanceTimersByTimeAsync(1000)
     const results = await p
     expect(results[0].success).toBe(true)
+  })
+
+  // ---- executeWithTimeout rejection backstop (Sonar S9383) ----
+  // The .catch() backstop guarantees executeWithTimeout's outer promise always
+  // settles even when executeSingle rejects (e.g. the error formatter itself
+  // throwing). These tests drive both backstop branches.
+  it('resolves execution_failed when executeSingle rejects with an Error', async () => {
+    vi.mocked(formatApiError).mockImplementationOnce(() => {
+      throw new Error('formatter exploded')
+    })
+    highlightMock.mockImplementationOnce(() => {
+      throw new Error('highlight failed')
+    })
+
+    const results = await runBatch([{ id: '1', name: 'spotlight', args: { target: 'save-btn' } }])
+
+    expect(results[0].success).toBe(false)
+    expect(results[0].error).toBe('execution_failed: formatter exploded')
+  })
+
+  it('resolves execution_failed when executeSingle rejects with a non-Error', async () => {
+    const nonError: unknown = 'formatter exploded'
+    vi.mocked(formatApiError).mockImplementationOnce(() => {
+      throw nonError
+    })
+    highlightMock.mockImplementationOnce(() => {
+      throw new Error('highlight failed')
+    })
+
+    const results = await runBatch([{ id: '1', name: 'spotlight', args: { target: 'save-btn' } }])
+
+    expect(results[0].success).toBe(false)
+    expect(results[0].error).toBe('execution_failed: formatter exploded')
+  })
+
+  it('does not clobber an already-resolved result when executeSingle rejects after abort', async () => {
+    await drainNavHistory()
+    const seeded = await runBatch([{ id: 'seed', name: 'navigate', args: { path: '/runs' } }])
+    expect(seeded[0].success).toBe(true)
+
+    vi.mocked(formatApiError).mockImplementationOnce(() => {
+      throw new Error('formatter exploded')
+    })
+
+    let rejectPush: (reason?: unknown) => void = () => {}
+    routerPush.mockReturnValueOnce(new Promise<never>((_, reject) => {
+      rejectPush = reject
+    }))
+
+    const p = executeCommandBatch([{ id: '1', name: 'go_back', args: {} }])
+    // Let executeSingle reach `await router.push(...)` before aborting.
+    await vi.advanceTimersByTimeAsync(10)
+    abortUiCommands()
+    const results = await p
+    expect(results[0].error).toBe('cancelled_by_user')
+
+    // The in-flight goBack now rejects: the backstop's `if (resolved) return`
+    // must swallow it rather than clobber the cancelled_by_user result.
+    rejectPush(new Error('push failed'))
+    await vi.advanceTimersByTimeAsync(0)
   })
 })
 
