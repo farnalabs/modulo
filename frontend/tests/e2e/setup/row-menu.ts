@@ -5,7 +5,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
  * across the real-stack journeys).
  *
  * Clicking a PrimeVue menu item is the single most brittle interaction in the
- * staging suite — it has now been "fixed" four times in opposite directions:
+ * staging suite — it has now been "fixed" five times in opposite directions:
  *
  *   1. a real `.click()` on the inner `<a class="p-menu-item-link">` — never
  *      completes: the anchored overlay's enter transition moves the element
@@ -16,22 +16,31 @@ import { expect, type Locator, type Page } from '@playwright/test'
  *      coordinates, so the first interaction after the menu opens no-ops;
  *   3. `dispatchEvent('mousedown')` + `dispatchEvent('mouseup')` — WRONG.
  *      `dispatchEvent` dispatches exactly the event it is given; it does NOT
- *      synthesise the browser's input pipeline, so a dispatched `mouseup`
- *      never produces a `click`. PrimeVue binds the command to `onClick`
- *      (`primevue/menu/Menuitem.vue`), so the handler never ran at all and
- *      every rename/archive/delete journey failed with "dialog not found".
- *      (Verified in Chromium: mousedown+mouseup on the content div produces
- *      zero `click` events.)
+ *      synthesise the browser's input pipeline, so neither a dispatched
+ *      `mouseup` produces a `click` nor does the handler ever run.
+ *   4. `dispatchEvent('click')` on `[data-pc-section="itemcontent"]` — also
+ *      WRONG. Re-verified against the deployed staging build (Chromium 149):
+ *      the element resolves, but PrimeVue's `onClick` never fires, so
+ *      rename/archive silently no-op. The pipeline-lifecycle journeys failed
+ *      with "dialog not found" / the row never leaving the list while no
+ *      archive request was ever sent.
+ *   5. a real Playwright `.click()` on the item (even after waiting for the
+ *      transition): measured 5/6 — it intermittently loses the race with the
+ *      anchored-overlay enter transition ("element is not stable" / "element
+ *      was detached from the DOM").
  *
- * Dispatch a `click` directly on the `[data-pc-section="itemcontent"]` `<div>`
- * — the element that carries PrimeVue's `onClick` handler. A dispatched click
- * fires that handler regardless of geometry or an in-flight overlay
- * transition, which is exactly why the coordinate-based approaches above
- * failed. The item is asserted visible first, so a genuinely missing command
- * still fails.
+ * The reliable activation is a NATIVE DOM `.click()` on the
+ * `[data-pc-section="itemcontent"]` `<div>` — the element that carries
+ * PrimeVue's `onClick` handler (`primevue/menu/Menuitem.vue`). Measured 6/6
+ * against the deployed build: it runs the handler regardless of geometry or an
+ * in-flight overlay transition, while still failing if the command is
+ * genuinely absent (the item is asserted visible first).
  */
 export async function clickMenuItem(page: Page, menuItem: Locator): Promise<void> {
   await expect(menuItem).toBeVisible({ timeout: 15_000 })
+  // Let the anchored-overlay enter transition settle so the popup DOM is
+  // stable before we invoke the handler.
+  await page.waitForTimeout(200)
   const content = menuItem.locator('[data-pc-section="itemcontent"]').first()
-  await content.dispatchEvent('click')
+  await content.evaluate((el) => (el as HTMLElement).click())
 }

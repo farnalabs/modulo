@@ -6723,6 +6723,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evals/{eval_id}/policy-gate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Policy Gate
+         * @description Read a PolicyGate for an eval.
+         *
+         *     Returns the gate's action and version.  Returns 404 when no gate exists
+         *     (criterion 13).  The gate inherits the eval's edit permission — no
+         *     separate permission check is performed (criterion 14).
+         */
+        get: operations["get_policy_gate_api_v1_evals__eval_id__policy_gate_get"];
+        /**
+         * Update Policy Gate
+         * @description Update a PolicyGate's action (admin only).
+         *
+         *     The gate inherits the eval's edit permission — no separate permission
+         *     check is performed (criterion 14).
+         *
+         *     Version increments on each edit (1→2→3).  ``pre_version_raw`` captures
+         *     ALL currently-mutable fields as ``{"action": <value>}`` — the snapshot
+         *     key set equals the set of mutable fields (criteria 17/18).
+         *
+         *     ``validate_binding`` is called to verify the gate-to-eval binding is
+         *     still valid after the update.  Violations are logged at WARNING with
+         *     structured context but the caller receives a generic 400 (criteria 5-9).
+         */
+        put: operations["update_policy_gate_api_v1_evals__eval_id__policy_gate_put"];
+        /**
+         * Create Policy Gate
+         * @description Create a PolicyGate for an eval (admin only).
+         *
+         *     The gate inherits the eval's edit permission — no separate permission
+         *     check is performed (criterion 14).
+         *
+         *     ``validate_binding`` is called to verify the gate-to-eval binding is
+         *     valid (cross-tenancy, guardrail-typed, suite-scoped, node_id mismatch).
+         *     Violations are logged at WARNING with structured context but the caller
+         *     receives a generic 400 -- never the violation list or org identifiers
+         *     (criteria 5-9).
+         *
+         *     Concurrent creates are serialised via a transaction-scoped advisory lock
+         *     (section 4.4/5).  A ``UniqueViolation`` while holding the lock → 409.
+         *     A lock-acquisition timeout (SQLSTATE 57014) → 503.
+         */
+        post: operations["create_policy_gate_api_v1_evals__eval_id__policy_gate_post"];
+        /**
+         * Delete Policy Gate
+         * @description Soft-delete a PolicyGate (admin only).
+         *
+         *     The gate inherits the eval's edit permission — no separate permission
+         *     check is performed (criterion 14).
+         *
+         *     Sets ``deleted_at`` / ``deleted_by`` on the gate row.  The row remains
+         *     (soft-deleted) but is no longer live.
+         *
+         *     If the gate has existing ``PolicyGateDecision`` rows, the FK RESTRICT
+         *     raises ``IntegrityError`` → mapped to a typed 409 naming the
+         *     remediation (criterion 4a / §4.3a).
+         */
+        delete: operations["delete_policy_gate_api_v1_evals__eval_id__policy_gate_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evals": {
         parameters: {
             query?: never;
@@ -15817,6 +15887,46 @@ export interface components {
             health_detail: string;
             /** Health Checked At */
             health_checked_at?: string | null;
+        };
+        /**
+         * PolicyGateCreateRequest
+         * @description Request body for POST /api/v1/evals/{eval_id}/policy-gate.
+         */
+        PolicyGateCreateRequest: {
+            /** Action */
+            action: string;
+        };
+        /**
+         * PolicyGateResponse
+         * @description Response body for GET /api/v1/evals/{eval_id}/policy-gate.
+         */
+        PolicyGateResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Action */
+            action: string;
+            /** Version */
+            version: number;
+            /** Pre Version Raw */
+            pre_version_raw?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * PolicyGateUpdateRequest
+         * @description Request body for PUT /api/v1/evals/{eval_id}/policy-gate.
+         */
+        PolicyGateUpdateRequest: {
+            /** Action */
+            action: string;
         };
         /**
          * PollingConfigUpdate
@@ -34413,6 +34523,221 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_policy_gate_api_v1_evals__eval_id__policy_gate_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyGateResponse"];
+                };
+            };
+            /** @description Policy gate not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_policy_gate_api_v1_evals__eval_id__policy_gate_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyGateUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyGateResponse"];
+                };
+            };
+            /** @description Bad Request — binding validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Policy gate not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict — concurrent gate update */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable — lock timeout */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_policy_gate_api_v1_evals__eval_id__policy_gate_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyGateCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyGateResponse"];
+                };
+            };
+            /** @description Bad Request — binding validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Eval not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict — concurrent gate creation */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable — lock timeout */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_policy_gate_api_v1_evals__eval_id__policy_gate_delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Policy gate not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict — gate has decision records */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
