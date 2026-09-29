@@ -128,7 +128,7 @@ Three authenticated endpoints expose plugin information:
 | `GET` | `/api/v1/plugins/{plugin_id}` | Detail for a single plugin with health status |
 | `GET` | `/api/v1/plugins/{plugin_id}/health` | Health check for a single plugin |
 
-Both require `plugin.list` permission (returning a `TenantPrincipal`) and the `plugin_management` feature flag. Plugin management (install, upgrade, remove) is not handled through this API; see [Installation](#installation).
+All three require `plugin.list` permission (returning a `TenantPrincipal`) and the `plugin_management` feature flag. Plugin management (install, upgrade, remove) is not handled through this API; see [Installation](#installation).
 
 ## How plugins interact with Modulo
 

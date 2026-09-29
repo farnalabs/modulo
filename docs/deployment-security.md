@@ -136,11 +136,12 @@ MODULO_USERS=admin:<bcrypt-hashed-password>
 
 Entries accept a bcrypt hash (`user1:$2b$12$<hash>`) or plaintext
 (`admin:changeme`); plaintext is bcrypt-hashed at seed time. Existing accounts
-are left untouched.
+with a bcrypt-stored hash are left untouched; a legacy account whose stored hash
+is missing or not bcrypt (does not start with `$2`) is re-hashed from this entry.
 
 **Security considerations:**
-- `MODULO_USERS` takes effect when the seeded account does not exist yet.
-  Removing it after seeding does not delete the user.
+- `MODULO_USERS` takes effect when the seeded account does not exist yet (or
+  has a legacy non-bcrypt hash). Removing it after seeding does not delete the user.
 - Do not commit `MODULO_USERS` to any configuration file – inject it via the
   runtime environment (Docker secret, or vault).
 - Prefer bcrypt-hashed passwords in production. The format is `$2b$12$<hash>` (generate with any
