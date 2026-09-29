@@ -33,6 +33,7 @@ from modulo.core.notifier.event_mapper import notification_categories
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
 from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
+from modulo.db.models.org_membership import OrgMembership
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -41,7 +42,15 @@ _USER_B = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _PREFERENCES_PATH = "/api/v1/notifications/in-app/preferences"
 _DASHBOARD_PATH = "/api/v1/notifications/in-app/dashboard"
 
-_TABLES = [Account.__table__, Notification.__table__, NotificationPreference.__table__, Dismissal.__table__]
+# OrgMembership is required because the admin-scope visibility clause reads it
+# (EXISTS) on every notification read the routes perform.
+_TABLES = [
+    Account.__table__,
+    Notification.__table__,
+    NotificationPreference.__table__,
+    Dismissal.__table__,
+    OrgMembership.__table__,
+]
 
 # FAR-620: the fixture's per-test engine is captured here so tests can seed
 # preferences blocks the HTTP surface cannot write (e.g. a sibling
