@@ -21,6 +21,7 @@ from modulo.core.hitl_email_alerts import (
     resolve_hitl_email_pref,
     resolve_hitl_email_recipients,
     schedule_hitl_email_dispatch,
+    send_hitl_deadline_alerts,
     send_hitl_email_alerts,
 )
 
@@ -618,3 +619,67 @@ class TestScheduleHitlEmailDispatchBriefing:
 
         sent.assert_awaited_once()
         assert sent.call_args.args[3] is None
+
+
+class TestDeadlineEmail:
+    """FAR-1270: the approaching-deadline warning reuses this substrate with
+    time-boxed copy — same resolver, same send contract, distinct subject."""
+
+    def test_subject_and_body_carry_gate_pipeline_and_time_left(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_deadline_email
+
+        subject, body_html, body_text = _build_deadline_email(_GATE, _RUN_LINK, "Improve Security", 12)
+        assert subject == f"HITL review deadline approaching - {_GATE}"
+        assert f"Gate: {_GATE}" in body_text
+        assert "Pipeline: Improve Security" in body_text
+        assert "about 12 minute(s)" in body_text
+        assert "hitl_review_expired" in body_text
+        assert f"Review: {_RUN_LINK}" in body_text
+        assert f"{_GATE}" in body_html
+        assert "about 12 minute(s)" in body_html
+        assert _RUN_LINK in body_html
+
+    def test_html_escapes_gate_label_and_pipeline(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_deadline_email
+
+        _, body_html, _ = _build_deadline_email("<script>x</script>", _RUN_LINK, "<b>pipe</b>", 5)
+        assert "<script>" not in body_html
+        assert "&lt;b&gt;pipe&lt;/b&gt;" in body_html
+
+    async def test_empty_recipients_sends_nothing(self) -> None:
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email") as mock_send,
+        ):
+            await send_hitl_deadline_alerts([], _RUN, _GATE, "Improve Security", 3)
+        assert mock_send.call_count == 0
+
+    async def test_sends_one_email_per_recipient_with_deadline_subject(self) -> None:
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email") as mock_send,
+        ):
+            await send_hitl_deadline_alerts([_RUNNER_EMAIL, _OPERATOR_EMAIL], _RUN, _GATE, "Improve Security", 8)
+        assert mock_send.call_count == 2
+        args = mock_send.call_args.args
+        assert args[1] == [_OPERATOR_EMAIL]  # last recipient (order preserved)
+        assert args[2] == f"HITL review deadline approaching - {_GATE}"
+        assert "Improve Security" in args[4]
+        assert f"/runs/{_RUN}" in args[4]
+
+    async def test_send_failure_is_swallowed_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email", side_effect=EmailSendingError("smtp down")),
+            caplog.at_level(logging.WARNING, logger="modulo.core.hitl_email_alerts"),
+        ):
+            await send_hitl_deadline_alerts([_RUNNER_EMAIL], _RUN, _GATE, "P", 3)
+        assert "hitl_email.dispatch_failed" in caplog.text
+
+    async def test_cancellation_propagates(self) -> None:
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email", side_effect=asyncio.CancelledError),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await send_hitl_deadline_alerts([_RUNNER_EMAIL], _RUN, _GATE, "P", 3)

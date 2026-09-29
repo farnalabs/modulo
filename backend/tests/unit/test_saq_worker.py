@@ -123,6 +123,7 @@ class TestFunctionsWiring:
         assert "dispatcher_reconcile" in names
         assert "claim_expiry" in names
         assert "hitl_overdue" in names
+        assert "hitl_deadline_warning" in names
         assert "retention_cleanup" in names
         assert "webhook_dedup_cleanup" in names
         assert "expired_webhook_dedup_purge" in names
@@ -148,6 +149,7 @@ class TestFunctionsWiring:
             "dispatcher_reconcile",
             "claim_expiry",
             "hitl_overdue",
+            "hitl_deadline_warning",
             "retention_cleanup",
             "webhook_dedup_cleanup",
             "expired_webhook_dedup_purge",
@@ -189,6 +191,17 @@ class TestFunctionsWiring:
         assert ho.heartbeat == 30
         assert ho.ttl == 300
         assert ho.unique is True
+        # hitl_deadline_warning: every 60s — the approaching band is a
+        # fraction of the review window (down to the 60s minimum), so the
+        # cadence — not a wider lead — guarantees a tick lands inside the
+        # band before the terminaliser cancels (FAR-1270).
+        hdw = jobs["hitl_deadline_warning"]
+        assert hdw.cron == "* * * * *"
+        assert hdw.timeout == 120
+        assert hdw.retries == 2
+        assert hdw.heartbeat == 30
+        assert hdw.ttl == 300
+        assert hdw.unique is True
         # slot_reconciliation: every 5 min (FAR-604), unique so overlapping
         # ticks cannot interleave (the guarded UPDATE is idempotent anyway).
         sr = jobs["slot_reconciliation"]
@@ -1975,6 +1988,90 @@ class TestHitlOverdue:
         dispatch.assert_awaited_once()
         assert dispatch.await_args.kwargs["notifier"] is None
         assert "hitl_overdue: notifier init failed" in caplog.text
+
+
+class TestHitlDeadlineWarning:
+    """FAR-1270: the every-minute approaching-deadline cron job body."""
+
+    @staticmethod
+    def _make_factory() -> MagicMock:
+        session = AsyncMock()
+        factory = MagicMock()
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=session)
+        context.__aexit__ = AsyncMock(return_value=False)
+        factory.return_value = context
+        return factory
+
+    @pytest.mark.asyncio
+    async def test_dispatches_deadline_warnings_with_redis_client(self) -> None:
+        factory = self._make_factory()
+        redis_client = AsyncMock()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings(hitl_review_cancel_grace_seconds=1800)),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client) as from_url,
+            patch(
+                "modulo.core.hitl_manager.deadline_warning.dispatch_deadline_notifications",
+                new_callable=AsyncMock,
+                return_value=[{"claim_id": "c1"}],
+            ) as dispatch,
+        ):
+            result = await sw.hitl_deadline_warning({})
+
+        assert result == {"notified": 1}
+        dispatch.assert_awaited_once()
+        assert dispatch.await_args.kwargs["grace_seconds"] == 1800
+        assert dispatch.await_args.kwargs["redis_client"] is redis_client
+        from_url.assert_called_once()
+        redis_client.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_redis_client_failure_still_dispatches_with_memory_backstop(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No Redis client → dispatch proceeds with ``redis_client=None``
+        (the in-process fire-once backstop) — a dead Redis must not silence
+        the warning."""
+        factory = self._make_factory()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch("redis.asyncio.Redis.from_url", side_effect=RuntimeError("bad url")),
+            patch(
+                "modulo.core.hitl_manager.deadline_warning.dispatch_deadline_notifications",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as dispatch,
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.hitl_deadline_warning({})
+
+        assert result == {"notified": 0}
+        dispatch.assert_awaited_once()
+        assert dispatch.await_args.kwargs["redis_client"] is None
+        assert "hitl_deadline_warning: redis client unavailable" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_dispatch_failure_propagates_and_client_is_closed(self) -> None:
+        """A sweep failure must RAISE (retries=2 engages) and still close the
+        Redis client — a silently dead cron would stop warning entirely."""
+        factory = self._make_factory()
+        redis_client = AsyncMock()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client),
+            patch(
+                "modulo.core.hitl_manager.deadline_warning.dispatch_deadline_notifications",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("db down"),
+            ),
+            pytest.raises(RuntimeError, match="db down"),
+        ):
+            await sw.hitl_deadline_warning({})
+
+        redis_client.aclose.assert_awaited_once()
 
 
 class TestCancellationPropagation:
