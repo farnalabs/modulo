@@ -95,7 +95,11 @@ def decide(reviews: list[Review], commits: list[Commit], head_sha: str) -> tuple
 
 
 def load(path: str) -> Any:
-    with Path(path).open(encoding="utf-8") as fh:
+    # ``path`` is a CLI argument supplied by the calling workflow
+    # (.github/workflows/ci.yml passes the fixed paths /tmp/pr-reviews.json and
+    # /tmp/pr-commits.json); it is never user- or model-supplied, so this S8707
+    # taint flow is a false positive.
+    with Path(path).open(encoding="utf-8") as fh:  # NOSONAR pythonsecurity:S8707
         return json.load(fh)
 
 
