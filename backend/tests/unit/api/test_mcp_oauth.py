@@ -262,6 +262,21 @@ class TestRegisterOAuthClient:
             "https://a.example.com/call back",
             "https://a.example.com/cb\nhttps://evil.example/cb",
         ],
+        ids=[
+            "relative-path",
+            "scheme-less",
+            "javascript-scheme",
+            "data-scheme",
+            "file-scheme",
+            "custom-scheme",
+            "wildcard-host",
+            "bare-wildcard",
+            "fragment",
+            "userinfo",
+            "non-loopback-http",
+            "internal-space",
+            "embedded-newline",
+        ],
     )
     def test_create_rejects_invalid_redirect_uris_with_400(self, admin_client: TestClient, uri: str) -> None:
         """Every previously-accepted invalid value is now a structured 400."""
