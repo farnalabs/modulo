@@ -33,6 +33,7 @@ Spec: chunk-08 §6 (criteria 1-12).
 """
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -454,6 +455,78 @@ class TestF1RegexBlockGateEnforced:
         )
         assert outcome.blocked is True
         assert outcome.blocking_eval_name == "regex-block"
+
+
+# ---------------------------------------------------------------------------
+# §5.2.1 — undefined resolver outcome: fail-closed (block) / fail-open (other)
+#
+# ``resolve_policy_gate`` returns ``result=None`` for an undefined resolution
+# (here: a gate whose ``node_id`` no longer matches its bound eval). The
+# chunk-8 wiring must treat an undefined outcome as fail-CLOSED when the
+# gate's action is ``block`` and fail-OPEN otherwise.  A defined outcome that
+# resolves to ``continue`` is a deliberate no-op.  These are the three
+# branches the coverage gate flagged as unexercised on the first pass.
+# ---------------------------------------------------------------------------
+
+
+class TestUndefinedResolution:
+    """§5.2.1 undefined outcomes follow the fail-closed / fail-open contract."""
+
+    def test_undefined_resolution_block_gate_fails_closed(self: Any) -> None:
+        engine = EvalEngine()
+        d = _guardrail(name="mismatch-block", action="block")
+        # node_id differs from the eval's → node_id_mismatch → result=None.
+        blind_gate = _GateRow(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_ID,
+            version=1,
+            node_id=uuid.uuid4(),
+            action="block",
+        )
+        with pytest.raises(GuardrailBlockedError) as excinfo:
+            evaluate_guardrails(
+                engine,
+                [d],
+                dict(_VIOLATION_PAYLOAD),
+                policy_gates={d.id: blind_gate},
+            )
+        assert type(excinfo.value) is GuardrailBlockedError
+        assert excinfo.value.eval_name == "mismatch-block"
+        assert "guardrail_undefined_resolution" in excinfo.value.detail
+        assert "node_id_mismatch" in excinfo.value.detail
+
+    def test_undefined_resolution_non_block_gate_fails_open(self: Any, caplog: Any) -> None:
+        engine = EvalEngine()
+        d = _guardrail(name="mismatch-warn", action="block")
+        blind_gate = _GateRow(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_ID,
+            version=1,
+            node_id=uuid.uuid4(),
+            action="warn",
+        )
+        with caplog.at_level(logging.WARNING, logger="modulo.core.guardrails"):
+            results = evaluate_guardrails(
+                engine,
+                [d],
+                dict(_VIOLATION_PAYLOAD),
+                policy_gates={d.id: blind_gate},
+            )
+        assert len(results) == 1
+        assert results[0].passed is False
+        assert "guardrails.resolver_undefined" in caplog.text
+
+    def test_defined_continue_action_is_a_noop(self: Any) -> None:
+        engine = EvalEngine()
+        d = _guardrail(name="continue-gr", action="block")
+        results = evaluate_guardrails(
+            engine,
+            [d],
+            dict(_VIOLATION_PAYLOAD),
+            policy_gates={d.id: _gate("continue")},
+        )
+        assert len(results) == 1
+        assert results[0].passed is False
 
 
 # ---------------------------------------------------------------------------
