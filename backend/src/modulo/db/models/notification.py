@@ -31,6 +31,8 @@ class Notification(OrgScoped):
             "dismiss_strategy IN ('user_only', 'org_admin', 'any_scope')",
             name="ck_notifications_dismiss_strategy",
         ),
+        Index("ix_notifications_org_expires_at", "organisation_id", "expires_at"),
+        Index("ix_notifications_org_scope_target", "organisation_id", "scope", "target_user_id"),
     )
 
     scope: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -110,6 +112,8 @@ class Dismissal(Base):
         CheckConstraint("dismiss_scope IN ('self', 'scope')", name="ck_dismissals_scope"),
         UniqueConstraint("notification_id", "dismissed_by_user_id", name="uq_dismissal_user_notification"),
         Index("ix_dismissals_dismissed_by_user_id", "dismissed_by_user_id"),
+        Index("ix_dismissals_org_user_scope", "organisation_id", "dismissed_by_user_id", "dismiss_scope"),
+        Index("ix_dismissals_user_scope", "dismissed_by_user_id", "dismiss_scope"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
