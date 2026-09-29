@@ -36,6 +36,23 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_max_autonomy_level",
         ),
+        # 0264: the ordering invariant itself (levels are NOT lexicographically
+        # ordered, hence the CASE rank map). A NULL ceiling always passes the
+        # first arm; a NULL default makes the comparison NULL, which a CHECK
+        # treats as satisfied - matching validate_autonomy_ceiling's
+        # "NULL default ranks as manual_approval" fallback.
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "(CASE default_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END) <= "
+            "(CASE max_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END)",
+            name="ck_pipelines_max_autonomy_ge_default",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -81,7 +98,8 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # FAR-1163 S0: hard ceiling on the autonomy level any HITL-gate resolution
     # may reach. NULL = effective ceiling is default_autonomy_level (a
     # context-setter recommendation can then only LOWER autonomy). Migration
-    # 0256; CHECK ck_pipelines_max_autonomy_level above.
+    # 0256; CHECKs ck_pipelines_max_autonomy_level (vocabulary) and
+    # ck_pipelines_max_autonomy_ge_default (>= default, migration 0264) above.
     max_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
