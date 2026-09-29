@@ -594,6 +594,18 @@ class PipelineCreate(TeamVisibilityMixin):
     max_concurrent_runs: int = Field(default=5, ge=1)
     lock_wait_timeout_seconds: int = Field(default=300, ge=30, le=3600)
     node_timeout_seconds: int = Field(default=300, ge=1)
+    hitl_review_window_seconds: int | None = Field(
+        None,
+        ge=60,
+        le=604800,
+        description=(
+            "Per-pipeline HITL review window override (60-604800s = 1 min..7 days). "
+            "How long a fired review may sit unclaimed/undecided before the run is "
+            "cancelled to release its concurrency slot. Precedence: this value > the "
+            "org default (settings) > the instance/env default. null = no override "
+            "(inherit). Resolved once at gate fire time."
+        ),
+    )
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
     max_autonomy_level: str | None = Field(
@@ -724,6 +736,15 @@ class PipelineUpdate(TeamVisibilityMixin):
     max_concurrent_runs: int | None = Field(None, ge=1)
     lock_wait_timeout_seconds: int | None = Field(None, ge=30, le=3600)
     node_timeout_seconds: int | None = Field(None, ge=1)
+    hitl_review_window_seconds: int | None = Field(
+        None,
+        ge=60,
+        le=604800,
+        description=(
+            "Per-pipeline HITL review window override (60-604800s). Omit to leave "
+            "unchanged; null clears the override (inherit the org/instance default)."
+        ),
+    )
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
     # FAR-1163: PATCH merges with the EXISTING row for the ceiling >= default
@@ -867,6 +888,9 @@ class PipelineResponse(BaseModel):
     max_concurrent_runs: int
     lock_wait_timeout_seconds: int
     node_timeout_seconds: int
+    # FAR-1257: nullable per-pipeline HITL review-window override; null = no
+    # override (inherit org default, then instance default).
+    hitl_review_window_seconds: int | None = None
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
@@ -2317,6 +2341,7 @@ async def create_pipeline_endpoint(
                 max_concurrent_runs=req.max_concurrent_runs,
                 lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
                 node_timeout_seconds=req.node_timeout_seconds,
+                hitl_review_window_seconds=req.hitl_review_window_seconds,
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
                 max_autonomy_level=req.max_autonomy_level,
