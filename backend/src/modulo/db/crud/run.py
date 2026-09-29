@@ -1303,7 +1303,7 @@ async def _run_guardrail_gate(
             guardrail_defs = _downgrade_guardrails_to_observe(guardrail_defs)
             _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
 
-        observed_by_eval = {d.id: True for d in guardrail_defs}
+        observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
         any_guarding = any(
             d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
         )

@@ -10,8 +10,9 @@ the composite CHECK.
 Lenses:
 
 * **Chain** - 0264 chains onto ``0263_evidence_layer``; 0265_hitl_review_window
-  (FAR-1257) chains onto 0264 as the single linear head (0259's test documents
-  the run-up through 0265).
+  (FAR-1257) chains onto 0264, and 0266_guardrail_policy_gate_sweep (FAR-1107)
+  chains onto 0265 as the single linear head (0259's test documents the run-up
+  through 0266).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -46,7 +47,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0265_hitl_review_window"
+_HEAD_MIGRATION = "0266_guardrail_policy_gate_sweep"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

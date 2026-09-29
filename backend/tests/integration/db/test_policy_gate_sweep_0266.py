@@ -1,4 +1,4 @@
-"""Integration tests for migration 0264 — the guardrail→PolicyGate sweep.
+"""Integration tests for migration 0266 — the guardrail→PolicyGate sweep.
 
 FAR-1107 chunk 8, spec criteria 8 and 10 (§5.4): a live sweep over REAL
 chain state must bind every pre-existing guardrail eval with a gate-valued
@@ -6,9 +6,9 @@ chain state must bind every pre-existing guardrail eval with a gate-valued
 ``warn→warn`` / ``block→block``), and skip everything else.
 
 Runs on its OWN testcontainer Postgres with migration roles provisioned,
-chain applied to ``0263_evidence_layer`` (the pre-sweep head), the §5.4
+chain applied to ``0265_hitl_review_window`` (the pre-sweep head), the §5.4
 row-shape matrix seeded as committed rows, then the REAL
-``0264_guardrail_policy_gate_sweep`` upgrade applied. Not reusing the
+``0266_guardrail_policy_gate_sweep`` upgrade applied. Not reusing the
 shared session DB: the sweep must run against the exact state the
 predicates run over at migration time, not whatever the shared DB drifted
 into.
@@ -31,9 +31,9 @@ pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).parents[3]
 
-#: The sweep runs for real from this pre-sweep head; 0264's downgrade is a
+#: The sweep runs for real from this pre-sweep head; 0266's downgrade is a
 #: documented no-op, which is what makes the re-run idempotence test legal.
-_PREHEAD = "0263_evidence_layer"
+_PREHEAD = "0265_hitl_review_window"
 
 _JS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -164,7 +164,7 @@ def _seed_matrix(
 
 @pytest.fixture
 def sweep_db(monkeypatch):
-    """Own Postgres migrated to :data:`_PREHEAD`, §5.4 matrix seeded, 0264 applied.
+    """Own Postgres migrated to :data:`_PREHEAD`, §5.4 matrix seeded, 0266 applied.
 
     Yields ``(raw_url, config, org_id, specs)``; DATABASE_URL/ADMIN_URL point
     at the container for the duration (restored at teardown before
@@ -199,7 +199,7 @@ def sweep_db(monkeypatch):
         asyncio.run(bootstrap_roles(raw, app_url))
         command.upgrade(config, _PREHEAD)
         org_id, specs = _seed_matrix(_sync_url(raw))
-        command.upgrade(config, "heads")  # the REAL 0264 sweep applies here
+        command.upgrade(config, "heads")  # the REAL 0266 sweep applies here
         yield raw, config, org_id, specs
     pg.stop()
 
@@ -270,7 +270,7 @@ class TestC10SweepPredicates:
             return sig
 
         before = _signature()
-        # 0264's downgrade is a documented no-op, so this is a true re-run of
+        # 0266's downgrade is a documented no-op, so this is a true re-run of
         # the same sweep step over the same committed rows.
         command.upgrade(config, _PREHEAD)
         command.upgrade(config, "heads")

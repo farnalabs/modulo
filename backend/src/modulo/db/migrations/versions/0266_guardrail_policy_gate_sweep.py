@@ -8,9 +8,14 @@ The binding validator's guardrail exclusion (exclusion 3) was retired by
 this chunk, so the sweep does not need to bypass it — the rows are
 created directly via SQL.
 
-Revision ID: 0264_guardrail_policy_gate_sweep
-Revises: 0263_evidence_layer
+Revision ID: 0266_guardrail_policy_gate_sweep
+Revises: 0265_hitl_review_window
 Create Date: 2026-09-29
+
+Migration tree: ``0263_evidence_layer`` is the shared base; main advanced
+through ``0264_pipelines_max_autonomy_ge_default`` and
+``0265_hitl_review_window`` before this chunk landed, so this sweep chains
+onto ``0265_hitl_review_window`` as the single linear head.
 """
 
 import json
@@ -18,8 +23,8 @@ import json
 from alembic import op
 from sqlalchemy import text
 
-revision = "0264_guardrail_policy_gate_sweep"
-down_revision = "0263_evidence_layer"
+revision = "0266_guardrail_policy_gate_sweep"
+down_revision = "0265_hitl_review_window"
 branch_labels = None
 depends_on = None
 
