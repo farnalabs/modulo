@@ -1,11 +1,11 @@
-"""FAR-1257: migration 0264 - the review-window columns.
+"""FAR-1257: migration 0265 - the review-window columns.
 
 Adds ``hitl_claims.terminalize_at`` (the absolute deadline stamped at fire
 time) and ``pipelines.hitl_review_window_seconds`` (the per-pipeline override).
 
 Lenses:
 
-* **Chain** - 0264 chains onto ``0263_evidence_layer`` (FAR-966) as the
+* **Chain** - 0265 chains onto ``0264_pipelines_max_autonomy_ge_default`` as the
   single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -30,9 +30,9 @@ from sqlalchemy import CheckConstraint, DateTime
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 
-_MIGRATION_REVISION = "0264_hitl_review_window"
-_MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0264_hitl_review_window"
+_MIGRATION_REVISION = "0265_hitl_review_window"
+_MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
+_HEAD_MIGRATION = "0265_hitl_review_window"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

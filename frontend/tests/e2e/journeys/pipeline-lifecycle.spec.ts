@@ -165,7 +165,13 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       // an unavailable surface.
       await row.getByTestId('pipeline-list-action-menu').click()
       const deleteItem = page.getByRole('menuitem', { name: 'Delete', exact: true })
-      await expect(deleteItem).toBeVisible({ timeout: 15_000 })
+      // The popup renders asynchronously, so wait for it to open before
+      // deciding whether the pipeline_delete command is present — waiting on a
+      // command that is always rendered (Rename) distinguishes "flag off" from
+      // "menu not open". Asserting Delete visible first (as this test used to)
+      // threw before the skip could run, failing the suite on every deployment
+      // whose plan does not enable pipeline_delete.
+      await expect(page.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible({ timeout: 15_000 })
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }

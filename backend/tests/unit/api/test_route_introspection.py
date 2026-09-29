@@ -251,11 +251,20 @@ def test_run_trigger_status_use_any_credential() -> None:
 
 
 def test_team_membership_gate_present_on_team_pipeline_routes() -> None:
-    """PATCH/DELETE/graph on pipelines carry the team-scope gate."""
+    """PATCH/DELETE/graph + the node-conversion writes carry the team-scope gate.
+
+    The node-conversion pair (convert-to-agent / revert-to-manual) used to be
+    the odd pair out: they mutated a pipeline's graph with NEITHER this
+    request-time dependency nor an in-txn re-check, while their sibling graph
+    writes had both. The enumeration is deliberate - a route listed here that
+    ever loses its ``team_scope`` tag fails this test.
+    """
     for route in get_mutating_routes(app):
         if route.path in (
             "/api/v1/pipelines/{pipeline_id}",
             "/api/v1/pipelines/{pipeline_id}/graph",
+            "/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/convert-to-agent",
+            "/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual",
         ):
             tag = get_permission_tag(route)
             assert tag is not None, f"{route.path} missing permission tag"

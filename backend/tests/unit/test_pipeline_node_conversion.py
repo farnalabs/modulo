@@ -4,6 +4,7 @@ Tests the handler functions directly with mocked dependencies.
 """
 
 import uuid
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,6 +29,65 @@ AGENT_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 CONNECTOR_ID = uuid.UUID("44444444-4444-4444-4444-444444444444")
 MODEL_BACKEND_ID = uuid.UUID("55555555-5555-5555-5555-555555555555")
 SNAPSHOT_ID = uuid.UUID("66666666-6666-6666-6666-666666666666")
+
+
+@pytest.fixture(autouse=True)
+def _stub_reference_resolution_loaders() -> Generator[None, None, None]:
+    """Stub the two loaders ``_resolve_graph_references`` runs.
+
+    The node-conversion endpoints now run the same save-time enforcement as
+    ``replace_pipeline_graph`` / ``PATCH /{id}`` (connector team bindings,
+    FAR-418 capability-scope widening, save-time graph validation). Those
+    checks issue agent/schema lookups that this module's positional
+    ``session.execute`` double - which answers a fixed ``results`` list by call
+    index - cannot serve, so the loaders are stubbed here exactly as the
+    sibling graph-endpoint tests stub them
+    (``tests/unit/api/test_pipelines_routes_coverage.py``, the
+    ``_load_agents_by_ids`` / ``_load_existing_schema_ids`` patches).
+
+    These tests exercise HANDLER SHAPE (which status each failure path maps
+    to), not the checks themselves. The checks have their own tests:
+    ``test_resolve_graph_references_scope_violation_maps_422`` and
+    ``test_resolve_graph_references_enforces_backend_team_bindings`` in
+    ``tests/unit/api/test_pipelines_routes_coverage.py``, the cross-team
+    connector rejection in
+    ``tests/unit/api/test_pipeline_node_conversion_team_gate.py``, and the
+    integration coverage in ``tests/integration/test_pipeline_node_conversion_team_gate.py``.
+
+    Deliberately NOT stubbed: ``_enforce_connector_team_bindings``,
+    ``_validate_graph_save`` and ``GraphValidator.validate_definition`` still
+    run for real against the double - their empty-result path is exactly what
+    these tests should exercise.
+    """
+
+    def _fake_agents(_session: object, org_id: uuid.UUID, agent_ids: set[uuid.UUID]) -> dict[uuid.UUID, MagicMock]:
+        agents: dict[uuid.UUID, MagicMock] = {}
+        for agent_id in agent_ids:
+            agent = MagicMock()
+            agent.id = agent_id
+            agent.organisation_id = org_id
+            agent.input_schema_id = uuid.uuid4()
+            agent.output_schema_id = uuid.uuid4()
+            agent.model_backend_id = uuid.uuid4()
+            agent.connector_type_refs = []
+            agents[agent_id] = agent
+        return agents
+
+    agents_patch = patch(
+        "modulo.api.routes.pipelines._load_agents_by_ids",
+        new=AsyncMock(side_effect=_fake_agents),
+    )
+    schemas_patch = patch(
+        "modulo.api.routes.pipelines._load_existing_schema_ids",
+        new=AsyncMock(side_effect=lambda _s, _o, schema_ids: set(schema_ids)),
+    )
+    agents_patch.start()
+    schemas_patch.start()
+    try:
+        yield
+    finally:
+        agents_patch.stop()
+        schemas_patch.stop()
 
 
 def make_principal() -> AuthenticatedPrincipal:

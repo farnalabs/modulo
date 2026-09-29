@@ -238,6 +238,14 @@ class TestWrite:
         assert org.settings_json[_KEY] == 1800
 
     @pytest.mark.anyio
+    async def test_put_missing_org_row_is_404(self, client_admin, mock_session):
+        """A PUT whose org row cannot be found (e.g. hard-deleted between auth
+        and the row lock) must 404 rather than write onto a phantom row."""
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        resp = await client_admin.put(_PATH, json={_KEY: 4500})
+        assert resp.status_code == 404
+
+    @pytest.mark.anyio
     async def test_viewer_forbidden_on_put(self, client_viewer):
         resp = await client_viewer.put(_PATH, json={_KEY: 4500})
         assert resp.status_code == 403

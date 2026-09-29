@@ -1,7 +1,7 @@
 """Configurable HITL review window: terminalize_at + per-pipeline override (FAR-1257).
 
-Revision ID: 0264_hitl_review_window
-Revises: 0263_evidence_layer
+Revision ID: 0265_hitl_review_window
+Revises: 0264_pipelines_max_autonomy_ge_default
 Create Date: 2026-09-27
 
 Two additive, nullable columns:
@@ -40,8 +40,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0264_hitl_review_window"
-down_revision: str | None = "0263_evidence_layer"
+revision: str = "0265_hitl_review_window"
+down_revision: str | None = "0264_pipelines_max_autonomy_ge_default"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

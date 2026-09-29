@@ -1792,6 +1792,10 @@ def _convert_session(agent: object, connector: object, connector_type: str, back
 
 def _convert_patches(nodes: list[dict], saved: object, *, save_side_effect: object = None) -> list:
     patches = [
+        # The in-txn team gate runs FIRST in the handler (its FOR UPDATE row
+        # read is what _load_locked_pipeline_graph now consumes); stub it so
+        # the strict session double never has to serve it.
+        patch(f"{_PREFIX}_reapply_team_gate_inside_mutation_txn", new=AsyncMock(return_value=MagicMock())),
         patch(f"{_PREFIX}_load_locked_pipeline_graph", new=AsyncMock(return_value=(nodes, []))),
         patch(f"{_PREFIX}append_audit_event", new_callable=AsyncMock),
     ]
@@ -2006,6 +2010,8 @@ async def test_finalize_locked_graph_save_denies_weakening() -> None:
 
 def _revert_patches(nodes: list[dict], snapshot: object, saved: object, *, save_side_effect: object = None) -> list:
     patches = [
+        # In-txn team gate first, then the graph load (see _convert_patches).
+        patch(f"{_PREFIX}_reapply_team_gate_inside_mutation_txn", new=AsyncMock(return_value=MagicMock())),
         patch(f"{_PREFIX}_load_locked_pipeline_graph", new=AsyncMock(return_value=(nodes, []))),
         patch(f"{_PREFIX}get_snapshot_detail", new=AsyncMock(return_value=snapshot)),
         patch(f"{_PREFIX}append_audit_event", new_callable=AsyncMock),

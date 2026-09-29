@@ -124,3 +124,55 @@ Feature: Guardrail Config-as-Code Workflow
     Given a guardrail config with a regex pattern was applied
     When I read the elevated guardrail config as an operator
     Then the response status is 403
+
+  Scenario: Importing a config applies it directly as the applied state
+    Given there is no applied guardrail config
+    When I import the guardrail config:
+      """
+      version: 1
+      guardrails:
+        - id: no-secrets
+          name: No Secrets
+          action: block
+          detection:
+            type: regex
+            pattern: "SECRET_[A-Z0-9]{8}"
+            field: body
+      """
+    Then the response status is 200
+    And the import reports a clean applied state
+    And the guardrail rows were reconciled
+
+  Scenario: Importing malformed YAML is rejected with 422
+    When I import the guardrail config "not: [valid: yaml"
+    Then the response status is 422
+
+  Scenario: Importing a config with a rule violation is rejected with 422
+    When I import the guardrail config:
+      """
+      version: 1
+      guardrails:
+        - id: no-secrets
+          name: No Secrets
+          action: block
+          detection:
+            type: regex
+            field: body
+      """
+    Then the response status is 422
+
+  Scenario: A non-admin cannot import guardrail config
+    Given I am authenticated as a viewer in org "acme"
+    When I import the guardrail config:
+      """
+      version: 1
+      guardrails:
+        - id: no-secrets
+          name: No Secrets
+          action: block
+          detection:
+            type: regex
+            pattern: "SECRET_[A-Z0-9]{8}"
+            field: body
+      """
+    Then the response status is 403

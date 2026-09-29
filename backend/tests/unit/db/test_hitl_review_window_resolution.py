@@ -97,6 +97,17 @@ class TestInstanceDefaultParity:
         # Pins the shipped arithmetic: _DEFAULT_EXPIRY_MINUTES (15) * 60.
         assert DEFAULT_EXPIRY_SECONDS == 900
 
+    def test_unusable_instance_default_falls_back_to_the_envelope_floor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The instance default is always an in-range int under shipped settings,
+        but the floor fallback is the hard guarantee: were the derived default
+        ever to become unusable, the resolver must still return an in-envelope
+        minimum rather than None/0. Pins that final branch."""
+        monkeypatch.setattr(
+            "modulo.db.crud.hitl_review_config._instance_default_review_window_seconds",
+            lambda: None,
+        )
+        assert resolve_hitl_review_window_seconds(None, None) == HITL_REVIEW_WINDOW_MIN_SECONDS
+
 
 class TestOrgDefaultRead:
     @pytest.mark.parametrize("settings_json", [None, "not-a-dict", [], 42])

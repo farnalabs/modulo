@@ -14,7 +14,7 @@ bdd:
 depends-on:
   - feat-connectors
   - feat-model-backends
-status: covered
+status: partial
 ---
 
 # Plugin Registry
@@ -55,6 +55,14 @@ API surface ships and is gated by the `plugin_management` feature and the
 - The `/admin/plugins` UI is deferred from the MVP nav (private preview).
 
 ## QA History
+
+- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+  tracker frontmatter `status:` with the manifest `feat-plugins` registry: the
+  entry now reads `status: partial` (matching the manifest's unchecked
+  "lifecycle management is not exposed through the registry API" deferral)
+  instead of `covered`. The two layers previously disagreed on the same
+  feature's coverage — a reader of the graph got the opposite answer from the
+  machine layer Assistant reads from the manifest.
 
 - 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
   `feat-plugins` registry entry: the unchecked "lifecycle management is partially
