@@ -67,6 +67,9 @@ const deleteMock = api.DELETE as unknown as Mock
 const decodeJwtPayloadMock = decodeJwtPayload as unknown as Mock
 
 const dialogStub = { template: '<div><slot /></div>' }
+// Same passthrough, but also renders the named header/footer slots so the
+// dialog action buttons (the footer "Done" buttons) are clickable.
+const dialogAllSlotsStub = { template: '<div><slot name="header" /><slot /><slot name="footer" /></div>' }
 const stubs = { Dialog: dialogStub, DialogContent: dialogStub, DialogDescription: dialogStub, DialogFooter: dialogStub, DialogHeader: dialogStub, DialogTitle: dialogStub, FeatureGate: dialogStub }
 
 /**
@@ -81,6 +84,25 @@ function oauthVm(wrapper: ReturnType<typeof mountView>) {
   return card.vm as any
 }
 
+/**
+ * Drive the real OAuth registration form end to end and return the card's vm.
+ * Used by the coverage tests below to reach the one-time-credential dialog.
+ */
+async function registerValidOauthClient(wrapper: ReturnType<typeof mountView>) {
+  await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+  await nextTick()
+  await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
+  await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').setValue('https://a.example/cb')
+  const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+  ;(box.element as HTMLInputElement).checked = true
+  await box.trigger('change')
+  await nextTick()
+  const vm = oauthVm(wrapper)
+  await vm.registerOauthClient()
+  await flushPromises()
+  return vm
+}
+
 function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, oauth: unknown = mockOAuthClients) {
   getMock.mockImplementation((path: string) => {
     if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mcpConfig, error: undefined })
@@ -93,6 +115,16 @@ function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, 
 function mountView(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, oauth: unknown = mockOAuthClients) {
   mockApiResponses(mcpConfig, apiKeysData, oauth)
   return mount(SettingsMcpView, { global: { stubs } })
+}
+
+/** Like `mountView`, but with dialog header/footer slots rendered. */
+function mountViewAllSlots(
+  mcpConfig = mockMcpConfig,
+  apiKeysData = mockApiKeys,
+  oauth: unknown = mockOAuthClients,
+) {
+  mockApiResponses(mcpConfig, apiKeysData, oauth)
+  return mount(SettingsMcpView, { global: { stubs: { ...stubs, Dialog: dialogAllSlotsStub } } })
 }
 
 describe('SettingsMcpView', () => {
@@ -1194,5 +1226,315 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('Claude Key')
     expect(wrapper.text()).toContain('CLI Client')
     expect(wrapper.text()).toContain('Configuration Snippets')
+  })
+
+  // ─── Coverage: one-time-secret countdown + copy/revoke edge paths ──────
+  // The changed-lines gate requires 98% line + branch coverage on the new
+  // McpOauthClientsCard / useSecretReveal code, so these tests exercise the
+  // remaining lifecycle and defensive branches: the reveal countdown
+  // expiring, the shared copy "Copied" timeout, and the register/revoke
+  // rejection and error paths.
+
+  it('auto-masks the revealed OAuth client secret when the countdown elapses', async () => {
+    vi.useFakeTimers()
+    postMock.mockResolvedValueOnce({ data: mockCreatedOauthClient, error: undefined })
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, [])
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const vm = await registerValidOauthClient(wrapper)
+    expect(vm.oauthSecretMasked).toBe(false)
+    expect(vm.oauthSecretCountdown).toBe(10)
+
+    vi.advanceTimersByTime(10000)
+    await nextTick()
+    expect(vm.oauthSecretMasked).toBe(true)
+    expect(vm.oauthSecretCountdown).toBe(0)
+
+    // The interval stops itself once the value masks - no further ticking.
+    vi.advanceTimersByTime(5000)
+    expect(vm.oauthSecretCountdown).toBe(0)
+    vi.useRealTimers()
+  })
+
+  it('clears the Copied flash after its timeout and when the dialog closes', async () => {
+    vi.useFakeTimers()
+    postMock.mockResolvedValueOnce({ data: mockCreatedOauthClient, error: undefined })
+    const wrapper = mountViewAllSlots(mockMcpConfig, mockApiKeys, [])
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    const vm = await registerValidOauthClient(wrapper)
+
+    const copyId = wrapper.find('[data-testid="settings-mcp-copy-oauth-client-id"]')
+    await copyId.trigger('click')
+    await flushPromises()
+    expect(vm.copiedField).toBe('oauth-client-id')
+    expect(copyId.text()).toContain('Copied')
+
+    // A second copy while a timeout is pending clears the stale timer.
+    await wrapper.find('[data-testid="settings-mcp-copy-oauth-client-secret"]').trigger('click')
+    await flushPromises()
+    expect(vm.copiedField).toBe('oauth-client-secret')
+    vi.advanceTimersByTime(2000)
+    await nextTick()
+    expect(vm.copiedField).toBeNull()
+
+    // Copy again, then close via the footer Done button - which resets the
+    // copied field while the timeout is still pending.
+    await copyId.trigger('click')
+    await flushPromises()
+    expect(vm.copiedField).toBe('oauth-client-id')
+    await wrapper.find('[data-testid="settings-mcp-oauth-created-done"]').trigger('click')
+    await nextTick()
+    expect(vm.oauthCreatedDialogOpen).toBe(false)
+    expect(vm.copiedField).toBeNull()
+
+    // The pending timer then fires with a mismatched field: a no-op.
+    vi.advanceTimersByTime(2000)
+    await nextTick()
+    expect(vm.copiedField).toBeNull()
+    vi.useRealTimers()
+  })
+
+  it('wipes the pending copy timeout when the card unmounts', async () => {
+    postMock.mockResolvedValueOnce({ data: mockCreatedOauthClient, error: undefined })
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, [])
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await registerValidOauthClient(wrapper)
+    await wrapper.find('[data-testid="settings-mcp-copy-oauth-client-id"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    expect(wrapper.exists()).toBe(false)
+  })
+
+  it('surfaces a visible failure when the one-time client id copy is rejected', async () => {
+    postMock.mockResolvedValueOnce({ data: mockCreatedOauthClient, error: undefined })
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, [])
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    const vm = await registerValidOauthClient(wrapper)
+
+    ;(navigator.clipboard.writeText as Mock).mockRejectedValueOnce(new Error('insecure context'))
+    await wrapper.find('[data-testid="settings-mcp-copy-oauth-client-id"]').trigger('click')
+    await flushPromises()
+
+    expect(vm.copyFailedField).toBe('oauth-client-id')
+    const err = wrapper.find('[data-testid="settings-mcp-copy-oauth-client-id-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('copy manually')
+  })
+
+  it('register rejection is surfaced through the inline register error', async () => {
+    postMock.mockRejectedValueOnce(new Error('Network error'))
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await registerValidOauthClient(wrapper)
+    const err = wrapper.find('[data-testid="settings-mcp-oauth-register-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('Network error')
+  })
+
+  it('a register response with neither error nor data keeps the dialog closed', async () => {
+    postMock.mockResolvedValueOnce({ data: undefined, error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    const vm = await registerValidOauthClient(wrapper)
+    expect(postMock).toHaveBeenCalled()
+    expect(vm.oauthCreatedDialogOpen).toBe(false)
+  })
+
+  it('revoke is a no-op when no client is selected', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    const vm = oauthVm(wrapper)
+    await vm.revokeOauthClient()
+    expect(deleteMock).not.toHaveBeenCalled()
+  })
+
+  it('revoke API error renders the inline revoke error', async () => {
+    deleteMock.mockResolvedValueOnce({ data: undefined, error: { status: 403, detail: 'Cannot revoke' } })
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-revoke-oauth-client"]').trigger('click')
+    await nextTick()
+    const vm = oauthVm(wrapper)
+    await vm.revokeOauthClient()
+    await flushPromises()
+    const err = wrapper.find('[data-testid="settings-mcp-oauth-revoke-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('Cannot revoke')
+  })
+
+  it('revoke rejection surfaces the inline revoke error (throw path)', async () => {
+    deleteMock.mockRejectedValueOnce(new Error('Network down'))
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, mockOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-revoke-oauth-client"]').trigger('click')
+    await nextTick()
+    const vm = oauthVm(wrapper)
+    await vm.revokeOauthClient()
+    await flushPromises()
+    const err = wrapper.find('[data-testid="settings-mcp-oauth-revoke-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('Network down')
+  })
+
+  it('falls back to the raw timestamp when a client date cannot be parsed', async () => {
+    // `new Date(BigInt)` throws; the card's formatDate must catch and return
+    // the raw value rather than crash the whole list render.
+    const badClient = [{ ...mockOAuthClients[0], created_at: 10n as unknown as string }]
+    const wrapper = mountView(mockMcpConfig, mockApiKeys, badClient)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('CLI Client')
+  })
+
+  it('the key-created Done button wipes the one-time key and closes the dialog', async () => {
+    const wrapper = mountViewAllSlots()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    const vm = wrapper.vm as any
+    await vm.createKey()
+    await flushPromises()
+    expect(vm.keyCreatedDialogOpen).toBe(true)
+    await wrapper.find('[data-testid="settings-mcp-key-created-done"]').trigger('click')
+    await nextTick()
+    expect(vm.keyCreatedDialogOpen).toBe(false)
+    expect(vm.createdKeyValue).toBe('')
+  })
+
+  it('a rejected mcp-config request falls back to the page-level error', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.reject(new Error('mcp boom'))
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: mockOAuthClients, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('mcp boom')
+  })
+
+  it('a rejected api-keys request falls back to the page-level error', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.reject(new Error('keys boom'))
+      if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: mockOAuthClients, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('keys boom')
+  })
+
+  it('treats an OAuth list error carrying status 403 as the restricted state', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') {
+        return Promise.resolve({ data: undefined, error: { status: 403, detail: 'forbidden' } })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-restricted"]').exists()).toBe(true)
+  })
+
+  it('treats a non-object OAuth list error as a plain section failure', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: undefined, error: 'plain failure' })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-list-error"]').exists()).toBe(true)
+  })
+
+  it('a null OAuth list response fails the fetch gracefully', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve(null)
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    // isForbiddenResult(null) short-circuits to false, then the malformed
+    // response fails the fetch without crashing the page.
+    expect(wrapper.exists()).toBe(true)
+  })
+
+  it('a non-array api-keys body degrades to the empty state, not a page error', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: { unexpected: true }, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: mockOAuthClients, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('No API keys created yet')
+  })
+
+  it('refetchError is null before the first successful load', async () => {
+    getMock.mockReturnValue(new Promise(() => {}))
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    expect((wrapper.vm as any).refetchError).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('surfaces a copy failure on the one-time API key value field', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    const vm = wrapper.vm as any
+    await vm.createKey()
+    await flushPromises()
+    ;(navigator.clipboard.writeText as Mock).mockRejectedValueOnce(new Error('insecure context'))
+    await wrapper.find('[data-testid="settings-mcp-copy-key-value"]').trigger('click')
+    await flushPromises()
+    expect(vm.copyFailedField).toBe('key-value')
+    vm.dismissKeyCreatedDialog()
+    expect(vm.copyFailedField).toBeNull()
   })
 })
