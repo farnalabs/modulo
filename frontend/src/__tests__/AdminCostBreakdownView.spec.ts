@@ -299,4 +299,123 @@ describe('AdminCostBreakdownView', () => {
     // Analytics failed → graceful degradation → dash
     expect(card.text()).toContain('—')
   })
+
+  it('shows an error alert when the anomalies request fails', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [
+              { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 100.0, total_runs: 5 },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({ data: null, error: { status: 500, message: 'Internal Server Error' } })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    const alert = wrapper.find('[data-testid="cost-anomalies-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Failed to load anomalies')
+  })
+
+  it('renders the anomaly list and omits the plus sign for a non-positive percent_above', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [
+              { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 100.0, total_runs: 5 },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({
+          data: [
+            { id: 'anomaly-flat', anomaly_date: '2026-06-20', pipeline_id: null, amount: 50.0, baseline: 50.0, percent_above: 0, dismissed: false },
+          ],
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-team-table"]').exists()).toBe(true)
+    const list = wrapper.find('[data-testid="cost-anomalies-list"]')
+    expect(list.exists()).toBe(true)
+    expect(list.text()).toContain('0% above')
+  })
+
+  it('renders the empty states when there are no team rows and no anomalies', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: { period: 'month', group_by: 'team', items: [] },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({ data: [], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-team-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="cost-anomalies-empty"]').exists()).toBe(true)
+  })
 })
