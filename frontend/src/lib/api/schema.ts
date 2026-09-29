@@ -37312,7 +37312,7 @@ export interface operations {
     get_evidence_retention_api_v1_admin_evidence_retention_get: {
         parameters: {
             query?: {
-                organisation_id?: unknown | null;
+                organisation_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -37344,7 +37344,7 @@ export interface operations {
     update_evidence_retention_api_v1_admin_evidence_retention_put: {
         parameters: {
             query?: {
-                organisation_id?: unknown | null;
+                organisation_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -37380,7 +37380,7 @@ export interface operations {
     purge_evidence_retention_api_v1_admin_evidence_retention_purge_post: {
         parameters: {
             query?: {
-                organisation_id?: unknown | null;
+                organisation_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;

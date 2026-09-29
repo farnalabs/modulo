@@ -281,6 +281,32 @@ async def test_purge_batches_oldest_first(session: AsyncSession, monkeypatch: py
     assert await count_evidence_rows(session, org_id) == 0
 
 
+async def test_purge_does_not_commit_between_batches(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sweep must not commit between batches.
+
+    ``set_rls_org`` binds the tenant GUC with ``SET LOCAL``, which is
+    transaction-scoped. An intermediate commit drops the tenant scope, so
+    batches 2..N would run unscoped and (under RLS) delete nothing while
+    reporting success. The testcontainers integration suite connects as a
+    superuser who bypasses RLS, so it cannot catch this — this commit-spy is
+    the regression guard.
+    """
+    org_id = await _seed_org(session)
+    old = _utc_days_ago(120)
+    session.add_all([_evidence(org_id, f"row.{i}", created_at=old - timedelta(minutes=i)) for i in range(7)])
+    await session.commit()
+    _grant_locks(monkeypatch)
+
+    commit_spy = AsyncMock(wraps=session.commit)
+    monkeypatch.setattr(session, "commit", commit_spy)
+
+    result = await purge_evidence(session, org_id, EvidenceRetentionPolicy(max_age_days=90, batch_size=3))
+
+    assert result.rows_deleted == 7
+    assert result.batches == 3
+    commit_spy.assert_not_awaited()
+
+
 async def test_purge_is_org_scoped(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     org_a = await _seed_org(session)
     org_b = uuid.uuid4()

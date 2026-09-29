@@ -359,6 +359,40 @@ def test_create_gate_binding_violation_returns_400(client: tuple[TestClient, Asy
     assert "binding is invalid" in resp.json()["detail"]
 
 
+def test_create_gate_suite_scoped_eval_rejected_before_any_insert(client: tuple[TestClient, AsyncMock]) -> None:
+    """A node-less (suite-scoped) eval is rejected before the gate insert.
+
+    The route must not fabricate a ``node_id`` for a node-less eval, so the
+    binding validation 400 is returned and the insert is never attempted — the
+    failure cannot leak out as an IntegrityError mapped to a misleading 409.
+    """
+    http, session = client
+    _queue_execute(session, [_result(scalar_one_or_none=_eval_row(node_id=None))])
+    insert = AsyncMock()
+    with patch.object(evals_routes, "_create_or_replace_gate", new=insert):
+        resp = http.post(_GATE_URL, json={"action": "warn"})
+
+    assert resp.status_code == 400, resp.text
+    insert.assert_not_awaited()
+
+
+def test_create_gate_binds_the_evals_own_node_id(client: tuple[TestClient, AsyncMock]) -> None:
+    """The gate's ``node_id`` is the eval's ``node_id`` verbatim.
+
+    The retired ``eval_row.node_id or uuid.uuid4()`` placeholder would have
+    silently bound a gate to a fabricated node; pin the pass-through instead.
+    """
+    http, session = client
+    _queue_execute(session, [_result(scalar_one_or_none=_eval_row(node_id=_NODE_ID))])
+    insert = AsyncMock(return_value=_gate_row())
+    with patch.object(evals_routes, "_create_or_replace_gate", new=insert):
+        resp = http.post(_GATE_URL, json={"action": "warn"})
+
+    assert resp.status_code == 201, resp.text
+    gate_fields = insert.await_args.args[1]
+    assert gate_fields["node_id"] == _NODE_ID
+
+
 def test_create_gate_conflict_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=_eval_row())])
