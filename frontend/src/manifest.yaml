@@ -4998,9 +4998,10 @@ features:
             - "[x] Guardrail policies are configurable per organisation with pass/fail thresholds"
             - "[x] Guardrail enforcement is applied at pipeline runtime with typed violation responses"
             - "[x] Guardrail policy templates ship as versioned policy packs (FAR-216): the PolicyPack/PolicyControl framework with schema-valid mapping, fail-closed instantiation (instantiate_pack), a structured validation report, the CI gate (assert_pack_ci_ready) and warn-mode-first rollout (pack_rollout_config) live in core/guardrails/policy_pack.py with shipped SOC2 pack content in core/guardrails/packs/soc2.py (test_guardrail_policy_pack.py, test_guardrail_soc2_pack.py)"
-            - "[ ] Cross-org inheritance of guardrail policies (importing or sharing an org's guardrail configuration between organisations) is not shipped"
+            - "[x] Cross-org guardrail policy inheritance ships via the config-as-code IMPORT surface: POST /api/v1/guardrails/config/import applies a config YAML (e.g. the unmasked elevated export of ANOTHER organisation) directly as THIS org's applied state in one admin-gated step — the transport is YAML-only so RLS is preserved (no cross-org rows are ever read), validation/collision handling mirror /apply (invalid config 422, node-bound-id collision 409 as a clean no-op before any mutation), the pin is stored as a clean applied snapshot so drift reads clean, and a guardrail_config.imported audit event records the hash/count/diff (api/routes/guardrail_config.py, tests/integration/test_guardrail_config_api.py, guardrail_config.feature)"
+            - "[ ] The /settings/guardrails page does not expose an Import control — cross-org inheritance is an API surface (import + the elevated export read), the settings UI stays propose/apply/reject only"
         deferrals:
-            - "Cross-org guardrail policy inheritance is tracked under feat-guardrails; policy templates/packs ship, cross-org sharing does not"
+            - "Cross-org guardrail inheritance ships via the import API; the /settings/guardrails page does not yet offer an in-page import control (API-only surface, mirroring the admin plugin-management UI pattern)"
     feat-hitl:
         description: Human-in-the-loop approval gates and review
         status: covered

@@ -5,6 +5,7 @@ URLs (mounted under ``/api/v1/guardrails/config``):
     GET    /api/v1/guardrails/config         — export the applied config as YAML
     POST   /api/v1/guardrails/config/propose — validate + hash + diff a proposal
     POST   /api/v1/guardrails/config/apply   — apply the pending proposal (approve/merge)
+    POST   /api/v1/guardrails/config/import  — import a config directly as the applied state
     POST   /api/v1/guardrails/config/reject  — discard the pending proposal
     GET    /api/v1/guardrails/config/drift   — recompute drift vs the applied pin
 
@@ -15,6 +16,12 @@ consumes — gated by the same admin check as the direct eval-definition API;
 the config-as-code layer is an authoring/source-of-truth seam on top, never a
 change to the engine's semantics. Every state-changing step emits an audit
 event (summary payloads only — never raw config content).
+
+**Import** (``POST /import``) is the cross-org inheritance/backup surface: an
+admin applies a config YAML (e.g. the unmasked export from another
+organisation) directly as the org's APPLIED state without a propose/review
+round-trip — the source org already reviewed the policy. Validation and
+collision handling mirror ``apply``.
 
 Chunk 3b cutover: writes target ``evals`` (via ``create_or_update_eval``),
 reads load from ``evals``, and deletes are soft-deletes on ``Eval`` rows.
@@ -104,6 +111,14 @@ class GuardrailApplyResponse(BaseModel):
     hash: str
     applied_at: str
     status: str = "clean"
+
+
+class GuardrailImportResponse(BaseModel):
+    imported: bool
+    hash: str
+    applied_at: str
+    status: str = "clean"
+    diff: list[GuardrailChangeResponse] = Field(default_factory=list)
 
 
 class GuardrailRejectResponse(BaseModel):
@@ -685,6 +700,112 @@ async def reject_guardrail_config(
         )
 
     return GuardrailRejectResponse(rejected=True, status="clean")
+
+
+@router.post("/import", dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("guardrail_config.import")
+async def import_guardrail_config(
+    req: ProposeGuardrailConfigRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
+) -> GuardrailImportResponse:
+    """Import an org guardrail config directly as the APPLIED state (admin only).
+
+    Cross-org inheritance: an admin imports the config YAML exported from
+    ANOTHER organisation (or a backup) and the imported set becomes this org's
+    applied guardrail config in ONE step — there is no propose/review round-trip
+    because the source org already reviewed the policy. The elevated read
+    (``GET /guardrails/config/elevated``) is the export side: it returns the
+    full unmasked YAML an operator copies into this endpoint.
+
+    Semantics mirror ``apply``: the live ``eval_type='guardrail'`` rows (plus
+    the org-level knobs) are reconciled to the imported set, collisions with
+    node-bound rows fail closed with 409 before any mutation, and the pin is
+    stored as a CLEAN applied snapshot. The transport is the YAML itself —
+    cross-org isolation is preserved by RLS (no cross-org identifiers, no FK
+    reads across org boundaries), so an admin can only ever import content that
+    was placed in front of them; they can never read another org's rows.
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can import guardrail config",
+        )
+    try:
+        imported = load_config_set(req.config_yaml)
+    except GuardrailConfigError as exc:
+        # Same fail-closed guarantee as /propose: an invalid imported config is
+        # rejected with the underlying validation message, never a 500.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from None
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        pin = await _load_pin(session, principal.organisation_id)
+        current = _applied_config_set(pin)
+        changes = diff_config_sets(current, imported)
+        imported_hash = hash_config_set(imported)
+        now = utc_now_iso()
+
+        colliding = await _reconcile_guardrail_rows(
+            session,
+            principal.organisation_id,
+            imported,
+            principal.account_id,
+        )
+        if colliding:
+            # Fail closed with the same in-band remediation as apply: a colliding
+            # id is a node-bound row the org-level reconcile must never claim.
+            # The reconcile is a clean no-op and the pin is untouched, so the
+            # operator can re-import a renamed YAML.
+            await _audit(
+                session,
+                principal.organisation_id,
+                principal.account_id,
+                "guardrail_config.import_conflict",
+                {"colliding_ids": sorted(colliding)},
+            )
+            conflict_detail = (
+                "Cannot import guardrail config: id(s) collide with node-bound guardrails: "
+                + ", ".join(sorted(colliding))
+                + ". Rename the colliding config id(s) and re-import."
+            )
+        else:
+            conflict_detail = None
+            new_pin = GuardrailPin(
+                org_id=principal.organisation_id,
+                status="clean",
+                applied_hash=imported_hash,
+                applied_at=now,
+                serialized_snapshot=req.config_yaml,
+            )
+            await _store_pin(session, principal.organisation_id, new_pin)
+
+            await _audit(
+                session,
+                principal.organisation_id,
+                principal.account_id,
+                "guardrail_config.imported",
+                {
+                    "hash": imported_hash,
+                    "guardrail_count": len(imported.guardrails),
+                    "diff": _diff_summary(changes),
+                },
+            )
+
+    if conflict_detail is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict_detail)
+
+    return GuardrailImportResponse(
+        imported=True,
+        hash=imported_hash,
+        applied_at=now,
+        status="clean",
+        diff=[GuardrailChangeResponse(**change.to_dict()) for change in changes],
+    )
 
 
 @router.get("/drift")
