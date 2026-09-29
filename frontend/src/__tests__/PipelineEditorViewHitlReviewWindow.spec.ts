@@ -252,6 +252,13 @@ describe('PipelineEditorView - ownerless-gate advisory', () => {
     wrapper.unmount()
   })
 
+  it('stays silent when the pipeline has only a reliability owner', async () => {
+    state.pipeline.reliability_owner_id = 'user-2'
+    const wrapper = await mountWithEdge(edgeFixture())
+    expect(wrapper.find(ADVISORY).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('stays silent when the gate declares a required team', async () => {
     const wrapper = await mountWithEdge(edgeFixture({
       hitl_review_config: {
@@ -287,6 +294,33 @@ describe('PipelineEditorView - ownerless-gate advisory', () => {
     await flushPromises()
 
     expect(graphPatchBodies()).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('does not advise before an edge is selected', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+    expect(vm.ownerlessGateAdvisory).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('clears a nullish input and still saves when no pipeline is loaded', async () => {
+    const wrapper = await mountEditor()
+    const vm = wrapper.vm as any
+
+    // A nullish input resolves through the ''-fallback to an explicit clear.
+    vm.hitlReviewWindowInput = null
+    await vm.updateHitlReviewWindow()
+    await flushPromises()
+    expect(windowPatchBodies()).toContainEqual({ hitl_review_window_seconds: null })
+
+    // With no pipeline object loaded the stored-value write is skipped, not
+    // crashed; the PATCH still lands.
+    vm.pipeline = null
+    vm.hitlReviewWindowInput = '600'
+    await vm.updateHitlReviewWindow()
+    await flushPromises()
+    expect(windowPatchBodies()).toContainEqual({ hitl_review_window_seconds: 600 })
     wrapper.unmount()
   })
 })

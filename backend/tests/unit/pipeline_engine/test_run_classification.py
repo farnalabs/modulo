@@ -589,6 +589,18 @@ class TestCancelledHitlTimeoutReason:
         assert REASON_HITL_TIMEOUT != REASON_CANCELLED
         assert REASON_HITL_TIMEOUT == "hitl_timeout"
 
+    def test_hitl_timeout_registry_failure_degrades_to_the_generic_reason(self) -> None:
+        """A registry lookup failure inside the hitl discrimination must degrade
+        to the pre-FAR-1257 operator/HITL-cancel reason — never raise out of the
+        pure classifier and never fabricate a timeout."""
+        with patch(
+            "modulo.core.pipeline_engine.error_codes.map_legacy_code",
+            side_effect=RuntimeError("registry broken"),
+        ):
+            result = classify_run("cancelled", "hitl.unknown_sibling")
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason == REASON_CANCELLED
+
     @pytest.mark.parametrize(
         ("status", "error_code"),
         [

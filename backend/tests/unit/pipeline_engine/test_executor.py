@@ -1,5 +1,6 @@
 """Unit tests for PipelineExecutor using mocked DB sessions."""
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -1651,6 +1652,55 @@ async def test_interrupt_persists_fire_time_context_on_the_gate_row():
     assert context["condition_result"] is None
     # FAR-860: the gate config declares no response_contract here.
     assert context["response_contract"] is None
+
+
+async def test_interrupt_window_resolution_cancellation_propagates():
+    """FAR-1257: a CancelledError raised while resolving the review window must
+    propagate, NOT be swallowed by the failure-isolated savepoint that guards the
+    ordinary resolve failure. The window resolution is the last of the fire-time
+    stamps; swallowing cancellation here would strand the savepoint's cleanup and
+    defeat the executor's cancellation handling. Directly exercises the
+    ``except asyncio.CancelledError: raise`` arm."""
+    snapshot = _make_snapshot({"nodes": [{"id": "native-gate", "role": None}], "edges": []})
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch(
+            "modulo.core.pipeline_engine.executor.evaluate_gate_coalescing",
+            new=AsyncMock(return_value="fresh"),
+        ),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", new=AsyncMock(return_value=None)),
+        patch(
+            "modulo.core.pipeline_engine.executor.build_hitl_review_context",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_hitl_review_config",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_review_window_for_gate",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._session_factory = factory
+        with pytest.raises(asyncio.CancelledError):
+            await executor._create_interrupt_gate(
+                org_id=uuid.uuid4(),
+                run_id=uuid.uuid4(),
+                review_id="native-gate",
+                pipeline_id=uuid.uuid4(),
+                required_team_id=None,
+            )
+
+    hitl_manager.create_gate.assert_not_awaited()
 
 
 async def test_interrupt_threads_matched_condition_result_into_the_context():
