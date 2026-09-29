@@ -16,9 +16,22 @@
       <template v-else>
         <div class="flex flex-row items-center justify-between gap-3">
           <p class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.configure_oauth_client_applications_for_mcp_token_based_auth') }}</p>
-          <Button data-testid="settings-mcp-register-oauth-client" @click="openRegisterOauthDialog">
+          <Button
+            data-testid="settings-mcp-register-oauth-client"
+            :disabled="!publicUrlConfigured"
+            @click="openRegisterOauthDialog"
+          >
             {{ $t('views.SettingsMcpView.register_oauth_client') }}
           </Button>
+        </div>
+
+        <div
+          v-if="!publicUrlConfigured"
+          class="rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning"
+          data-testid="settings-mcp-oauth-public-url-warning"
+          aria-live="polite"
+        >
+          {{ $t('views.SettingsMcpView.set_modulo_public_url_before_registering_oauth') }}
         </div>
 
         <div
@@ -282,7 +295,6 @@ import { formatDateShort } from '../../lib/formatDate'
 import { useSecretReveal } from '../../composables/useSecretReveal'
 
 type OAuthClientItem = components['schemas']['OAuthClientItem']
-type CreateOAuthClientResponse = components['schemas']['CreateOAuthClientResponse']
 
 const props = defineProps<{
   /** Registered OAuth clients from `GET /api/v1/mcp/oauth/clients`. */
@@ -293,6 +305,14 @@ const props = defineProps<{
   listError: string | null
   /** Org role is admin|operator - the backend gate on all three endpoints. */
   canManage: boolean
+  /**
+   * MODULO_PUBLIC_URL is configured well enough for the OAuth flow (FAR-1282).
+   * Derived ONCE by the owning view from the MCP status URL and passed down,
+   * so this card never re-derives it. When false the server-side guard in
+   * `api/routes/mcp_oauth.py` would reject the register call with a 500, so
+   * the action is disabled up front instead of after a doomed submit.
+   */
+  publicUrlConfigured: boolean
 }>()
 
 const emit = defineEmits<{
@@ -406,6 +426,10 @@ function toggleOauthScope(scope: string) {
 }
 
 function openRegisterOauthDialog() {
+  // FAR-1282: the button is disabled when MODULO_PUBLIC_URL is missing, but
+  // this guard keeps the invariant true for any other entry point (keyboard,
+  // a future caller) rather than relying on the disabled attribute alone.
+  if (!props.publicUrlConfigured) return
   oauthName.value = ''
   oauthNameTouched.value = false
   oauthRedirectUris.value = ''
@@ -426,7 +450,7 @@ async function registerOauthClient() {
   registeringOauth.value = true
   registerOauthError.value = null
   try {
-    const { data, error: err } = await (api as any).POST('/api/v1/mcp/oauth/clients', {
+    const { data, error: err } = await api.POST('/api/v1/mcp/oauth/clients', {
       body: {
         name: oauthName.value.trim(),
         redirect_uris: oauthRedirectList.value,
@@ -436,12 +460,11 @@ async function registerOauthClient() {
     if (err) {
       registerOauthError.value = formatApiError(err)
     } else if (data) {
-      const created = data as CreateOAuthClientResponse
-      createdOauthClientId.value = created.client_id
-      createdOauthClientName.value = created.name
+      createdOauthClientId.value = data.client_id
+      createdOauthClientName.value = data.name
       registerOauthDialogOpen.value = false
       oauthCreatedDialogOpen.value = true
-      revealOauthClientSecret(created.client_secret)
+      revealOauthClientSecret(data.client_secret)
       emit('refresh')
     }
   } catch (e: unknown) {
@@ -494,7 +517,7 @@ async function revokeOauthClient() {
   revokingOauth.value = true
   revokeOauthError.value = null
   try {
-    const { error: err } = await (api as any).DELETE('/api/v1/mcp/oauth/clients/{client_id}', {
+    const { error: err } = await api.DELETE('/api/v1/mcp/oauth/clients/{client_id}', {
       params: { path: { client_id: revokeOauthTarget.value.client_id } },
     })
     if (err) {
