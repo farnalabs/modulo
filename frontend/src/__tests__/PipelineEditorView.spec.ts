@@ -2870,6 +2870,24 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     wrapper.unmount()
   })
 
+  it('single_pr_per_run getter/setter are safe with no node selected (FAR-1273)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    // The toggle only renders for a selected sandbox node, but the computed
+    // must not throw if read or written before a node is selected: a legacy
+    // graph with no selection reads as unchecked, and the setter is a no-op.
+    expect(vm.selectedNodeData).toBeNull()
+    expect(vm.singlePrPerRun).toBe(false)
+    vm.singlePrPerRun = true
+    expect(vm.selectedNodeData).toBeNull()
+    expect(vm.singlePrPerRun).toBe(false)
+    wrapper.unmount()
+  })
+
   it('displays read-only commands for a non-sandbox node that has agent_commands', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
