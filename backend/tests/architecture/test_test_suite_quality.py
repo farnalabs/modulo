@@ -283,6 +283,27 @@ regression that silently weakens the suite:
   it is almost always a leftover from inlining a double while debugging.
   Configure the double and pass the configured instance (or use a bound
   name), or assert on the real expected value
+- a freshly-constructed Mock nested *inside* a ``call(...)`` wrapper passed
+  as an *expected* argument to a mock verification — ``<mock>.assert_called_with(
+  call(Mock()))``, ``assert_has_calls([call(MagicMock())])``,
+  ``assert_awaited_any_call(call(AsyncMock()))``. The direct fresh-Mock-in-call-
+  assertion lens owns only the bare expected-argument positions and
+  deliberately leaves ``call(...)``-wrapped mocks alone (a negative control
+  there); this lens closes that documented gap. ``call`` objects compare
+  their payload by equality, and a fresh Mock compares by identity
+  (``__eq__`` defaults to ``is``), so the recorded call can never equal the
+  freshly-minted wrapper: for ``assert_called_with``/``assert_called_once_with``
+  and the awaited twins the verification ALWAYS FAILS, ``assert_any_call``/
+  ``assert_awaited_any_call`` can never match any recorded call, and
+  ``assert_has_calls``/``assert_has_awaits`` membership can never hold.
+  ``call(ANY)`` is deliberately left alone — ``ANY`` exists precisely to
+  match from inside a wrapper — as are class references (``call(Mock)``,
+  the deliberate factory spelling), bound doubles, and fresh Mocks nested
+  inside a container that is itself inside the ``call(...)`` (``call({'k':
+  Mock()})``, a doubly-indirect shape). Only the direct argument positions of
+  the wrapper are checked, mirroring the direct-positions discipline of the
+  sibling lenses. Capture the double in a variable and pass the bound name,
+  or assert against the real expected value
 - ``assert x and not x`` / ``assert x or not x`` (and the ``not``-wrapped
   twins ``assert not (x and not x)`` / ``assert not (x or not x)``) — a
   boolean assertion whose test expression joins a value with its own negation.
@@ -6456,6 +6477,178 @@ def test_fresh_mock_side_effect_lens_flags_dead_delegation():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _fresh_mock_side_effect_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+#: Mock verification methods whose expected arguments can legally be wrapped in
+#: ``call(...)`` records. ``assert_called``/``assert_not_called``/``assert_awaited``
+#: and their ``_once`` twins take no expected arguments and are deliberately
+#: absent.
+_VERIFY_METHODS_WITH_EXPECTED_ARGS = frozenset(
+    {
+        "assert_called_with",
+        "assert_called_once_with",
+        "assert_any_call",
+        "assert_awaited_with",
+        "assert_awaited_once_with",
+        "assert_awaited_any_call",
+        "assert_has_calls",
+        "assert_has_awaits",
+    }
+)
+
+
+def _is_call_record(node: ast.AST) -> bool:
+    """True when ``node`` is a call to the ``unittest.mock`` ``call()`` factory
+    (``call(...)`` or the ``mock.call(...)`` attribute spelling) that records
+    an expected invocation."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id == "call"
+    if isinstance(func, ast.Attribute):
+        return func.attr == "call"
+    return False
+
+
+def _fresh_mock_in_call_wrapper_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every mock verification whose
+    expected arguments wrap a *freshly-constructed* Mock inside a ``call(...)``
+    record — ``mock.assert_called_with(call(Mock()))``,
+    ``assert_has_calls([call(MagicMock())])``,
+    ``assert_awaited_any_call(call(AsyncMock()))``.
+
+    ``call`` objects compare their payload by equality, and a fresh Mock
+    compares by identity (``__eq__`` defaults to ``is``), so the recorded call
+    can never equal the freshly-minted wrapper: the verification always FAILS
+    (or, for the ``*_any_call``/``has_calls`` forms, can never match), which is
+    dead code that reports a confusing failure no matter what the code under
+    test recorded. Only the direct positional/keyword argument positions of a
+    ``call(...)`` record are checked, mirroring the direct-positions discipline
+    of the sibling fresh-Mock lenses; a fresh Mock buried inside a container
+    that is itself inside the ``call(...)`` (``call({'k': Mock()})``) is a
+    doubly-indirect shape and is left alone. ``call(ANY)`` (the blessed wrapped
+    spell), class references (``call(Mock)``), and mocks bound to a name
+    earlier (no name resolution is involved) are naturally excluded. The direct
+    fresh-Mock-in-call-assertion lens owns the bare expected-argument positions
+    and treats ``call(Mock())`` as a negative control there, so the two lenses
+    never double-report the same line."""
+    found: list[tuple[int, str]] = []
+    for node in _all_nodes(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr in _VERIFY_METHODS_WITH_EXPECTED_ARGS):
+            continue
+        expected_operands = list(node.args)
+        expected_operands.extend(kw.value for kw in node.keywords if kw.value is not None)
+        if not expected_operands:
+            continue
+        for operand in expected_operands:
+            hits: list[ast.AST] = []
+            for sub in ast.walk(operand):
+                if not _is_call_record(sub):
+                    continue
+                direct = list(sub.args)
+                direct.extend(kw.value for kw in sub.keywords if kw.value is not None)
+                if any(_is_mock_constructor_call(el) for el in direct):
+                    hits.append(sub)
+            if hits:
+                found.append(
+                    (
+                        node.lineno,
+                        (
+                            f"{ast.unparse(node)} — a fresh Mock wrapped in call(...) is compared "
+                            "by identity, so the expected call can never match the recorded one"
+                        ),
+                    )
+                )
+                break
+    return found
+
+
+def test_no_fresh_mock_in_call_wrappers():
+    """A freshly-constructed Mock nested inside a ``call(...)`` wrapper passed
+    as an expected argument to a mock verification — ``mock.assert_called_with(
+    call(Mock()))``, ``assert_has_calls([call(MagicMock())])``,
+    ``assert_awaited_any_call(call(AsyncMock()))`` — is a dead expectation.
+    ``call`` objects compare their payload by equality, and a fresh Mock
+    compares by identity (``__eq__`` defaults to ``is``), so the recorded call
+    can never equal the freshly-minted wrapper: the ``assert_called_with``/
+    ``assert_called_once_with`` and awaited twins ALWAYS FAIL, the ``*_any_call``
+    forms can never match any recorded call, and ``assert_has_calls``/
+    ``assert_has_awaits`` membership can never hold — the verification reports a
+    confusing mismatch no matter how broken (or correct) the behaviour under
+    test is. This is the ``call(...)``-wrapper twin of the fresh-Mock-in-call-
+    assertion lens, which deliberately leaves wrapped mocks alone (a negative
+    control there). ``call(ANY)`` is the blessed wrapped spelling and is left
+    alone — ``ANY`` exists precisely to match from inside a wrapper — as are
+    class references (``call(Mock)``), bound doubles, and fresh Mocks nested
+    inside a container that is itself inside the wrapper. Capture the double in
+    a variable and pass the bound name, or assert against the real expected
+    value."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _fresh_mock_in_call_wrapper_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} fresh Mock instance(s) wrapped in a call(...) expected argument.\n"
+        "A fresh Mock inside call(...) compares by identity, so the expected call can never "
+        "match the recorded one — the verification ALWAYS FAILS. Capture the double in a "
+        "variable and pass the bound name, or assert against the real expected value.\n" + "\n".join(violations)
+    )
+
+
+def test_fresh_mock_call_wrapper_lens_flags_dead_expected_calls():
+    """Synthetic positive/negative control for the fresh-Mock-in-call-wrapper
+    lens: it must flag a fresh Mock constructor in a direct argument position of
+    a ``call(...)`` record passed to a verification method (positional,
+    keyword, sync or awaited method, ``assert_has_calls`` sequence) and ignore
+    the legitimate wrapped spellings — ``call(ANY)``, real values, class
+    references, bound doubles, empty records, bare fresh-Mock expected
+    arguments (a sibling lens's shape), and fresh Mocks buried inside a
+    container inside the record."""
+    positive_sources = [
+        "def test_foo():\n    mock.assert_called_with(call(Mock()))\n",
+        "def test_foo():\n    mock.assert_called_once_with(mock.call(MagicMock()))\n",
+        "def test_foo():\n    mock.assert_any_call(call(AsyncMock()))\n",
+        "def test_foo():\n    mock_async.assert_awaited_with(call(unittest.mock.NonCallableMock()))\n",
+        "def test_foo():\n    mock_async.assert_awaited_once_with(mock.call(MagicMock()))\n",
+        "def test_foo():\n    mock_async.assert_awaited_any_call(call(Mock(spec=HTTPResponse)))\n",
+        "def test_foo():\n    mock.assert_has_calls([call(MagicMock())])\n",
+        "def test_foo():\n    mock.assert_has_calls([call(1), mock.call(Mock())])\n",
+        "def test_foo():\n    mock.assert_has_calls([call(MagicMock())], any_order=True)\n",
+        "def test_foo():\n    mock.assert_called_with(call(user.org_id, reason=MagicMock()))\n",
+        "def test_foo():\n    mock.assert_called_with(call())\n    mock.assert_has_calls([call(Mock())])\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _fresh_mock_in_call_wrapper_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock.assert_called_with(call(ANY))\n",
+        "def test_foo():\n    mock.assert_called_with(call(42))\n",
+        "def test_foo():\n    mock.assert_called_with(call(user.org_id))\n",
+        "def test_foo():\n    mock.assert_called_with(call(Mock))\n",
+        "def test_foo():\n    mock.assert_called_with(call())\n",
+        "def test_foo():\n    double = Mock()\n    mock.assert_called_once_with(call(double))\n",
+        "def test_foo():\n    mock.assert_called_with(call({'k': Mock()}))\n",
+        "def test_foo():\n    mock.assert_called_with(Mock())\n",
+        "def test_foo():\n    mock.assert_called_with([Mock()])\n",
+        "def test_foo():\n    mock.assert_has_calls(ANY)\n",
+        "def test_foo():\n    mock.assert_has_calls([call('x', 1)])\n",
+        "def test_foo():\n    record = call(Mock())\n    assert record\n",
+        "def test_foo():\n    mock.method.call(Mock())\n",
+        "def test_foo():\n    mock.assert_called()\n",
+        "def test_foo():\n    mock.assert_awaited_once()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _fresh_mock_in_call_wrapper_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _complementary_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
