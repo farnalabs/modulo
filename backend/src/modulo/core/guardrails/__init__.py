@@ -67,8 +67,20 @@ def assert_guardrail_evidence_write_authorised(key: str) -> None:
     The guardrail module is a ``system_state`` producer writing
     ``connector_*`` and ``capability_*`` keys (chunk 8, §5.5). Every
     evidence write from this module MUST call this function before
-    persisting the row. Without this call site the evidence store would
-    be dormant past its own activation chunk.
+    persisting the row.
+
+    **Dormancy residual (FAR-1107 chunk 8, F2):** no production code path
+    currently writes evidence rows (``connector_*`` / ``capability_*``
+    keys) to the ``Evidence`` table.  The closest seam is
+    ``_persist_guardrail_eval_results`` in ``db/crud/run.py``, which
+    writes ``EvalResult`` rows — not ``Evidence`` rows.  The Evidence
+    table's model and migration exist (chunk 7), but the write path that
+    populates it from guardrail evaluations has not been implemented.
+    This function therefore has zero production callers today.  The
+    owning chunk for the first evidence-write call site is **chunk 8
+    itself** (§5.5 obligation CO-4); the wiring will land when the
+    guardrail module gains a code path that persists ``Evidence`` rows
+    (``connector_*`` / ``capability_*`` keys under ``system_state``).
 
     Raises ``EvidenceWriteAuthorisationError`` if the key is outside the
     guardrail module's allowed namespace.
