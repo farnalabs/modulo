@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
+import { mount } from '@vue/test-utils'
 import { useAssistantStore } from '../composables/useAssistantStore'
 import { useAssistantStream } from '../composables/useAssistantStream'
 import { executeCommandBatch } from '../composables/useUiCommandExecutor'
@@ -614,5 +616,22 @@ describe('useAssistantStream', () => {
     await connectStream('session-1')
 
     expect(bodies[0].page_context).toBeUndefined()
+  })
+})
+
+// Sonar S9383: the composable fires `void disconnectStream()` from onUnmounted.
+// Mounting a component that uses it and then unmounting exercises that cleanup
+// path — the direct (non-component) calls elsewhere in this spec never do.
+describe('useAssistantStream unmount cleanup', () => {
+  it('disconnects the stream when its component unmounts', () => {
+    const Comp = defineComponent({
+      setup() {
+        useAssistantStream()
+        return () => h('div')
+      },
+    })
+
+    const wrapper = mount(Comp)
+    expect(() => wrapper.unmount()).not.toThrow()
   })
 })
