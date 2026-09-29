@@ -36,6 +36,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
 from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
+from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.run import Run
 from modulo.settings import Settings, get_settings
 
@@ -52,6 +53,9 @@ _TABLES = [
     NotificationPreference.__table__,
     Dismissal.__table__,
     Run.__table__,
+    # The admin-scope visibility clause reads org_memberships (EXISTS) on every
+    # notification read — the table must exist for the routes to query at all.
+    OrgMembership.__table__,
 ]
 
 

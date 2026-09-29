@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
+from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 LEVEL_RANK: dict[str, int] = {
@@ -121,9 +122,37 @@ async def get_linked_run_states(
 
 
 def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Which notification rows *user_id* may read within their org.
+
+    * ``scope='org'`` — every org member;
+    * ``scope='admin'`` — ONLY a member whose LIVE membership in the
+      notification's org has ``role='admin'`` (non-deactivated). The arm
+      used to OR ``scope == 'admin'`` UNCONDITIONALLY, so a viewer/runner
+      member could read admin-scoped alerts (run numbers, deep links, PR
+      URLs) although ``run.output``/``run.list`` require a higher role — the
+      clause now enforces what ``get_notification``'s docstring always
+      claimed. The EXISTS correlates on ``Notification.organisation_id`` so
+      an admin of org A never sees org B's admin rows on a backend without
+      RLS;
+    * ``scope='user'`` — only the target user.
+
+    A membership that is deactivated (or absent) resolves to non-admin, i.e.
+    the arm fails CLOSED; the auth layer independently rejects deactivated
+    accounts before any read path is reached.
+    """
+    is_org_admin: ColumnElement[bool] = (
+        select(OrgMembership.id)
+        .where(
+            OrgMembership.organisation_id == Notification.organisation_id,
+            OrgMembership.account_id == user_id,
+            OrgMembership.role == "admin",
+            OrgMembership.deactivated_at.is_(None),
+        )
+        .exists()
+    )
     return (
         (Notification.scope == "org")
-        | (Notification.scope == "admin")
+        | ((Notification.scope == "admin") & is_org_admin)
         | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
     )
 
