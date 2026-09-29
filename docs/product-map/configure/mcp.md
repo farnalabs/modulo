@@ -9,6 +9,7 @@ code:
   - backend/src/modulo/api/routes/mcp_oauth.py
   - backend/src/modulo/api/routes/mcp_setup.py
   - frontend/src/views/SettingsMcpView.vue
+  - frontend/src/components/settings/McpOauthClientsCard.vue
 unit-tests:
   - backend/tests/unit/mcp/test_scope_validator.py
   - backend/tests/unit/mcp/test_tenant_context.py
@@ -41,7 +42,8 @@ sub-application, it exposes the pipeline/schema/connector/trigger/viewmodel tool
 surfaces over MCP (SSE), authenticates by API key (`mk_*` bearer) or OAuth, and
 enforces role / tenant / team scoping at both the middleware and viewmodel
 layers. The `/settings/mcp` surface configures keys, their roles, and the MCP
-URL, plus completion handoff setup. Built on the auth + model-backend core.
+URL, plus completion handoff setup and the org's registered OAuth client
+applications. Built on the auth + model-backend core.
 
 ## Behaviours
 
@@ -71,6 +73,36 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       selectable role (`settings-mcp-create-key`), revokes keys, and shows the
       generated key value for copying — the configured key is what external
       agents authenticate with
+- [x] MCP OAuth client registration UI (2026-09-28, FAR-1251): the
+      "Registered OAuth Clients" card on `/settings/mcp`
+      (`components/settings/McpOauthClientsCard.vue`) lists the org's clients
+      — name, client id, scopes, redirect URIs, created — and drives
+      registration and revocation through `POST/GET/DELETE
+      /api/v1/mcp/oauth/clients`. Registering takes a required name, one or
+      more redirect URIs (tokenised on ANY whitespace so the backend's
+      space-joined storage round-trips losslessly, every entry an absolute
+      `http://`/`https://` URI — localhost and 127.0.0.1 stay valid for local
+      development, duplicates de-duplicated, invalid entries named in an
+      inline error) and at least one of the three valid scopes `trigger:run` /
+      `hitl:review` / `library:browse` (the backend's `VALID_SCOPES`; an
+      unknown scope is a 400 `InvalidScopeError`). Success opens a one-time
+      dialog showing the client id and client secret: only the create
+      response ever carries the raw secret (the row stores
+      `client_secret_hash`, so it cannot be retrieved again), the value
+      auto-masks after 10 s, both values are wiped from component state when
+      the dialog closes, and a rejected clipboard write (plain-HTTP
+      self-hosted origin, no `navigator.clipboard`) renders a visible
+      copy-failed message rather than losing the credential silently. Revoke
+      confirms by name, then `DELETE`s the client by id (404 when already
+      gone). All three endpoints require org role `admin` or `operator` — a
+      viewer gets 403 on list/register/delete alike and the card renders a
+      restricted state instead of the table (the list call's 403 is the
+      fallback for a stale/downgraded JWT) — and registration refuses with
+      500 while `MODULO_PUBLIC_URL` is unset or still the
+      `http://localhost:8000` default, because the authorize / token / refresh
+      protocol endpoints need a real public issuer
+      (`SettingsMcpView.spec.ts`, `tests/unit/api/test_mcp_oauth.py`,
+      `mcp/mcp_oauth.feature`)
 - [x] Security hardening: keys are minted/revoked through the api-key surface,
       list-run/cost and other sensitive tools are role-gated, HITL-gated tools
       route through human review, and the suite guards structural tool

@@ -29,16 +29,17 @@ when the agent runs:
     firewall/route-based egress, then add back ONLY the allowlisted host:port
     pairs. This upgrades ``selected`` from the FAR-296 Phase 3b-3
     "functionally equivalent to deny_all" state to a REAL allowlist.
-  - ``delivery_sentinel`` (FAR-1264): install a run-scoped ``gh`` shim that
-    permits exactly ONE ``gh pr create`` per sandbox run — the platform-side
-    hard guard behind the prompt-level "exactly one PR per run" rule
-    (FAR-1254). A second ``gh pr create`` in the same run exits non-zero
-    WITHOUT invoking the real ``gh``; every other ``gh`` invocation passes
-    through untouched. The claim is held only for a create that SUCCEEDED —
-    a non-zero exit releases it, so a transient failure does not burn the
-    run's only attempt — and the install's own diagnostics (including the
-    "no gh on PATH" case, where the guard is ABSENT) are mirrored into the
-    policy log rather than discarded with the step result.
+  - ``single_pr_per_run`` (FAR-1273; guard introduced by FAR-1264): install a
+    run-scoped ``gh`` shim that permits exactly ONE ``gh pr create`` per
+    sandbox run — the platform-side hard guard behind the prompt-level
+    "exactly one PR per run" rule (FAR-1254). A second ``gh pr create`` in
+    the same run exits non-zero WITHOUT invoking the real ``gh``; every other
+    ``gh`` invocation passes through untouched. The claim is held only for a
+    create that SUCCEEDED — a non-zero exit releases it, so a transient
+    failure does not burn the run's only attempt — and the install's own
+    diagnostics (including the "no gh on PATH" case, where the guard is
+    ABSENT) are mirrored into the policy log rather than discarded with the
+    step result.
 
 The enforcement is REAL (the sandbox cannot write / egress is scoped), never a
 declared flag. Script builders are pure string functions (unit-testable without
@@ -49,8 +50,8 @@ dispatch a failure, never silently certify a deny-guarantee nothing enforces);
 the egress step and the ``gh``-guard install are best-effort (their failures are
 logged-and-continued: egress is drop-first fail-closed, and a missing ``gh``
 guard simply degrades to the prompt-level guard). node_runner invokes
-:func:`apply_sandbox_policy` when ANY of the policy fields — including a
-non-empty ``delivery_sentinel`` — is set.
+:func:`apply_sandbox_policy` when ANY of the policy fields — including the
+FAR-1273 ``single_pr_per_run`` flag — is set.
 
 This module is dependency-free (no LangGraph, no DB) so it can be imported by
 node_runner and the unit tests without dragging in the pipeline engine.
@@ -93,16 +94,12 @@ _WORKSPACE = "/home/user"
 # source of truth for the allowlisted host).
 _AGENT_GIT_CONFIG = f"{_WORKSPACE}/.gitconfig"
 
-# FAR-1264: the WorkspaceSpec ``workspace_metadata`` key that carries a node's
-# ``delivery_sentinel`` from node_runner's policy call site to the E2B
-# provider's ``apply_isolation`` policy call site. ``IsolationPolicy`` is a
-# frozen dataclass that does not model the sentinel, and the spec is built per
-# policy invocation (never persisted to the workspace in this flow), so the
-# metadata dict is the carrier both allowlisted call sites share. Defined HERE
-# so node_runner and e2b.py import one constant instead of duplicating a
-# stringly-typed key (a typo in either direction would silently disarm the
-# guard).
-DELIVERY_SENTINEL_SPEC_KEY = "modulo.delivery_sentinel"
+# FAR-1273: the one-PR-per-run guard's trigger is the explicit node flag
+# ``single_pr_per_run``, carried on the typed ``IsolationPolicy`` (the single
+# carrier from node_runner's policy call site to the E2B provider's
+# ``apply_isolation``). The pre-FAR-1273 ``workspace_metadata`` sentinel key
+# (``DELIVERY_SENTINEL_SPEC_KEY``) is deliberately GONE: a delivery sentinel
+# keeps only its FAR-228 idempotency meaning and must never arm this guard.
 
 # FAR-1264: the marker ROOT. ``/tmp`` is deliberately OUTSIDE the read-only
 # workspace seal (``build_read_only_script`` only chmods ``/home/user``), so
@@ -502,16 +499,16 @@ def build_gh_pr_guard_script(marker_path: str) -> str:
     create while following its prompt. Deliberate-evasion hardening is out of
     scope for this ticket and is tracked separately.
 
-    SCOPE (known follow-up, not a defect): the guard is keyed off ANY
-    non-empty ``delivery_sentinel`` — the install is not PR-specific today. A
-    sentinel used for a different purpose would still install the
-    one-PR-per-run guard; decoupling the two is a follow-up, not a bug here.
+    SCOPE: the guard is armed by the explicit ``single_pr_per_run`` node flag
+    (FAR-1273) — nothing else. A non-empty ``delivery_sentinel`` no longer
+    installs it (FAR-228 idempotency is a separate concern), so a sentinel
+    used for any other purpose never arms an unrelated PR guard.
 
     BEST-EFFORT: any per-directory failure (read-only dir, no write
     permission) skips that directory with a stderr note; if NOTHING could be
     guarded while a ``gh`` does exist, the script exits 1 so the step is
     logged — the caller never raises. If there is no ``gh`` on PATH at all the
-    script says so loudly on stderr (an unguarded sentinel run must be
+    script says so loudly on stderr (an unguarded flagged run must be
     observable) and exits 0: there is nothing to guard.
 
     Forms NOT intercepted (documented per the ticket): ``gh api`` calls that
@@ -584,12 +581,12 @@ def build_gh_pr_guard_script(marker_path: str) -> str:
         '    echo "modulo: gh guard: FAILED - a gh exists on PATH but none could be guarded" >&2\n'
         "    exit 1\n"
         "  fi\n"
-        # XS: an unguarded sentinel run must be OBSERVABLE — this exits 0 (the
+        # XS: an unguarded flagged run must be OBSERVABLE — this exits 0 (the
         # install step is best-effort and must not wedge the dispatch), so the
         # note is the only signal that the platform guard is absent; the
         # caller also mirrors it into the policy log.
         '  echo "modulo: gh guard: WARNING no gh on PATH; nothing to guard" >&2\n'
-        '  echo "modulo: gh guard: sentinel run is NOT platform-guarded (prompt-level only)" >&2\n'
+        '  echo "modulo: gh guard: flagged run is NOT platform-guarded (prompt-level only)" >&2\n'
         "fi\n"
         "exit 0\n"
     )
@@ -604,7 +601,7 @@ async def apply_sandbox_policy(
     egress_allowlist: list[dict[str, Any]] | None,
     allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
-    delivery_sentinel: str | None = None,
+    single_pr_per_run: bool = False,
     run_scope: str | None = None,
 ) -> None:
     """Run the enforced sandbox policy in the sandbox (FAR-212 PR B).
@@ -654,12 +651,14 @@ async def apply_sandbox_policy(
     carry an extra ``_resolved_ip`` key (resolved by node_runner before calling)
     used to bind the iptables rule to a concrete address.
 
-    FAR-1264: when ``delivery_sentinel`` is non-empty, the one-PR-per-run
+    FAR-1273: when ``single_pr_per_run`` is true, the one-PR-per-run
     ``gh`` shim is installed (:func:`build_gh_pr_guard_script`) with the
-    run-scoped marker from ``run_scope``. Both new arguments are optional and
-    default to ``None``/unset, so every existing caller is unaffected. The
-    sentinel VALUE is only a gate — the shim's refusal message is fixed — so
-    no caller-controlled text is interpolated into the shell scripts.
+    run-scoped marker from ``run_scope``. Both arguments are optional and
+    default to ``False``/unset, so every existing caller is unaffected. The
+    flag is only a gate — the shim's refusal message is fixed — so no
+    caller-controlled text is interpolated into the shell scripts. The flag
+    is the ONLY trigger: a non-empty ``delivery_sentinel`` never arms the
+    guard (it keeps its FAR-228 idempotency meaning alone).
     """
 
     async def _run_step(script: str, *, user: str, enforce: bool) -> Any:
@@ -705,11 +704,12 @@ async def apply_sandbox_policy(
         await _run_step(build_git_none_script(), user="root", enforce=True)
     if egress_policy == "selected" and egress_allowlist:
         await _run_step(build_egress_selected_script(egress_allowlist), user="root", enforce=False)
-    if delivery_sentinel:
-        # FAR-1264: install the run-scoped one-PR-per-run gh shim. BEST-EFFORT
-        # (enforce=False): a failed install is logged-and-continued and the run
-        # degrades to the prompt-level guard — never raises into the dispatch.
-        # Runs BEFORE the read-only seal (it writes: system PATH dirs + /tmp).
+    if single_pr_per_run:
+        # FAR-1273 (guard introduced by FAR-1264): install the run-scoped
+        # one-PR-per-run gh shim. BEST-EFFORT (enforce=False): a failed install
+        # is logged-and-continued and the run degrades to the prompt-level
+        # guard — never raises into the dispatch. Runs BEFORE the read-only
+        # seal (it writes: system PATH dirs + /tmp).
         _guard_result = await _run_step(
             build_gh_pr_guard_script(gh_pr_guard_marker_path(run_scope)),
             user="root",
@@ -717,7 +717,7 @@ async def apply_sandbox_policy(
         )
         # XS: the install's own diagnostics exit 0 with only a stderr note —
         # most importantly "no gh on PATH ... NOT platform-guarded", i.e. a
-        # sentinel run whose platform guard is ABSENT. Without this mirror the
+        # flagged run whose platform guard is ABSENT. Without this mirror the
         # note is discarded with the result and the degraded run is invisible.
         _guard_report = str(getattr(_guard_result, "stderr", "") or "").strip()
         if _guard_report:
@@ -727,7 +727,6 @@ async def apply_sandbox_policy(
 
 
 __all__ = [
-    "DELIVERY_SENTINEL_SPEC_KEY",
     "apply_sandbox_policy",
     "build_egress_selected_script",
     "build_gh_pr_guard_script",

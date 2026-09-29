@@ -14,14 +14,15 @@ Exercises, without a live sandbox or network:
 3. E2B handle resolution: a tracked sandbox is used directly (no SDK
    connect); an untracked ref reconnects via ``AsyncSandbox.connect``; a
    connect failure raises ``RuntimeError``; cancellation propagates.
-4. **FAR-1264 production wiring**: ``apply_isolation`` reads the delivery
-   sentinel and run id OFF THE SPEC (``workspace_metadata`` /
-   ``run_id``) and threads them into ``apply_sandbox_policy``, which installs
-   the run-scoped one-PR-per-run ``gh`` guard; a spec without them (or with a
-   malformed sentinel value) installs nothing. Covered from two angles — the
-   read under an all-controls policy, and the sentinel-only shape (exactly
-   one guard step, the exact run-scoped marker path, and a no-metadata
-   control).
+4. **FAR-1273 production wiring**: ``apply_isolation`` reads the explicit
+   ``single_pr_per_run`` flag OFF THE TYPED ``IsolationPolicy`` (the single
+   carrier) and the run id off the SPEC (``run_id``), and threads them into
+   ``apply_sandbox_policy``, which installs the run-scoped one-PR-per-run
+   ``gh`` guard; a policy without the flag installs nothing — including when
+   a spec still carries the RETIRED ``workspace_metadata`` sentinel key.
+   Covered from two angles — the read under an all-controls policy, and the
+   flag-only shape (exactly one guard step, the exact run-scoped marker
+   path, and a no-flag control).
 """
 
 from __future__ import annotations
@@ -35,7 +36,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from modulo.core.pipeline_engine.sandbox_policy import (
-    DELIVERY_SENTINEL_SPEC_KEY,
     apply_sandbox_policy,
     gh_pr_guard_marker_path,
 )
@@ -270,59 +270,49 @@ async def test_apply_isolation_connect_cancellation_propagates() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. FAR-1264: delivery-sentinel extraction on the REAL provider path
+# 4. FAR-1273: the typed single_pr_per_run carrier on the REAL provider path
 # ---------------------------------------------------------------------------
 
 
-def _sentinel_spec(**kwargs: Any) -> WorkspaceSpec:
-    return WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=uuid.uuid4(),
-        **kwargs,
-    )
-
-
-async def test_apply_isolation_threads_sentinel_and_run_scope_to_policy() -> None:
+async def test_apply_isolation_threads_the_flag_and_run_scope_to_policy() -> None:
     """The REAL ``E2BRuntimeProvider.apply_isolation`` (not a fake override)
-    reads the sentinel from ``spec.workspace_metadata`` and the run id from
+    reads ``single_pr_per_run`` from the TYPED policy and the run id from
     ``spec.run_id`` and installs the gh guard with the run-scoped marker."""
     sandbox = _RecordingSandbox()
-    provider = E2BRuntimeProvider(api_key="sentinel-key")
-    provider._sandboxes["sbx-sentinel"] = sandbox
-    spec = _sentinel_spec(
+    provider = E2BRuntimeProvider(api_key="flag-key")
+    provider._sandboxes["sbx-flagged"] = sandbox
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
         run_id=uuid.UUID("11111111-2222-3333-4444-555555555555"),
-        workspace_metadata={DELIVERY_SENTINEL_SPEC_KEY: "PR_CREATED"},
     )
+    policy = IsolationPolicy(single_pr_per_run=True)
 
-    await provider.apply_isolation("sbx-sentinel", spec, _policy())
+    await provider.apply_isolation("sbx-flagged", spec, policy)
 
     guard_scripts = [script for script, _, _ in sandbox.commands.calls if ".modulo-real" in script]
-    assert guard_scripts, "sentinel-carrying spec must install the gh guard"
+    assert guard_scripts, "a flagged policy must install the gh guard"
     assert "11111111-2222-3333-4444-555555555555" in guard_scripts[0]
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        pytest.param(123, id="non-str"),
-        pytest.param("", id="empty-str"),
-        pytest.param(None, id="none"),
-    ],
-)
-async def test_apply_isolation_degrades_to_no_guard_for_malformed_sentinel(raw: Any) -> None:
-    """The metadata dict is engine-supplied, so a malformed/absent value is
-    type-narrowed to "no guard" — never a crash, never an install."""
+async def test_apply_isolation_ignores_the_retired_metadata_sentinel_key() -> None:
+    """FAR-1273 carrier retirement: a spec that still carries the OLD
+    ``workspace_metadata`` sentinel key (the pre-FAR-1273 carrier) installs
+    NO guard — the typed policy is the single carrier, so the metadata key
+    cannot arm anything."""
     sandbox = _RecordingSandbox()
-    provider = E2BRuntimeProvider(api_key="sentinel-key")
-    provider._sandboxes["sbx-degrade"] = sandbox
-    spec = _sentinel_spec(
+    provider = E2BRuntimeProvider(api_key="retired-key")
+    provider._sandboxes["sbx-retired"] = sandbox
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
-        workspace_metadata={DELIVERY_SENTINEL_SPEC_KEY: raw},
+        workspace_metadata={"modulo.delivery_sentinel": "PR_CREATED"},
     )
 
-    await provider.apply_isolation("sbx-degrade", spec, _policy())
+    await provider.apply_isolation("sbx-retired", spec, IsolationPolicy())
 
-    assert not any(".modulo-real" in script for script, _, _ in sandbox.commands.calls)
+    assert not sandbox.commands.calls
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +330,7 @@ def test_isolation_policy_defaults_match_legacy_defaults() -> None:
     assert policy.egress_allowlist is None
     assert policy.allowed_hosts is None
     assert policy.command_timeout == 60.0
+    assert policy.single_pr_per_run is False
 
 
 def test_isolation_policy_is_frozen() -> None:
@@ -347,46 +338,45 @@ def test_isolation_policy_is_frozen() -> None:
     mutated between the two invocation paths)."""
     policy = IsolationPolicy()
     with pytest.raises(FrozenInstanceError, match="cannot assign"):
-        policy.read_only = True  # type: ignore[misc]
-    assert policy.read_only is False
+        policy.single_pr_per_run = True  # type: ignore[misc]
+    assert policy.single_pr_per_run is False
 
 
 # ---------------------------------------------------------------------------
-# 6. FAR-1264: the PRODUCTION wiring read — sentinel-only shape + control
+# 6. FAR-1273: the PRODUCTION wiring read — flag-only shape + control
 # ---------------------------------------------------------------------------
 
 
-async def test_apply_isolation_installs_the_run_scoped_gh_guard_from_spec_metadata() -> None:
-    """The e2b call site's OWN read of the sentinel, in the SENTINEL-ONLY
-    shape (every enforcement control default — Prompt-to-PR's node): the
-    guard install must be the ONLY step, and its claim marker must be the
-    exact path for THIS run id.
+async def test_apply_isolation_installs_the_run_scoped_gh_guard_from_the_policy() -> None:
+    """The e2b call site's OWN read of the flag, in the FLAG-ONLY shape
+    (every enforcement control default — Prompt-to-PR's node): the guard
+    install must be the ONLY step, and its claim marker must be the exact
+    path for THIS run id.
 
     The companion test above pins the same read under an all-controls
-    policy; this one adds the sentinel-only routing, the exact marker path,
-    and the no-metadata control below. C1 (the QA pass that requested it)
-    found the chain otherwise tested only in disconnected segments:
-    node_runner's assertion runs a FAKE provider that never calls
-    ``apply_isolation``, and the policy-step tests pass
-    ``delivery_sentinel=``/``run_scope=`` as direct kwargs — deleting the two
-    kwargs from ``e2b.py``'s ``apply_sandbox_policy(...)`` call (or the
-    metadata/run-id resolution above it) fails this test with ``0 != 1``
-    while the rest of the suite stays green (verified by mutation).
+    policy; this one adds the flag-only routing, the exact marker path, and
+    the no-flag control below. C1 (the QA pass that requested it) found the
+    chain otherwise tested only in disconnected segments: node_runner's
+    assertion runs a FAKE provider that never calls ``apply_isolation``, and
+    the policy-step tests pass ``single_pr_per_run=``/``run_scope=`` as
+    direct kwargs — deleting the ``single_pr_per_run=`` kwarg from
+    ``e2b.py``'s ``apply_sandbox_policy(...)`` call (or the policy read above
+    it) fails this test with ``0 != 1`` while the rest of the suite stays
+    green (verified by mutation).
     """
     sandbox = _RecordingSandbox()
-    provider = E2BRuntimeProvider(api_key="sentinel-key")
-    provider._sandboxes["sbx-sentinel"] = sandbox
+    provider = E2BRuntimeProvider(api_key="flag-key")
+    provider._sandboxes["sbx-flagged"] = sandbox
     run_id = uuid.uuid4()
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
         run_id=run_id,
-        workspace_metadata={DELIVERY_SENTINEL_SPEC_KEY: "PR_CREATED"},
     )
 
-    # Sentinel-only node shape: every ENFORCEMENT control stays default, so
-    # the ONLY step the policy can run is the guard install.
-    await provider.apply_isolation("sbx-sentinel", spec, IsolationPolicy())
+    # Flag-only node shape: every ENFORCEMENT control stays default, so the
+    # ONLY step the policy can run is the guard install.
+    await provider.apply_isolation("sbx-flagged", spec, IsolationPolicy(single_pr_per_run=True))
 
     assert len(sandbox.commands.calls) == 1
     script, user, timeout = sandbox.commands.calls[0]
@@ -399,10 +389,11 @@ async def test_apply_isolation_installs_the_run_scoped_gh_guard_from_spec_metada
     assert timeout == 60.0
 
 
-async def test_apply_isolation_without_sentinel_metadata_installs_no_guard() -> None:
-    """Control for the wiring test above: a spec with NO ``workspace_metadata``
-    sentinel and NO ``run_id`` (every other caller's shape) produces NO guard
-    step — so the assertion there is discriminating, not vacuous."""
+async def test_apply_isolation_without_the_flag_installs_no_guard() -> None:
+    """Control for the wiring test above: a default policy (no
+    ``single_pr_per_run``) and no run id (every other caller's shape)
+    produces NO guard step — so the assertion there is discriminating, not
+    vacuous."""
     sandbox = _RecordingSandbox()
     provider = E2BRuntimeProvider(api_key="control-key")
     provider._sandboxes["sbx-plain"] = sandbox
