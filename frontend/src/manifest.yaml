@@ -1187,6 +1187,21 @@ elements:
       - testid: cost-annotation-clamped
         type: element
         dynamic_testid: false
+      - testid: cost-team-empty
+        type: element
+        dynamic_testid: false
+      - testid: cost-team-table
+        type: element
+        dynamic_testid: false
+      - testid: cost-anomalies-error
+        type: element
+        dynamic_testid: false
+      - testid: cost-anomalies-empty
+        type: element
+        dynamic_testid: false
+      - testid: cost-anomalies-list
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
