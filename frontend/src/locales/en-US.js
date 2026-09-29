@@ -2197,6 +2197,7 @@ export default {
       "generate_new_api_key_description": "Generate a new API key for MCP client authentication",
       "no_api_keys_created_yet": "No API keys created yet.",
       "revoked": "Revoked",
+      "expired": "Expired",
       "never": "Never",
       "revoke": "Revoke",
       "confirm_revoke": "Confirm Revoke",

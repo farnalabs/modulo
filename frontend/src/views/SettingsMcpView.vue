@@ -111,10 +111,8 @@
                 <td class="py-2.5 font-medium">{{ key.name }}</td>
                 <td class="py-2.5 font-mono text-muted-foreground">{{ key.lookup_prefix }}</td>
                 <td class="py-2.5 capitalize">{{ key.role }}</td>
-                <td class="py-2.5">
-                  <Badge :severity="key.is_active ? 'success' : 'secondary'">
-                    {{ key.is_active ? $t('views.SettingsMcpView.active') : $t('views.SettingsMcpView.revoked') }}
-                  </Badge>
+                <td class="py-2.5" data-testid="settings-mcp-key-status">
+                  <Badge :severity="apiKeyStatusMeta(key).severity">{{ apiKeyStatusMeta(key).label }}</Badge>
                 </td>
                 <td class="py-2.5 text-muted-foreground">
                   {{ key.last_used_at ? formatDate(key.last_used_at) : $t('views.SettingsMcpView.never') }}
@@ -316,6 +314,9 @@ interface ApiKeyItem {
   role: string
   lookup_prefix: string
   is_active: boolean
+  // Serialized by _serialize_key (backend/src/modulo/auth/api_key.py) alongside
+  // is_active - always present on the wire, null when the key never expires.
+  expires_at: string | null
   last_used_at: string | null
   created_at: string
 }
@@ -589,6 +590,48 @@ function formatDate(iso: string): string {
     return formatDateShort(new Date(iso))
   } catch {
     return iso
+  }
+}
+
+type ApiKeyStatus = 'active' | 'expired' | 'revoked'
+
+/**
+ * FAR-1296: derive the key's status.
+ *
+ * `is_active` is DERIVED backend state, not a stored flag: the serializer
+ * computes `revoked_at is None and (expires_at is None or expires_at > now)`
+ * (backend/src/modulo/auth/api_key.py:359). So `is_active: false` says only
+ * that the key stopped working - never WHY - and labelling every inactive key
+ * "Revoked" called an expired key by an admin's action.
+ *
+ * The list payload carries `expires_at`, which separates the two causes:
+ *
+ * - `active`   - `is_active` is true.
+ * - `expired`  - inactive AND the expiry has elapsed: nobody revoked it, the
+ *                clock did.
+ * - `revoked`  - inactive with no elapsed expiry. An expiry that never came
+ *                due cannot explain the inactive state, so revocation can.
+ *
+ * The payload does not carry `revoked_at`, and the list endpoint filters
+ * revoked rows out entirely (`include_revoked=False` - api_key.py:380/384-385),
+ * so `revoked` is the sound complement of the other two rather than a directly
+ * observed field. An unparseable `expires_at` on an inactive key falls to
+ * `revoked`, matching the backend's own "not provably expired" reading.
+ */
+function apiKeyStatus(key: ApiKeyItem): ApiKeyStatus {
+  if (key.is_active) return 'active'
+  if (key.expires_at && Date.parse(key.expires_at) <= Date.now()) return 'expired'
+  return 'revoked'
+}
+
+function apiKeyStatusMeta(key: ApiKeyItem): { severity: 'success' | 'warn' | 'secondary'; label: string } {
+  switch (apiKeyStatus(key)) {
+    case 'active':
+      return { severity: 'success', label: t('views.SettingsMcpView.active') }
+    case 'expired':
+      return { severity: 'warn', label: t('views.SettingsMcpView.expired') }
+    default:
+      return { severity: 'secondary', label: t('views.SettingsMcpView.revoked') }
   }
 }
 
