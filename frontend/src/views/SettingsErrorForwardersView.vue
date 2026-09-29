@@ -4,9 +4,33 @@
 
     <FeatureGate feature-name="error_forwarders" required-tier="team" show-disabled>
 
-      <LoadingSpinner v-if="loading" />
+      <div v-if="loading" class="space-y-6">
+        <div
+          v-for="n in 3"
+          :key="`error-forwarders-skeleton-${n}`"
+          data-testid="error-forwarders-skeleton"
+          class="rounded-lg border bg-card p-4 shadow-sm animate-pulse"
+        >
+          <div class="flex items-center gap-3">
+            <div class="h-10 w-10 rounded-lg bg-muted" />
+            <div class="flex-1">
+              <div class="h-4 w-40 rounded bg-muted" />
+              <div class="mt-2 h-3 w-24 rounded bg-muted" />
+            </div>
+            <div class="h-6 w-11 rounded-full bg-muted" />
+          </div>
+        </div>
+      </div>
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadForwarders" />
+
+      <div v-else-if="forwarders.length === 0" class="space-y-6">
+        <EmptyState
+          data-testid="error-forwarders-empty"
+          :title="$t('views.SettingsErrorForwardersView.no_error_forwarders_available')"
+          :description="$t('views.SettingsErrorForwardersView.no_error_forwarders_available_description')"
+        />
+      </div>
 
       <div v-else class="space-y-6">
         <div v-for="fwd in forwarders" :key="fwd.forwarder_type" class="rounded-lg border bg-card shadow-sm">
@@ -19,6 +43,7 @@
                 <h3 class="font-semibold">{{ fwd.display_name }}</h3>
                 <div class="flex items-center gap-2 mt-0.5">
                   <span
+                    aria-hidden="true"
                     class="inline-block h-2 w-2 rounded-full"
                     :class="fwd.last_test_ok === true ? 'bg-green-500' : fwd.last_test_ok === false ? 'bg-red-500' : 'bg-gray-400'"
                     :title="fwd.last_test_ok === true ? $t('views.SettingsErrorForwardersView.last_test_passed') : fwd.last_test_ok === false ? $t('views.SettingsErrorForwardersView.last_test_failed') : $t('views.SettingsErrorForwardersView.not_tested')"
@@ -36,6 +61,7 @@
               >{{ $t('views.SettingsErrorForwardersView.not_configured') }}</span>
               <button
                 type="button"
+                data-testid="error-forwarders-toggle"
                 class="relative inline-flex h-6 w-11 items-center"
                 :aria-label="$t('views.SettingsErrorForwardersView.toggle_forwarder', { name: fwd.display_name })"
                 @click="toggleForwarder(fwd)"
@@ -103,19 +129,25 @@
               <div>
                 <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.site') }}</label>
                 <Select
-  v-model="configs.datadog.site"
-  :aria-label="$t('views.SettingsErrorForwardersView.site')"
-  :placeholder="$t('views.SettingsErrorForwardersView.select_site')"
-  id="settingserrorforwardersview-datadog-site"
-  class="input-base"
-  :options="[{ value: 'datadoghq.com', label: 'US (datadoghq.com)' }, { value: 'datadoghq.eu', label: 'EU (datadoghq.eu)' }, { value: 'us3.datadoghq.com', label: 'US3 (us3.datadoghq.com)' }, { value: 'us5.datadoghq.com', label: 'US5 (us5.datadoghq.com)' }, { value: 'ddog-gov.com', label: $t('views.SettingsErrorForwardersView.gov_ddog_gov_com') }]"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
+                  v-model="configs.datadog.site"
+                  :aria-label="$t('views.SettingsErrorForwardersView.site')"
+                  :placeholder="$t('views.SettingsErrorForwardersView.select_site')"
+                  id="settingserrorforwardersview-datadog-site"
+                  class="input-base"
+                  :options="[
+                    { value: 'datadoghq.com', label: $t('views.SettingsErrorForwardersView.us_datadoghq_com') },
+                    { value: 'datadoghq.eu', label: $t('views.SettingsErrorForwardersView.eu_datadoghq_eu') },
+                    { value: 'us3.datadoghq.com', label: $t('views.SettingsErrorForwardersView.us3_us3_datadoghq_com') },
+                    { value: 'us5.datadoghq.com', label: $t('views.SettingsErrorForwardersView.us5_us5_datadoghq_com') },
+                    { value: 'ddog-gov.com', label: $t('views.SettingsErrorForwardersView.gov_ddog_gov_com') }
+                  ]"
+                  option-label="label"
+                  option-value="value"
+                >
+                  <template #option="{ option }">
+                    <span :data-value="option.value">{{ option.label }}</span>
+                  </template>
+                </Select>
               </div>
             </template>
 
@@ -211,13 +243,14 @@
             <div class="flex items-center gap-3 pt-2">
               <button
                 type="button"
+                data-testid="error-forwarders-test"
                 :disabled="testing[fwd.forwarder_type]"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
                 @click="testConnection(fwd)"
               >
                 {{ testing[fwd.forwarder_type] ? $t('views.SettingsErrorForwardersView.testing') : $t('views.SettingsErrorForwardersView.test_connection') }}
               </button>
-              <Button type="button" :disabled="saving[fwd.forwarder_type]" @click="saveConfig(fwd)">
+              <Button type="button" data-testid="error-forwarders-save" :disabled="saving[fwd.forwarder_type]" @click="saveConfig(fwd)">
                 {{ saving[fwd.forwarder_type] ? $t('views.SettingsErrorForwardersView.saving') : $t('views.SettingsErrorForwardersView.save') }}
               </Button>
             </div>
@@ -259,7 +292,7 @@ import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'

@@ -86,11 +86,24 @@ describe('SettingsErrorForwardersView', () => {
     vi.useRealTimers()
   })
 
-  it('shows the loading spinner before the list resolves', async () => {
+  it('shows a skeleton loading state before the list resolves', async () => {
     // Hold the forwarders GET open so `loading` stays true.
     ;(api.GET as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(() => {}))
     const wrapper = mountView()
-    expect(wrapper.find('.animate-spin').exists()).toBe(true)
+    // STATE-3: a pulse skeleton, not an indeterminate spinner that can spin forever.
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="error-forwarders-skeleton"]').length).toBe(3)
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders an empty state when no forwarders are returned', async () => {
+    ;(api.GET as ReturnType<typeof vi.fn>).mockResolvedValueOnce(apiResult({ forwarders: [] }))
+    const wrapper = mountView()
+    await flushPromises()
+    // STATE-1: never a blank content area.
+    expect(wrapper.find('[data-testid="error-forwarders-empty"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('No error forwarders available')
     wrapper.unmount()
   })
 
