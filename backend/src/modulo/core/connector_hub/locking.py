@@ -149,7 +149,7 @@ class AdvisoryLockService:
                 ),
                 timeout=_LOCK_RELEASE_TIMEOUT,
             )
-            released = result.scalar_one()
+            released: bool = result.scalar_one()
             if not released:
                 logger.warning(
                     "Lock on resource %s was not held by this session — possible double-release", resource_id

@@ -273,7 +273,7 @@ def _journey_refs_containment(journey: Journey) -> ColumnElement[bool]:
     )
 
 
-def _journey_runs_postgres_query(journey: Journey, *, limit: int) -> Select[tuple[Run]]:
+def _journey_runs_postgres_query(journey: Journey, *, limit: int) -> Select[Run]:
     """Scalable Postgres predicate walk for ``list_journey_runs``.
 
     Translates the portable scan exactly: only refs-carrying runs, matched by

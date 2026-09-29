@@ -307,6 +307,60 @@ def test_every_manifest_feature_has_a_behaviour_tracker():
     )
 
 
+#: Status values the two product-map layers are allowed to carry. A manifest
+#: feature WITH an explicit ``status:`` must agree with its behaviour-tracker;
+#: every manifest feature today carries one (32 ``covered`` + 4 ``partial``).
+def test_graph_tracker_status_matches_manifest_registry():
+    """A behaviour-tracker's ``status:`` must agree with its manifest registry status.
+
+    Both product-map layers carry a ``status:`` for features that live in the
+    manifest ``features:`` registry. The manifest is the machine-readable
+    source of truth Assistant indexes from; the ``docs/product-map/`` tracker is
+    the human-readable layer keyed by the same ``feat-*`` id. When they
+    disagree, a reader of the graph gets the opposite coverage answer from the
+    machine layer — exactly the drift the 2026-09-26 walks left behind:
+    ``feat-guardrails`` / ``feat-license`` / ``feat-plugins`` /
+    ``feat-product-analytics`` were sharpened to ``status: partial`` in the
+    manifest (an unshipped sub-surface — cross-org guardrail inheritance,
+    universal license gating, registry-API lifecycle management, in-product
+    analytics export — stays tracked as an unchecked deferral) while each
+    tracker's frontmatter still read ``status: covered`` despite its own QA
+    note saying "Status stays ``partial``". Keep the two layers honest with
+    each other. Infra-only entries that have no manifest feature are
+    unconstrained — the manifest registry is the source of truth for trackers
+    that reference it.
+    """
+    with MANIFEST_PATH.open() as handle:
+        manifest_features = yaml.safe_load(handle)["features"]
+
+    mismatches: dict[str, dict[str, object]] = {}
+    for entry in _product_map_entry_paths():
+        entry_id = _frontmatter_id(entry)
+        spec = manifest_features.get(entry_id) if isinstance(manifest_features, dict) else None
+        if entry_id is None or not isinstance(spec, dict):
+            continue
+        manifest_status = spec.get("status")
+        tracker_status = (_entry_frontmatter(entry) or {}).get("status")
+        if manifest_status == tracker_status:
+            continue
+        mismatches[entry_id] = {
+            "manifest": manifest_status,
+            "tracker": tracker_status,
+            "entry": entry.relative_to(REPO_ROOT).as_posix(),
+        }
+
+    assert not mismatches, (
+        "behaviour-tracker frontmatter 'status' disagrees with the manifest "
+        "features registry for the same feat-* id — a reader of the graph gets "
+        "the opposite coverage answer from the machine layer Assistant indexes "
+        "(aligned for the 2026-09-29 walk; keep the two layers in step):\n"
+        + "\n".join(
+            f"  {feat} -> manifest={info['manifest']!r} tracker={info['tracker']!r} in {info['entry']}"
+            for feat, info in sorted(mismatches.items())
+        )
+    )
+
+
 def test_graph_entry_feature_ids_are_unique():
     """Product-map entries key on unique ``id`` frontmatter values."""
     seen: dict[str, Path] = {}
@@ -516,6 +570,68 @@ def test_no_unregistered_bdd_feature_files():
     )
 
 
+def _feature_scenarios_fully_deselected(feature: Path) -> bool:
+    """Return True when every scenario in a feature file is ``@awaiting-implementation``.
+
+    A fully-deselected file registers scenarios that pytest's ``-m 'not
+    awaiting-implementation'`` addopt skips, so the file contributes nothing to a
+    run no matter how many step modules call ``scenarios(...)`` for it. Files with
+    no scenarios (or at least one executing scenario) are not "fully deselected".
+    """
+    tags: set[str] = set()
+    total = 0
+    executing = 0
+    for raw in feature.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("@"):
+            tags = {t for t in line.split() if t.startswith("@")}
+            continue
+        if line.startswith(("Scenario Outline", "Scenario:")):
+            total += 1
+            if "@awaiting-implementation" not in tags:
+                executing += 1
+            tags = set()
+    return total > 0 and executing == 0
+
+
+def test_feature_scenarios_fully_deselected_resets_tags_per_scenario(tmp_path: Path):
+    """A per-scenario tag must not bleed into the following scenario.
+
+    Here the first (pinned) scenario is deselected but the second, untagged
+    scenario executes, so the file is not "fully deselected". A parser that
+    accumulated tags across scenarios would misclassify it as fully deselected
+    and wrongly let a ``bdd:`` citation to it pass the guard.
+    """
+    feature = tmp_path / "mixed.feature"
+    feature.write_text(
+        "@awaiting-implementation\n"
+        "Scenario: pinned draft\n"
+        "  Given a step\n"
+        "\n"
+        "Scenario: executing coverage\n"
+        "  Given a step\n",
+        encoding="utf-8",
+    )
+    assert _feature_scenarios_fully_deselected(feature) is False
+
+
+def test_feature_scenarios_fully_deselected_when_every_scenario_pinned(tmp_path: Path):
+    feature = tmp_path / "all_pinned.feature"
+    feature.write_text(
+        "@awaiting-implementation\n"
+        "Scenario: first draft\n"
+        "  Given a step\n"
+        "\n"
+        "@awaiting-implementation\n"
+        "Scenario: second draft\n"
+        "  Given a step\n",
+        encoding="utf-8",
+    )
+    assert _feature_scenarios_fully_deselected(feature) is True
+
+
 #: Heading that opens a behaviour-tracker's currently-acknowledged gap list.
 _KNOWN_GAPS_HEADING = "## Known Gaps"
 _KNOWN_GAPS_CLAIM_START = re.compile(r"^- ", re.MULTILINE)
@@ -603,6 +719,42 @@ def test_no_stale_dead_bdd_claims():
         "stale 'dead BDD' claims: update the entry to cite them as executing "
         "coverage and drop the gap:\n"
         + "\n".join(f"  {entry} -> {', '.join(files)}" for entry, files in sorted(stale.items()))
+    )
+
+
+def test_no_bdd_citations_for_fully_deselected_features():
+    """No ``bdd:`` citation points at a feature file whose every scenario is deselected.
+
+    ``test_bdd_citations_are_registered_coverage`` proves a cited ``.feature``
+    file is *loaded* by a step module, but a file whose scenarios are all
+    ``@awaiting-implementation`` is deselected at collection time (pyproject
+    addopt ``-m 'not awaiting-implementation'``) and therefore never executes --
+    the product map claims BDD coverage for behaviour CI does not run. This was
+    exactly the stale ``ui/eval_dashboard.feature`` citation: registered via
+    ``steps/test_ui.py`` but with all four scenarios pinned since 2026-08, so
+    ``feat-evals`` advertised executing BDD coverage that never executed until the
+    drafts were archived (2026-09-28 Improve Architecture walk). A ``bdd:``
+    citation must name at least one executing scenario; fully-deselected drafts
+    belong nowhere in the graph and must be archived/re-anchored instead.
+    """
+    deselected: dict[str, list[str]] = {}
+    for entry in _product_map_entry_paths():
+        frontmatter = _entry_frontmatter(entry)
+        for ref in frontmatter.get("bdd") or []:
+            if not isinstance(ref, str) or not ref.endswith(".feature"):
+                continue
+            resolved = (REPO_ROOT / ref).resolve()
+            if not resolved.is_relative_to(_BDD_ROOT.resolve()) or not resolved.is_file():
+                continue
+            if _feature_scenarios_fully_deselected(resolved):
+                deselected.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(ref)
+    assert not deselected, (
+        "bdd: citations that name a fully @awaiting-implementation-deselected "
+        ".feature file — every scenario is skipped by '-m not awaiting-implementation', "
+        "so the product map claims BDD coverage that never executes. Archive or "
+        "re-anchor the draft (and drop the bdd: citation, or un-deselect at least "
+        "one scenario) so the claim describes tests CI actually runs:\n"
+        + "\n".join(f"  {entry} -> {refs}" for entry, refs in sorted(deselected.items()))
     )
 
 

@@ -66,16 +66,25 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
       advertised provider (linking to `/api/v1/auth/oidc/{provider}/login`) plus a SAML
       button when SAML is enabled; when the feature is unavailable (402) or no provider
       is advertised, the page stays on password login (fails closed)
+- [x] Deleting a provider warns that already-signed-in users are NOT signed out — their
+      sessions remain valid until they expire and only new sign-ins through the provider
+      are blocked (`settings-sso-delete-session-warning` in the delete-confirmation dialog)
 
 ## Known Gaps
 
 - **Sidebar entry tier-gated but not SSO-skill-gated** — the nav entry hides for
   community (team tier required) but does not re-check the `sso` license key; the page
   renders a locked prompt via `FeatureGate show-disabled`.
-- **Delete-provider confirmation does not warn about active SSO sessions** — the dialog
-  states only "This action cannot be undone".
 
 ## QA History
+- 2026-09-28: **Improve Architecture product-map walk** — closed the
+  "Delete-provider confirmation does not warn about active SSO sessions" gap:
+  the delete-confirmation dialog now explains that deleting a provider does not
+  revoke the sessions of already-signed-in users (they remain valid until they
+  expire) and only blocks new sign-ins through the provider. The warning ships a
+  static `settings-sso-delete-session-warning` testid, registered in the
+  `/settings/sso` manifest `elements:` inventory (reverse testid-coverage guard),
+  and is asserted by the delete-confirmation vitest cases.
 - 2026-09-21: **product-map review pass** — closed the OIDC
   multi-org real-DB (RLS) integration gap (manifest `feat-sso` deferral). New
   `backend/tests/integration/auth/test_oidc_rls_resolution.py` mirrors the SAML

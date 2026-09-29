@@ -11,6 +11,8 @@ code:
   - backend/src/modulo/core/assistant
 unit-tests:
   - backend/tests/unit/api/test_me_assistant_skills.py
+  - backend/tests/unit/api/test_assistant_routes.py
+  - backend/tests/unit/api/test_admin_assistant_routes.py
 bdd:
   - backend/tests/bdd/features/assistant
 depends-on:
@@ -73,10 +75,29 @@ listed org roles always granted).
 - **No PRD section reference for the plugin/registry-adjacent assistant tool surface** — the
   MCP API-key/JWT binding is tracked under `feat-mcp` (ADR 014), not here.
 - **Test breadth** — the user-session streaming/SSE surface is BDD-covered at the
-  feature-file level; deeper unit coverage for the permission round-trips lives in
-  `backend/tests/unit/api/test_me_assistant_skills.py` only.
+  feature-file level; the API-level unit coverage is split across
+  `test_assistant_routes.py` (session/message CRUD, the SSE
+  stream/permission-response/reset-permissions routes, and the permission
+  round-trip helpers — `_default_tool_permission`, `_resolve_tool_permission`,
+  `_check_nogo`, `_tool_allowlist_disabled`, `_build_permission_request_payload`
+  / `_merge_ui_command_results`, `_classify_ui_tool_permissions`,
+  `clear_session_approvals_for_account`) and `test_admin_assistant_routes.py`
+  (the admin config/skills surface); `test_me_assistant_skills.py` covers the
+  user-facing skills list/create path.
 
 ## QA History
+- 2026-09-28: **Improve Architecture product-map walk** — reconciled the stale
+  "Test breadth" known gap and the under-cited unit coverage. The tracker cited
+  only `test_me_assistant_skills.py` while claiming deeper permission-round-trip
+  coverage lived there, but the permission helpers
+  (`_default_tool_permission`, `_resolve_tool_permission`, `_check_nogo`,
+  `_tool_allowlist_disabled`, `_build_permission_request_payload` /
+  `_merge_ui_command_results`, `_classify_ui_tool_permissions`,
+  `clear_session_approvals_for_account`) and the SSE
+  stream/permission-response/reset routes are unit-covered in
+  `test_assistant_routes.py`, with the admin config surface in
+  `test_admin_assistant_routes.py`. Added both files to `unit-tests:` and
+  re-worded the gap to name the actual distribution.
 - 2026-09-26: **Improve Architecture product-map walk** — closed `feat-assistant`'s
   stale "auto-execute thresholds and guidance tuning are partially wired" gap. Both
   surfaces ship end to end: `auto_execute_threshold` (AssistantConfig default 0.8)

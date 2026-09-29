@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -123,7 +124,7 @@ async def fetch(
             select(Evidence)
             .where(*subject_filter)
             .order_by(Evidence.organisation_id, Evidence.subject_type, Evidence.subject_id, Evidence.key, *order_by)
-            .distinct(*partition_by)
+            .ext(postgresql.distinct_on(*partition_by))
         )
     else:
         # Portable fallback: rank rows per key by recency, keep rn = 1.

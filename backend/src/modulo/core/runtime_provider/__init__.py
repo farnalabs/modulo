@@ -42,6 +42,7 @@ __all__ = [
     "UnknownRefError",
     "WorkspaceFileInfo",
     "WorkspaceGoneError",
+    "WorkspaceMetrics",
     "WorkspaceNetworkValidationError",
     "WorkspaceSpec",
     "build_hub",
@@ -325,6 +326,35 @@ class WorkspaceFileInfo:
     path: str
     size: int
     is_dir: bool
+
+
+@dataclass(frozen=True)
+class WorkspaceMetrics:
+    """Provider-neutral resource-usage sample for a workspace (FAR-1050 R6).
+
+    Carrier for :meth:`RuntimeProvider.get_metrics` — the observable
+    metrics the platform-side resource-cap killer compares against a
+    node's ``resource_limits``:
+
+    - ``cpu_used_pct``: CPU usage as a 0-100 PERCENTAGE (never a core
+      count - a core count is not a threshold);
+    - ``mem_used`` / ``mem_total``: memory in BYTES;
+    - ``disk_used`` / ``disk_total``: disk in BYTES;
+    - ``cpu_count``: core count, INFORMATIONAL ONLY — never enforced as a
+      percentage (the historical core-count-vs-percentage trap).
+
+    Every field is ``None`` when the substrate does not report it. A cap
+    whose metric is ``None`` is simply unobservable on that sample: the
+    resource-cap killer skips that cap (fail open for the measurement,
+    never a crash and never a kill on a missing number).
+    """
+
+    cpu_used_pct: float | None = None
+    cpu_count: int | None = None
+    mem_used: float | None = None
+    mem_total: float | None = None
+    disk_used: float | None = None
+    disk_total: float | None = None
 
 
 @dataclass
@@ -647,6 +677,40 @@ class RuntimeProvider(ABC):
         except ValueError as exc:
             raise RuntimeProviderError(f"get_info could not parse stat size for {path}: {size_text!r}") from exc
         return WorkspaceFileInfo(path=path, size=size, is_dir=kind.strip() == "directory")
+
+    # ------------------------------------------------------------------
+    # Resource-metrics primitive (FAR-1050 R6 — ADR 040 metrics gap)
+    # ------------------------------------------------------------------
+
+    async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:
+        """Return resource-usage samples for *provider_ref* (FAR-1050 R6).
+
+        The poll the platform-side resource-cap killer drives: each sample
+        carries the observable caps (``cpu_used_pct`` percentage,
+        ``mem_used`` / ``disk_used`` bytes) that ``resource_limits``
+        compares against, newest-last so callers can take the latest
+        instantaneous reading. Empty list means "no samples yet" — a
+        measurement gap, never an error.
+
+        Optional base-class method (ADR 040 "Error honesty": the same
+        carve-out from the contract freeze as :meth:`exec_command_stream`,
+        :meth:`destroy_workspace_by_ref`, :meth:`read_log_tail` and
+        :meth:`apply_isolation`): providers that do not override it raise
+        the typed :class:`ProviderCapabilityUnsupportedError` — never a raw
+        ``NotImplementedError``.
+
+        Callers MUST treat that refusal as "metrics unavailable" and FAIL
+        OPEN: resource-cap enforcement is best-effort monitoring, so a
+        provider that cannot report metrics must never crash or kill a
+        run — it degrades to a single, explicit warning naming the gap
+        (the ``sandbox_agent.resource_caps_not_enforced_via_provider``
+        site in the watchdog). The ADR 040 freeze means "no contract
+        redesign", not "never add a primitive" — this primitive is the
+        additive close of the metrics gap the R4 dispatch recorded.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement get_metrics"
+        )
 
     @abstractmethod
     async def get_workspace_status(self, provider_ref: str) -> str:

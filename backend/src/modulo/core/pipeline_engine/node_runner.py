@@ -70,6 +70,10 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
 from modulo.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES
+from modulo.core.runtime_provider import (
+    ProviderCapabilityUnsupportedError,
+    WorkspaceMetrics,
+)
 from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
 
 if TYPE_CHECKING:
@@ -1104,6 +1108,7 @@ async def _apply_isolation_via_provider(
     egress_allowlist: list[dict[str, Any]] | None,
     allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
+    delivery_sentinel: str | None = None,
 ) -> None:
     """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
 
@@ -1123,7 +1128,17 @@ async def _apply_isolation_via_provider(
       - no key / provider build failure / missing sandbox id fail CLOSED as
         the same tier refusal (isolation is enforcement-critical: never
         silently skipped).
+
+    FAR-1264: ``delivery_sentinel`` (optional, default ``None`` — existing
+    callers unaffected) rides the per-invocation ``WorkspaceSpec`` under
+    ``workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`` to the E2B provider's
+    ``apply_isolation``, which threads it into ``apply_sandbox_policy`` for
+    the one-PR-per-run ``gh`` guard. ``IsolationPolicy`` does not model the
+    sentinel (it is the three enforcement controls, ADR 040), and the spec
+    built here is call-scoped attribution — never persisted to the workspace
+    in this flow — so the metadata dict is the carrier.
     """
+    from modulo.core.pipeline_engine.sandbox_policy import DELIVERY_SENTINEL_SPEC_KEY
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import (
         IsolationPolicy,
@@ -1149,6 +1164,7 @@ async def _apply_isolation_via_provider(
         organisation_id=_parse_uuid_opt(org_id) or uuid.UUID(int=0),
         run_id=_parse_uuid_opt(run_id),
         egress_policy=egress_policy,
+        workspace_metadata=({DELIVERY_SENTINEL_SPEC_KEY: delivery_sentinel} if delivery_sentinel else {}),
     )
     policy = IsolationPolicy(
         read_only=read_only,
@@ -1464,17 +1480,21 @@ class _ProviderMediatedHandle:
     - ``sandbox_id`` — the provider ref returned by ``create_workspace``;
     - ``kill(...)`` — ``destroy_workspace`` (T5 budget + stall kills);
     - ``commands.run(script, timeout=...)`` — ``exec_command`` (T10 workspace
-      inputs + drift probe).
+      inputs + drift probe);
+    - ``get_metrics()`` — the ABC's ``get_metrics`` primitive (FAR-1050 R6,
+      the ADR 040 metrics-gap close): the resource-cap killer polls it, so
+      ``resource_limits`` are enforced on this path exactly as on the
+      legacy SDK handle when the provider implements the primitive. A
+      provider that does not implement it refuses with the typed
+      ``ProviderCapabilityUnsupportedError``, which the watchdog turns into
+      its explicit, once-per-dispatch
+      ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning —
+      fail open, never a crash.
 
     Deliberately ABSENT: ``files`` (every file site is gated onto the ABC
-    primitives by FAR-1050 R2b) and ``get_metrics`` (the ABC models no
-    metrics primitive — the resource-cap killer detects the missing primitive
-    and fails OPEN through its EXPLICIT, once-per-dispatch
-    ``sandbox_agent.resource_caps_not_enforced_via_provider`` warning, so an
-    operator can see the caps are not enforced on this path rather than
-    reading it as a transient metrics failure; ADR 040 metrics gap). Touching
-    ``files`` therefore means only one thing: a call site that still expects
-    the deleted legacy surface, which must be loud, never a silent downgrade.
+    primitives by FAR-1050 R2b). Touching ``files`` therefore means only
+    one thing: a call site that still expects the deleted legacy surface,
+    which must be loud, never a silent downgrade.
     """
 
     def __init__(self, provider: "RuntimeProvider", provider_ref: str) -> None:
@@ -1491,6 +1511,16 @@ class _ProviderMediatedHandle:
     async def kill(self, **_kwargs: Any) -> None:
         """T5 kill site: ``destroy_workspace`` on the provider that created it."""
         await self._provider.destroy_workspace(self.sandbox_id)
+
+    async def get_metrics(self) -> list[WorkspaceMetrics]:
+        """Resource-cap poll site: the ABC's ``get_metrics`` primitive (FAR-1050 R6).
+
+        Addressed by the provider ref this handle wraps — the same
+        ref-first convention as ``kill``/``commands``. Raises the typed
+        ``ProviderCapabilityUnsupportedError`` verbatim when the provider
+        does not implement the primitive (the watchdog fails open on it).
+        """
+        return await self._provider.get_metrics(self.sandbox_id)
 
 
 def _bounded_tail(text: str, limit: int) -> str:
@@ -6252,10 +6282,14 @@ async def _sandbox_acquire_dispatch_marker(
     ``via_provider`` (FAR-1050) is threaded to EVERY node-runner-owned marker
     write — the primary capacity-gate acquire below (R4 follow-up: the gate
     builds its own marker inside ``runner_capacity.build_dispatch_marker``,
-    which now accepts the routing state), the legacy best-effort fail-open write,
-    and the post-create ``_sandbox_store_dispatch_marker_sandbox`` rewrite —
-    so the routing state is on the marker from the first durable write onward,
-    not only after the create succeeds.
+    which now accepts the routing state), the best-effort fail-open write
+    (pre-D8 marker shape), and the post-create
+    ``_sandbox_store_dispatch_marker_sandbox`` rewrite — so the routing state
+    is on the marker from the first durable write onward, not only after the
+    create succeeds. The ``MODULO_E2B_VIA_PROVIDER`` flag this field once
+    reported was RETIRED by FAR-1050 R6 (PR #1033): the provider path is
+    unconditional, so ``via_provider`` now survives as a historical
+    attribution field only.
 
     Returns the attempt key on success, ``None`` when fenced (claim superseded
     or run not running — the caller MUST NOT create a sandbox). Raises
@@ -7008,6 +7042,28 @@ class _SandboxWatchdog:
                 changed = True
         return changed
 
+    def _log_resource_caps_gap_once(self, reason: str) -> None:
+        """Explicit, once-per-dispatch warning that resource caps are NOT enforced.
+
+        Shared by both gap shapes — a handle with no ``get_metrics``
+        surface at all, and a provider whose ABC default refused the
+        primitive — so an operator sees ONE clear warning naming the gap
+        per node dispatch, never the generic "metrics unavailable"
+        traceback (which reads as a transient SDK hiccup) and never once
+        per poll tick.
+        """
+        if self._resource_gap_logged:
+            return
+        self._resource_gap_logged = True
+        _log.warning(
+            "sandbox_agent.resource_caps_not_enforced_via_provider",
+            extra={
+                "node_id": self._node_id,
+                "run_id": self._run_id,
+                "reason": reason,
+            },
+        )
+
     async def enforce_resource_limits(self) -> bool:
         """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
 
@@ -7028,39 +7084,35 @@ class _SandboxWatchdog:
         as a percentage threshold would kill a 2-core self._sandbox at >2%
         CPU usage.
 
-        FAR-1050 R4 follow-up (ADR 040 metrics gap): on the provider path
-        ``self._sandbox`` is the ABC-mediated ``_ProviderMediatedHandle``,
-        which exposes NO ``get_metrics`` — the frozen ``RuntimeProvider``
-        ABC models no metrics primitive, so there is nothing to poll. The
-        caps therefore CANNOT be enforced there. That fail-open is made
-        explicit and observable below: a distinct, one-per-dispatch warning
-        naming the gap, never a silent pass and never the generic
-        "metrics unavailable" traceback an operator would read as a
-        transient SDK hiccup.
+        FAR-1050 R6 (ADR 040 metrics gap, now CLOSED): on the provider
+        path ``self._sandbox`` is the ABC-mediated ``_ProviderMediatedHandle``
+        and polls the ABC's ``get_metrics`` primitive, so ``resource_limits``
+        ARE enforced there whenever the provider implements it (E2B does).
+
+        Three fail-open shapes remain, all explicit and none fatal to the
+        run — resource-cap enforcement is best-effort monitoring:
+          1. a handle with no ``get_metrics`` surface at all, or
+          2. a provider that does not implement the primitive (its ABC
+             default refuses with ``ProviderCapabilityUnsupportedError``)
+             -> the ONE-PER-DISPATCH
+             ``sandbox_agent.resource_caps_not_enforced_via_provider``
+             warning naming the gap, then fail open;
+          3. a metrics poll/compare failure (SDK unreachable, bad sample)
+             -> ``sandbox_agent.resource_metrics_unavailable`` /
+             ``..._compare_failed``, then fail open. Never kill on a
+             measurement failure.
         """
         if not self._resource_limits or self._sandbox_mode != "script" or self._sandbox is None:
             return False
         get_metrics = getattr(self._sandbox, "get_metrics", None)
         if not callable(get_metrics):
-            # Explicit, observable fail-open for the missing ABC primitive —
-            # resource caps are NOT enforced on this path (ADR 040 metrics
-            # gap; the provider contract would need a new metrics primitive,
-            # which the contract freeze defers to an ADR amendment).
-            if not self._resource_gap_logged:
-                self._resource_gap_logged = True
-                _log.warning(
-                    "sandbox_agent.resource_caps_not_enforced_via_provider",
-                    extra={
-                        "node_id": self._node_id,
-                        "run_id": self._run_id,
-                        "reason": (
-                            "the ABC-mediated sandbox handle exposes no get_metrics primitive "
-                            "(the RuntimeProvider contract models none - ADR 040), so the "
-                            "configured resource_limits are NOT enforced while "
-                            "the ABC-mediated dispatch holds no metrics primitive; fail open by design"
-                        ),
-                    },
-                )
+            # Shape 1: no primitive on the handle at all — explicit,
+            # observable fail-open (ADR 040 metrics gap).
+            self._log_resource_caps_gap_once(
+                "the sandbox handle exposes no get_metrics primitive, so the configured "
+                "resource_limits are NOT enforced for this workspace; fail open by design "
+                "(ADR 040 metrics gap)"
+            )
             return False
         try:
             # get_metrics is a fresh coroutine per call, so wait_for is
@@ -7072,8 +7124,19 @@ class _SandboxWatchdog:
             )
         except asyncio.CancelledError:
             raise
+        except ProviderCapabilityUnsupportedError as exc:
+            # Shape 2: the provider genuinely cannot report metrics — the
+            # ABC default's typed refusal. Same EXPLICIT, once-per-dispatch
+            # warning as a missing primitive (never the generic transient
+            # "metrics unavailable" traceback an operator would read as an
+            # SDK hiccup), then fail open: never crash the run.
+            self._log_resource_caps_gap_once(
+                f"{exc} - the configured resource_limits are NOT enforced for this "
+                "workspace; fail open by design (ADR 040 metrics gap)"
+            )
+            return False
         except Exception:
-            # Fail-open: metrics unavailable (SDK too old / self._sandbox
+            # Shape 3 - Fail-open: metrics unavailable (SDK too old / self._sandbox
             # unreachable) — never kill on a measurement failure.
             _log.warning(
                 "sandbox_agent.resource_metrics_unavailable",
@@ -7081,8 +7144,9 @@ class _SandboxWatchdog:
                 exc_info=True,
             )
             return False
-        # get_metrics returns a LIST of SandboxMetrics samples —
-        # compare against the latest (most recent instantaneous sample).
+        # get_metrics returns a LIST of samples (SandboxMetrics on the legacy
+        # handle, WorkspaceMetrics through the ABC) — compare against the
+        # latest (most recent instantaneous sample).
         metrics = metrics_raw[-1] if isinstance(metrics_raw, (list, tuple)) and metrics_raw else metrics_raw
         if metrics is None:
             return False
@@ -7436,10 +7500,13 @@ def _build_sandbox_node_envelope(
     FAR-1050 (ADR 040 "Flag and revert observability"): passing a non-empty
     ``provider`` stamps BOTH the resolved tier and the provider-routing
     state (``via_provider``) onto the envelope, which the P1b splitter folds
-    into ``node_telemetry_json`` verbatim — every run is then attributable to
-    legacy-vs-provider execution. Both keys are emitted together and on BOTH
-    routing states; callers that pass no tier (the Bundled Runner route) get
-    neither, so their envelope key set is unchanged.
+    into ``node_telemetry_json`` verbatim — every run is then attributable
+    to provider-mediated execution. Both keys are emitted together. The
+    ``MODULO_E2B_VIA_PROVIDER`` flag ``via_provider`` once reported was
+    RETIRED by FAR-1050 R6 (PR #1033) — the provider path is unconditional —
+    so the key is a historical attribution field; callers that pass no tier
+    (the Bundled Runner route) get neither, so their envelope key set is
+    unchanged.
     """
     inner: dict[str, Any] = {
         "status": output.status,
@@ -7579,16 +7646,50 @@ def _configure_stall_detector(
     return _stall
 
 
-def _should_apply_sandbox_policy(
+def _has_enforcement_sandbox_controls(
     *,
     read_only: bool,
     git_credentials: str | None,
     egress_policy: str | None,
     egress_allowlist: list[dict[str, Any]] | None,
 ) -> bool:
-    """True when the FAR-212 sandbox policy step must run before the command."""
+    """True when an ENFORCEMENT-CRITICAL sandbox control is configured.
+
+    The pre-FAR-1264 body of :func:`_should_apply_sandbox_policy`: the
+    git-credential scope, the read-only seal, and the selected-mode egress
+    allowlist. Failures of THESE controls must propagate (fail-closed — see
+    ``apply_sandbox_policy``), unlike the FAR-1264 ``gh``-guard install,
+    which is best-effort.
+    """
     return (
         read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and bool(egress_allowlist))
+    )
+
+
+def _should_apply_sandbox_policy(
+    *,
+    read_only: bool,
+    git_credentials: str | None,
+    egress_policy: str | None,
+    egress_allowlist: list[dict[str, Any]] | None,
+    delivery_sentinel: str | None = None,
+) -> bool:
+    """True when the FAR-212 sandbox policy step must run before the command.
+
+    FAR-1264: a node with a non-empty ``delivery_sentinel`` runs the step too
+    — that is what scopes the run-scoped one-PR-per-run ``gh`` guard to
+    sentinel-guarded nodes (e.g. Prompt-to-PR) even when ``read_only``,
+    ``git_credentials`` and the egress policy are all default. For such a
+    sentinel-only node the policy step installs ONLY the ``gh`` guard (every
+    enforcement step is skipped by ``apply_sandbox_policy``'s own branches),
+    and the call site treats its failure as best-effort — degrade to the
+    prompt-level guard, never wedge the dispatch.
+    """
+    return bool(delivery_sentinel) or _has_enforcement_sandbox_controls(
+        read_only=read_only,
+        git_credentials=git_credentials,
+        egress_policy=egress_policy,
+        egress_allowlist=egress_allowlist,
     )
 
 
@@ -8855,6 +8956,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             git_credentials=git_credentials,
             egress_policy=_resolved_egress_for_policy,
             egress_allowlist=_resolved_allowlist_for_policy,
+            # FAR-1264: a sentinel-guarded node runs the policy step for the
+            # one-PR-per-run gh guard even with every enforcement control
+            # default (Prompt-to-PR's shape).
+            delivery_sentinel=delivery_sentinel,
         ):
             # FAR-798: thread the node's validated ``allowed_hosts`` (host ->
             # per-host env-var name) into the sandbox policy so the multi-host
@@ -8863,23 +8968,57 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # ``sandbox.git_credentials.multi_host`` certifies a guarantee the
             # runtime never enforced (capability/enforcement mismatch). Only
             # relevant for scoped credentials; other scopes ignore it.
-            # Allowlist pre-resolution runs once, BEFORE the flag branch, so
-            # both paths enforce the identical resolved values (unchanged by
-            # FAR-1050 R3 — only the invocation seam is gated).
+            # Allowlist pre-resolution runs once, BEFORE the isolation call,
+            # so resolution and enforcement use the identical resolved values
+            # (unchanged by FAR-1050 R3 — only the invocation seam moved, onto
+            # ``apply_isolation``; R6 then retired the flag and deleted the
+            # legacy branch, leaving this single unconditional path).
             _resolved_allowlist = await _resolve_egress_allowlist(_resolved_allowlist_for_policy)
             _policy_allowed_hosts = node_def.get("allowed_hosts") if git_credentials == "scoped" else None
             from modulo.settings import get_settings
 
-            await _apply_isolation_via_provider(
-                _sandbox_id,
-                org_id=org_id,
-                run_id=run_id,
+            # FAR-1264: when this invocation exists ONLY for the gh guard
+            # (no enforcement control set), its failure must NOT fail the run
+            # — degrade to the prompt-level one-PR-per-run guard, exactly as
+            # before this ticket (the guard install is best-effort by
+            # contract). When an enforcement control IS set, failures keep
+            # propagating unchanged (fail-closed — a node that asked for the
+            # read-only seal / scoped credentials / egress allowlist must
+            # never run without it).
+            _policy_enforces_controls = _has_enforcement_sandbox_controls(
                 read_only=read_only,
                 git_credentials=git_credentials,
                 egress_policy=_resolved_egress_for_policy,
-                egress_allowlist=_resolved_allowlist,
-                allowed_hosts=_policy_allowed_hosts,
+                egress_allowlist=_resolved_allowlist_for_policy,
             )
+            try:
+                await _apply_isolation_via_provider(
+                    _sandbox_id,
+                    org_id=org_id,
+                    run_id=run_id,
+                    read_only=read_only,
+                    git_credentials=git_credentials,
+                    egress_policy=_resolved_egress_for_policy,
+                    egress_allowlist=_resolved_allowlist,
+                    allowed_hosts=_policy_allowed_hosts,
+                    # FAR-1264: rides the per-invocation WorkspaceSpec to the
+                    # E2B policy call site (IsolationPolicy does not model it).
+                    delivery_sentinel=delivery_sentinel,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if _policy_enforces_controls:
+                    raise
+                _log.warning(
+                    "sandbox_policy.delivery_guard_install_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "detail": "gh one-PR-per-run guard not installed; degrading to the prompt-level guard",
+                    },
+                    exc_info=True,
+                )
 
         try:
             # FAR-306: per-channel stall detector. The heartbeat channel

@@ -1,3 +1,4 @@
+import type { components } from '../../../src/lib/api/schema'
 import type { TestEnv } from './env'
 import { getBaseUrl } from './env'
 
@@ -352,36 +353,31 @@ export async function deleteTrigger(apiBase: string, token: string, triggerId: s
   }
 }
 
-export interface PendingGate {
-  gate_id: string
-  decision: string | null
-  label: string | null
-}
+/** A pending (undecided) HITL review, as served by GET /runs/{id}/hitl/pending. */
+export type PendingReview = components['schemas']['ReviewResponse']
 
-interface PendingGatesResponse {
-  gates: PendingGate[]
-}
+type PendingReviewsResponse = components['schemas']['PendingReviewsResponse']
 
-/** List a run's pending (undecided) HITL gates. */
-export async function getRunPendingGates(apiBase: string, token: string, runId: string): Promise<PendingGate[]> {
-  const res = await apiFetch<PendingGatesResponse>(apiBase, token, 'GET', `/api/v1/runs/${runId}/hitl/pending`)
+/** List a run's pending (undecided) HITL reviews. */
+export async function getRunPendingReviews(apiBase: string, token: string, runId: string): Promise<PendingReview[]> {
+  const res = await apiFetch<PendingReviewsResponse>(apiBase, token, 'GET', `/api/v1/runs/${runId}/hitl/pending`)
   if (res.status !== 200) {
-    throw new Error(`[realstack] pending-gate list failed: ${res.status} ${res.text.slice(0, 300)}`)
+    throw new Error(`[realstack] pending-review list failed: ${res.status} ${res.text.slice(0, 300)}`)
   }
-  return res.body?.gates ?? []
+  return res.body?.reviews ?? []
 }
 
-/** Claim a HITL gate through the real API, returning the claim token. */
-export async function claimGate(apiBase: string, token: string, runId: string, gateId: string): Promise<string> {
+/** Claim a HITL review through the real API, returning the claim token. */
+export async function claimReview(apiBase: string, token: string, runId: string, reviewId: string): Promise<string> {
   const res = await apiFetch<{ claim_token: string }>(
     apiBase,
     token,
     'POST',
-    `/api/v1/runs/${runId}/hitl/${gateId}/claim`,
+    `/api/v1/runs/${runId}/hitl/${reviewId}/claim`,
     {},
   )
   if (res.status !== 200 || !res.body?.claim_token) {
-    throw new Error(`[realstack] gate claim failed: ${res.status} ${res.text.slice(0, 300)}`)
+    throw new Error(`[realstack] review claim failed: ${res.status} ${res.text.slice(0, 300)}`)
   }
   return res.body.claim_token
 }
@@ -511,9 +507,17 @@ interface AdminTeamListResponse {
   items: AdminTeam[]
 }
 
-/** List the org's teams (admin). */
+/**
+ * List the org's teams (admin).
+ *
+ * The endpoint pages oldest-first by `created_at` with a default page size of
+ * 20, so on a shared instance with more than 20 accumulated teams a team the
+ * journey just created is NOT on page 1 and the journey's "created team must
+ * be returned" assertion fails on a healthy backend. Request the endpoint's
+ * maximum page size so the freshly-created (newest) team is always returned.
+ */
 export async function listTeams(apiBase: string, token: string): Promise<AdminTeamListResponse> {
-  const res = await apiFetch<AdminTeamListResponse>(apiBase, token, 'GET', '/api/v1/admin/teams')
+  const res = await apiFetch<AdminTeamListResponse>(apiBase, token, 'GET', '/api/v1/admin/teams?page_size=1000')
   if (res.status !== 200) {
     throw new Error(`[realstack] team list failed: ${res.status} ${res.text.slice(0, 300)}`)
   }

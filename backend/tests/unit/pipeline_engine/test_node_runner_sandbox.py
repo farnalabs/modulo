@@ -2258,6 +2258,30 @@ async def test_watch_log_growth_keeps_silent_run_alive():
     handle.kill.assert_not_awaited()
 
 
+class _ProbeDrivenClock:
+    """A fake ``time`` module for node_runner: real everywhere except ``monotonic``.
+
+    ``monotonic`` returns a value that advances only via :meth:`advance`, which
+    the test calls from the sandbox file-stat probe. The idle watchdog's
+    wall-clock comparison therefore measures probe activity, not real elapsed
+    time, so an OS/CI scheduler stall can never starve the event loop past the
+    stall window (the FAR-320 log-growth flake, third recurrence).
+    """
+
+    def __init__(self, step: float) -> None:
+        self._step = step
+        self._now = time.monotonic()
+
+    def advance(self) -> None:
+        self._now += self._step
+
+    def monotonic(self) -> float:
+        return self._now
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
 async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     """End-to-end proof that the log-growth detector wires up through
     make_sandbox_agent_fn: with enable_heartbeat=False (strict mode) and a fully
@@ -2283,33 +2307,25 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     cmd_result.stdout = ""
     cmd_result.stderr = ""
 
-    # The command stays "running" for 199 tick slices (each ~0.03s wall) before
-    # completing on the 200th, so the run lasts ~6.0s in total. That EXCEEDS
-    # the 3.0s stall window with a 2x window-to-run margin: without the
-    # log-growth detector the idle watchdog fires at ~3.0s, mid-run and on an
-    # unloaded host, so this test genuinely fails when the detector is removed
-    # (verified: with the probe stubbed to stop touching, the run raises
-    # SandboxNodeFailedError). With the detector the log-growth touch on every
-    # tick keeps the run alive to completion.
-    #
-    # FAR-320 (second fix): the previous shape used a 1.0s window against a
-    # ~1.35s run — a 20x window-to-TICK ratio, but only a ~1.35x
-    # window-to-RUN ratio. Measured under load the run actually takes
-    # 1.9-2.8s (event-loop contention), so a single scheduling stall longer
-    # than the 1.0s window tripped the watchdog and the test flaked ~1-in-4
-    # full-directory runs. The first fix widened the window to 3.0s but left
-    # the run at ~2.7s, so the run no longer exceeded the window and removing
-    # the detector did NOT fail the test — a no-op trap (FAR-320 review).
-    # Both margins must hold:
-    #   - window-to-tick: 3.0s / 0.05s = 60x. The 0.05s tick_interval is only
-    #     the wait_for cap, not the per-iteration cost; a tick actually costs
-    #     ~0.03s (the mock's asyncio.sleep, whose TimeoutError propagates
-    #     through wait_for first), so a single tick can never trip the window.
-    #   - window-to-run:  the run (~6.0s) is 2x the 3.0s window, so a broken
-    #     detector still fails this test on an unloaded host — the detector is
-    #     genuinely exercised end-to-end (199 ticks against a ~100-tick window).
+    # Determinism (the FAR-320 flake, third recurrence, on main 2026-09-28):
+    # the idle watchdog compares *wall-clock* elapsed time against
+    # stall_timeout_seconds, so a real clock makes this test
+    # scheduling-dependent — a single event-loop stall longer than the 3.0s
+    # window trips the watchdog even though the detector is refreshing the run
+    # on every tick. Two margin-widening fixes (1.0s -> 3.0s, run 1.35s ->
+    # ~6.0s) did not stop the flake. This test instead drives the node_runner
+    # ``time.monotonic`` from a probe-driven fake clock: logical time only
+    # advances when the drain probe runs, so "stall time" is measured in
+    # probes, not wall seconds, and no scheduler stall can starve the run past
+    # the window. Both margins still hold in probe-time:
+    #   - window-to-probe: the 3.0s window is 3.0 / 0.05 = 60 drain probes
+    #     wide, so a single probe can never trip it.
+    #   - window-to-run: the simulated command runs for 200 wait slices (far
+    #     more than the ~60 probes the window needs), so a broken detector
+    #     still fires mid-run — the detector is genuinely exercised end-to-end.
     # The no-detector stall case is proven separately by
     # test_heartbeat_off_no_detector_stalls_end_to_end.
+    clock = _ProbeDrivenClock(step=0.05)
     wait_calls = {"n": 0}
 
     async def _wait():
@@ -2329,6 +2345,10 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
         if str(path).endswith("progress.log"):
             watch_size["n"] += 10
             return MagicMock(size=watch_size["n"])
+        if str(path) == "/home/user/agent.log":
+            # Each drain probe is one logical "tick": advance the fake clock so
+            # the watchdog's idle window is measured in probes, not wall time.
+            clock.advance()
         return MagicMock(size=0)
 
     def _read(path, format="text", **kwargs):
@@ -2347,6 +2367,10 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        # Replace node_runner's ``time`` binding so the idle watchdog reads the
+        # probe-driven clock (other attributes still delegate to the real time
+        # module, so nothing else in the module changes behaviour).
+        patch("modulo.core.pipeline_engine.node_runner.time", clock),
     ):
         result = await fn(_run_state())
 

@@ -2334,7 +2334,7 @@ class PipelineExecutor:
                 Eval.deleted_at.is_(None),
             )
         )
-        return list((await session.execute(eval_stmt)).all())  # type: ignore[arg-type]  # Row[tuple[Eval, PolicyGate|None]] from LEFT OUTER JOIN
+        return list((await session.execute(eval_stmt)).all())  # Row[tuple[Eval, PolicyGate | None]] (LEFT OUTER JOIN)
 
     @staticmethod
     def _build_eval_defs_by_node(

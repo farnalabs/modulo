@@ -1,5 +1,6 @@
 import { type Locator, type Page } from '@playwright/test'
 import { test, expect, loginAsAdmin } from '../setup/fixtures'
+import { clickMenuItem } from '../setup/row-menu'
 import {
   apiBaseFor,
   apiFetch,
@@ -10,29 +11,13 @@ import {
 } from '../setup/realstack-api'
 
 /**
- * Invoke a row's action-menu command.
- *
- * The action menu is a PrimeVue popup `<Menu>`. Two independent traps, both
- * observed on staging:
- *
- * 1. PrimeVue 5's `Menuitem` puts `role="menuitem"` on the outer `<li>` but
- *    binds the command handler to the inner `.p-menu-item-content` `<div>`
- *    (primevue/menu/Menuitem.vue). A click dispatched on the `<li>` bubbles
- *    up to the overlay's document-level dismisser (closing the menu) but
- *    never reaches the descendant handler — so the command never runs.
- * 2. The anchored-overlay enter transition leaves the item moving/detaching
- *    across frames, so a coordinate-based `.click()` can retry on stability
- *    until the test times out.
- *
- * Enter the menu and dispatch the click at the inner `<li> > div` that
- * actually carries the handler. The item is asserted visible first, so a
- * genuinely missing command still fails.
+ * Invoke a row's action-menu command. See `setup/row-menu.ts` for why a real
+ * pointer sequence is required (the overlay transition defeats coordinate
+ * clicks, and a synthetic click lands on the item's anchor href and navigates).
  */
 async function clickRowAction(page: Page, row: Locator, label: string): Promise<void> {
   await row.getByTestId('pipeline-list-action-menu').click()
-  const menuItem = page.getByRole('menuitem', { name: label, exact: true })
-  await expect(menuItem).toBeVisible({ timeout: 15_000 })
-  await menuItem.locator(':scope > div').first().dispatchEvent('click')
+  await clickMenuItem(page, page.getByRole('menuitem', { name: label, exact: true }))
 }
 
 /**
@@ -179,12 +164,18 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       // account the command is absent, so skip rather than fail the suite on
       // an unavailable surface.
       await row.getByTestId('pipeline-list-action-menu').click()
-      await expect(page.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible({ timeout: 15_000 })
       const deleteItem = page.getByRole('menuitem', { name: 'Delete', exact: true })
+      // The popup renders asynchronously, so wait for it to open before
+      // deciding whether the pipeline_delete command is present — waiting on a
+      // command that is always rendered (Rename) distinguishes "flag off" from
+      // "menu not open". Asserting Delete visible first (as this test used to)
+      // threw before the skip could run, failing the suite on every deployment
+      // whose plan does not enable pipeline_delete.
+      await expect(page.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible({ timeout: 15_000 })
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await deleteItem.locator(':scope > div').first().dispatchEvent('click')
+      await clickMenuItem(page, deleteItem)
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
       await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Delete' }).click()

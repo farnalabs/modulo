@@ -764,6 +764,103 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-org` registry gained the shipped UI behaviour + scoped deferral.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-28):** closed `feat-sso`'s
+> "Delete-provider confirmation does not warn about active SSO sessions" gap
+> (`auth/sso-provider-ui.md`). The delete-confirmation dialog now explains that
+> deleting a provider does NOT sign out already-signed-in users — their sessions
+> remain valid until they expire and only new sign-ins through the provider are
+> blocked. The warning ships a static `settings-sso-delete-session-warning`
+> testid, registered in the `/settings/sso` manifest `elements:` inventory (the
+> reverse testid-coverage guard front-to-back), with vitest assertions on the
+> delete-confirmation flow. The `feat-sso` manifest registry gained the shipped
+> behaviour line; the tracker gap is removed.
+
+> **Closed this walk (2026-09-28):** closed `feat-org`'s lingering
+> "org-settings UI-journey BDD scenarios stay `@awaiting-implementation`" gap
+> (`admin/org.md`). The five `ui/org_settings.feature` drafts (view page, rename
+> org, invite member, revoke API key, viewer denial) referenced eleven
+> `data-testid`s that exist NOWHERE in the frontend (verified 0/11 across
+> `frontend/src`; `/admin/org` ships a different surface — org profile, data
+> export, product-analytics + community-objects toggles, delete confirmation),
+> so they described a page that never shipped and could never execute. The stale
+> drafts were archived (file deleted, `scenarios()` registration + Playwright
+> steps removed from `steps/test_ui.py`, pin removed from
+> `PINNED_AWAITING_IMPLEMENTATION`) and `feat-org` was re-anchored to the REAL
+> org-management coverage: self-service org profile read/rename/delete +
+> admin-role gate (unit, `tests/unit/api/test_admin.py` — slug immutability +
+> operator/viewer 403), member invites (`system_admin_users.feature`),
+> API-key create/revoke + non-admin 403 (`auth/api_keys.feature`), viewer denial
+> (`viewmodel_current.feature`), org deletion BDD (`org_deletion.feature`). The
+> manifest `feat-org` deferral claiming the drafts were "covered by component
+> (vitest) and E2E suites" was stale and removed; the registry now carries the
+> accurate behaviour lines. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-28):** reconciled `feat-assistant`'s stale "Test
+> breadth" known gap (`configure/assistant.md`). The bullet claimed deeper unit
+> coverage for the permission round-trips "lives in
+> `backend/tests/unit/api/test_me_assistant_skills.py` only" — but the permission
+> round-trip helpers (`_default_tool_permission`, `_resolve_tool_permission`,
+> `_check_nogo`, `_tool_allowlist_disabled`, `_build_permission_request_payload`,
+> `_classify_ui_tool_permissions`, `clear_session_approvals_for_account`) and the
+> SSE stream/permission-response/reset routes are unit-covered across
+> `test_assistant_routes.py` (149 test symbols), with the admin config/skills
+> surface in `test_admin_assistant_routes.py` (56) and the user skills surface in
+> `test_me_assistant_skills.py`. The tracker now cites all three unit suites;
+> the gap bullet is re-worded to name the actual distribution.
+
+> **Closed this walk (2026-09-28):** archived the five remaining stale
+> `ui/*.feature` UI-journey BDD drafts pinned `@awaiting-implementation` since
+> 2026-08 — they describe surfaces that could never execute. Following the
+> `ui/org_settings.feature` precedent, every testid the drafts' Playwright steps
+> depend on was verified to exist NOWHERE in the frontend (0 hits for
+> `theme-toggle`, `pipeline-canvas`, `agent-sidebar`, `agent-item`, `canvas-node`,
+> `canvas-edge`, `agent-config-panel`, `delete-node-button`, `approval-banner`,
+> `eval-result-item`, `eval-results-list`, `filter-failed`, `compare-run-checkbox`,
+> `compare-button`, `eval-comparison`, `node-output`, `log-viewer-tab`,
+> `log-entry`, `sensitive-value`, `run-status`, `node-status`), and the step
+> `Given` clauses navigated to fictional run ids (`/runs/run-completed-123`) no
+> backend could serve. The five files were deleted
+> (`theme_switching.feature`, `run_detail.feature`, `real_time_updates.feature`,
+> `pipeline_builder.feature`, `eval_dashboard.feature`) along with the wholly-
+> dead `steps/test_ui.py` step module, and the 22 scenarios were removed from
+> `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`). Each real
+> journey the drafts gestured at ships with REAL manifest-registered testids that
+> are already covered elsewhere: run-detail + HITL journeys by
+> `frontend/tests/e2e/journeys/run-cancel-journey.spec.ts`,
+> `run-hitl-audit.spec.ts`, `run-manual-output-io.spec.ts`,
+> `runs-filter-journey.spec.ts`; the pipeline editor by
+> `frontend/tests/e2e/pipeline-editor.spec.ts`; eval journeys by
+> `frontend/tests/e2e/evals.spec.ts`, `eval-pages-empty-states.spec.ts`,
+> `journeys/eval-journey.spec.ts`; real-time run events by
+> `frontend/tests/e2e/sse-crossworker-notification.spec.ts` plus the backend
+> `operations/websocket_reconnection.feature` and
+> `observability/active_run_observability.feature` (all executing BDD); theme
+> switching does not ship (there is no theme toggle; the static
+> `data-theme="agent"` CSS hook is locked by
+> `frontend/src/__tests__/agent-theme-audit.spec.ts`).
+> `_ORPHANED_BDD_FEATURES` stays empty and the new guard
+> `test_no_bdd_citations_for_fully_deselected_features` makes it an invariant
+> that a product-map `bdd:` citation always names at least one scenario CI
+> actually executes.
+
+> **Closed this walk (2026-09-29):** reconciled the four behaviour-tracker
+> frontmatter `status:` fields with the manifest `features:` registry — the two
+> layers disagreed on the same features' coverage. `feat-guardrails`,
+> `feat-license`, `feat-plugins` and `feat-product-analytics` were sharpened to
+> `status: partial` in the manifest during the 2026-09-26 walk (each carries an
+> unshipped sub-surface — cross-org guardrail inheritance, universal license
+> gating, registry-API plugin lifecycle management, in-product analytics
+> export — tracked as an unchecked behaviour deferral), but each
+> `docs/product-map/` tracker kept `status: covered` even though its own QA
+> note said "Status stays `partial`". A reader of the graph got the opposite
+> coverage answer from the machine layer Assistant indexes from. The trackers
+> now read `partial` (`configure/guardrails.md`, `licensing/license.md`,
+> `admin/plugins.md`, `admin/product-analytics.md`), the guardrail/license
+> trackers also name the exact deferral in Known Gaps, and the new
+> `test_graph_tracker_status_matches_manifest_registry` guard makes
+> manifest↔tracker status agreement an invariant so the two layers can never
+> drift again. `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

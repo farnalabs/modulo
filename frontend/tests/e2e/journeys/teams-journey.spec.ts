@@ -69,8 +69,12 @@ test.describe('Real-stack journeys: team lifecycle', { tag: '@regression' }, () 
       teamId = created.id
       await expect(page.locator('.card').filter({ hasText: name }).first()).toBeVisible({ timeout: 30_000 })
 
-      // Rename through the row's Rename action.
+      // Rename through the row's Rename action. The rename form lives in the
+      // card's expanded panel (SettingsTeamsView renders the rename input only
+      // when `expandedTeamId === team.id`), so disclose the card first — the
+      // Rename action sets `renameTeamId` but does not expand the card itself.
       const card = page.locator('.card').filter({ hasText: name }).first()
+      await card.getByTestId(`settings-teams-toggle-${created.id}`).click()
       await card.getByRole('button', { name: 'Rename' }).click()
       await page.getByTestId('settings-teams-rename-name').fill(renamedName)
       await page.getByTestId('settings-teams-rename-save').click()

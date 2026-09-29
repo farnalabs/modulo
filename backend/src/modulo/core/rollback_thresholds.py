@@ -16,7 +16,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from sqlalchemy import func, select
@@ -111,7 +111,8 @@ async def _count_script_runs_by_graph(
             Run.created_at >= window_start,
         )
     )
-    return sum(1 for graph_json in result.scalars() if _graph_has_script_mode_node(graph_json))
+    rows: Iterable[dict[str, Any] | None] = result.scalars()
+    return sum(1 for graph_json in rows if _graph_has_script_mode_node(graph_json))
 
 
 async def _count_claim_without_marker(

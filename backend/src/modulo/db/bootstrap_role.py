@@ -90,6 +90,7 @@ ACCOUNTS_WRITABLE_COLUMNS = (
     "preferences",
     "last_login",
     "is_system_admin",
+    "must_change_password",
     "updated_at",
 )
 

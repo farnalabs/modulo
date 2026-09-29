@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -257,7 +258,7 @@ async def _fact_enforcement_aggregates(
     from modulo.db.models.run_node_outputs import RunNodeOutput
 
     try:
-        rows = (
+        rows: Sequence[dict[str, Any] | None] = (
             (
                 await session.execute(
                     select(RunNodeOutput.schema_enforcement_json).where(

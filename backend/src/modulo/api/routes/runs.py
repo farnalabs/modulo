@@ -175,7 +175,7 @@ async def _run_with_retry[R](
     return await fn()
 
 
-def _run_detail_statement(principal: TenantPrincipal, run_id: uuid.UUID) -> Select[tuple[Run]]:
+def _run_detail_statement(principal: TenantPrincipal, run_id: uuid.UUID) -> Select[Run]:
     """The org-scoped run SELECT shared by the detail/with-gate loaders."""
     return (
         select(Run)

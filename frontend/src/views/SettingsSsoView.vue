@@ -134,6 +134,7 @@
             <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4" @click.stop @keydown.stop>
               <p class="text-sm font-medium text-destructive">{{ $t('views.SettingsSsoView.delete_confirm', { name: provider.name }) }}</p>
               <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsSsoView.delete_warning') }}</p>
+              <p class="mt-1 text-sm text-destructive/80" data-testid="settings-sso-delete-session-warning">{{ $t('views.SettingsSsoView.delete_session_warning') }}</p>
               <div class="mt-3 flex items-center gap-2">
                 <Button :disabled="deleting" severity="danger" data-testid="settings-sso-delete-confirm" @click="deleteProvider(provider.id)">
                   {{ deleting ? $t('views.SettingsSsoView.deleting') : $t('views.SettingsSsoView.delete') }}

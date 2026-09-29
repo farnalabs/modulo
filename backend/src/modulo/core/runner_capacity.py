@@ -172,11 +172,14 @@ def build_dispatch_marker(attempt_key: str, provider: str, *, via_provider: bool
     call site must pass its value explicitly so the type-checker enforces
     correct attribution (FAR-995).
 
-    ``via_provider`` (FAR-1050 R4 follow-up) stamps the
-    ``MODULO_E2B_VIA_PROVIDER`` flag state onto the marker AT BUILD TIME so
-    the capacity gate's own primary-acquire write is attributable to
-    legacy-vs-provider execution from the marker alone (ADR 040 "Flag and
-    revert observability") instead of waiting for the post-create rewrite.
+    ``via_provider`` (FAR-1050 R4 follow-up) stamps the provider-routing
+    state onto the marker AT BUILD TIME so the capacity gate's own
+    primary-acquire write is attributable to provider-mediated execution
+    from the marker alone (ADR 040 "Flag and revert observability") instead
+    of waiting for the post-create rewrite. The ``MODULO_E2B_VIA_PROVIDER``
+    flag it originally reported was RETIRED by FAR-1050 R6 (PR #1033): the
+    provider path is now unconditional, so this key survives purely as a
+    historical attribution field on the dispatch marker / telemetry.
     Optional and defaulting to ``None`` = OMITTED, so every existing call
     site keeps its exact prior payload; a supplied ``True``/``False`` is
     stored as a JSON boolean. The extra key is fence-neutral: marker readers
@@ -418,9 +421,9 @@ async def acquire_runner_dispatch_slot(
        tier filter for the Docker-tier default) + cap read.
     5. Decide: deny → :class:`RunnerCapacityDeniedError` (the transaction
        rolls back — no marker, no slot); admit → the fenced marker UPDATE
-       commits the reservation (provider + written_at ride the marker; the
-       optional ``via_provider`` FAR-1050 flag state rides it too when the
-       caller supplies one, see :func:`build_dispatch_marker`).
+        commits the reservation (provider + written_at ride the marker; the
+        optional ``via_provider`` FAR-1050 attribution state rides it too
+        when the caller supplies one, see :func:`build_dispatch_marker`).
 
     The lock is NEVER held across workspace-create I/O — the caller provisions
     after this transaction commits.

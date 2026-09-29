@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -936,6 +936,52 @@ def test_lifecycle_actions_happy_and_missing(client: tuple[TestClient, AsyncMock
             _stop_all(_rls_started)
 
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("action", ["archive", "unarchive"])
+def test_lifecycle_actions_refresh_flushed_row(client: tuple[TestClient, AsyncMock], action: str) -> None:
+    """The UPDATE flush expires ``updated_at``; the endpoint must refresh in-txn.
+
+    Regression (staging E2E): ``POST /pipelines/{id}/archive`` and ``/unarchive``
+    returned 422 "Data validation failed." because ``archive_pipeline`` /
+    ``unarchive_pipeline`` flush an UPDATE whose ``onupdate`` column
+    (``updated_at``) is then expired; reading it after commit made Pydantic's
+    attribute extraction raise outside the async greenlet, which
+    ``handle_db_errors`` maps to 422. Both endpoints now mirror
+    ``update_pipeline_endpoint``'s in-transaction ``session.refresh``.
+
+    This is behavioural, not a mere presence-guard: ``session.refresh`` stands
+    in for the DB reload that surfaces the DB-computed ``updated_at``, so the
+    response body must carry the refreshed value. Without the in-txn refresh the
+    endpoint returns the stale ``updated_at`` and this test fails.
+    """
+    http, session = client
+    crud = {"archive": "archive_pipeline", "unarchive": "unarchive_pipeline"}[action]
+    refreshed = _make_pipeline()
+    db_updated_at = _NOW + timedelta(seconds=5)
+
+    async def _refresh(instance: object) -> None:
+        # Mirror the DB-computed onupdate value becoming visible after the
+        # in-transaction reload.
+        instance.updated_at = db_updated_at
+
+    session.refresh = AsyncMock(side_effect=_refresh)
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=refreshed)),
+        patch(f"{_PREFIX}{crud}", new=AsyncMock(return_value=refreshed)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/{action}")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    # The response must carry the DB-computed value the refresh loaded (the
+    # behavioural guarantee); the awaited-refresh check is a belt-and-braces
+    # signal for the same in-txn reload.
+    assert datetime.fromisoformat(resp.json()["updated_at"]) == db_updated_at
+    session.refresh.assert_awaited()
 
 
 def test_restore_pipeline_write_none_maps_404(client: tuple[TestClient, AsyncMock]) -> None:

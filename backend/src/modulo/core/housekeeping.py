@@ -747,7 +747,7 @@ async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list
         if not pk_cols:
             continue
         stmt = select(model_cls).where(org_col == org_id).where(org_col.is_not(None))
-        rows = (await session.execute(stmt)).scalars().all()
+        rows: Sequence[Any] = (await session.execute(stmt)).scalars().all()
         for r in rows:
             pk_values = [str(getattr(r, pk.name)) for pk in pk_cols]
             pk_str = "/".join(pk_values)

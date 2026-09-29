@@ -138,7 +138,18 @@ _DELIVERABLE_STATUSES: frozenset[str] = frozenset({"complete"})
 
 #: Hard statement timeout for the classification persist + sweep re-reads
 #: (FAR-188 precedent): a hung DB must never block terminalization indefinitely.
-_CLASSIFICATION_WRITE_TIMEOUT_SECONDS = 5.0
+#:
+#: This is a STALL bound, not a performance budget. 5s was too tight on a
+#: loaded CI runner: aiosqlite dispatches every statement through its own
+#: worker thread, and when the runner is oversubscribed (the unit suite runs
+#: under ``-n auto``) the ``connect`` / ``execute`` / ``close`` round-trips for
+#: a trivial write can each be delayed for tens of seconds. The write itself
+#: never hangs — it is queued behind the runner's CPU contention — so a tight
+#: bound converts pure scheduling jitter into a spurious ``persist_timeout``
+#: (and, in the reconcile sweep, a run that is left unclassified for that
+#: tick). Raised to 30s so only a genuinely wedged DB trips it; the
+#: terminalization path also waits on this bound, so it stays finite.
+_CLASSIFICATION_WRITE_TIMEOUT_SECONDS = 30.0
 
 
 class RunClassificationValue(StrEnum):
@@ -636,7 +647,11 @@ async def persist_classification(
     except asyncio.CancelledError:
         raise
     except TimeoutError:
-        _log.exception("classification.persist_timeout run=%s", run.id)
+        # ``asyncio.wait_for`` raises TimeoutError (== the builtin, since 3.11)
+        # when the bound fires — a genuine DB stall. ``TimeoutError`` subclasses
+        # ``OSError``, so it must be caught BEFORE the broad handler to keep the
+        # distinct ``persist_timeout`` failure counter.
+        _log.warning("classification.persist_timeout run=%s", run.id)
         _record_classification_failure("persist_timeout")
         return False
     except Exception:
@@ -766,9 +781,6 @@ async def _reconcile_classify_run(
             return "errors"
     except asyncio.CancelledError:
         raise
-    except TimeoutError:
-        _log.warning("classification.sweep_timeout run=%s", run.id)
-        return "errors"
     except Exception:
         _log.exception("classification.sweep_failed run=%s", run.id)
         return "errors"

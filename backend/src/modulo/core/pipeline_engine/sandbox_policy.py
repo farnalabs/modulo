@@ -29,6 +29,16 @@ when the agent runs:
     firewall/route-based egress, then add back ONLY the allowlisted host:port
     pairs. This upgrades ``selected`` from the FAR-296 Phase 3b-3
     "functionally equivalent to deny_all" state to a REAL allowlist.
+  - ``delivery_sentinel`` (FAR-1264): install a run-scoped ``gh`` shim that
+    permits exactly ONE ``gh pr create`` per sandbox run — the platform-side
+    hard guard behind the prompt-level "exactly one PR per run" rule
+    (FAR-1254). A second ``gh pr create`` in the same run exits non-zero
+    WITHOUT invoking the real ``gh``; every other ``gh`` invocation passes
+    through untouched. The claim is held only for a create that SUCCEEDED —
+    a non-zero exit releases it, so a transient failure does not burn the
+    run's only attempt — and the install's own diagnostics (including the
+    "no gh on PATH" case, where the guard is ABSENT) are mirrored into the
+    policy log rather than discarded with the step result.
 
 The enforcement is REAL (the sandbox cannot write / egress is scoped), never a
 declared flag. Script builders are pure string functions (unit-testable without
@@ -36,9 +46,11 @@ a sandbox); :func:`apply_sandbox_policy` runs them in the sandbox with bounded
 timeouts. The git-credential steps and the read-only seal are
 ENFORCEMENT-CRITICAL and RAISE on failure (a failed chmod / helper install must
 dispatch a failure, never silently certify a deny-guarantee nothing enforces);
-the egress step is best-effort (its script is drop-first fail-closed, so a
-failure leaves deny-all). node_runner invokes :func:`apply_sandbox_policy` when
-ANY of the policy fields is set.
+the egress step and the ``gh``-guard install are best-effort (their failures are
+logged-and-continued: egress is drop-first fail-closed, and a missing ``gh``
+guard simply degrades to the prompt-level guard). node_runner invokes
+:func:`apply_sandbox_policy` when ANY of the policy fields — including a
+non-empty ``delivery_sentinel`` — is set.
 
 This module is dependency-free (no LangGraph, no DB) so it can be imported by
 node_runner and the unit tests without dragging in the pipeline engine.
@@ -80,6 +92,59 @@ _WORKSPACE = "/home/user"
 # host for a SCOPED git credential is imported from ``sandbox_mode`` (single
 # source of truth for the allowlisted host).
 _AGENT_GIT_CONFIG = f"{_WORKSPACE}/.gitconfig"
+
+# FAR-1264: the WorkspaceSpec ``workspace_metadata`` key that carries a node's
+# ``delivery_sentinel`` from node_runner's policy call site to the E2B
+# provider's ``apply_isolation`` policy call site. ``IsolationPolicy`` is a
+# frozen dataclass that does not model the sentinel, and the spec is built per
+# policy invocation (never persisted to the workspace in this flow), so the
+# metadata dict is the carrier both allowlisted call sites share. Defined HERE
+# so node_runner and e2b.py import one constant instead of duplicating a
+# stringly-typed key (a typo in either direction would silently disarm the
+# guard).
+DELIVERY_SENTINEL_SPEC_KEY = "modulo.delivery_sentinel"
+
+# FAR-1264: the marker ROOT. ``/tmp`` is deliberately OUTSIDE the read-only
+# workspace seal (``build_read_only_script`` only chmods ``/home/user``), so
+# the agent user can always claim the marker at ``gh pr create`` time even on
+# a read-only node. The E2B sandbox is created per run (and destroyed after
+# it), so a marker under /tmp is run-scoped by construction; ``run_scope``
+# (the run id) additionally keys the marker so a workspace that somehow
+# outlived its run can never leak a claimed marker into the next run.
+#
+# The /tmp root is a deliberate, code-reviewed S5443 tradeoff — not an
+# unchecked host tempfile. It is a fixed in-SANDBOX path that must survive the
+# workspace seal; the marker is a claim DIRECTORY created by atomic ``mkdir``
+# as the sandbox agent user, its name is run-scoped and sanitised to
+# ``[A-Za-z0-9._-]``, it holds NO credentials, and the whole guard is
+# best-effort: a hostile/pre-created marker can at worst refuse one run's
+# ``gh pr create`` (fail-closed), never read, redirect, or escalate anything.
+# The NOSONAR below documents that rationale on the flagged line (matching the
+# docker.py / db/bootstrap.py /tmp-literal precedent) so the rule stays
+# suppressed through review instead of re-opening as a false positive.
+_GH_PR_GUARD_MARKER_ROOT = "/tmp"  # noqa: S108  # nosec B108  # NOSONAR S5443 - documented run-scoped in-sandbox marker root (see block comment above)
+
+# Scope fragments are embedded in a filesystem path and single-quoted into a
+# shell script — reduce them to a safe alphabet instead of raising (the guard
+# step is best-effort; it must never fail the dispatch).
+_GH_PR_GUARD_SCOPE_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def gh_pr_guard_marker_path(run_scope: str | None = None) -> str:
+    """Build the run-scoped marker path the ``gh`` shim claims exactly once.
+
+    The marker is created as a DIRECTORY (``mkdir`` is atomic on POSIX: the
+    first ``gh pr create`` wins it, every later one sees it and is refused).
+    ``run_scope`` is normally the run id; sanitised to ``[A-Za-z0-9._-]`` and
+    truncated so it can never escape ``/tmp`` or inject shell metacharacters
+    into the installed shim.
+    """
+    if not run_scope:
+        return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.marker"
+    scope = _GH_PR_GUARD_SCOPE_RE.sub("_", str(run_scope))[:64].strip("._-")
+    if not scope:
+        return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.marker"
+    return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.{scope}.marker"
 
 
 def build_read_only_script() -> str:
@@ -308,6 +373,228 @@ def build_egress_selected_script(egress_allowlist: list[dict[str, Any]]) -> str:
     return "".join(lines)
 
 
+# FAR-1264 (M4): the shim's SELF-IDENTIFYING marker — the first comment line
+# of every shim we install. The install step greps for this exact string
+# inside a candidate ``gh`` to tell "our shim is installed here" from "a
+# preserved real gh / partial install": a ``gh.modulo-real`` file ALONE proves
+# neither, because the preserved copy outlives a stale shim on a reused
+# workspace. Keep it unique to this shim (it is grepped for, unescaped).
+_GH_PR_GUARD_FINGERPRINT = "# modulo-gh-pr-guard-shim"
+
+# FAR-1264: the shim body, embedded verbatim (quoted heredoc) into the install
+# script. Keep it POSIX ``sh`` only (no bashisms — the sandbox agent runs
+# ``sh -c``) and keep REAL_BIN / MARKER as the two header lines the install
+# script writes above it.
+_GH_PR_GUARD_SHIM_BODY = (
+    _GH_PR_GUARD_FINGERPRINT
+    + "\n"
+    + """\
+is_pr_create=0
+saw_pr=0
+expect_val=0
+for arg in "$@"; do
+  if [ "$expect_val" -eq 1 ]; then
+    # Value of a global flag we already saw (e.g. the X in `gh --repo X pr
+    # create`) — never a subcommand.
+    expect_val=0
+    continue
+  fi
+  case "$arg" in
+    --repo|-R|--hostname|--config|-c)
+      expect_val=1
+      continue
+      ;;
+    --repo=*|--hostname=*|--config=*)
+      continue
+      ;;
+    -*)
+      # Any other flag, before or between positionals (gh's persistent flags
+      # may appear anywhere): never a subcommand.
+      continue
+      ;;
+  esac
+  if [ "$saw_pr" -eq 1 ]; then
+    if [ "$arg" = "create" ]; then
+      is_pr_create=1
+      break
+    fi
+    # First non-`create` positional after `pr` ends that attempt (e.g.
+    # `gh pr list ...`); it may itself start a new `pr` pair.
+    saw_pr=0
+    if [ "$arg" = "pr" ]; then saw_pr=1; fi
+  else
+    if [ "$arg" = "pr" ]; then saw_pr=1; fi
+  fi
+done
+
+if [ "$is_pr_create" -ne 1 ]; then
+  # Every non-`pr create` invocation (other subcommands, `gh --version`,
+  # `gh issue create`, ...) passes straight through, untouched.
+  exec "$REAL_BIN" "$@"
+fi
+
+# Claim the run's single `gh pr create`. mkdir is atomic: the winner runs the
+# real gh, everyone else is refused WITHOUT calling it. The claim is held ONLY
+# for a SUCCESSFUL create: a non-zero exit (rate limit, empty diff, network
+# flap) releases it before exiting with that code, so the run's retry can
+# claim again — burning the run's only attempt on a transient failure would
+# refuse a legitimate FIRST create while reporting that one had succeeded.
+if mkdir "$MARKER" 2>/dev/null; then
+  "$REAL_BIN" "$@"
+  _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    rmdir "$MARKER" 2>/dev/null || true
+  fi
+  exit "$_rc"
+fi
+if [ -d "$MARKER" ]; then
+  printf '%s\\n' "modulo: one-PR-per-run guard (FAR-1264): refusing a second 'gh pr create' attempt in this run." >&2
+  printf '%s\\n' "modulo: the run's one attempt is spent - an earlier 'gh pr create' exited 0 (claim: $MARKER)." >&2
+  printf '%s\\n' "modulo: (no PR? that claim is stale or hand-planted - out of scope, see the install docstring)" >&2
+  exit 1
+fi
+# mkdir failed for an environmental reason (marker dir does NOT exist — e.g.
+# an unwritable /tmp). The install step is best-effort, so the runtime claim
+# degrades the same way: warn loudly and let the create through rather than
+# blocking the run's ONE legitimate PR; the prompt-level guard still applies.
+printf '%s\\n' "modulo: one-PR-per-run guard (FAR-1264): WARNING could not claim $MARKER" >&2
+printf '%s\\n' "modulo: guard degraded - allowing this gh pr create unguarded; prompt-level guard still applies." >&2
+exec "$REAL_BIN" "$@"
+"""
+)
+
+
+def build_gh_pr_guard_script(marker_path: str) -> str:
+    """Build the shell script that installs the one-PR-per-run ``gh`` shim.
+
+    FAR-1264. Runs as root before the agent command executes:
+
+      1. Resolve the REAL ``gh`` at install time: every ``gh`` found in the
+         install-time ``PATH`` is copied aside to ``<dir>/gh.modulo-real``
+         BEFORE its path is shadowed by the shim, so the shim can never
+         recurse into itself. The shim lives AT the path ``command -v gh``
+         would have resolved — PATH *order* therefore does not decide whether
+         the guard is reached; the shim replaces the very binary the agent's
+         ``sh -c`` resolves (the agent command runs with the sandbox's default
+         env, the same image PATH the policy step sees).
+      2. Re-installation is keyed off the shim's OWN fingerprint (its
+         ``# modulo-gh-pr-guard-shim`` line) plus the run scope embedded in
+         it — NOT off the presence of ``gh.modulo-real``. "Real gh preserved"
+         is not "guard installed": the preserved copy outlives a stale shim on
+         a reused workspace, so a scope-matching shim counts as already
+         guarded, a stale-scope shim (or a ``gh`` that is not our shim at all)
+         is rewritten in place, and only a ``gh`` that genuinely could not be
+         guarded is reported as a failure.
+      3. Each shim claims ``marker_path`` atomically (``mkdir``) on its first
+         ``gh pr create``; later ones exit non-zero WITHOUT calling the real
+         gh. The claim is held only for a SUCCESSFUL create — a non-zero exit
+         releases it, so a transient failure (rate limit, empty diff, network)
+         does not burn the run's only attempt. The marker path is embedded at
+         install time and is run-scoped (see :func:`gh_pr_guard_marker_path`).
+
+    TAMPER MODEL (explicit — do not overstate what this buys): the claim is an
+    in-sandbox marker file under ``/tmp``. It is predictable and writable by
+    the agent, so it is NOT tamper-proof against a deliberately evasive agent
+    (which could ``rmdir`` the marker, delete the shim or the
+    ``gh.modulo-real`` copy, or invoke a non-PATH ``gh``). What it guards
+    against is the OBSERVED failure mode — the ACCIDENTAL second
+    ``gh pr create`` within one run, where the agent retries or repeats the
+    create while following its prompt. Deliberate-evasion hardening is out of
+    scope for this ticket and is tracked separately.
+
+    SCOPE (known follow-up, not a defect): the guard is keyed off ANY
+    non-empty ``delivery_sentinel`` — the install is not PR-specific today. A
+    sentinel used for a different purpose would still install the
+    one-PR-per-run guard; decoupling the two is a follow-up, not a bug here.
+
+    BEST-EFFORT: any per-directory failure (read-only dir, no write
+    permission) skips that directory with a stderr note; if NOTHING could be
+    guarded while a ``gh`` does exist, the script exits 1 so the step is
+    logged — the caller never raises. If there is no ``gh`` on PATH at all the
+    script says so loudly on stderr (an unguarded sentinel run must be
+    observable) and exits 0: there is nothing to guard.
+
+    Forms NOT intercepted (documented per the ticket): ``gh api`` calls that
+    create a PR through the REST API; a ``gh`` invoked by absolute path from
+    a copy outside the install-time PATH; a shell function/alias or a ``gh``
+    installed into a NEW PATH directory after this script ran; and ``gh pr
+    <flags> create`` interleavings are only missed if a flag between ``pr``
+    and ``create`` takes a value that is not in the skip list (the realistic
+    invocations ``gh pr create ...`` and ``gh --repo X pr create ...`` are
+    both handled).
+    """
+    return (
+        "set -e\n"
+        f"MARKER='{marker_path}'\n"
+        "guard_installed=0\n"
+        # PATH entries are ':'-separated (E2B sandboxes are Linux); entries
+        # containing whitespace are not supported by this word-split (the
+        # sandbox image PATH has none).
+        "for d in $(printf '%s' \"$PATH\" | tr ':' ' '); do\n"
+        '  [ -n "$d" ] || continue\n'
+        '  tgt="$d/gh"\n'
+        '  if [ ! -f "$tgt" ]; then continue; fi\n'
+        '  real="$tgt.modulo-real"\n'
+        # M4: "a preserved real gh exists" must NEVER be read as "our shim is
+        # installed". Detect OUR shim by its fingerprint line and verify the
+        # embedded run scope; a scope-matching shim counts as guarded, anything
+        # else falls through to a rewrite (the preserved copy is then already
+        # there, or this path holds a real gh we are about to shadow).
+        "  is_ours=0\n"
+        f'  if grep -qF "{_GH_PR_GUARD_FINGERPRINT}" "$tgt" 2>/dev/null; then is_ours=1; fi\n'
+        '  if [ "$is_ours" -eq 1 ]; then\n'
+        '    if grep -qF "MARKER=\'$MARKER\'" "$tgt" 2>/dev/null; then\n'
+        "      guard_installed=$((guard_installed + 1))\n"
+        "      continue\n"
+        "    fi\n"
+        '    echo "modulo: gh guard: rewriting shim with a stale run scope in $d" >&2\n'
+        '  elif [ -f "$real" ]; then\n'
+        '    echo "modulo: gh guard: $real exists but $tgt is not a guard shim; reinstalling in $d" >&2\n'
+        "  fi\n"
+        '  tmp="$d/.gh.modulo-shim.$$"\n'
+        # Write the shim to a temp file FIRST (a failure here leaves the real
+        # gh untouched), then preserve the real gh, then shadow the path.
+        "  if ! { printf '%s\\n' '#!/bin/sh'\n"
+        '    printf "REAL_BIN=\'%s\'\\n" "$real"\n'
+        '    printf "MARKER=\'%s\'\\n" "$MARKER"\n'
+        "    cat <<'MODULO_GH_GUARD_EOF'\n"
+        f"{_GH_PR_GUARD_SHIM_BODY}"
+        "MODULO_GH_GUARD_EOF\n"
+        f'  }} > "$tmp" 2>/dev/null; then rm -f "$tmp" 2>/dev/null || true; '
+        'echo "modulo: gh guard: cannot write shim in $d" >&2; continue; fi\n'
+        '  if ! chmod 755 "$tmp" 2>/dev/null; then rm -f "$tmp" 2>/dev/null || true; '
+        'echo "modulo: gh guard: cannot chmod shim in $d" >&2; continue; fi\n'
+        # Preserve the real gh ONLY when this path does not already hold our
+        # shim: copying a shim over gh.modulo-real would create exactly the
+        # self-recursion the preserve step exists to prevent.
+        '  if [ "$is_ours" -eq 0 ] && [ ! -f "$real" ]; then\n'
+        '    if ! cp -p "$tgt" "$real" 2>/dev/null; then rm -f "$tmp" 2>/dev/null || true; '
+        'echo "modulo: gh guard: cannot preserve real gh in $d" >&2; continue; fi\n'
+        "  fi\n"
+        '  if ! mv "$tmp" "$tgt" 2>/dev/null; then rm -f "$tmp" 2>/dev/null || true; '
+        'echo "modulo: gh guard: cannot shadow gh in $d" >&2; continue; fi\n'
+        "  guard_installed=$((guard_installed + 1))\n"
+        "done\n"
+        'if [ "$guard_installed" -eq 0 ]; then\n'
+        "  found_gh=0\n"
+        "  for d in $(printf '%s' \"$PATH\" | tr ':' ' '); do\n"
+        '    if [ -f "$d/gh" ]; then found_gh=1; break; fi\n'
+        "  done\n"
+        '  if [ "$found_gh" -eq 1 ]; then\n'
+        '    echo "modulo: gh guard: FAILED - a gh exists on PATH but none could be guarded" >&2\n'
+        "    exit 1\n"
+        "  fi\n"
+        # XS: an unguarded sentinel run must be OBSERVABLE — this exits 0 (the
+        # install step is best-effort and must not wedge the dispatch), so the
+        # note is the only signal that the platform guard is absent; the
+        # caller also mirrors it into the policy log.
+        '  echo "modulo: gh guard: WARNING no gh on PATH; nothing to guard" >&2\n'
+        '  echo "modulo: gh guard: sentinel run is NOT platform-guarded (prompt-level only)" >&2\n'
+        "fi\n"
+        "exit 0\n"
+    )
+
+
 async def apply_sandbox_policy(
     sandbox: Any,
     *,
@@ -317,19 +604,25 @@ async def apply_sandbox_policy(
     egress_allowlist: list[dict[str, Any]] | None,
     allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
+    delivery_sentinel: str | None = None,
+    run_scope: str | None = None,
 ) -> None:
     """Run the enforced sandbox policy in the sandbox (FAR-212 PR B).
 
-    Executes the git-credential scope, the selected-mode egress allowlist, and
-    the read-only chmod scripts as root inside the sandbox, each wrapped in a
-    bounded ``asyncio.wait_for`` (fresh coroutines per call, safe to cancel).
+    Executes the git-credential scope, the selected-mode egress allowlist, the
+    FAR-1264 one-PR-per-run ``gh`` guard, and the read-only chmod scripts as
+    root inside the sandbox, each wrapped in a bounded ``asyncio.wait_for``
+    (fresh coroutines per call, safe to cancel).
 
     STEP ORDER MATTERS: the git-credential scripts WRITE files into the
     workspace (``/home/user/.git-policy/cred-helper.sh`` + the agent's
     ``/home/user/.gitconfig``) and the read-only script SEALS the workspace
-    read-only — so the git steps run FIRST and the read-only seal runs LAST,
-    otherwise the seal would block the git helper install. The egress step uses
-    iptables (no filesystem writes) and runs between them.
+    read-only — so every step that writes runs FIRST and the read-only seal
+    runs LAST, otherwise the seal would block the git helper install. The
+    egress step uses iptables (no filesystem writes) and runs between them.
+    The FAR-1264 ``gh``-guard install also writes (system ``PATH`` dirs +
+    ``/tmp``) and therefore runs BEFORE the seal; it does not touch
+    ``/home/user`` itself.
 
     USER CONTEXT (critical for the git steps): the git-credential scripts must
     register the helper in the AGENT's git config (``/home/user/.gitconfig``),
@@ -352,16 +645,34 @@ async def apply_sandbox_policy(
     step is BEST-EFFORT (failures are logged-and-continued): its script is
     drop-first fail-closed, so a failure / missing-iptables no-op leaves the
     sandbox with NO egress (deny-all) — the safe direction, never a permissive
-    one.
+    one. The FAR-1264 ``gh``-guard install is BEST-EFFORT too — a failed
+    install is logged-and-continued and the run degrades to the prompt-level
+    one-PR-per-run guard (it must never wedge a dispatch; it does NOT copy the
+    enforcement-critical raise semantics of the git/seal steps).
 
     ``sandbox`` is the e2b ``AsyncSandbox``. ``egress_allowlist`` entries may
     carry an extra ``_resolved_ip`` key (resolved by node_runner before calling)
     used to bind the iptables rule to a concrete address.
+
+    FAR-1264: when ``delivery_sentinel`` is non-empty, the one-PR-per-run
+    ``gh`` shim is installed (:func:`build_gh_pr_guard_script`) with the
+    run-scoped marker from ``run_scope``. Both new arguments are optional and
+    default to ``None``/unset, so every existing caller is unaffected. The
+    sentinel VALUE is only a gate — the shim's refusal message is fixed — so
+    no caller-controlled text is interpolated into the shell scripts.
     """
 
-    async def _run_step(script: str, *, user: str, enforce: bool) -> None:
+    async def _run_step(script: str, *, user: str, enforce: bool) -> Any:
+        """Run one policy step; return its CommandResult (``None`` on a
+        swallowed best-effort failure).
+
+        The e2b SDK's ``commands.run`` RAISES on a non-zero exit
+        (``CommandExitException``), so a returned result is a successful step —
+        one whose stderr can still carry a diagnostic the caller must not
+        discard (see the gh-guard reporting below).
+        """
         try:
-            await asyncio.wait_for(
+            return await asyncio.wait_for(
                 asyncio.shield(sandbox.commands.run(script, user=user, timeout=command_timeout)),
                 timeout=command_timeout,
             )
@@ -370,9 +681,12 @@ async def apply_sandbox_policy(
         except Exception:
             if enforce:
                 raise
-            # Best-effort (egress only): the script is drop-first fail-closed,
-            # so a failure leaves NO egress (deny-all) — never fail-open.
+            # Best-effort (egress + the gh guard): a failure is logged-and-
+            # continued, never raised into the dispatch. Egress is drop-first
+            # fail-closed (a failure leaves NO egress — never fail-open); the
+            # guard install degrades to the prompt-level one-PR-per-run guard.
             _log.warning("sandbox_policy.step_failed", exc_info=True)
+            return None
 
     # Enforcement-critical steps run as root (the read-only seal must override
     # every file's mode bits regardless of ownership; the git helper install
@@ -391,15 +705,35 @@ async def apply_sandbox_policy(
         await _run_step(build_git_none_script(), user="root", enforce=True)
     if egress_policy == "selected" and egress_allowlist:
         await _run_step(build_egress_selected_script(egress_allowlist), user="root", enforce=False)
+    if delivery_sentinel:
+        # FAR-1264: install the run-scoped one-PR-per-run gh shim. BEST-EFFORT
+        # (enforce=False): a failed install is logged-and-continued and the run
+        # degrades to the prompt-level guard — never raises into the dispatch.
+        # Runs BEFORE the read-only seal (it writes: system PATH dirs + /tmp).
+        _guard_result = await _run_step(
+            build_gh_pr_guard_script(gh_pr_guard_marker_path(run_scope)),
+            user="root",
+            enforce=False,
+        )
+        # XS: the install's own diagnostics exit 0 with only a stderr note —
+        # most importantly "no gh on PATH ... NOT platform-guarded", i.e. a
+        # sentinel run whose platform guard is ABSENT. Without this mirror the
+        # note is discarded with the result and the degraded run is invisible.
+        _guard_report = str(getattr(_guard_result, "stderr", "") or "").strip()
+        if _guard_report:
+            _log.warning("sandbox_policy.gh_guard_install_reported: %s", _guard_report[:1000])
     if read_only:
         await _run_step(build_read_only_script(), user="root", enforce=True)
 
 
 __all__ = [
+    "DELIVERY_SENTINEL_SPEC_KEY",
     "apply_sandbox_policy",
     "build_egress_selected_script",
+    "build_gh_pr_guard_script",
     "build_git_multi_host_script",
     "build_git_none_script",
     "build_git_scoped_script",
     "build_read_only_script",
+    "gh_pr_guard_marker_path",
 ]

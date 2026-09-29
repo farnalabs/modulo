@@ -21,6 +21,7 @@ from modulo.core.runtime_provider import (
     IsolationPolicy,
     RuntimeProvider,
     WorkspaceFileInfo,
+    WorkspaceMetrics,
     WorkspaceSpec,
 )
 from modulo.core.runtime_provider.log_tail import combine_log_entries
@@ -53,6 +54,11 @@ _LOG_TAIL_RAW_FALLBACK = 4000
 # calls (SDK ``request_timeout`` + outer ``asyncio.wait_for``), mirroring
 # the house rule that every E2B SDK call sits under a wait_for.
 _FILE_IO_TIMEOUT = 30
+# FAR-1050 R6: bound on the ``sandbox.get_metrics`` poll (same house rule —
+# every E2B SDK call sits under a wait_for). The watchdog applies its own
+# outer bound on top; this inner bound keeps the provider primitive honest
+# for callers that do not.
+_METRICS_TIMEOUT = 10
 # FAR-1050 R5: egress vocabulary accepted on ``WorkspaceSpec.egress_policy``.
 # Two dialects feed this field (both reach the provider in production):
 #   - the CANONICAL dialect stamped by the flag-ON dispatch
@@ -124,6 +130,36 @@ class _StreamEnd:
 def _stream_error_message(exc: Exception) -> str:
     """Format an engine/proxy stream failure for ``ExecProcess.error`` (ADR 040)."""
     return f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
+def _metric_number(value: Any) -> float | None:
+    """Coerce an SDK metric field to float, or ``None`` when unusable.
+
+    bool is excluded (``True`` is not a measurement) and non-numeric /
+    absent fields become ``None`` — the ABC carrier reports "not
+    observable" rather than a number the killer would compare against.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _workspace_metrics(sample: Any) -> WorkspaceMetrics:
+    """Map an SDK ``SandboxMetrics`` sample onto the ABC carrier (FAR-1050 R6).
+
+    Sample semantics are preserved verbatim: ``cpu_used_pct`` stays a
+    percentage, byte counters stay bytes, and ``cpu_count`` stays a
+    core count (informational, never enforced as a threshold).
+    """
+    cpu_count = getattr(sample, "cpu_count", None)
+    return WorkspaceMetrics(
+        cpu_used_pct=_metric_number(getattr(sample, "cpu_used_pct", None)),
+        cpu_count=cpu_count if isinstance(cpu_count, int) and not isinstance(cpu_count, bool) else None,
+        mem_used=_metric_number(getattr(sample, "mem_used", None)),
+        mem_total=_metric_number(getattr(sample, "mem_total", None)),
+        disk_used=_metric_number(getattr(sample, "disk_used", None)),
+        disk_total=_metric_number(getattr(sample, "disk_total", None)),
+    )
 
 
 class E2BRuntimeProvider(RuntimeProvider):
@@ -465,8 +501,8 @@ class E2BRuntimeProvider(RuntimeProvider):
         ADR 040 ``apply_isolation``: wraps the existing
         ``sandbox_policy.apply_sandbox_policy`` — the same script builders,
         the same step order (git-credential scope -> egress allowlist ->
-        read-only seal), the same ``user=root``, and the same
-        enforcement-critical-raise vs egress-best-effort split — so the
+        FAR-1264 gh guard -> read-only seal), the same ``user=root``, and the
+        same enforcement-critical-raise vs best-effort split — so the
         flag-ON primitive and the flag-OFF engine invocation emit identical
         enforcement for a fixed policy (pinned by the R3 parity unit test).
 
@@ -476,14 +512,30 @@ class E2BRuntimeProvider(RuntimeProvider):
         pattern as :meth:`destroy_workspace_by_ref` — so the R3 flag-ON
         engine path can enforce a workspace the legacy direct path
         provisioned. ``spec`` carries workspace attribution for callers; the
-        scripts target the fixed ``/home/user`` workspace and do not read it.
+        enforcement scripts target the fixed ``/home/user`` workspace and do
+        not read it — EXCEPT the FAR-1264 delivery sentinel: the engine
+        threads the node's ``delivery_sentinel`` through
+        ``spec.workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`` (the
+        per-invocation carrier) and it gates the one-PR-per-run ``gh`` guard;
+        ``spec.run_id`` scopes the guard's claim marker so a marker can never
+        leak across runs. Both are absent on a spec built without them, so
+        every existing caller and the R3 parity test are unaffected.
         """
         # Lazy import (house convention): sandbox_policy is dependency-free,
         # but importing it pulls the pipeline_engine package __init__ — the
         # engine process already has it loaded when this runs.
-        from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+        from modulo.core.pipeline_engine.sandbox_policy import (
+            DELIVERY_SENTINEL_SPEC_KEY,
+            apply_sandbox_policy,
+        )
 
         sandbox = await self._resolve_sandbox(provider_ref, "apply isolation")
+        # FAR-1264: resolve the run-scoped one-PR-per-run guard inputs from
+        # the spec (type-narrowed: the metadata dict is engine-supplied, so a
+        # malformed/foreign value degrades to "no guard", never a crash).
+        _sentinel_raw = (spec.workspace_metadata or {}).get(DELIVERY_SENTINEL_SPEC_KEY)
+        _delivery_sentinel = _sentinel_raw if isinstance(_sentinel_raw, str) and _sentinel_raw else None
+        _run_scope = str(spec.run_id) if spec.run_id is not None else None
         await apply_sandbox_policy(
             sandbox,
             read_only=policy.read_only,
@@ -492,6 +544,8 @@ class E2BRuntimeProvider(RuntimeProvider):
             egress_allowlist=policy.egress_allowlist,
             allowed_hosts=policy.allowed_hosts,
             command_timeout=policy.command_timeout,
+            delivery_sentinel=_delivery_sentinel,
+            run_scope=_run_scope,
         )
 
     # ------------------------------------------------------------------
@@ -550,6 +604,28 @@ class E2BRuntimeProvider(RuntimeProvider):
             size=int(getattr(info, "size", 0) or 0),
             is_dir=str(file_type) == "dir",
         )
+
+    # ------------------------------------------------------------------
+    # Resource-metrics primitive (FAR-1050 R6 — ADR 040 metrics gap)
+    # ------------------------------------------------------------------
+
+    async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:
+        """Poll the sandbox metrics endpoint (FAR-1050 R6 ABC primitive).
+
+        E2B's ``sandbox.get_metrics()`` returns a list of SDK
+        ``SandboxMetrics`` samples (oldest-first); each is mapped onto the
+        provider-neutral :class:`WorkspaceMetrics` carrier, preserving the
+        sample order so the caller can take the newest instantaneous
+        reading. Handle resolution mirrors :meth:`apply_isolation` /
+        the file-I/O primitives: the tracked handle when this provider
+        created the workspace, otherwise reconnect by ref.
+
+        Failures propagate (sandbox unreachable, poll timeout) — the
+        resource-cap killer owns the fail-open, never this primitive.
+        """
+        sandbox = await self._resolve_sandbox(provider_ref, "get_metrics")
+        samples = await asyncio.wait_for(sandbox.get_metrics(), timeout=_METRICS_TIMEOUT)
+        return [_workspace_metrics(sample) for sample in samples]
 
     async def _resolve_sandbox(self, provider_ref: str, operation: str) -> Any:
         """Return the sandbox handle for *provider_ref* (FAR-1050 R2a).

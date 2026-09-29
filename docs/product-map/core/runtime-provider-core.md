@@ -29,7 +29,7 @@ unit-tests:
   - backend/tests/unit/core/runtime_provider/test_docker_endpoint_tls.py
   - backend/tests/unit/core/runtime_provider/test_far1128_cap_environments_dispatch.py
   - backend/tests/unit/runtime_provider/test_docker_provider.py
-  - backend/tests/unit/pipeline_engine/test_e2b_isolation_flag.py
+  - backend/tests/unit/pipeline_engine/test_e2b_isolation_provider.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
 bdd:
@@ -108,6 +108,35 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       flag-gated parity to the legacy `sandbox_policy.apply_sandbox_policy`
       (enforcement-critical-raise vs egress-best-effort split) and a typed
       `ProviderCapabilityUnsupportedError` refusal on non-overriding providers
+- [x] Run-scoped one-PR-per-run `gh` guard (FAR-1264): when the engine threads
+      a node's non-empty `delivery_sentinel` through
+      `WorkspaceSpec.workspace_metadata`, `apply_sandbox_policy` installs a
+      `gh` shim that permits exactly ONE `gh pr create` per sandbox run for the
+      `gh` binaries it managed to guard (the platform-side hard guard behind the
+      prompt-level one-PR-per-run rule, FAR-1254); every other `gh` invocation
+      passes through untouched, and a create that FAILS (non-zero exit) releases
+      its claim so a transient failure does not burn the run's only attempt.
+      **Coverage is bounded, not absolute:** the guard intercepts only
+      `gh pr create` resolved through the sandbox PATH at install time (and
+      absolute paths to those same binaries); `gh api` PR creation, a `gh` copy
+      outside the PATH, shell aliases/functions, and a `gh` installed into the
+      PATH AFTER the install are NOT intercepted, and a missing `gh` or a failed
+      install degrades to the prompt-level guard (both are logged). The install
+      is BEST-EFFORT — a failure is logged and the run degrades to
+      the prompt-level guard, never wedges the dispatch (unlike the
+      enforcement-critical steps); the gate
+      `_should_apply_sandbox_policy(..., delivery_sentinel=...)` runs the
+      policy step for sentinel-only nodes, and a sentinel-only invocation
+      failure is swallowed at the T7 call site while enforcement-control
+      nodes keep the fail-closed tier refusal. Unit-covered in
+      `tests/unit/pipeline_engine/test_sandbox_policy.py` (shim executed
+      end-to-end under `sh`: first create passes, a failed first create
+      releases its claim for a retry, second refused; install idempotency
+      re-writes a stale run scope) and
+      `tests/unit/pipeline_engine/test_e2b_isolation_provider.py` (gating
+      predicate + call-site routing/best-effort), with the e2b call site's own
+      spec-metadata read pinned in
+      `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
 - [x] File-I/O primitives (FAR-1050 R2a): `read_file` / `write_file` /
       `list_files` / `get_info` (+ the frozen `WorkspaceFileInfo` value object)
       on the ABC — exec-based binary-safe defaults (base64 over the text exec
