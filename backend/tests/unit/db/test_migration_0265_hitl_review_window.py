@@ -6,9 +6,11 @@ time) and ``pipelines.hitl_review_window_seconds`` (the per-pipeline override).
 Lenses:
 
 * **Chain** - 0265 chains onto ``0264_pipelines_max_autonomy_ge_default``;
-  0266_guardrail_policy_gate_sweep (FAR-1107) chains onto 0265, and
-  0267_notification_hot_query_indexes chains onto 0266, and
-  0268_pipeline_snapshots_max_autonomy_ge_default chains onto 0267 as the
+  0266_guardrail_policy_gate_sweep (FAR-1107) chains onto 0265,
+  0267_notification_hot_query_indexes chains onto 0266,
+  0268_webhook_lookup_expiry_indexes chains onto 0267,
+  0269_webhook_dedup_check_constraints chains onto 0268, and
+  0270_pipeline_snapshots_max_autonomy_ge_default chains onto 0269 as the
   current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -35,7 +37,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0268_pipeline_snapshots_max_autonomy_ge_default"
+_HEAD_MIGRATION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

@@ -1,8 +1,8 @@
-"""0268: ``ck_pipeline_snapshots_max_autonomy_ge_default`` against real Postgres.
+"""0270: ``ck_pipeline_snapshots_max_autonomy_ge_default`` against real Postgres.
 
 Migration 0259 guarded the VOCABULARY of both snapshot autonomy columns but
 never their RELATIVE ORDER - that invariant lived on ``pipelines`` only (0264).
-0268 repairs inverted snapshot rows (behaviour-preserving) and adds the
+0270 repairs inverted snapshot rows (behaviour-preserving) and adds the
 composite CHECK to ``pipeline_snapshots``.
 
 Runs against the migrated testcontainer (real Postgres):
@@ -55,7 +55,7 @@ _MIGRATION_PATH = (
     / "db"
     / "migrations"
     / "versions"
-    / "0268_pipeline_snapshots_max_autonomy_ge_default.py"
+    / "0270_pipeline_snapshots_max_autonomy_ge_default.py"
 )
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 
@@ -74,7 +74,7 @@ _SNAPSHOT_INSERT = (
 
 def _load_migration() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
-        "migration_0268_pipeline_snapshots_max_autonomy_ge_default", _MIGRATION_PATH
+        "migration_0270_pipeline_snapshots_max_autonomy_ge_default", _MIGRATION_PATH
     )
     assert spec is not None
     assert spec.loader is not None
@@ -86,7 +86,7 @@ def _load_migration() -> ModuleType:
 def _upgrade_statements() -> dict[str, str]:
     """The migration's three statements, keyed by role.
 
-    ``UPGRADE_STATEMENTS`` is ordered ADD -> repair -> VALIDATE (0268's
+    ``UPGRADE_STATEMENTS`` is ordered ADD -> repair -> VALIDATE (0270's
     statement-order contract); keying by role keeps every call site readable
     and makes an order change fail loudly here rather than silently swapping
     the repair and the DDL.
@@ -212,7 +212,7 @@ async def _seed_org_account_and_pipeline(engine: AsyncEngine) -> tuple[uuid.UUID
                 "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
                 "VALUES (:id, :email, :name, 'hash', 'local', true)"
             ),
-            {"id": str(account_id), "email": f"{slug}@example.com", "name": "0268 repair"},
+            {"id": str(account_id), "email": f"{slug}@example.com", "name": "0270 repair"},
         )
         await conn.execute(
             text(
@@ -282,7 +282,7 @@ async def _constraint_validated(db_engine: AsyncEngine) -> bool:
 
 
 async def _restore_constraint(db_engine: AsyncEngine) -> None:
-    """Re-add + VALIDATE 0268's CHECK (both statements are existence-gated)."""
+    """Re-add + VALIDATE 0270's CHECK (both statements are existence-gated)."""
     statements = _upgrade_statements()
     async with db_engine.begin() as conn:
         await conn.execute(text(statements["add"]))
@@ -470,7 +470,7 @@ async def test_repair_lowers_the_default_onto_the_ceiling_and_preserves_behaviou
 
         # Put the CHECK back with the migration's OWN statements (both
         # existence-gated, so this is a no-op if the drop above never ran) and
-        # prove it validates - the ADD/VALIDATE half of 0268.
+        # prove it validates - the ADD/VALIDATE half of 0270.
         await _restore_constraint(engine)
         assert await _constraint_validated(engine), "the CHECK must be restored and VALIDATEd after the repair"
     finally:

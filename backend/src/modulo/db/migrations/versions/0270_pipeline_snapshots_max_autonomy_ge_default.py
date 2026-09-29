@@ -1,7 +1,7 @@
 """DB-enforce ``pipeline_snapshots.max_autonomy_level >= default_autonomy_level`` (FAR-1280).
 
-Revision ID: 0268_pipeline_snapshots_max_autonomy_ge_default
-Revises: 0267_notification_hot_query_indexes
+Revision ID: 0270_pipeline_snapshots_max_autonomy_ge_default
+Revises: 0269_webhook_dedup_check_constraints
 Create Date: 2026-09-29
 
 .. warning::
@@ -148,8 +148,8 @@ import logging
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0268_pipeline_snapshots_max_autonomy_ge_default"
-down_revision: str | None = "0267_notification_hot_query_indexes"
+revision: str = "0270_pipeline_snapshots_max_autonomy_ge_default"
+down_revision: str | None = "0269_webhook_dedup_check_constraints"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -231,7 +231,7 @@ def upgrade() -> None:
             # returns no result - there is no rowcount to log from it.
             result = op.get_bind().execute(text(statement))
             logger.info(
-                "0268 repair: %s inverted pipeline_snapshot row(s) rewritten onto their ceiling",
+                "0270 repair: %s inverted pipeline_snapshot row(s) rewritten onto their ceiling",
                 result.rowcount,
             )
         else:

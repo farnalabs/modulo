@@ -515,11 +515,21 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
 
     original_get_engine = cron_helpers._get_engine
     role = non_superuser_role
+    # Engines already instrumented with the SET ROLE checkout listener. A
+    # checkout listener executes SQL through the asyncpg sync proxy, which
+    # yields to the event loop mid-dispatch; registering another listener from
+    # a concurrent coroutine mutates the pool's listener deque while it is
+    # being iterated ("RuntimeError: deque mutated during iteration", deploy
+    # run 36583273069 / test_two_connections_no_double_redispatch). Register at
+    # most once per engine so repeated _get_engine() calls cannot race.
+    instrumented_engines: set[AsyncEngine] = set()
 
     def _rls_get_engine() -> AsyncEngine:
         from sqlalchemy import event
 
         engine = original_get_engine()
+        if engine in instrumented_engines:
+            return engine
 
         @event.listens_for(engine.sync_engine, "checkout")
         def _set_role_on_checkout(
@@ -532,6 +542,8 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
                 cursor.execute(f'SET ROLE "{role}"')
             finally:
                 cursor.close()
+
+        instrumented_engines.add(engine)
 
         return engine
 

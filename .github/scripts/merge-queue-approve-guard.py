@@ -50,7 +50,10 @@ def load_concatenated(path: str):
     We walk the text with ``raw_decode`` and flatten every top-level array/dict
     into a single list.
     """
-    with Path(path).open(encoding="utf-8") as fh:
+    # ``path`` is a CLI argument supplied by the calling workflow
+    # (.github/workflows/merge-queue.yml passes an ``mktemp`` path); it is never
+    # user- or model-supplied, so this S8707 taint flow is a false positive.
+    with Path(path).open(encoding="utf-8") as fh:  # NOSONAR pythonsecurity:S8707
         text = fh.read()
     decoder = json.JSONDecoder()
     items: list = []

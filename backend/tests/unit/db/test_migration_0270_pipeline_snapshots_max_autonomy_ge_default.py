@@ -1,16 +1,19 @@
-"""0268: ``pipeline_snapshots.max_autonomy_level >= default_autonomy_level`` at the DB layer.
+"""0270: ``pipeline_snapshots.max_autonomy_level >= default_autonomy_level`` at the DB layer.
 
 Migration 0259 guarded the VOCABULARY of both snapshot autonomy columns but not
 their RELATIVE ORDER, while 0264 added exactly that pair invariant to
-``pipelines`` - so the two tables were asymmetric. 0268 repairs inverted
+``pipelines`` - so the two tables were asymmetric. 0270 repairs inverted
 snapshot rows (behaviour-preserving: run-time resolution already computed
 ``base = min(default, ceiling) = ceiling`` for them) and then adds the composite
 CHECK, mirroring 0264 statement-for-statement on the snapshot table.
 
 Lenses:
 
-* **Chain** - 0268 chains onto ``0267_notification_hot_query_indexes`` (0266/0267 landed on main while
-  this branch was in flight) as the single linear head.
+* **Chain** - 0270 chains onto ``0269_webhook_dedup_check_constraints`` as the
+  single linear head. This migration was originally numbered 0268; main landed
+  ``0268_webhook_lookup_expiry_indexes`` and
+  ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
+  so it was renumbered onto 0270.
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -47,9 +50,9 @@ from sqlalchemy import CheckConstraint
 
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
-_MIGRATION_REVISION = "0268_pipeline_snapshots_max_autonomy_ge_default"
-_MIGRATION_DOWN_REVISION = "0267_notification_hot_query_indexes"
-_HEAD_MIGRATION = "0268_pipeline_snapshots_max_autonomy_ge_default"
+_MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
+_MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
+_HEAD_MIGRATION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264
@@ -117,11 +120,11 @@ def _executed() -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0268(self) -> None:
+    def test_single_head_is_0270(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0267_notification_hot_query_indexes(self) -> None:
+    def test_down_revision_is_0269_webhook_dedup_check_constraints(self) -> None:
         module = _load_migration()
         assert module.down_revision == _MIGRATION_DOWN_REVISION
 
@@ -211,7 +214,7 @@ class TestUpgrade:
         assert "max_autonomy_level IS NULL OR " in add_ddl, add_ddl
         assert f"{_REPAIR_RANK_DEFAULT} <= {_REPAIR_RANK_CEILING}" in add_ddl, add_ddl
         for value in _VOCABULARY:
-            assert f"'{value}'" in add_ddl, f"0268 CHECK vocabulary missing {value!r}"
+            assert f"'{value}'" in add_ddl, f"0270 CHECK vocabulary missing {value!r}"
 
     def test_no_string_formatted_ddl(self) -> None:
         """S608 / migration-fstring-sql: the DDL must be literal, not f-string."""
