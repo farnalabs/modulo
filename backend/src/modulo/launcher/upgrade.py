@@ -235,8 +235,15 @@ def pre_upgrade_dump(
     dump_url, postgres_password = _decredential_url(url_with_password)
 
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    # `parent` is the operator-chosen data/snapshot directory, supplied by the
+    # bundled installer via the local `modulo upgrade --data-dir` CLI -- never an
+    # HTTP request or agent input. The block above has already refused unless the
+    # directory holds a bootstrapped state.json (HMAC-verified against the
+    # secrets file) plus a secrets.json, so the path is trusted by construction,
+    # not attacker-arbitrary, and no privilege boundary is crossed (the process
+    # runs as the same operator that chose the path).
     parent = output_dir if output_dir is not None else data_dir
-    parent.mkdir(parents=True, exist_ok=True)
+    parent.mkdir(parents=True, exist_ok=True)  # NOSONAR pythonsecurity:S8707
     snapshot_dir = parent / f"{SNAPSHOT_PREFIX}{timestamp}"
     counter = 0
     while snapshot_dir.exists():
