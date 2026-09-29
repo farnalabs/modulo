@@ -11,6 +11,14 @@ export default defineConfig({
   testDir: './tests/e2e',
   retries: target !== 'local' ? 2 : 0,
   timeout: target !== 'local' ? 180_000 : 30_000,
+  // Bound a cascade. The staging @regression job runs 265 tests serially, so a
+  // systemic failure (e.g. a pre-auth/login degradation) otherwise retries
+  // every remaining test 3× at the 180 s budget and exhausts the job's
+  // 90-minute timeout before Playwright can report a signal — the deploy
+  // pipeline then sees an opaque "exceeded maximum execution time" cancelled
+  // run. Aborting after a clear failure count turns that into a fast, legible
+  // failure and cannot fail an otherwise-healthy run (zero final failures).
+  maxFailures: target !== 'local' ? 15 : undefined,
   workers: target === 'staging' ? 1 : undefined,
   use: {
     baseURL,
