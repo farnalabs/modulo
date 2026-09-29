@@ -112,6 +112,7 @@ Features:
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
 - `manual` node type – same as HITL but human provides full output
 - `hitl` node type (FAR-402 P1) – a draggable human-in-the-loop gate; compiles to the same synthetic-gate path as a legacy edge-level HITL gate. `manual` remains the non-gating human-output step.
+- Review window (FAR-1257) and approaching-deadline warning (FAR-1270) – the effective window is resolved ONCE at gate fire (pipeline override > org default > `HITL_CLAIM_TTL_SECONDS` + `HITL_REVIEW_CANCEL_GRACE_SECONDS`, clamped to 60s..7d) and stamped as `hitl_claims.terminalize_at`; the dispatcher-reconcile terminaliser cancels the run at that deadline, and a fire-once `hitl_deadline_warning` cron emails the gate-fire recipients at the halfway lead so a human can act first. Both mechanisms are described under "Run admission and healing" below.
 
 **Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "review_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `review_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honoured ONLY by the gate/node its stamp names: every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
 
@@ -239,7 +240,7 @@ Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-s
 
 Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), and `runner_docker` (registered when a `MODULO_RUNNER_*` variable or a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
 
-E2B direct-path inventory, sanctioned-site list, and the rewire plan that moved every E2B dispatch onto the RuntimeProvider ABC (FAR-1050 deliverable 1). The `MODULO_E2B_VIA_PROVIDER` flag the plan originally gated on was **retired by slice R6 (PR #1033)** — the provider path is now unconditional, and `via_provider` survives only as a historical attribution field on the dispatch marker and node telemetry: [`docs/design/e2b-provider-conformance-rewire.md`](design/e2b-provider-conformance-rewire.md).
+E2B direct-path inventory, sanctioned-site list, and the rewire plan that moved every E2B dispatch onto the RuntimeProvider ABC (FAR-1050 deliverable 1). The `MODULO_E2B_VIA_PROVIDER` flag the plan originally gated on was **retired by slice R6 (PR #1033)**: the provider path is now unconditional, and `via_provider` survives only as a historical attribution field on the dispatch marker and node telemetry: [`docs/design/e2b-provider-conformance-rewire.md`](design/e2b-provider-conformance-rewire.md).
 
 #### Bundled Runner (Docker) packaging (D4, FAR-590)
 
@@ -271,23 +272,23 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 #### Git-sourced content refs (FAR-220)
 
-A `sandbox_agent` node's content fields — `agent_prompt`, each `agent_commands` item, and `script_command` — may reference a file tracked in a git repository instead of inlining the content (the "checkout-and-execute" / "fetch-and-render" pattern, productised):
+A `sandbox_agent` node's content fields (`agent_prompt`, each `agent_commands` item, and `script_command`) may reference a file tracked in a git repository instead of inlining the content (the "checkout-and-execute" / "fetch-and-render" pattern, productised):
 
 ```
 git+<repo-url>[@<ref>]#<path>
 ```
 
-- `git+` marks the value as a ref (it sits in a string field exactly like `secretref://` does — an alternative value, not a new field). A value that merely *mentions* `git+` mid-string stays inline content.
-- `<repo-url>` uses the same scheme set managed workspace inputs accept (`https://`, `ssh://`, SCP-style `git@host:path`). Credentials are forbidden in the URL — `@` after the repository is reserved for the ref separator.
+- `git+` marks the value as a ref (it sits in a string field exactly like `secretref://` does, an alternative value rather than a new field). A value that merely *mentions* `git+` mid-string stays inline content.
+- `<repo-url>` uses the same scheme set managed workspace inputs accept (`https://`, `ssh://`, SCP-style `git@host:path`). Credentials are forbidden in the URL: `@` after the repository is reserved for the ref separator.
 - `@<ref>` is an optional branch / tag / commit SHA; omitted means `HEAD`. A 40-hex value is a **pin**.
 - `#<path>` is a repository-relative file path (non-empty, no `..`, no `#`, no newlines).
 
 Lifecycle (the shared parse/resolve/pin helpers live in `modulo/core/pipeline_engine/git_content.py`; the save-time gate is part of the graph validator):
 
-1. **Graph-save validation** (`GraphValidator`, codes `GIT_CONTENT_REF_INVALID` / `GIT_CONTENT_REF_UNPINNED`): a `git+` value must parse, and stored graphs must carry a **pinned** `@<40-hex>` ref — so every run snapshot (which deep-copies the live graph at snapshot creation) surfaces the resolved commit SHA for audit. Movable refs are rejected at save with a hint to pin them or use `modulo apply`. Composite-template sandbox sub-nodes obey the same gate. Agent rows are gated at every write path too: the REST/MCP Agent saves run `validate_agent_git_content_values` directly, the graph-PATCH Agent-command sync validates each incoming list before writing the row (the graph validator only checks `sandbox_agent` nodes, so an `agent`-type node could otherwise carry an unpinned ref into the row ungated), and prompt rollback re-validates the restored template (a legacy history entry must not re-poison a clean row). A `GitContentRefError` from any of these surfaces is mapped to HTTP 422 and rolls back the enclosing write.
-2. **Pin-on-apply**: `modulo apply` resolves a movable spec ref to its current commit SHA at plan time (`git ls-remote`, bounded, fail-closed — an unresolvable ref BLOCKS the entity) and rewrites the field to the canonical pinned form. The desired managed view, the write payload, the stored graph, and every subsequent run snapshot therefore hold the same pinned SHA.
-3. **Run-time rendering**: at the agent-command rendering point (`node_runner`), a whole-field pinned ref is fetched at exactly that commit (host-side `git clone --no-checkout` + `git show <sha>:<path>`) and the file content replaces the ref before dispatch (fetched content then flows through the normal Jinja render for llm mode / verbatim for script mode). Unpinned refs and fetch failures raise typed errors — the node fails closed rather than dispatching the raw ref string. Host-side fetch is public-repository-only in this increment (no credential material is ever embedded in the ref or the process environment); private-repo credential support is a later increment.
-4. **Drift (`--diff`)**: because the desired side is the resolved pin and the deployed side is the stored pin, the managed-field hash reports `updated` when the tracked ref moved (branch/tag advanced, spec changed, or the deployed graph was saved unpinned). `drift_detail` additionally names the move per content field as a `git_content` list (`{node, field, desired, current}` with the full old/new refs), rendered as `drift detail git-content ...` lines — so a CI gate on `--diff` fails on content drift and the report shows the actual commit transition. Re-running `modulo apply` converges the deployed pin.
+1. **Graph-save validation** (`GraphValidator`, codes `GIT_CONTENT_REF_INVALID` / `GIT_CONTENT_REF_UNPINNED`): a `git+` value must parse, and stored graphs must carry a **pinned** `@<40-hex>` ref, so every run snapshot (which deep-copies the live graph at snapshot creation) surfaces the resolved commit SHA for audit. Movable refs are rejected at save with a hint to pin them or use `modulo apply`. Composite-template sandbox sub-nodes obey the same gate. Agent rows are gated at every write path too: the REST/MCP Agent saves run `validate_agent_git_content_values` directly, the graph-PATCH Agent-command sync validates each incoming list before writing the row (the graph validator only checks `sandbox_agent` nodes, so an `agent`-type node could otherwise carry an unpinned ref into the row ungated), and prompt rollback re-validates the restored template (a legacy history entry must not re-poison a clean row). A `GitContentRefError` from any of these surfaces is mapped to HTTP 422 and rolls back the enclosing write.
+2. **Pin-on-apply**: `modulo apply` resolves a movable spec ref to its current commit SHA at plan time (`git ls-remote`, bounded, fail-closed: an unresolvable ref BLOCKS the entity) and rewrites the field to the canonical pinned form. The desired managed view, the write payload, the stored graph, and every subsequent run snapshot therefore hold the same pinned SHA.
+3. **Run-time rendering**: at the agent-command rendering point (`node_runner`), a whole-field pinned ref is fetched at exactly that commit (host-side `git clone --no-checkout` + `git show <sha>:<path>`) and the file content replaces the ref before dispatch (fetched content then flows through the normal Jinja render for llm mode / verbatim for script mode). Unpinned refs and fetch failures raise typed errors: the node fails closed rather than dispatching the raw ref string. Host-side fetch is public-repository-only in this increment (no credential material is ever embedded in the ref or the process environment); private-repo credential support is a later increment.
+4. **Drift (`--diff`)**: because the desired side is the resolved pin and the deployed side is the stored pin, the managed-field hash reports `updated` when the tracked ref moved (branch/tag advanced, spec changed, or the deployed graph was saved unpinned). `drift_detail` additionally names the move per content field as a `git_content` list (`{node, field, desired, current}` with the full old/new refs), rendered as `drift detail git-content ...` lines, so a CI gate on `--diff` fails on content drift and the report shows the actual commit transition. Re-running `modulo apply` converges the deployed pin.
 
 ## Feature Flags
 
@@ -348,20 +349,46 @@ worker pool stays bounded by parked runs). A capacity-deferred run stays
 `pipeline_capacity` / `org_capacity_limited`) and is re-dispatched when a slot
 frees; `pipeline.max_concurrent_runs` must be >= 1 (create/update reject 0 and
 negatives; 0 would silently wedge admission forever; pausing admission is the
-org triggers pause). Four independent mechanisms keep that gate healthy:
+org triggers pause). Several independent mechanisms keep those gates healthy:
 
 - **Slot reconciliation sweep:** a system cron (every 5 min) terminalises
   `running` runs whose heartbeat is stale past `SLOT_RECONCILE_STALE_SECONDS`
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
+- **HITL review-window terminaliser (FAR-648, FAR-1257):** a sweep wired into
+  `dispatcher_reconcile` (every 60s) cancels an `awaiting_human` run whose open
+  gate is still UNCLAIMED and UNDECIDED past the resolved review window:
+  `cancelled` / `hitl_review_expired`, which releases the org concurrency slot
+  (pipeline capacity was already released when the run left `running`). The
+  window is resolved once at fire time (pipeline override > org default >
+  `HITL_CLAIM_TTL_SECONDS` + `HITL_REVIEW_CANCEL_GRACE_SECONDS`, clamped to
+  60s..7d) and stamped as `hitl_claims.terminalize_at`, so stamped rows ignore
+  the grace knob while legacy unstamped rows keep the old arithmetic. A run
+  with ANY claimed or still-in-window undecided gate is left alone (live human
+  work), cancellation-requested runs belong to the cancel path, and analytics
+  classifies these runs as `excluded` / `hitl_timeout` rather than a deliberate
+  `operator_or_hitl_cancelled` cancel.
+- **HITL approaching-deadline warning (FAR-1270):** a dedicated
+  `hitl_deadline_warning` SAQ cron (every 60s) emails the same recipients the
+  gate-fire alert uses while an unclaimed, undecided gate is still inside its
+  lead band, `min(max(window / 2, 60s), window, 3600s)` before the deadline, so
+  someone can approve/reject BEFORE the terminaliser cancels. At most ONE
+  warning per gate (Redis `SET NX` fire-once marker, in-process backstop when
+  Redis is down), skipped when the gate is already claimed or decided, already
+  past its deadline, covered by a claimed open sibling gate, or has no opted-in
+  recipients.
 - **HITL park-on-expiry sweep:** a system cron (every 5 min) parks a run whose
-  open HITL gate expired UNANSWERED past `HITL_PARK_GRACE_SECONDS` (default
-  24h): the run moves `awaiting_human` to `hitl_parked` (a non-terminal status
-  that holds no pipeline capacity). The STATUS itself is the parked signal
-  the HITL UI reads to show "expired, parked". Park is not decide: the gate row
-  stays OPEN AND CLAIMABLE (a claim takes a fresh TTL), and the moment a
-  decision commits
+  open HITL gate expired UNANSWERED: the run moves `awaiting_human` to
+  `hitl_parked` (a non-terminal status that holds no pipeline capacity). The
+  deadline is `HITL_PARK_GRACE_SECONDS` (default 24h) after expiry for legacy
+  unstamped rows, but since FAR-1257 the sweep anchors on the review deadline
+  (`terminalize_at` + a positive margin), so the terminaliser above always acts
+  first and parking is unreachable for the unclaimed-expired class at stamped
+  rows (a parked run still holds the org slot, which is why the terminaliser
+  exists). The STATUS itself is the parked signal the HITL UI reads to show
+  "expired, parked". Park is not decide: the gate row stays OPEN AND CLAIMABLE
+  (a claim takes a fresh TTL), and the moment a decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
   re-enters normal admission: approve resumes from the checkpoint through the
   normal resume path, reject terminalises via the reject path. Each park is
@@ -567,7 +594,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 ### JWT Security
 
 - Access tokens: 15-min expiry
-- Refresh tokens: sliding 24-h expiry by default (configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`), rotated on use — each rotation mints a fresh token with the full lifetime, so this IS the idle-logout window: a session abandoned longer than the TTL cannot refresh and is logged out
+- Refresh tokens: sliding 24-h expiry by default (configurable 1–168h via `MODULO_REFRESH_TOKEN_TTL_HOURS`), rotated on use: each rotation mints a fresh token with the full lifetime, so this IS the idle-logout window: a session abandoned longer than the TTL cannot refresh and is logged out
 - Algorithm pinning: `HS256` only – `none` and other algs rejected
 - SECRET_KEY: minimum 32 bytes (256 bits) – refused at startup if insufficient
 - Token family invalidation on revocation
@@ -764,7 +791,7 @@ ADRs document key trade-offs and are maintained alongside this project's private
 | 029 | Agent Execution Tiers + the Bundled Runner | Accepted |
 | 038 | RBAC as a Security Boundary: One Rule, One Principal | Accepted |
 
-Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`): where two files shared a number, the later arrival was renumbered — 003 Agent Dispatch Model → 044, 004 Agent as a Self-Contained Bundle → 045, 005 Agent Architecture: Two-Tier → 046, 017 Centralized Authorization → 047, 021 E2B Session Liveness → 048, 025 Live-Edit History + Release Channels → 049 and Execution-Graph Router/HITL Nodes → 050, 042 Managed Sandbox Adapter Pattern → 051 — so each number now names exactly one ADR file (the keeper files — 003 Packaging & Distribution, 004 User Offboarding, 005 Single-Org Self-Hosted, 017 Celery to SAQ, 021 Worker Resilience, 025 Generic REST Integration Connector, 042 Governed Run Contract — kept their numbers). Centralized Authorization still exists as two copies, `047-centralized-authorization.md` (superseded by the canonical `018-centralized-authorization.md`), so it is listed once above under the combined number 047/018.
+Note: duplicate ADR numbers were resolved by FAR-1157 (devtools commit `b65b5de`): where two files shared a number, the later arrival was renumbered: 003 Agent Dispatch Model → 044, 004 Agent as a Self-Contained Bundle → 045, 005 Agent Architecture: Two-Tier → 046, 017 Centralized Authorization → 047, 021 E2B Session Liveness → 048, 025 Live-Edit History + Release Channels → 049 and Execution-Graph Router/HITL Nodes → 050, 042 Managed Sandbox Adapter Pattern → 051, so each number now names exactly one ADR file (the keeper files 003 Packaging & Distribution, 004 User Offboarding, 005 Single-Org Self-Hosted, 017 Celery to SAQ, 021 Worker Resilience, 025 Generic REST Integration Connector, 042 Governed Run Contract, kept their numbers). Centralized Authorization still exists as two copies, `047-centralized-authorization.md` (superseded by the canonical `018-centralized-authorization.md`), so it is listed once above under the combined number 047/018.
 
 ## Import Contracts (enforced by import-linter)
 
