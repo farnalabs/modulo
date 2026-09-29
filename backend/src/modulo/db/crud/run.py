@@ -1025,6 +1025,7 @@ async def _run_guardrail_interception_pass(
     is_replay: bool | None,
     skipped_guardrails: list[Any],
     any_guarding: bool,
+    session: Any | None = None,
 ) -> tuple[dict[str, Any], list[Any], list[Any], bool, str, list[Any], str]:
     """Execute the interception pass and return every mutated run state field.
 
@@ -1032,9 +1033,37 @@ async def _run_guardrail_interception_pass(
     guardrails log-and-continue. Emits the interception latency metric. Returns
     ``(payload, results, redactions, blocked, block_message, skipped,
     blocking_eval_name)`` in assignment order.
+
+    When *session* is provided, PolicyGate rows are looked up for guardrail
+    evals and passed to the resolver (chunk 8).
     """
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import run_interception_pass_async
+
+    # Chunk 8: look up PolicyGate rows for guardrail evals (resolver wiring).
+    policy_gates_map: dict[uuid.UUID, Any] | None = None
+    if session is not None:
+        from sqlalchemy import select
+
+        from modulo.db.models.policy_gate import PolicyGate
+
+        eval_ids = [d.id for d in guardrail_defs]
+        if eval_ids:
+            gate_rows = (
+                (
+                    await session.execute(
+                        select(PolicyGate).where(
+                            PolicyGate.eval_id.in_(eval_ids),
+                            PolicyGate.organisation_id == org_id,
+                            PolicyGate.deleted_at.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if gate_rows:
+                policy_gates_map = {row.eval_id: row for row in gate_rows}
 
     start_wall = time.perf_counter()
     try:
@@ -1044,6 +1073,7 @@ async def _run_guardrail_interception_pass(
             payload,
             detection_only=bool(is_replay),
             skipped=skipped_guardrails,
+            policy_gates=policy_gates_map,
         )
     except asyncio.CancelledError:
         raise
@@ -1299,7 +1329,7 @@ async def _run_guardrail_gate(
             guardrail_defs = _downgrade_guardrails_to_observe(guardrail_defs)
             _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
 
-        observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
+        observed_by_eval = {d.id: True for d in guardrail_defs}
         any_guarding = any(
             d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
         )
@@ -1337,6 +1367,7 @@ async def _run_guardrail_gate(
                 is_replay=request.is_replay,
                 skipped_guardrails=skipped_guardrails,
                 any_guarding=any_guarding,
+                session=session,
             )
         # NOTE (item 10 invariant): a conformance block (``blocked`` True via
         # the block above) must NOT clear the accumulated pin-skips collected

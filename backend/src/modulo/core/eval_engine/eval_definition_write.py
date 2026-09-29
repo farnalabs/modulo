@@ -24,7 +24,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine.policy_gate import (
-    GUARDRAIL_EVAL_TYPE,
     validate_binding,
 )
 
@@ -132,7 +131,7 @@ async def create_or_update_eval(
 
     # --- Branch on eval type BEFORE calling validate_binding ---
 
-    if eval_type == GUARDRAIL_EVAL_TYPE:
+    if eval_type == "guardrail":
         # Branch 1: guardrail — config-vocabulary validator only, no PolicyGate
         validate_guardrail_request(
             eval_type=eval_type,
@@ -226,7 +225,7 @@ async def create_or_update_eval(
 
     # --- PolicyGate persistence (branches 2 only) ---
 
-    if pg_action is not None and node_id is not None and eval_type != GUARDRAIL_EVAL_TYPE:
+    if pg_action is not None and node_id is not None and eval_type != "guardrail":
         # Upsert PolicyGate for this eval
         existing_gate = (
             await session.execute(

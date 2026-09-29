@@ -60,6 +60,24 @@ from modulo.core.eval_engine import (
     GuardrailMisroutedError,
 )
 
+
+def assert_guardrail_evidence_write_authorised(key: str) -> None:
+    """Validate that the guardrail module is authorised to write *key*.
+
+    The guardrail module is a ``system_state`` producer writing
+    ``connector_*`` and ``capability_*`` keys (chunk 8, §5.5). Every
+    evidence write from this module MUST call this function before
+    persisting the row. Without this call site the evidence store would
+    be dormant past its own activation chunk.
+
+    Raises ``EvidenceWriteAuthorisationError`` if the key is outside the
+    guardrail module's allowed namespace.
+    """
+    from modulo.core.eval_engine.evidence_layer import assert_write_authorisation
+
+    assert_write_authorisation("system_state", key)
+
+
 _log = logging.getLogger(__name__)
 
 
@@ -135,7 +153,15 @@ class GuardrailConfigError(ValueError):
 
 
 class GuardrailBlockedError(EvalBlockedError):
-    """A guardrail blocked the run at the ingestion edge — terminal eval_failed."""
+    """A guardrail blocked the run — terminal eval_failed.
+
+    Raised by two enforcement paths:
+    1. The ingestion edge (run-creation, pre-persist) — unchanged from chunk 1.
+    2. The per-node evaluation path via the Policy Gate resolver (chunk 8).
+
+    The exception type is preserved across both paths so every existing catch
+    site continues to work without a catch-site sweep.
+    """
 
 
 class FieldRedactionPolicy(BaseModel):
@@ -542,6 +568,7 @@ def evaluate_guardrails(
     payload: dict[str, Any],
     *,
     raise_on_block: bool = True,
+    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> list[EvalResult]:
     """Evaluate ALL *definitions* against *payload* (phase one).
 
@@ -550,15 +577,88 @@ def evaluate_guardrails(
     ``warn``/``observe`` guardrails never raise. Guardrail detection reuses
     the pure eval helpers by building a transient regex/json_schema
     ``EvalDefinition`` mirror of the guardrail.
+
+    When *policy_gates* is provided (a mapping of eval_id → PolicyGate row),
+    the Policy Gate resolver (``resolve_policy_gate``) is the enforcement
+    authority for guardrails with a gate row. Guardrails without a gate row
+    (observe/redact) fall back to the direct ``config_json.action`` check.
     """
+    from modulo.core.eval_engine.policy_gate import (
+        EvalPolicySnapshot,
+        EvalResultView,
+        EvalView,
+        PolicyGateView,
+        resolve_policy_gate,
+    )
+
     results: list[EvalResult] = []
     violations: list[tuple[EvalDefinition, EvalResult]] = []
+    warn_violations: list[tuple[EvalDefinition, EvalResult, str]] = []
     for eval_def in definitions:
         result = _detect_one(engine, payload, eval_def)
         results.append(result)
         detection_type, _ = _resolve_detection(eval_def)
-        if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
+        is_violation = _interpret_violation(detection_type, result)
+
+        if not is_violation:
+            continue
+
+        gate_row = (policy_gates or {}).get(eval_def.id)
+        if gate_row is not None:
+            # Resolver is the enforcement authority (chunk 8).
+            pg_view = PolicyGateView(
+                id=gate_row.id,
+                organisation_id=gate_row.organisation_id,
+                version=gate_row.version,
+                node_id=gate_row.node_id,
+                action=gate_row.action,
+            )
+            ev_view = EvalView(
+                id=eval_def.id,
+                organisation_id=eval_def.org_id,
+                node_id=uuid.UUID(str(eval_def.node_id)) if eval_def.node_id else None,
+                eval_type=str(eval_def.eval_type),
+                deleted_at=None,
+            )
+            er_view = EvalResultView(id=result.id, passed=result.passed)
+            snapshot = EvalPolicySnapshot(
+                policy_gate=pg_view,
+                eval=ev_view,
+                eval_result=er_view,
+            )
+            outcome = resolve_policy_gate(snapshot)
+
+            if outcome.result is None:
+                # Undefined resolution (§5.2.1).
+                if outcome.action == "block":
+                    # Fail closed — raise with error code in detail.
+                    raise GuardrailBlockedError(
+                        eval_def.name,
+                        f"guardrail_undefined_resolution: {outcome.error}",
+                    )
+                # Fail open — log warning and continue.
+                _log.warning(
+                    "guardrails.resolver_undefined",
+                    extra={
+                        "gate_id": str(gate_row.id),
+                        "error_source": outcome.error,
+                        "guardrail": eval_def.name,
+                    },
+                )
+                warn_violations.append((eval_def, result, outcome.action))
+            elif outcome.action == "block":
+                violations.append((eval_def, result))
+            elif outcome.action == "warn":
+                _log.warning(
+                    "guardrails.resolver_warn",
+                    extra={"guardrail": eval_def.name, "detail": result.detail},
+                )
+                warn_violations.append((eval_def, result, outcome.action))
+            # outcome.action == "continue" → no action (passing result)
+        # No gate row — fall back to direct config_json.action check.
+        elif eval_def.config.get("action") == GuardrailAction.BLOCK:
             violations.append((eval_def, result))
+
     if violations and raise_on_block:
         first_def, first_result = violations[0]
         raise GuardrailBlockedError(first_def.name, first_result.detail)
@@ -614,16 +714,60 @@ class DetectionLoopOutcome:
 def _detect_block(
     definitions: Sequence[EvalDefinition],
     results: Sequence[EvalResult],
+    *,
+    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> BlockDecision:
-    """Determine the block decision from aligned (definitions, results)."""
+    """Determine the block decision from aligned (definitions, results).
+
+    When *policy_gates* is provided, uses the resolver for guardrails with
+    a gate row; falls back to the direct ``config_json.action`` check otherwise.
+    """
+    from modulo.core.eval_engine.policy_gate import (
+        EvalPolicySnapshot,
+        EvalResultView,
+        EvalView,
+        PolicyGateView,
+        resolve_policy_gate,
+    )
+
     for eval_def, result in zip(definitions, results, strict=True):
-        detection_type, _ = _resolve_detection(eval_def)
-        if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
-            return BlockDecision(
-                blocked=True,
-                block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
-                blocking_eval_name=eval_def.name,
+        gate_row = (policy_gates or {}).get(eval_def.id)
+        if gate_row is not None:
+            pg_view = PolicyGateView(
+                id=gate_row.id,
+                organisation_id=gate_row.organisation_id,
+                version=gate_row.version,
+                node_id=gate_row.node_id,
+                action=gate_row.action,
             )
+            ev_view = EvalView(
+                id=eval_def.id,
+                organisation_id=eval_def.org_id,
+                node_id=uuid.UUID(str(eval_def.node_id)) if eval_def.node_id else None,
+                eval_type=str(eval_def.eval_type),
+                deleted_at=None,
+            )
+            er_view = EvalResultView(id=result.id, passed=result.passed)
+            snapshot = EvalPolicySnapshot(
+                policy_gate=pg_view,
+                eval=ev_view,
+                eval_result=er_view,
+            )
+            outcome = resolve_policy_gate(snapshot)
+            if outcome.result is False and outcome.action == "block":
+                return BlockDecision(
+                    blocked=True,
+                    block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
+                    blocking_eval_name=eval_def.name,
+                )
+        else:
+            detection_type, _ = _resolve_detection(eval_def)
+            if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
+                return BlockDecision(
+                    blocked=True,
+                    block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
+                    blocking_eval_name=eval_def.name,
+                )
     return BlockDecision()
 
 
@@ -771,6 +915,8 @@ def run_guardrail_pass(
     engine: EvalEngine,
     definitions: Sequence[EvalDefinition],
     payload: dict[str, Any],
+    *,
+    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> GuardrailPassResult:
     """Two-phase guardrail pass over an immutable pre-act payload (raising).
 
@@ -784,7 +930,13 @@ def run_guardrail_pass(
     """
     if not definitions:
         return GuardrailPassResult()
-    outcome = run_interception_pass(engine, definitions, payload, detection_only=False)
+    outcome = run_interception_pass(
+        engine,
+        definitions,
+        payload,
+        detection_only=False,
+        policy_gates=policy_gates,
+    )
     if outcome.blocked:
         raise GuardrailBlockedError(outcome.blocking_eval_name or "<guardrail>", outcome.block_message)
     return GuardrailPassResult(
@@ -910,6 +1062,7 @@ def run_interception_pass(
     payload: dict[str, Any],
     *,
     detection_only: bool = False,
+    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> GuardrailInterceptionOutcome:
     """Non-raising two-phase guardrail pass for the ingestion edge (sync).
 
@@ -922,6 +1075,9 @@ def run_interception_pass(
     *detection_only* (replays) skips both the block decision and the
     redaction act — replays are detection-only (item 10).
 
+    When *policy_gates* is provided, the Policy Gate resolver is the
+    enforcement authority for guardrails with a gate row (chunk 8).
+
     NOTE: this unbounded sync variant is the test/contract surface. The
     production seam (``create_run`` / ``guardrail_override``) uses
     :func:`run_interception_pass_async`, which adds the per-guardrail hard
@@ -930,9 +1086,15 @@ def run_interception_pass(
     if not definitions:
         return GuardrailInterceptionOutcome(payload=dict(payload), results=[])
     pre_act = copy.deepcopy(payload)
-    results = evaluate_guardrails(engine, definitions, pre_act, raise_on_block=False)
+    results = evaluate_guardrails(
+        engine,
+        definitions,
+        pre_act,
+        raise_on_block=False,
+        policy_gates=policy_gates,
+    )
 
-    decision = _detect_block(definitions, results)
+    decision = _detect_block(definitions, results, policy_gates=policy_gates)
     return _assemble_outcome(
         definitions,
         pre_act,
@@ -1104,6 +1266,7 @@ async def run_interception_pass_async(
     timeout_seconds: float | None = None,
     max_payload_bytes: int = DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES,
     skipped: Sequence[GuardrailSkip] = (),
+    policy_gates: Mapping[uuid.UUID, Any] | None = None,
 ) -> GuardrailInterceptionOutcome:
     """Async two-phase guardrail pass with per-guardrail hard timeouts (item 7).
 
@@ -1156,7 +1319,11 @@ async def run_interception_pass_async(
 
     decision = detection_outcome.decision
     if not decision.blocked:
-        decision = _detect_block(detection_outcome.evaluated_defs, detection_outcome.results)
+        decision = _detect_block(
+            detection_outcome.evaluated_defs,
+            detection_outcome.results,
+            policy_gates=policy_gates,
+        )
     return _assemble_outcome(
         definitions,
         pre_act,
@@ -1616,6 +1783,7 @@ __all__ = [
     "RedactionEntry",
     "alert_unexpected_guardrail_skip",
     "apply_redaction_masks",
+    "assert_guardrail_evidence_write_authorised",
     "audit_guardrail_skip",
     "build_guardrail_summary",
     "check_payload_within_budget",
