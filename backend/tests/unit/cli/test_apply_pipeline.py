@@ -830,6 +830,122 @@ class TestStdoutRetentionConfigPayloads:
         assert second.status == "unchanged"
 
 
+HITL_REVIEW_WINDOW_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      hitl_review_window_seconds: 3600
+"""
+
+
+class TestHitlReviewWindowPayloads:
+    """FAR-1257: hitl_review_window_seconds must be parsed, planned, and SENT.
+
+    The payload assertions read the RAW request body: this branch predates
+    the REST field (it ships in the same sweep), so the real
+    PipelineCreate/PipelineUpdate models on this base ignore the key and the
+    round-trip can only assert the attribute once that REST field lands —
+    the model_validate() calls below still prove the payload is not
+    REJECTED by the real request models.
+    """
+
+    @respx.mock
+    def test_create_payload_includes_hitl_review_window(self) -> None:
+        routes = _mock_current_with_pipelines([])
+        config = parse_apply_documents(HITL_REVIEW_WINDOW_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        assert routes["pipelines_post"].call_count == 1
+        create_payload = json.loads(routes["pipelines_post"].calls.last.request.content)
+        assert create_payload["hitl_review_window_seconds"] == 3600
+        PipelineCreate.model_validate(create_payload)
+
+    @respx.mock
+    def test_patch_payload_includes_hitl_review_window(self) -> None:
+        """A live row without the override drifts, and the PATCH carries it."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        routes = _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(HITL_REVIEW_WINDOW_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
+        assert updated == ["sample"]
+        assert routes["pipeline_patch"].call_count == 1
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert patch_payload["hitl_review_window_seconds"] == 3600
+        PipelineUpdate.model_validate(patch_payload)
+
+    @respx.mock
+    def test_double_apply_with_hitl_review_window_converges(self) -> None:
+        """Prove-the-fix: plan 'updated' against a row lacking the override;
+        after the payload builder sends the value, re-planning against the
+        stored value reports 'unchanged' (no perpetual drift)."""
+        from modulo.cli.apply.models import PipelineEntity
+        from modulo.cli.apply.plan import plan_entity
+
+        entity = PipelineEntity.model_validate(
+            {
+                "name": "sample",
+                "description": "Sample pipeline",
+                "max_concurrent_runs": 3,
+                "hitl_review_window_seconds": 3600,
+            }
+        )
+        current_row = _pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa")
+        first = plan_entity("pipeline", "sample", entity.managed_view(), current_row)
+        assert first.status == "updated"
+
+        routes = _mock_current_with_pipelines([dict(current_row)])
+        config = parse_apply_documents(HITL_REVIEW_WINDOW_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        sent = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert sent["hitl_review_window_seconds"] == 3600
+
+        stored = dict(current_row)
+        stored.update(sent)
+        second = plan_entity("pipeline", "sample", entity.managed_view(), stored)
+        assert second.status == "unchanged"
+
+    @respx.mock
+    def test_omitted_field_patches_null_and_still_converges(self) -> None:
+        """Unconditional semantics: an OMITTED key means null, and a live row
+        carrying a UI-set override therefore plans as drift and is cleared."""
+        from modulo.cli.apply.models import PipelineEntity
+        from modulo.cli.apply.plan import plan_entity
+
+        entity = PipelineEntity.model_validate(
+            {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
+        )
+        current_row = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        current_row["hitl_review_window_seconds"] = 7200
+        first = plan_entity("pipeline", "sample", entity.managed_view(), current_row)
+        assert first.status == "updated"
+
+        routes = _mock_current_with_pipelines([current_row])
+        config = parse_apply_documents(GRAPHLESS_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        assert not report["failed"]
+        sent = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        assert sent["hitl_review_window_seconds"] is None
+
+        stored = dict(current_row)
+        stored.update(sent)
+        second = plan_entity("pipeline", "sample", entity.managed_view(), stored)
+        assert second.status == "unchanged"
+
+
 class TestGraphSecretEnvVarConvergence:
     """FAR-1181 review (MAJOR) / FAR-1232: read-path masking must not make
     declarative apply drift forever on graph env_vars.
