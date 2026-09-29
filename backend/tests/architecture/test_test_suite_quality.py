@@ -283,27 +283,27 @@ regression that silently weakens the suite:
   it is almost always a leftover from inlining a double while debugging.
   Configure the double and pass the configured instance (or use a bound
   name), or assert on the real expected value
- - a freshly-constructed Mock nested *inside* a ``call(...)`` wrapper passed
-   as an *expected* argument to a mock verification — ``<mock>.assert_called_with(
-   call(Mock()))``, ``assert_has_calls([call(MagicMock())])``,
-   ``assert_awaited_any_call(call(AsyncMock()))``. The direct fresh-Mock-in-call-
-   assertion lens owns only the bare expected-argument positions and
-   deliberately leaves ``call(...)``-wrapped mocks alone (a negative control
-   there); this lens closes that documented gap. ``call`` objects compare
-   their payload by equality, and a fresh Mock compares by identity
-   (``__eq__`` defaults to ``is``), so the recorded call can never equal the
-   freshly-minted wrapper: for ``assert_called_with``/``assert_called_once_with``
-   and the awaited twins the verification ALWAYS FAILS, ``assert_any_call``/
-   ``assert_awaited_any_call`` can never match any recorded call, and
-   ``assert_has_calls``/``assert_has_awaits`` membership can never hold.
-   ``call(ANY)`` is deliberately left alone — ``ANY`` exists precisely to
-   match from inside a wrapper — as are class references (``call(Mock)``,
-   the deliberate factory spelling), bound doubles, and fresh Mocks nested
-   inside a container that is itself inside the ``call(...)`` (``call({'k':
-   Mock()})``, a doubly-indirect shape). Only the direct argument positions of
-   the wrapper are checked, mirroring the direct-positions discipline of the
-   sibling lenses. Capture the double in a variable and pass the bound name,
-   or assert against the real expected value
+- a freshly-constructed Mock nested *inside* a ``call(...)`` wrapper passed
+  as an *expected* argument to a mock verification — ``<mock>.assert_called_with(
+  call(Mock()))``, ``assert_has_calls([call(MagicMock())])``,
+  ``assert_awaited_any_call(call(AsyncMock()))``. The direct fresh-Mock-in-call-
+  assertion lens owns only the bare expected-argument positions and
+  deliberately leaves ``call(...)``-wrapped mocks alone (a negative control
+  there); this lens closes that documented gap. ``call`` objects compare
+  their payload by equality, and a fresh Mock compares by identity
+  (``__eq__`` defaults to ``is``), so the recorded call can never equal the
+  freshly-minted wrapper: for ``assert_called_with``/``assert_called_once_with``
+  and the awaited twins the verification ALWAYS FAILS, ``assert_any_call``/
+  ``assert_awaited_any_call`` can never match any recorded call, and
+  ``assert_has_calls``/``assert_has_awaits`` membership can never hold.
+  ``call(ANY)`` is deliberately left alone — ``ANY`` exists precisely to
+  match from inside a wrapper — as are class references (``call(Mock)``,
+  the deliberate factory spelling), bound doubles, and fresh Mocks nested
+  inside a container that is itself inside the ``call(...)`` (``call({'k':
+  Mock()})``, a doubly-indirect shape). Only the direct argument positions of
+  the wrapper are checked, mirroring the direct-positions discipline of the
+  sibling lenses. Capture the double in a variable and pass the bound name,
+  or assert against the real expected value
 - ``assert x and not x`` / ``assert x or not x`` (and the ``not``-wrapped
   twins ``assert not (x and not x)`` / ``assert not (x or not x)``) — a
   boolean assertion whose test expression joins a value with its own negation.
