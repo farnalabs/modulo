@@ -36,7 +36,7 @@ from sqlalchemy.sql import Select
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.api.routes.pipelines import _finalize_locked_graph_save
+from modulo.api.routes.pipelines import GraphValidationIssue, _finalize_locked_graph_save
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.hitl_review_guard import (
@@ -1907,7 +1907,7 @@ def test_convert_to_agent_happy_path_returns_graph() -> None:
     saved_nodes = [_agent_node_dict()]
     session = _convert_session(agent=MagicMock(), connector=MagicMock(), connector_type="github", backend=MagicMock())
     with _convert_client(session) as http, ExitStack() as stack:
-        for p in _convert_patches([manual], (saved_nodes, [])):
+        for p in _convert_patches([manual], (saved_nodes, [], [])):
             stack.enter_context(p)
         for p in _rls():
             stack.enter_context(p)
@@ -1916,6 +1916,39 @@ def test_convert_to_agent_happy_path_returns_graph() -> None:
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["nodes"][0]["node_type"] == "agent"
+
+
+def test_convert_to_agent_surfaces_advisory_validation_issues() -> None:
+    """FAR-1277: advisory issues come back in ``validation_issues``, like PATCH /graph.
+
+    ``_save_locked_graph`` logs them AND returns them; the endpoint must pass
+    them through to the response instead of dropping them. Blocking codes still
+    raise (covered in ``test_node_conversion_save_enforcement.py``) - this is
+    only about the non-blocking half the siblings already surface.
+    """
+    node_id = uuid.uuid4()
+    manual = _manual_node_dict()
+    manual["id"] = str(node_id)
+    saved_nodes = [_agent_node_dict()]
+    advisory = GraphValidationIssue(
+        severity="warning",
+        code="guardrail_cap_advisory",
+        message="node would exceed the advisory guardrail cap",
+        node_id=str(node_id),
+    )
+    session = _convert_session(agent=MagicMock(), connector=MagicMock(), connector_type="github", backend=MagicMock())
+    with _convert_client(session) as http, ExitStack() as stack:
+        for p in _convert_patches([manual], (saved_nodes, [], [advisory])):
+            stack.enter_context(p)
+        for p in _rls():
+            stack.enter_context(p)
+        resp = http.post(f"{_CONVERT_URL}/{node_id}/convert-to-agent", json=_convert_body())
+
+    assert resp.status_code == 200, resp.text
+    issues = resp.json()["validation_issues"]
+    assert issues, "the advisory issue returned by _save_locked_graph must reach the response"
+    assert issues[0]["code"] == "guardrail_cap_advisory", issues
+    assert issues[0]["severity"] == "warning", issues
 
 
 def test_convert_to_agent_save_none_maps_404() -> None:
@@ -2144,7 +2177,7 @@ def test_revert_to_manual_happy_path_returns_graph() -> None:
     saved_nodes = [_manual_node_dict()]
     session = _make_session()
     with _convert_client(session) as http, ExitStack() as stack:
-        for p in _revert_patches([agent_node], _snapshot_with_node(snapshot_node), (saved_nodes, [])):
+        for p in _revert_patches([agent_node], _snapshot_with_node(snapshot_node), (saved_nodes, [], [])):
             stack.enter_context(p)
         for p in _rls():
             stack.enter_context(p)

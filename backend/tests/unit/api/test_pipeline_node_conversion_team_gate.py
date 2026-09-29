@@ -256,7 +256,7 @@ def test_revert_non_member_is_denied_403() -> None:
 def test_convert_member_succeeds() -> None:
     session = _make_team_session(is_member=True)
     nodes = [_convert_ready_manual_node()]
-    with _client_for(session, role="operator") as http, _patched(_convert_patches(nodes, (nodes, []))):
+    with _client_for(session, role="operator") as http, _patched(_convert_patches(nodes, (nodes, [], []))):
         resp = http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/nodes/{_NODE_ID}/convert-to-agent",
             json=_convert_body(),
@@ -268,7 +268,7 @@ def test_revert_member_succeeds() -> None:
     session = _make_team_session(is_member=True)
     with (
         _client_for(session, role="operator") as http,
-        _patched(_revert_patches([_agent_node()], _snapshot_with_manual_node(), ([_manual_node()], []))),
+        _patched(_revert_patches([_agent_node()], _snapshot_with_manual_node(), ([_manual_node()], [], []))),
     ):
         resp = http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/nodes/{_NODE_ID}/revert-to-manual",
@@ -281,7 +281,7 @@ def test_convert_org_admin_bypasses_the_membership_gate() -> None:
     """Admin bypass (RLS parity): no membership row is required."""
     session = _make_team_session(is_member=False)
     nodes = [_convert_ready_manual_node()]
-    with _client_for(session, role="admin") as http, _patched(_convert_patches(nodes, (nodes, []))):
+    with _client_for(session, role="admin") as http, _patched(_convert_patches(nodes, (nodes, [], []))):
         resp = http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/nodes/{_NODE_ID}/convert-to-agent",
             json=_convert_body(),

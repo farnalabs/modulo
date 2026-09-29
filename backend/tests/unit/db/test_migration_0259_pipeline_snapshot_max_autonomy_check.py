@@ -10,9 +10,10 @@ Lenses:
 * **Chain** - 0259 chains onto 0258; 0260_run_cancel_reason (FAR-1233) chains
   onto 0259, 0261_decision_record_payload (FAR-1102) chains onto 0260,
   0262_hitl_gate_to_review_vocabulary (FAR-1104) chains onto 0261,
-  0263_evidence_layer (FAR-966) chains onto 0262,
-  0264_pipelines_max_autonomy_ge_default chains onto 0263, and
-  0265_hitl_review_window (FAR-1257) chains onto 0264 as the single linear head.
+  0263_evidence_layer (FAR-966) chains onto 0262, 0264_pipelines_max_autonomy_ge_default
+  chains onto 0263, 0265_hitl_review_window (FAR-1257) chains onto 0264, and
+  0266_pipeline_snapshots_max_autonomy_ge_default chains onto 0265_hitl_review_window as the single
+  linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
   vocabulary and a TABLE-QUALIFIED ``conrelid`` gate; downgrade is the
@@ -37,7 +38,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0265_hitl_review_window"
+_HEAD_MIGRATION = "0266_pipeline_snapshots_max_autonomy_ge_default"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

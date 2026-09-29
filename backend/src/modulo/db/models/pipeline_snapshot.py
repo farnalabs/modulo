@@ -47,6 +47,26 @@ class PipelineSnapshot(OrgScoped):
             "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipeline_snapshots_default_autonomy_level",
         ),
+        # FAR-1280: the snapshot pair gets the SAME ceiling >= default invariant
+        # 0264 added to `pipelines` - byte-identical predicate, only the table
+        # and constraint name differ (migration 0266). Both columns are nullable
+        # by design, so the `max IS NULL` arm is load-bearing (NULL ceiling =
+        # effective ceiling is the default), and a NULL default ranks as
+        # manual_approval under three-valued logic exactly as
+        # `validate_autonomy_ceiling` does - no explicit `default IS NULL` arm
+        # is needed.
+        CheckConstraint(
+            "max_autonomy_level IS NULL OR "
+            "(CASE default_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END) <= "
+            "(CASE max_autonomy_level "
+            "WHEN 'manual_approval' THEN 0 "
+            "WHEN 'notify_on_complete' THEN 1 "
+            "WHEN 'fully_autonomous' THEN 2 END)",
+            name="ck_pipeline_snapshots_max_autonomy_ge_default",
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(

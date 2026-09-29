@@ -94,10 +94,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0260_run_cancel_reason (FAR-1233) chains off 0259, and
 # 0261_decision_record_payload (FAR-1102) chains off 0260, and
 # 0262_hitl_gate_to_review_vocabulary (FAR-1104) chains off 0261, and
-# 0263_evidence_layer (FAR-966) chains off 0262, and
-# 0265_hitl_review_window (FAR-1257) chains off
-# 0264_pipelines_max_autonomy_ge_default as the chain head.
-_CHAIN_HEAD_MIGRATION = "0265_hitl_review_window"
+# 0263_evidence_layer (FAR-966) chains off 0262, 0264_pipelines_max_autonomy_ge_default
+# chains off 0263, 0265_hitl_review_window (FAR-1257) chains off 0264, and
+# 0266_pipeline_snapshots_max_autonomy_ge_default chains off 0265_hitl_review_window as the chain head.
+_CHAIN_HEAD_MIGRATION = "0266_pipeline_snapshots_max_autonomy_ge_default"
 
 
 def _source(name: str) -> str:

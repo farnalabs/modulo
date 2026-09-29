@@ -10,8 +10,8 @@ holds the pipeline row lock, a PATCH arrives, and the endpoint must come back
 with HTTP 409 + the lock-timeout detail (SQLSTATE 55P03 mapped by
 ``handle_db_errors``) rather than hanging or answering the generic 503.
 
-The wait is ``_MUTATION_ROW_LOCK_TIMEOUT_MS`` (5 s), so this test takes ~5 s
-by design - it is timing the bounded wait, not a fixed sleep.
+The wait is ``Settings.mutation_row_lock_timeout_ms`` (5 s by default), so this
+test takes ~5 s by design - it is timing the bounded wait, not a fixed sleep.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.api.routes.pipelines import _MUTATION_ROW_LOCK_TIMEOUT_MS
 from modulo.auth.jwt import create_access_token
+from modulo.settings import get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -119,7 +119,7 @@ async def test_contended_patch_times_out_with_a_mapped_409(
             elapsed = time.monotonic() - started
             await holder.rollback()
 
-        expected_seconds = _MUTATION_ROW_LOCK_TIMEOUT_MS / 1000
+        expected_seconds = get_settings().mutation_row_lock_timeout_ms / 1000
         assert resp.status_code == 409, resp.text
         detail = resp.json()["detail"]
         assert "Timed out waiting for a lock" in detail, detail

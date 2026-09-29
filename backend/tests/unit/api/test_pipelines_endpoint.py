@@ -2495,6 +2495,10 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
         account_id=_USER_ID,
         org_role="admin",
         new_name=None,
+        # FAR-1276: the in-txn team gate rides in as clone_pipeline's
+        # step-(a)-commit hook (it must not lock the source row BEFORE
+        # step (a) reads it - see _clone_pipeline_into_org's docstring).
+        _on_step_a_committed=ANY,
     )
 
 
@@ -2529,6 +2533,7 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
         account_id=_USER_ID,
         org_role="admin",
         new_name="My Custom Clone",
+        _on_step_a_committed=ANY,
     )
 
 
