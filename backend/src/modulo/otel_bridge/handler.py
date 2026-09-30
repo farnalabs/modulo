@@ -96,6 +96,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         self._pipeline_id: str | None = pipeline_id
 
     def set_run_context(self, org_id: str, pipeline_id: str) -> None:
+        """Set the org/pipeline ids attached (anonymised) to subsequently started spans."""
         with self._lock:
             self._org_id = org_id
             self._pipeline_id = pipeline_id
