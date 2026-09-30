@@ -117,8 +117,9 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       threads the flag on the typed `IsolationPolicy` (the single carrier) to
       `apply_sandbox_policy`, which installs a `gh` shim that permits exactly
       ONE `gh pr create` per sandbox run for the `gh` binaries it managed to
-      guard (a bounded defence-in-depth layer behind the prompt-level
-      one-PR-per-run rule, FAR-1254 — not a hard guard); every other `gh`
+      guard (a bounded, best-effort defence-in-depth layer behind the
+      prompt-level one-PR-per-run rule, FAR-1254 — explicitly not a guarantee
+      on its own); every other `gh`
       invocation passes through untouched, and
       a create that FAILS (non-zero exit) releases its claim so a transient
       failure does not burn the run's only attempt. **Coverage is bounded, not

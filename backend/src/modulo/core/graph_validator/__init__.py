@@ -961,6 +961,30 @@ def _check_sandbox_git_credentials(node: dict[str, Any], nid: str, result: Valid
         result.error("SANDBOX_GIT_CREDENTIALS_INVALID", str(exc), node_id=nid)
 
 
+def _check_sandbox_single_pr_per_run(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 13b: ``single_pr_per_run`` must be a genuine boolean (FAR-1316).
+
+    The API model types the field ``StrictBool`` and the runtime reads it
+    fail-closed (``is True``), so a raw import that carries a non-bool
+    (``"true"`` / ``1`` / ``"yes"``) would SAVE cleanly and then silently
+    resolve to false at dispatch — a declared one-PR-per-run guard nothing
+    installs. Fail closed at save time instead, mirroring the ``read_only``
+    boolean check above. ``false`` and an absent flag are both legal and
+    never rejected.
+    """
+    if "single_pr_per_run" not in node:
+        return
+    value = node.get("single_pr_per_run")
+    if value is None or isinstance(value, bool):
+        return
+    result.error(
+        "SANDBOX_SINGLE_PR_PER_RUN_INVALID",
+        f"Node '{nid}': single_pr_per_run must be a boolean (true = arm the "
+        f"one-PR-per-run gh guard for this sandbox run), got {value!r}",
+        node_id=nid,
+    )
+
+
 def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any], result: ValidationResult) -> None:
     """Sandbox check 13: read_only / git_credentials only exist on sandbox_agent nodes.
 
@@ -2942,6 +2966,9 @@ class GraphValidator:
         9. agent_commands is Jinja-renderable (FAR-226).
         10. read_only / git_credentials are validated sandbox-only fields
             (FAR-212 PR B), and no non-sandbox node carries them.
+        10b. single_pr_per_run is a genuine boolean on a sandbox_agent node
+            (FAR-1316) — a raw-import non-bool would save cleanly and then
+            fail closed to false at dispatch, arming nothing.
         11. agent_commands list items must not end with a heredoc terminator
             (FAR-664) — the join operator would corrupt the terminator.
         16. git-sourced content refs (FAR-220) parse and are SHA-pinned so
@@ -2970,6 +2997,7 @@ class GraphValidator:
             _check_sandbox_resource_limits(node, nid, result)
             _check_sandbox_read_only(node, nid, result)
             _check_sandbox_git_credentials(node, nid, result)
+            _check_sandbox_single_pr_per_run(node, nid, result)
             _check_sandbox_wallclock_budget(node, nid, result)
             _check_sandbox_managed_inputs(node, nid, result)
             _check_sandbox_git_content(node, nid, result)
