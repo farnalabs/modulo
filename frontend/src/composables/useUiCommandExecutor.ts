@@ -306,6 +306,16 @@ async function executeWithTimeout(cmd: UiCommand, signal: AbortSignal): Promise<
       clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
       resolve(result)
+    }).catch(error => {
+      // executeSingle returns failure-shaped results for its own error paths;
+      // this backstop guarantees the outer Promise always settles if it
+      // nonetheless rejects (e.g. the error formatter itself throwing).
+      if (resolved) return
+      resolved = true
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      const detail = error instanceof Error ? error.message : String(error)
+      resolve({ id: cmd.id, name: cmd.name, success: false, error: `execution_failed: ${detail}` })
     })
   })
 }

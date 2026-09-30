@@ -28,12 +28,15 @@ from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
+    InvalidRedirectUriError,
     InvalidScopeError,
     create_authorization_code,
     create_oauth_client,
     delete_oauth_client,
     list_oauth_clients,
+    normalize_redirect_uris,
     normalize_scopes,
+    validate_redirect_uri,
 )
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.rls import set_rls_org
@@ -103,7 +106,18 @@ async def register_oauth_client(
             detail=str(e),
         ) from e
 
-    redirect_uris_str = " ".join(req.redirect_uris)
+    # FAR-1281: validate BEFORE the join so what is stored is exactly what was
+    # validated (an entry with an internal space would round-trip as two URIs
+    # through the space-joined column) and so a forbidden URI is never stored.
+    try:
+        redirect_uris = normalize_redirect_uris(req.redirect_uris)
+    except InvalidRedirectUriError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+
+    redirect_uris_str = " ".join(redirect_uris)
     scopes_str = " ".join(req.scopes)
 
     try:
@@ -295,7 +309,8 @@ async def approve_consent(
 
     Security properties:
     - ``state`` must be single-use, unexpired, and in the approver's org (RLS).
-    - ``redirect_uri`` comes from the state row ONLY — never client-supplied.
+    - ``redirect_uri`` comes from the state row ONLY — never client-supplied,
+      and it is re-validated before it is used to build the redirect.
     - The code is minted from the state row's scopes + code_challenge ONLY, so
       a tampered display can never escalate the granted scope (display is
       never authoritative).
@@ -317,6 +332,18 @@ async def approve_consent(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Unknown, expired, or already-used consent state",
                 )
+
+            # FAR-1281: fail closed if the stored redirect_uri would not pass
+            # today's registration rules. The state row can predate them (the
+            # TTL is ~15 min), and this handler is what hands the browser the
+            # final redirect target.
+            try:
+                validate_redirect_uri(state_row.redirect_uri)
+            except InvalidRedirectUriError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(e),
+                ) from e
 
             code = await create_authorization_code(
                 session,
@@ -353,5 +380,8 @@ async def approve_consent(
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
-    redirect_url = f"{state_row.redirect_uri}?code={quote(code)}&state={quote(req.state)}"
+    # The registered URI may already carry a query, so join with "&" in that
+    # case — "?code=" on top of "?x=1" would strand the code in the "x" value.
+    separator = "&" if "?" in state_row.redirect_uri else "?"
+    redirect_url = f"{state_row.redirect_uri}{separator}code={quote(code)}&state={quote(req.state)}"
     return ConsentApproveResponse(redirect_url=redirect_url)

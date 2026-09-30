@@ -6233,7 +6233,8 @@ export interface paths {
          *
          *     Security properties:
          *     - ``state`` must be single-use, unexpired, and in the approver's org (RLS).
-         *     - ``redirect_uri`` comes from the state row ONLY — never client-supplied.
+         *     - ``redirect_uri`` comes from the state row ONLY — never client-supplied,
+         *       and it is re-validated before it is used to build the redirect.
          *     - The code is minted from the state row's scopes + code_challenge ONLY, so
          *       a tampered display can never escalate the granted scope (display is
          *       never authoritative).

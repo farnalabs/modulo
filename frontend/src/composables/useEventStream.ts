@@ -87,7 +87,7 @@ function scheduleReconnect(kind: 'auth' | 'retry'): void {
   const delay = exp / 2 + secureRandomFraction() * (exp / 2)
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
-    doConnect()
+    void doConnect()
   }, delay)
 }
 
@@ -104,7 +104,7 @@ function connect(): void {
   _disconnecting = false
   clearReconnectTimer()
   connectionState.value = 'connecting'
-  doConnect()
+  void doConnect()
 }
 
 function handleConnectError(timeoutId: ReturnType<typeof setTimeout>, e: unknown): void {
@@ -259,7 +259,7 @@ export const eventBus = {
     reconnectAttempts = 0
     _disconnecting = false
     connectionState.value = 'connecting'
-    doConnect()
+    void doConnect()
   },
   /**
    * Register a callback fired (debounced as one batch) after each successful

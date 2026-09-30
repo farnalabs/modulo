@@ -117,15 +117,18 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       threads the flag on the typed `IsolationPolicy` (the single carrier) to
       `apply_sandbox_policy`, which installs a `gh` shim that permits exactly
       ONE `gh pr create` per sandbox run for the `gh` binaries it managed to
-      guard (the platform-side hard guard behind the prompt-level one-PR-per-run
-      rule, FAR-1254); every other `gh` invocation passes through untouched, and
+      guard (a bounded defence-in-depth layer behind the prompt-level
+      one-PR-per-run rule, FAR-1254 — not a hard guard); every other `gh`
+      invocation passes through untouched, and
       a create that FAILS (non-zero exit) releases its claim so a transient
       failure does not burn the run's only attempt. **Coverage is bounded, not
       absolute:** the guard intercepts only `gh pr create` resolved through the
       sandbox PATH at install time (and absolute paths to those same binaries);
       `gh api` PR creation, a `gh` copy outside the PATH, shell aliases/functions,
-      and a `gh` installed into the PATH AFTER the install are NOT intercepted,
-      and a missing `gh` or a failed install degrades to the prompt-level guard
+      and a `gh` installed into the PATH AFTER the install are NOT intercepted;
+      nor is any non-E2B dispatch — only the E2B provider implements
+      `apply_isolation`, so `runner_docker` / `local` runs get NO guard. A
+      missing `gh` or a failed install degrades to the prompt-level guard
       (both are logged). The install is BEST-EFFORT — a failure is logged and the
       run degrades to the prompt-level guard, never wedges the dispatch (unlike
       the enforcement-critical steps); the gate
@@ -137,7 +140,12 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `WorkspaceSpec.workspace_metadata[DELIVERY_SENTINEL_SPEC_KEY]`) is gone:
       `delivery_sentinel` keeps only its FAR-228 idempotency meaning and a
       sentinel-only node now gets NO guard, and the metadata constant itself was
-      deleted. Unit-covered in
+      deleted. **Migration required:** existing sentinel-only pipelines (the
+      live Prompt-to-PR nodes among them) must be migrated to the explicit flag
+      — set `single_pr_per_run: true` on each such node; until then no shim is
+      installed for them, and every dispatch logs the
+      `sandbox_agent.single_pr_per_run_flag_missing` warning (node id +
+      pipeline id) so the disarm stays observable. Unit-covered in
       `tests/unit/pipeline_engine/test_sandbox_policy.py` (shim executed
       end-to-end under `sh`: first create passes, a failed first create
       releases its claim for a retry, second refused; install idempotency
@@ -146,17 +154,32 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       predicate, the sentinel-only-gets-no-guard regression, and call-site
       routing/best-effort), with the e2b call site's own policy-flag read
       pinned in `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
-- [x] One-PR-per-run delivery contract enforced OUTSIDE the sandbox (FAR-1274):
-      every terminal write that funnels through `db.crud.run` (the
+- [x] One-PR-per-run: POST-RUN detection + an admin alert outside the sandbox
+      (FAR-1274) — this DETECTS and alerts after the fact; it does **NOT
+      prevent** a second PR. It is a stopgap until a preventive,
+      platform-mediated PR-create path exists (outstanding, XL/design).
+      Every terminal write that funnels through `db.crud.run` (the
       `update_run_status` ORM + fenced writers and `request_cancellation`) runs
-      `_enforce_one_pr_per_run`, which re-scans the run's **platform-captured**
+      `_enforce_one_pr_per_run`, which is **armed ONLY for runs whose frozen
+      pipeline snapshot declares the FAR-1273 `single_pr_per_run` node flag** —
+      multi-PR-by-design pipelines (and runs whose snapshot cannot be read)
+      stay silent, so the detector honours each run's own declared contract.
+      For an armed run it re-scans the run's **platform-captured**
       delivery evidence — the stored blobs' strings, i.e. the persisted
       transcript (`agent_stdout` / `agent_stderr` / `sandbox_log_tail`, marker
       `raw_output`) plus the agent-declared `pr_url` fields — for distinct
-      GitHub pull-request URLs. Two or more distinct URLs breach the contract
-      and are recorded LOUDLY: an `error`-level, admin-scoped in-app
-      notification (category `run.duplicate_pr_delivery`, deep-linked to the
-      run) written in the **same transaction** as the terminal status — so a
+      GitHub pull-request URLs: URLs are **normalised before dedup**
+      (scheme-insensitive, lowercase host/path, trailing punctuation stripped —
+      variants of one PR never count twice), `gh pr list --json` listing lines
+      (other open PRs a pre-check echoes) are skipped, and both collection
+      (≤50 URLs) and the rendered list (first 10 + "and N more") are bounded so
+      the alert body and log line stay bounded. Two or more distinct URLs
+      breach the contract and are recorded LOUDLY: an `error`-level,
+      admin-scoped in-app notification (category `run.duplicate_pr_delivery`,
+      deep-linked to the run; admin-scoped means READABLE BY ORG ADMINS ONLY —
+      the visibility clause requires a live `admin` membership) written in a
+      **SAVEPOINT of the same transaction** as the terminal status — a failed
+      alert rolls back only itself, never the terminal status, and a
       rolled-back terminalization leaves no phantom alert — plus an
       `error`-level `delivery_contract.duplicate_pr` log line. The alert is
       idempotent per run (a re-terminalization does not stack a second row).
@@ -170,15 +193,22 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       sandbox, transcript truncated past the retention cap without its
       `stdout_artifact`, output suppressed) is not detected; conversely a run
       that merely *references* two PR URLs in its output is flagged for
-      review (the alert is worded as a suspected breach, not a verdict); and
-      terminalizers that write `status` via raw SQL (the cron/SAQ failure
+      review (the alert is worded as a suspected breach, not a verdict); a
+      `gh pr list --jq`-style listing flattened to bare URL lines still counts;
+      and terminalizers that write `status` via raw SQL (the cron/SAQ failure
       sweeps) bypass this hook exactly as they bypass the FAR-189 inline
-      classify hook. The in-sandbox FAR-1264 `gh` shim stays as defence in
-      depth. Unit-covered in
+      classify hook. The in-sandbox FAR-1264 `gh` shim stays as **defence in
+      depth, bounded**. Unit-covered in
       `tests/unit/db/test_run_one_pr_per_run.py` (the FAR-1254 shape caught
-      from the transcript alone; single-PR happy path silent; same-transaction
-      rollback drops the alert; re-terminalization idempotency; a failed
-      blob read never blocks the terminal write)
+      from the transcript alone; single-PR happy path silent; multi-PR-by-design
+      pipeline without the flag silent; unreadable snapshot fails safe to
+      silent; `gh pr list` pre-check noise silent; URL-variant dedup; collection
+      and rendered-list bounds; the production write shape — blobs carried by
+      `update_run_status` itself, nothing pre-seeded; DB-level alert INSERT
+      failure still commits the terminal status; same-transaction rollback drops
+      the alert; re-terminalization idempotency; a failed blob read never blocks
+      the terminal write) and `tests/unit/db/test_notification_preferences.py`
+      (admin-scope rows readable by org admins only)
 - [x] File-I/O primitives (FAR-1050 R2a): `read_file` / `write_file` /
       `list_files` / `get_info` (+ the frozen `WorkspaceFileInfo` value object)
       on the ABC — exec-based binary-safe defaults (base64 over the text exec

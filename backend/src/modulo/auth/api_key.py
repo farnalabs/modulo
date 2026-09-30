@@ -370,6 +370,11 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
         "created_at": k.created_at.isoformat(),
         "expires_at": k.expires_at.isoformat() if k.expires_at else None,
+        # FAR-1299: the revocation FACT, not an inference from ``is_active``.
+        # ``is_active`` is derived (see above), so without this field a caller
+        # cannot tell an operator's revocation from a lapsed expiry. Same
+        # emission shape as ``expires_at`` above: ISO-8601 when set, else None.
+        "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
         "is_active": is_active,
     }
 

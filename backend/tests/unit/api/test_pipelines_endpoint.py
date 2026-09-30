@@ -1030,6 +1030,25 @@ def test_pipeline_graph_node_single_pr_per_run_round_trip() -> None:
     assert legacy.single_pr_per_run is False
 
 
+def test_pipeline_graph_node_single_pr_per_run_rejects_non_bool_on_sandbox_nodes() -> None:
+    """FAR-1273: a non-bool on a SANDBOX node is rejected at save time.
+
+    The runtime gate reads the flag with ``is True`` (fail-closed), so a
+    lax-coerced value (``"true"`` / ``1`` / ``"yes"`` -> True here, then read
+    as ``False`` by the runner) would silently DISARM the guard with no
+    signal. ``StrictBool`` rejects it at the write boundary instead.
+    """
+    for bad in ("true", 1, "yes"):
+        with pytest.raises(ValidationError, match="single_pr_per_run"):
+            PipelineGraphNode.model_validate({**_sandbox_node_json(), "single_pr_per_run": bad})
+
+    # The genuine bool still round-trips (positive control: the gate is the
+    # TYPE, not the field).
+    assert (
+        PipelineGraphNode.model_validate({**_sandbox_node_json(), "single_pr_per_run": True}).single_pr_per_run is True
+    )
+
+
 def test_pipeline_graph_node_single_pr_per_run_rejected_off_sandbox_nodes() -> None:
     """FAR-1273: single_pr_per_run is sandbox-only — an agent/manual/composite
     node that sets it is rejected at save time (a declared guard nothing

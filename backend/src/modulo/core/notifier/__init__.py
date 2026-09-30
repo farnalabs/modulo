@@ -54,6 +54,7 @@ __all__ = [
     "EVENT_GUARDRAIL_UNEXPECTED_SKIP",
     "EVENT_HITL_APPROVE_SWEEP",
     "EVENT_HITL_AWAITING",
+    "EVENT_HITL_DEADLINE_WARNING",
     "EVENT_HITL_OVERDUE",
     "EVENT_ORG_TRIGGERS_AUTO_PAUSED",
     "EVENT_RUN_FAILED",
@@ -194,6 +195,12 @@ EVENT_BUDGET_EXCEEDED = "budget_exceeded"
 EVENT_CIRCUIT_BREAKER_TRIPPED = "circuit_breaker_tripped"
 EVENT_CLAIM_EXPIRED = "claim_expired"
 EVENT_HITL_OVERDUE = "hitl_overdue"
+# FAR-1295 — the webhook / in-app leg of the FAR-1270 approaching-deadline
+# warning: an UNCLAIMED gate is inside its lead band and will be terminalised
+# at the deadline if nobody reviews it. Dispatched by the
+# ``hitl_deadline_warning`` sweep under the SAME once-only fire-once claim the
+# email leg uses, so the two channels can never double-fire per gate.
+EVENT_HITL_DEADLINE_WARNING = "hitl_deadline_warning"
 # FAR-611 — one actor approved HITL reviews across multiple pipelines within the
 # sweep window (bulk-approve anomaly, e.g. the 2026-09-05 22-gate/80-second
 # sweep). Emitted at most once per actor per hour by the sweep alarm.
@@ -276,6 +283,33 @@ class Notifier:
         Returns a list of DispatchResult, one per endpoint.
         """
         return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
+
+    async def has_subscribers(self, org_id: uuid.UUID, event_type: str) -> bool:
+        """Whether ANY active org-wide endpoint is subscribed to ``event_type``.
+
+        A read-only pre-check for callers whose once-only idempotency marker
+        must not be burned when the channel cannot deliver (the FAR-1295
+        deadline-warning sweep: an org with no email recipients AND no
+        subscribed endpoint leaves the marker unset so a later subscription
+        can still warn while the band is open). Mirrors the endpoint read that
+        ``dispatch_event`` performs for ``team_id=None`` (org-wide rows only),
+        so True here means dispatch would attempt at least one webhook — the
+        break-glass owner re-check at dispatch time may still skip it.
+
+        A DB failure returns ``False`` (fail toward NOT burning the marker):
+        a later tick inside the band retries the check.
+        """
+        try:
+            endpoints = await self._get_subscribed_endpoints(org_id, event_type)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "notifier.subscriber_check_failed",
+                extra={"event_type": event_type, "org_id": str(org_id)},
+            )
+            return False
+        return bool(endpoints)
 
     async def _get_subscribed_endpoints(
         self,

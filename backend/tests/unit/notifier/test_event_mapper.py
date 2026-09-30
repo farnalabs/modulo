@@ -86,6 +86,7 @@ _EXPECTED_MAPPING = {
     "budget_exceeded": ("warning", "org", "run.budget_exceeded", "org_admin", True, 168),
     "claim_expired": ("info", "org", "hitl.claim_expired", "any_scope", True, 24),
     "hitl_overdue": ("warning", "admin", "hitl.overdue", "org_admin", True, 168),
+    "hitl_deadline_warning": ("warning", "admin", "hitl.deadline_warning", "org_admin", True, 24),
     "hitl_review_removed": ("warning", "admin", "hitl.gate_removed", "org_admin", True, 168),
     "hitl_review_removal_denied": ("error", "admin", "hitl.gate_removal_denied", "org_admin", True, 168),
     "hitl_approve_sweep_suspected": ("warning", "admin", "hitl.approve_sweep", "org_admin", True, 168),
@@ -200,6 +201,20 @@ async def test_hitl_overdue_templates_resolved(mapper: NotificationEventMapper) 
     assert kwargs["title"] == "HITL overdue — my-pipeline"
     assert kwargs["body"] == 'Pipeline "my-pipeline" has been awaiting human review for 12 minutes.'
     assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
+
+
+async def test_hitl_deadline_warning_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """hitl_deadline_warning (FAR-1295) names the gate, the pipeline and the
+    minutes remaining, and deep-links to the run."""
+    payload = {**_PAYLOAD, "gate_label": "Security sign-off", "minutes_remaining": 3}
+    _, mock_create = await _call(mapper, "hitl_deadline_warning", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "HITL review deadline approaching — my-pipeline"
+    assert kwargs["body"] == (
+        'HITL gate "Security sign-off" on "my-pipeline" is due in 3 minutes. '
+        "Unreviewed, the run is cancelled at the deadline."
+    )
+    assert kwargs["action_url"] == f"/runs/{payload['run_id']}"
 
 
 async def test_hitl_review_removed_templates_resolved(mapper: NotificationEventMapper) -> None:

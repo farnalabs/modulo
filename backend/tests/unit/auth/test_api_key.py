@@ -275,6 +275,54 @@ def test_serialize_key_revoked_is_inactive() -> None:
     assert _serialize_key(key)["is_active"] is False
 
 
+# ---------------------------------------------------------------------------
+# _serialize_key — revoked_at (FAR-1299)
+# ---------------------------------------------------------------------------
+#
+# `revoked_at` is emitted so callers need not infer revocation from `is_active`,
+# which is DERIVED (`revoked_at is None and (expires_at is None or expires_at >
+# now)`) and therefore says only that a key stopped working, never why.
+
+
+def test_serialize_key_includes_revoked_at_field() -> None:
+    assert "revoked_at" in _serialize_key(_make_serializable_key())
+
+
+def test_serialize_key_revoked_at_is_none_for_active_key() -> None:
+    key = _make_serializable_key()
+    assert _serialize_key(key)["revoked_at"] is None
+
+
+def test_serialize_key_revoked_at_is_none_for_expired_key() -> None:
+    key = _make_serializable_key(expires_at=datetime.now(UTC) - timedelta(days=1))
+    serialized = _serialize_key(key)
+
+    assert serialized["is_active"] is False
+    assert serialized["revoked_at"] is None
+
+
+def test_serialize_key_revoked_at_is_iso8601_for_revoked_key() -> None:
+    revoked_at = datetime.now(UTC) - timedelta(hours=1)
+    key = _make_serializable_key(revoked_at=revoked_at)
+    serialized = _serialize_key(key)
+
+    assert serialized["revoked_at"] == revoked_at.isoformat()
+    # Parses as ISO-8601 and round-trips to the same instant.
+    assert datetime.fromisoformat(serialized["revoked_at"]) == revoked_at
+
+
+def test_serialize_key_reports_revoked_at_alongside_elapsed_expiry() -> None:
+    """Both causes present: both facts are emitted, neither is suppressed."""
+    revoked_at = datetime.now(UTC) - timedelta(days=2)
+    expires_at = datetime.now(UTC) - timedelta(days=1)
+    key = _make_serializable_key(expires_at=expires_at, revoked_at=revoked_at)
+    serialized = _serialize_key(key)
+
+    assert serialized["expires_at"] == expires_at.isoformat()
+    assert serialized["revoked_at"] == revoked_at.isoformat()
+    assert serialized["is_active"] is False
+
+
 def test_serialize_key_with_team_and_last_used() -> None:
     team_id = uuid.uuid4()
     last_used = datetime.now(UTC) - timedelta(hours=1)
@@ -331,6 +379,28 @@ async def test_list_api_keys_include_revoked_omits_filter() -> None:
     stmt = session.execute.await_args.args[0]
     where = str(stmt.whereclause.compile(compile_kwargs={"literal_binds": True}))
     assert "revoked_at" not in where
+
+
+@pytest.mark.asyncio
+async def test_list_api_keys_include_revoked_carries_revoked_at() -> None:
+    """FAR-1299: a listed revoked key proves its own revocation.
+
+    ``list_api_keys`` filters revoked rows by default, so the only way the
+    serializer sees one is ``include_revoked=True`` — the default is unchanged
+    (FAR-1300 owns whether revoked keys are visible at all).
+    """
+    org_id = uuid.uuid4()
+    revoked_at = datetime.now(UTC) - timedelta(hours=3)
+    revoked_key = _make_serializable_key(revoked_at=revoked_at)
+    active_key = _make_serializable_key()
+    session = _make_list_session([revoked_key, active_key])
+
+    keys = await list_api_keys(session, org_id, include_revoked=True)
+
+    # Keyed by id, not position: the mock returns rows in insertion order while
+    # the real query orders by created_at DESC.
+    revoked_at_by_id = {k["id"]: k["revoked_at"] for k in keys}
+    assert revoked_at_by_id == {str(revoked_key.id): revoked_at.isoformat(), str(active_key.id): None}
 
 
 @pytest.mark.asyncio

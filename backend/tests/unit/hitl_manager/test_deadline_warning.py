@@ -5,7 +5,9 @@ the lead-time computation (including the 60s minimum review window), the
 dual-arm deadline (stamped ``terminalize_at`` vs legacy ``expires_at +
 grace``), the once-only fire-once guard, and every skip condition (claimed /
 decided / not-awaiting / past deadline / not-yet-in-band / claimed sibling /
-no opted-in recipients / lock denied).
+no opted-in recipients / lock denied) — plus the FAR-1295 webhook / in-app
+leg that shares that once-only guard with the email leg (one claim, both
+channels, never a double-fire).
 """
 
 from __future__ import annotations
@@ -308,13 +310,15 @@ async def _run_dispatch(
     lock_failure: Exception | None = None,
     recipients: list[str] | None = None,
     redis_client: Any = None,
+    notifier: Any = None,
     send_side_effect: Any = None,
     resolve_side_effect: Any = None,
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], AsyncMock, AsyncMock]:
     """Run dispatch_deadline_notifications against fully mocked sessions.
 
-    Returns ``(notified, send_mock, resolve_mock)``.
+    Returns ``(notified, send_mock, resolve_mock)``. ``notifier`` defaults to
+    None (webhook / in-app leg disabled — the FAR-1295 tests pass a double).
     """
     resolved_recipients = _RECIPIENTS if recipients is None else recipients
     # Always queue a third result for the sibling-guard SELECT — it only runs
@@ -347,6 +351,7 @@ async def _run_dispatch(
             factory,
             grace_seconds=_GRACE,
             redis_client=redis_client,
+            notifier=notifier,
             now=now,
         )
     return notified, send, resolve
@@ -404,6 +409,215 @@ async def test_dispatch_sends_once_across_ticks() -> None:
     assert not second
     assert send_first.await_count == 1
     assert send_second.await_count == 0
+
+
+# ---------------------------------------------------------------------------
+# FAR-1295 — the webhook / in-app leg shares the once-only guard
+# ---------------------------------------------------------------------------
+
+
+def _notifier(*, subscribed: bool = True) -> AsyncMock:
+    """Notifier double whose subscriber check resolves to *subscribed*."""
+    notifier = AsyncMock(name="notifier")
+    notifier.has_subscribers = AsyncMock(return_value=subscribed)
+    return notifier
+
+
+async def test_dispatch_fires_both_channels_exactly_once_across_ticks() -> None:
+    """ONE claim gates BOTH legs: the email send and the Notifier dispatch
+    each fire exactly once, and the second tick re-fires neither — the two
+    channels cannot double-fire for the same gate."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    redis = _FakeRedis()
+    notifier = _notifier()
+
+    first, send_first, _ = await _run_dispatch(
+        candidate_rows=[(claim, "My Pipeline")],
+        redis_client=redis,
+        notifier=notifier,
+        now=now,
+    )
+    second, send_second, _ = await _run_dispatch(
+        candidate_rows=[(claim, "My Pipeline")],
+        redis_client=redis,
+        notifier=notifier,
+        now=now,
+    )
+
+    assert len(first) == 1
+    assert not second
+    assert send_first.await_count == 1
+    assert send_second.await_count == 0
+    assert notifier.dispatch_event.await_count == 1
+
+    call = notifier.dispatch_event.await_args
+    assert call is not None
+    assert call.kwargs["org_id"] == _ORG
+    assert call.kwargs["event_type"] == "hitl_deadline_warning"
+    assert call.kwargs["run_id"] == str(_RUN)
+    payload = call.kwargs["payload"]
+    assert payload["run_id"] == str(_RUN)
+    assert payload["pipeline_name"] == "My Pipeline"
+    assert payload["gate_label"] == "gate-a"
+    assert payload["minutes_remaining"] == 1
+
+
+async def test_webhook_only_org_gets_exactly_one_dispatch() -> None:
+    """No email recipients but a subscribed endpoint: the marker IS claimed
+    and ONLY the webhook / in-app leg fires — once per gate, never twice."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    redis = _FakeRedis()
+    notifier = _notifier(subscribed=True)
+
+    first, send_first, _ = await _run_dispatch(
+        candidate_rows=[(claim, "My Pipeline")],
+        recipients=[],
+        redis_client=redis,
+        notifier=notifier,
+        now=now,
+    )
+    assert len(first) == 1
+    send_first.assert_not_awaited()
+    assert notifier.dispatch_event.await_count == 1
+
+    second, send_second, _ = await _run_dispatch(
+        candidate_rows=[(claim, "My Pipeline")],
+        recipients=[],
+        redis_client=redis,
+        notifier=notifier,
+        now=now,
+    )
+    assert not second
+    send_second.assert_not_awaited()
+    assert notifier.dispatch_event.await_count == 1
+
+
+async def test_no_delivery_channel_leaves_marker_unset_for_later_subscription() -> None:
+    """Empty recipients AND no subscribed endpoint → the marker is untouched,
+    so a subscription added mid-band still warns (the webhook twin of the
+    email opt-in rule)."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    redis = _FakeRedis()
+    notifier = _notifier(subscribed=False)
+
+    nothing, send, _ = await _run_dispatch(
+        candidate_rows=[(claim, "My Pipeline")],
+        recipients=[],
+        redis_client=redis,
+        notifier=notifier,
+        now=now,
+    )
+    assert not nothing
+    send.assert_not_awaited()
+    notifier.dispatch_event.assert_not_awaited()
+    assert not redis.keys  # marker untouched
+
+    # An endpoint subscription appears while the band is still open: the next
+    # tick must warn, and must warn exactly once.
+    notifier.has_subscribers = AsyncMock(return_value=True)
+    later, _, _ = await _run_dispatch(
+        candidate_rows=[(claim, "My Pipeline")],
+        recipients=[],
+        redis_client=redis,
+        notifier=notifier,
+        now=now,
+    )
+    assert len(later) == 1
+    assert notifier.dispatch_event.await_count == 1
+
+
+async def test_webhook_dispatch_failure_keeps_the_email_leg_and_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The webhook leg failing after the shared claim must not lose the email
+    that the same claim authorised (each leg is isolated)."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    notifier = _notifier()
+    notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("endpoint down"))
+
+    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+        notified, send, _ = await _run_dispatch(
+            candidate_rows=[(claim, "My Pipeline")],
+            notifier=notifier,
+            now=now,
+        )
+
+    assert len(notified) == 1
+    assert send.await_count == 1
+    assert "hitl.deadline_warning.webhook_dispatch_failed" in caplog.text
+
+
+async def test_email_failure_still_fires_the_webhook_leg() -> None:
+    """The email leg failing must not suppress the webhook / in-app leg that
+    the same claim authorised."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    notifier = _notifier()
+
+    notified, send, _ = await _run_dispatch(
+        candidate_rows=[(claim, "My Pipeline")],
+        notifier=notifier,
+        send_side_effect=RuntimeError("smtp down"),
+        now=now,
+    )
+
+    assert len(notified) == 1
+    assert send.await_count == 1
+    assert notifier.dispatch_event.await_count == 1
+
+
+async def test_subscriber_check_failure_fails_closed_without_burning_the_marker(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unverifiable webhook channel must NOT claim the marker (a DB blip
+    must not permanently suppress a later, deliverable warning)."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    redis = _FakeRedis()
+    notifier = AsyncMock(name="notifier")
+    notifier.has_subscribers = AsyncMock(side_effect=RuntimeError("db blip"))
+
+    with caplog.at_level(logging.ERROR, logger="modulo.core.hitl_manager.deadline_warning"):
+        notified, send, _ = await _run_dispatch(
+            candidate_rows=[(claim, "My Pipeline")],
+            recipients=[],
+            redis_client=redis,
+            notifier=notifier,
+            now=now,
+        )
+
+    assert not notified
+    send.assert_not_awaited()
+    notifier.dispatch_event.assert_not_awaited()
+    assert not redis.keys
+    assert "hitl.deadline_warning.webhook_subscriber_check_failed" in caplog.text
+
+
+async def test_cancellation_from_subscriber_check_propagates() -> None:
+    """Cancellation during the subscriber check re-raises (SAQ abort contract)."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    notifier = AsyncMock(name="notifier")
+    notifier.has_subscribers = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_dispatch(candidate_rows=[(claim, "P")], notifier=notifier, now=now)
+
+
+async def test_cancellation_from_webhook_dispatch_propagates() -> None:
+    """Cancellation during the webhook dispatch re-raises rather than being
+    swallowed as a dispatch failure."""
+    now = datetime.now(UTC)
+    claim, _ = _approaching_gate(now)
+    notifier = _notifier()
+    notifier.dispatch_event = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_dispatch(candidate_rows=[(claim, "P")], notifier=notifier, now=now)
 
 
 async def test_dispatch_skips_past_deadline_gate() -> None:

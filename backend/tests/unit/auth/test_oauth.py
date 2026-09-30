@@ -9,8 +9,11 @@ import pytest
 from jwt import InvalidTokenError as JWTError
 
 from modulo.auth.oauth import (
+    MAX_REDIRECT_URI_LENGTH,
+    AuthlibClientWrapper,
     InvalidClientError,
     InvalidGrantError,
+    InvalidRedirectUriError,
     InvalidScopeError,
     OAuthAccessTokenClaims,
     UnauthorizedClientError,
@@ -30,13 +33,17 @@ from modulo.auth.oauth import (
     delete_oauth_client,
     generate_client_credentials,
     get_oauth_client_by_client_id,
+    is_valid_redirect_uri,
     list_oauth_clients,
+    normalize_redirect_uris,
     normalize_scopes,
+    redirect_uri_allowed,
     rotate_oauth_token_family,
     scopes_required_role,
     validate_client_scopes,
     validate_client_secret,
     validate_pkce_method,
+    validate_redirect_uri,
     verify_pkce,
 )
 from tests.unit.auth.conftest import _make_session_mock
@@ -726,8 +733,193 @@ class TestValidateClientScopes:
 
     def test_partial_overlap(self) -> None:
         client = _make_oauth_client(scopes="trigger:run library:browse")
-        result = validate_client_scopes(client, ["trigger:run", "hitl:review"])
+        result = validate_client_scopes(client, ["hitl:review", "trigger:run"])
         assert result == ["trigger:run"]
+
+
+# ---------------------------------------------------------------------------
+# Redirect URI validation + exact-match comparison (FAR-1281)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateRedirectUri:
+    def test_https_absolute_uri_accepted(self) -> None:
+        assert validate_redirect_uri("https://app.example.com/callback") == "https://app.example.com/callback"
+
+    def test_https_uri_with_port_and_query_accepted(self) -> None:
+        assert is_valid_redirect_uri("https://app.example.com:8443/cb?next=%2Fhome")
+
+    def test_loopback_http_accepted(self) -> None:
+        for uri in ("http://localhost:5173/callback", "http://127.0.0.1:8080/cb", "http://[::1]:9000/cb"):
+            assert is_valid_redirect_uri(uri), uri
+
+    def test_relative_uri_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError, match="absolute http"):
+            validate_redirect_uri("/callback")
+
+    def test_protocol_relative_uri_rejected(self) -> None:
+        assert not is_valid_redirect_uri("//app.example.com/callback")
+
+    def test_scheme_relative_host_only_rejected(self) -> None:
+        assert not is_valid_redirect_uri("https:///callback")
+
+    def test_javascript_uri_rejected(self) -> None:
+        assert not is_valid_redirect_uri("javascript:alert(document.domain)")
+
+    def test_data_and_file_uris_rejected(self) -> None:
+        assert not is_valid_redirect_uri("data:text/html;base64,PHNjcmlwdD4=")
+        assert not is_valid_redirect_uri("file:///etc/passwd")
+
+    def test_custom_app_scheme_rejected(self) -> None:
+        assert not is_valid_redirect_uri("myapp://callback")
+
+    def test_wildcard_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError, match="wildcard"):
+            validate_redirect_uri("https://*.example.com/callback")
+        assert not is_valid_redirect_uri("*")
+
+    def test_entry_containing_whitespace_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError, match="whitespace"):
+            validate_redirect_uri("https://app.example.com/call back")
+        assert not is_valid_redirect_uri("https://app.example.com/cb\nhttps://evil.example/cb")
+        assert not is_valid_redirect_uri(" https://app.example.com/cb")
+
+    def test_fragment_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError, match="fragment"):
+            validate_redirect_uri("https://app.example.com/cb#frag")
+        assert not is_valid_redirect_uri("https://app.example.com/cb#")
+
+    def test_userinfo_rejected(self) -> None:
+        assert not is_valid_redirect_uri("https://user:pw@app.example.com/cb")
+
+    def test_backslash_rejected(self) -> None:
+        """A browser reads "\\" as a path separator, so the validator must too."""
+        with pytest.raises(InvalidRedirectUriError, match="backslash"):
+            validate_redirect_uri("https://app.example.com\\@evil.com/cb")
+        assert not is_valid_redirect_uri("https://good.com\\.evil.com/cb")
+
+    def test_non_loopback_http_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError, match="loopback"):
+            validate_redirect_uri("http://app.example.com/callback")
+
+    def test_malformed_port_rejected(self) -> None:
+        assert not is_valid_redirect_uri("https://app.example.com:notaport/cb")
+        assert not is_valid_redirect_uri("https://app.example.com:99999/cb")
+
+    def test_zero_port_rejected(self) -> None:
+        """:0 is a syntactically valid port but not a usable endpoint."""
+        with pytest.raises(InvalidRedirectUriError, match="invalid port"):
+            validate_redirect_uri("https://app.example.com:0/cb")
+        assert not is_valid_redirect_uri("https://app.example.com:0/cb")
+
+    def test_malformed_authority_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError, match="malformed"):
+            validate_redirect_uri("https://[::1")
+        assert not is_valid_redirect_uri("http://localhost\uff03evil.com/")
+
+    def test_empty_and_non_string_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError):
+            validate_redirect_uri("")
+        for value in (None, 123, b"https://a.example/cb", ["https://a.example/cb"]):
+            assert not is_valid_redirect_uri(value)
+            with pytest.raises(InvalidRedirectUriError, match="must be a string"):
+                validate_redirect_uri(value)
+
+    def test_invisible_characters_rejected(self) -> None:
+        """U+202E (RLO) / zero-width / NBSP enable display spoofing in the client list."""
+        for uri in (
+            "https://a.example/\u202egnp.exe",
+            "https://a.example\u200b/cb",
+            "https://a.example\ufeff/cb",
+            "https://a.example\u00a0/cb",
+        ):
+            assert not is_valid_redirect_uri(uri), uri
+
+    def test_too_long_rejected(self) -> None:
+        """Past varchar(1024) the consent/code insert fails permanently — reject at registration."""
+        too_long = "https://a.example/cb?p=" + "a" * 1100
+        with pytest.raises(InvalidRedirectUriError, match="at most 1024"):
+            validate_redirect_uri(too_long)
+        prefix = "https://a.example/cb?p="
+        assert is_valid_redirect_uri(prefix + "a" * (MAX_REDIRECT_URI_LENGTH - len(prefix)))
+
+    def test_loopback_spellings_accepted(self) -> None:
+        for uri in (
+            "http://[0:0:0:0:0:0:0:1]:9000/cb",
+            "http://[::ffff:127.0.0.1]/cb",
+            "http://127.0.0.2/cb",
+            "http://LOCALHOST:5173/cb",
+            "http://localhost./cb",
+        ):
+            assert is_valid_redirect_uri(uri), uri
+
+    def test_non_loopback_bind_address_rejected(self) -> None:
+        assert not is_valid_redirect_uri("http://0.0.0.0:8080/cb")
+        assert not is_valid_redirect_uri("http://127.0.0.1.nip.io/cb")
+
+
+class TestNormalizeRedirectUris:
+    def test_returns_entries_unchanged_and_deduped(self) -> None:
+        assert normalize_redirect_uris(["https://b.example/cb", "https://a.example/cb"]) == [
+            "https://b.example/cb",
+            "https://a.example/cb",
+        ]
+        assert normalize_redirect_uris(["https://a.example/cb", "https://a.example/cb"]) == ["https://a.example/cb"]
+
+    def test_space_join_round_trip_is_lossless(self) -> None:
+        uris = ["https://a.example/cb", "http://localhost:5173/cb", "http://127.0.0.1:8080/cb"]
+        assert " ".join(normalize_redirect_uris(uris)).split() == uris
+
+    def test_error_names_every_offending_entry(self) -> None:
+        with pytest.raises(InvalidRedirectUriError) as exc_info:
+            normalize_redirect_uris(["https://a.example/cb", "javascript:alert(1)", "/relative", "https://*.b/cb"])
+        message = str(exc_info.value)
+        assert "javascript:alert(1)" in message
+        assert "/relative" in message
+        assert "https://*.b/cb" in message
+
+    def test_empty_list_rejected(self) -> None:
+        with pytest.raises(InvalidRedirectUriError, match="At least one"):
+            normalize_redirect_uris([])
+
+    def test_error_length_is_bounded_for_a_bulk_list(self) -> None:
+        """A bulk-submitted list must not inflate the 400 body without bound."""
+        with pytest.raises(InvalidRedirectUriError) as exc_info:
+            normalize_redirect_uris(["bad-uri"] * 5000)
+        message = exc_info.value.description
+        assert len(message) < 5000
+        assert message.endswith("and 4990 more")
+
+
+class TestRedirectUriAllowed:
+    def test_exact_match(self) -> None:
+        client = _make_oauth_client(redirect_uris="https://a.example/cb https://b.example/cb")
+        assert redirect_uri_allowed(client, "https://a.example/cb")
+        assert redirect_uri_allowed(client, "https://b.example/cb")
+
+    def test_no_prefix_or_suffix_match(self) -> None:
+        client = _make_oauth_client(redirect_uris="https://a.example/cb")
+        assert not redirect_uri_allowed(client, "https://a.example/cb/extra")
+        assert not redirect_uri_allowed(client, "https://a.example/cb?x=1")
+        assert not redirect_uri_allowed(client, "http://a.example/cb")
+
+    def test_legacy_row_with_forbidden_uri_fails_closed(self) -> None:
+        """A row written before registration validation is still rejected."""
+        client = _make_oauth_client(redirect_uris="javascript:alert(1)")
+        assert not redirect_uri_allowed(client, "javascript:alert(1)")
+
+    def test_check_redirect_uri_uses_same_predicate(self) -> None:
+        wrapper = AuthlibClientWrapper(_make_oauth_client(redirect_uris="https://a.example/cb"))
+        assert wrapper.check_redirect_uri("https://a.example/cb")
+        assert not wrapper.check_redirect_uri("https://a.example/cb.evil.com")
+        legacy = AuthlibClientWrapper(_make_oauth_client(redirect_uris="javascript:alert(1)"))
+        assert not legacy.check_redirect_uri("javascript:alert(1)")
+
+    def test_get_default_redirect_uri_reads_the_stored_list(self) -> None:
+        wrapper = AuthlibClientWrapper(_make_oauth_client(redirect_uris="https://a.example/cb https://b.example/cb"))
+        assert wrapper.get_default_redirect_uri() == "https://a.example/cb"
+        empty = AuthlibClientWrapper(_make_oauth_client(redirect_uris=""))
+        assert not empty.get_default_redirect_uri()
 
 
 # ---------------------------------------------------------------------------

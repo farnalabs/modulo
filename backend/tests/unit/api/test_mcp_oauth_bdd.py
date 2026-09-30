@@ -497,6 +497,36 @@ class TestApproveConsent:
         assert resp.status_code == 400
         assert "state" in resp.json()["detail"].lower()
 
+    def test_approve_joins_params_when_redirect_uri_has_a_query(self, admin_client: TestClient) -> None:
+        """A bare "?code=" on top of an existing query would strand the code."""
+        state_row = _make_mock_consent_state(state="state-xyz", redirect_uri="https://app.example.com/cb?next=%2Fhome")
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch("modulo.api.routes.mcp_oauth.create_authorization_code", new=AsyncMock(return_value="code-abc")),
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(self.ENDPOINT, json={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        assert resp.json()["redirect_url"] == "https://app.example.com/cb?next=%2Fhome&code=code-abc&state=state-xyz"
+
+    def test_approve_refuses_state_with_forbidden_redirect_uri(self, admin_client: TestClient) -> None:
+        """FAR-1281: a state row minted before the registration check fails closed."""
+        state_row = _make_mock_consent_state(state="state-xyz", redirect_uri="javascript:alert(1)")
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(self.ENDPOINT, json={"state": "state-xyz"})
+
+        assert resp.status_code == 400
+        assert "invalid_redirect_uri" in resp.json()["detail"]
+        mock_code.assert_not_called()
+
     def test_approve_expired_state_returns_400(self, admin_client: TestClient) -> None:
         with (
             patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=None)),

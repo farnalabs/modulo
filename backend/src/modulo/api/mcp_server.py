@@ -9562,7 +9562,9 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     from modulo.auth.oauth import (
         create_consent_state,
         get_oauth_client_by_client_id,
+        is_valid_redirect_uri,
         normalize_scopes,
+        redirect_uri_allowed,
         validate_client_scopes,
     )
 
@@ -9577,8 +9579,17 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
                     status_code=400,
                 )
 
-            allowed_uris = client.redirect_uris.split()
-            if redirect_uri not in allowed_uris:
+            # FAR-1281: exact match AND the same validity predicate applied at
+            # registration, so a row stored before that check existed fails
+            # closed here instead of being redirected to.
+            if not redirect_uri_allowed(client, redirect_uri):
+                if not is_valid_redirect_uri(redirect_uri):
+                    # Registered but forbidden by today's rules — the owning
+                    # org's admin/operator has to re-register the client.
+                    _log.warning(
+                        "mcp_oauth.authorize.forbidden_registered_redirect_uri",
+                        extra={"client_id": client_id},
+                    )
                 return JSONResponse(
                     {"error": "invalid_client", "detail": "redirect_uri not allowed"},
                     status_code=400,

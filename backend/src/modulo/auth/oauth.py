@@ -14,12 +14,15 @@ Supports:
 import base64
 import hashlib
 import hmac
+import ipaddress
 import logging
 import secrets
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 import jwt
 from authlib.oauth2 import OAuth2Error as _OAuth2Error
@@ -80,6 +83,208 @@ class UnauthorizedClientError(OAuthError):
         super().__init__("unauthorized_client", description)
 
 
+class InvalidRedirectUriError(OAuthError):
+    """``invalid_redirect_uri`` — RFC 7591 §3.2.2 error code.
+
+    Raised at client registration and by :func:`validate_redirect_uri` at the
+    consent-approve leg, so a redirect URI the OAuth 2.0 Security BCP forbids
+    is never stored and never used to build a browser redirect. The comparison
+    points use the boolean form (:func:`is_valid_redirect_uri`) because they
+    must fail closed, not raise.
+    """
+
+    def __init__(self, description: str = "Invalid redirect URI") -> None:
+        super().__init__("invalid_redirect_uri", description)
+
+
+# ---------------------------------------------------------------------------
+# Redirect URI validation (OAuth 2.0 Security BCP §4.1.3 / RFC 9700 §4)
+# ---------------------------------------------------------------------------
+
+#: Schemes a redirect URI may use. Everything else (javascript:, data:, file:,
+#: custom app schemes) is rejected outright.
+ALLOWED_REDIRECT_SCHEMES = frozenset({"http", "https"})
+
+#: Longest accepted redirect URI. Matches the narrowest column the value is
+#: copied into downstream — ``oauth_consent_states.redirect_uri`` and
+#: ``oauth_authorization_codes.redirect_uri`` are both varchar(1024) — so a
+#: longer URI would register fine and then fail every authorize/approve with a
+#: permanent 503 on the string-truncation error.
+MAX_REDIRECT_URI_LENGTH = 1024
+
+#: Unicode categories that carry no visible meaning inside a URI and enable
+#: spoofing: ``Cc`` (control), ``Cf`` (format — U+202E right-to-left override,
+#: U+200B zero-width space, U+00AD soft hyphen), ``Zs``/``Zl``/``Zp`` (spaces,
+#: incl. U+00A0 no-break space) and ``Cs`` (lone surrogates, unencodable as
+#: UTF-8 in the column). Whitespace lands here too, which keeps the
+#: space-join/``.split()`` round-trip in the stored column lossless.
+_INVISIBLE_URI_CHARS = frozenset({"Cc", "Cf", "Cs", "Zs", "Zl", "Zp"})
+
+#: Most offending entries echoed in one aggregated error before the rest are
+#: summarised, so a bulk-submitted list cannot inflate the response body.
+_REDIRECT_URI_ERROR_LIMIT = 10
+
+#: Longest rejected value echoed back inside an error description.
+_REDIRECT_URI_ECHO_LIMIT = 200
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True for a host that can only resolve to this machine.
+
+    ``localhost`` (with or without the FQDN trailing dot) plus every address
+    ``ipaddress`` reports as loopback — 127.0.0.0/8, ``::1`` in any spelling,
+    and IPv4-mapped forms. ``0.0.0.0`` is NOT loopback and stays rejected.
+    """
+    candidate = host.lower().rstrip(".")
+    if candidate == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return True
+    # ``ipaddress`` does not report an IPv4-mapped IPv6 address such as
+    # ``::ffff:127.0.0.1`` as loopback, so unwrap it and test the embedded
+    # IPv4 — ``::ffff:127.0.0.1`` is still only reachable from this machine.
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_loopback
+
+
+def _describe_uri(uri: str) -> str:
+    """Render a rejected value safely for an authlib error description.
+
+    RFC 6749 §4.1.2.1 restricts ``error_description`` to printable ASCII, and
+    authlib raises ``ValueError`` on anything else — so a value carrying the
+    very control character we reject (a newline, a NUL) must never be
+    interpolated raw, or a 400 would turn into a 500. Non-printable, non-ASCII,
+    quote and backslash characters become ``?``; the tail is truncated.
+    """
+    echoed = "".join(ch if " " <= ch <= "~" and ch not in '"\\' else "?" for ch in uri)
+    return echoed[:_REDIRECT_URI_ECHO_LIMIT]
+
+
+def _redirect_uri_rejection_reason(uri: str) -> str | None:
+    """Return why ``uri`` is not a safe redirect URI, or ``None`` if it is."""
+    if not uri:
+        return "Redirect URI must be a non-empty string"
+    if len(uri) > MAX_REDIRECT_URI_LENGTH:
+        # Checked before the per-character scan so an oversized value costs
+        # O(1) rather than a walk over the whole string.
+        return f"Redirect URI must be at most {MAX_REDIRECT_URI_LENGTH} characters"
+    if any(unicodedata.category(ch) in _INVISIBLE_URI_CHARS for ch in uri):
+        return "Redirect URI must not contain whitespace or invisible characters"
+    if "\\" in uri:
+        # A WHATWG browser treats "\" as a path separator in http(s) URLs, so
+        # "https://good.com\.evil.com/" would navigate to good.com — the
+        # validator and the browser must agree on where the host ends.
+        return "Redirect URI must not contain a backslash"
+    if "*" in uri:
+        return "Redirect URI must not contain a wildcard"
+    if "#" in uri:
+        return "Redirect URI must not contain a fragment"
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return "Redirect URI is malformed"
+    if parts.scheme not in ALLOWED_REDIRECT_SCHEMES or not parts.netloc or not parts.hostname:
+        return "Redirect URI must be an absolute http(s) URI"
+    if parts.username is not None or parts.password is not None:
+        return "Redirect URI must not contain userinfo"
+    try:
+        port = parts.port
+    except ValueError:
+        # Malformed port, e.g. https://host:notaport/cb
+        return "Redirect URI has an invalid port"
+    if port == 0:
+        return "Redirect URI has an invalid port"
+    if parts.scheme == "http" and not _is_loopback_host(parts.hostname or ""):
+        return "Redirect URI must use https unless the host is loopback"
+    return None
+
+
+def validate_redirect_uri(uri: object) -> str:
+    """Return ``uri`` unchanged when it is a safe, absolute redirect URI.
+
+    Raises :class:`InvalidRedirectUriError` naming the offending value
+    otherwise. The rules (FAR-1281):
+
+    - absolute URI with scheme ``http`` or ``https`` and a host;
+    - ``https`` required unless the host is loopback (local development);
+    - no wildcards, no fragments, no userinfo, no whitespace/invisible
+      characters (the stored form is ``" ".join(uris)`` read back with
+      ``.split()``, so an entry with an internal space would round-trip as
+      two different URIs);
+    - at most :data:`MAX_REDIRECT_URI_LENGTH` characters, and a
+      syntactically valid port when one is present.
+
+    The value is returned byte-for-byte unchanged: the OAuth BCP requires
+    exact-match comparison, so normalising here would silently change the
+    string the client is compared against.
+    """
+    if not isinstance(uri, str):
+        raise InvalidRedirectUriError(f"Redirect URI must be a string, got {type(uri).__name__}")
+    reason = _redirect_uri_rejection_reason(uri)
+    if reason is not None:
+        raise InvalidRedirectUriError(f"{reason}: '{_describe_uri(uri)}'")
+    return uri
+
+
+def is_valid_redirect_uri(uri: object) -> bool:
+    """Boolean form of :func:`validate_redirect_uri` — never raises, any input."""
+    return isinstance(uri, str) and _redirect_uri_rejection_reason(uri) is None
+
+
+def normalize_redirect_uris(uris: list[str]) -> list[str]:
+    """Validate every redirect URI and return them de-duplicated, order-preserved.
+
+    Raises a single :class:`InvalidRedirectUriError` naming every offending
+    entry (past :data:`_REDIRECT_URI_ERROR_LIMIT` they are counted, not
+    echoed) so the caller can return one structured 400. Nothing is
+    normalised: the returned strings are exactly what was validated, so
+    ``" ".join(result)`` round-trips losslessly through the stored column.
+    """
+    if not uris:
+        # Unreachable through the API (the request model enforces min_length=1);
+        # guards direct/programmatic callers of this helper.
+        raise InvalidRedirectUriError("At least one redirect URI is required")
+    errors: list[str] = []
+    validated: list[str] = []
+    for uri in uris:
+        try:
+            validated.append(validate_redirect_uri(uri))
+        except InvalidRedirectUriError as exc:
+            errors.append(exc.description)
+    if errors:
+        reported = errors[:_REDIRECT_URI_ERROR_LIMIT]
+        hidden = len(errors) - len(reported)
+        if hidden:
+            reported.append(f"... and {hidden} more")
+        raise InvalidRedirectUriError("; ".join(reported))
+    return list(dict.fromkeys(validated))
+
+
+def stored_redirect_uris(client: OAuthClient) -> list[str]:
+    """The client's registered redirect URIs, read back from the column.
+
+    ``oauth_clients.redirect_uris`` is a single space-joined text column, so
+    this ``.split()`` is the load-bearing half of the round trip: registration
+    only ever writes values :func:`validate_redirect_uri` accepted, and none of
+    them can contain a ``str.split()`` separator.
+    """
+    return (client.redirect_uris or "").split()
+
+
+def redirect_uri_allowed(client: OAuthClient, redirect_uri: str) -> bool:
+    """Exact-match ``redirect_uri`` against a client's stored list (FAR-1281).
+
+    The SAME predicate as registration is applied at the comparison point, so
+    a row written before this check existed (e.g. a ``javascript:`` URI) fails
+    closed here instead of being trusted because it is present in the column.
+    """
+    return redirect_uri in stored_redirect_uris(client) and is_valid_redirect_uri(redirect_uri)
+
+
 # ---------------------------------------------------------------------------
 # Authlib-compatible model wrappers (keep existing DB models untouched)
 # ---------------------------------------------------------------------------
@@ -95,12 +300,11 @@ class AuthlibClientWrapper(ClientMixin):  # type: ignore[misc]
         return self._client.client_id
 
     def get_default_redirect_uri(self) -> str:
-        uris = (self._client.redirect_uris or "").split()
+        uris = stored_redirect_uris(self._client)
         return uris[0] if uris else ""
 
     def check_redirect_uri(self, redirect_uri: str) -> bool:
-        allowed = (self._client.redirect_uris or "").split()
-        return redirect_uri in allowed
+        return redirect_uri_allowed(self._client, redirect_uri)
 
     def check_client_secret(self, client_secret: str) -> bool:
         expected = _hash_secret(client_secret)
@@ -193,7 +397,7 @@ async def list_oauth_clients(session: AsyncSession, org_id: uuid.UUID) -> list[d
             "client_id": c.client_id,
             "name": c.name,
             "scopes": c.scopes.split() if c.scopes else [],
-            "redirect_uris": c.redirect_uris.split() if c.redirect_uris else [],
+            "redirect_uris": stored_redirect_uris(c),
             "created_at": c.created_at.isoformat() if c.created_at else "",
         }
         for c in clients

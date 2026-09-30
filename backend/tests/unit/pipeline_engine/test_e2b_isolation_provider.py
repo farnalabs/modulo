@@ -25,6 +25,7 @@ enforced structurally by
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -642,3 +643,75 @@ async def test_helper_threads_single_pr_per_run_into_the_typed_policy(
     _, spec, policy = fake.calls[1]
     assert policy.single_pr_per_run is False
     assert not spec.workspace_metadata
+
+
+# ---------------------------------------------------------------------------
+# FAR-1273: the sentinel -> flag trigger move must be OBSERVABLE, never silent
+# ---------------------------------------------------------------------------
+
+_FLAG_MISSING_EVENT = "sandbox_agent.single_pr_per_run_flag_missing"
+
+
+def _flag_missing_records(caplog: pytest.LogCaptureFixture) -> list[Any]:
+    """Every captured record carrying the disarm-warning event name."""
+    return [record for record in caplog.records if record.getMessage() == _FLAG_MISSING_EVENT]
+
+
+async def test_sentinel_without_flag_emits_the_disarm_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A sentinel-armed node that predates the explicit flag (the stored-graph
+    case: live Prompt-to-PR nodes carry ONLY ``delivery_sentinel``) must WARN
+    at the dispatch decision point so the guard's disarm is observable in
+    logs/metrics - node id + pipeline id - while the run FAILS OPEN (it
+    proceeds unchanged, no guard, no raised error)."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, delivery_sentinel="PR_CREATED"))
+    sandbox = await _completed_no_output_sandbox("sbx-flag-missing")
+    install_fake_dispatch(monkeypatch, ref="sbx-flag-missing")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    records = _flag_missing_records(caplog)
+    assert records
+    assert records[0].node_id == "n1"
+    assert records[0].pipeline_id == "pipe-1"
+    # Fail-open: the dispatch behaved exactly as it does today (no policy
+    # step, no guard) - the warning is the ONLY change.
+    assert not fake.calls
+
+
+async def test_flagged_node_emits_no_disarm_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The warning is about the MISSING flag, not about sentinels: a node that
+    carries BOTH the sentinel and ``single_pr_per_run`` (the migrated shape)
+    arms the guard and must NOT warn."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, delivery_sentinel="PR_CREATED", single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-flag-armed")
+    install_fake_dispatch(monkeypatch, ref="sbx-flag-armed")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert not _flag_missing_records(caplog)
+    assert len(fake.calls) == 1
+    assert fake.calls[0][2].single_pr_per_run is True

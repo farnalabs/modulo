@@ -13,6 +13,16 @@ Feature: MCP OAuth 2.0 Authorization
     And the response contains client_secret
     And the response has name "My MCP App"
 
+  Scenario: Registration rejects a forbidden redirect URI
+    When I POST /api/v1/mcp/oauth/clients with name "My App" and redirect_uris ["javascript:alert(document.domain)"] and scopes ["trigger:run"]
+    Then the response status is 400
+    And the error indicates "invalid_redirect_uri"
+
+  Scenario: Registration rejects a redirect URI that is not absolute http(s)
+    When I POST /api/v1/mcp/oauth/clients with name "My App" and redirect_uris ["/relative/callback"] and scopes ["trigger:run"]
+    Then the response status is 400
+    And the error indicates "invalid_redirect_uri"
+
   Scenario: Authorization request with PKCE redirects the browser to the consent route
     Given an OAuth client exists with id "oauth_client_1"
     When I GET /mcp/oauth/authorize with client_id "oauth_client_1" and redirect_uri "https://app.example.com/callback" and scope "trigger:run" and code_challenge "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" and code_challenge_method "S256" and state "xyz"

@@ -699,6 +699,39 @@ class TestPipelineEntityContracts:
         tx["entities"]["pipelines"][0]["graph"]["nodes"][0].pop("single_pr_per_run")
         assert _config(tx).entities.pipelines[0].graph.nodes[0].single_pr_per_run is False
 
+    def test_single_pr_per_run_rejected_off_sandbox_via_api_normalisation(self) -> None:
+        """FAR-1273: the CLI's sandbox-only rule for single_pr_per_run is
+        enforced by the REAL API node model when the executor normalises the
+        resolved payload through it.
+
+        Mirrors ``test_api_node_rejects_stdout_retention_off_sandbox``: an
+        agent node that sets the flag would declare a guard nothing installs,
+        so ``_normalized_node`` must raise a ValidationError naming the field
+        instead of carrying it into the write payload.
+        """
+        from modulo.cli.apply.pipeline_apply import _normalized_node
+
+        agent_node = {
+            "id": "00000000-0000-0000-0000-0000000000a1",
+            "node_type": "agent",
+            "position": {"x": 0, "y": 0},
+            "agent_id": "00000000-0000-0000-0000-0000000000ff",
+            "single_pr_per_run": True,
+        }
+        with pytest.raises(ValidationError, match="single_pr_per_run"):
+            _normalized_node(agent_node)
+
+        # Positive control: the same flag on a sandbox node normalises.
+        sandbox_node = {
+            **agent_node,
+            "node_type": "sandbox_agent",
+            "agent_id": None,
+            "agent_prompt": "Do the thing",
+            "agent_commands": ["echo hi"],
+            "template_id": "opencode",
+        }
+        assert _normalized_node(sandbox_node)["single_pr_per_run"] is True
+
     def test_graph_duplicate_node_ids_rejected(self) -> None:
         tx = {
             "api_version": "modulo.dev/v1",

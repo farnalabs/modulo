@@ -4,14 +4,15 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/hitl.py
+  - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/core/hitl_manager/__init__.py
+  - backend/src/modulo/core/hitl_manager/deadline_warning.py
   - backend/src/modulo/core/hitl_manager/expiry_job.py
   - backend/src/modulo/core/hitl_manager/overdue_warning.py
   - backend/src/modulo/core/hitl_manager/sweep_alarm.py
   - backend/src/modulo/core/pipeline_engine/hitl_context.py
   - backend/src/modulo/db/crud/hitl_review_config.py
   - backend/src/modulo/core/run_context/autonomy.py
-  - backend/src/modulo/db/crud/hitl_review_config.py
   - backend/src/modulo/db/models/hitl_claim.py
   - frontend/src/views/SettingsHitlReviewView.vue
   - frontend/src/components/HitlBriefing.vue
@@ -21,13 +22,18 @@ unit-tests:
   - backend/tests/unit/hitl_manager/test_overdue_warning.py
   - backend/tests/unit/hitl_manager/test_claim_expiry_job.py
   - backend/tests/unit/hitl_manager/test_sweep_alarm.py
+  - backend/tests/unit/hitl_manager/test_deadline_warning.py
   - backend/tests/unit/hitl_manager/test_client_type_audit.py
   - backend/tests/unit/core/hitl_manager/test_hitl_jwt.py
   - backend/tests/unit/api/test_hitl_resilience.py
   - backend/tests/unit/api/test_rate_limit_hitl_review.py
+  - backend/tests/unit/api/test_admin_hitl_review_window.py
+  - backend/tests/unit/db/test_hitl_review_window_resolution.py
   - backend/tests/unit/pipeline_engine/test_node_runner_hitl.py
   - backend/tests/unit/pipeline_engine/test_hitl_context.py
   - backend/tests/unit/db/test_hitl_review_config.py
+  - backend/tests/integration/test_hitl_review_window_terminalize.py
+  - backend/tests/integration/test_hitl_deadline_warning.py
   - frontend/src/__tests__/SettingsHitlReviewView.spec.ts
   - frontend/src/__tests__/components/HitlBriefing.spec.ts
 bdd:
@@ -172,6 +178,31 @@ may decide.
 - [x] Stale gates warn their owners and expired claims are reset to unclaimed
       (`test_overdue_warning`, `test_claim_expiry_job`, `overdue_warning.py`,
       `expiry_job.py`)
+- [x] Configurable HITL review window (FAR-1257, org tiering FAR-1269): the
+      effective window resolves pipeline override
+      (`pipelines.hitl_review_window_seconds`, CHECK 60..604800, also settable
+      via `modulo apply`) over the org default (`GET/PUT
+      /api/v1/admin/org/hitl-review-window`, whole seconds 60..604800, an
+      explicit null clears back to inheritance) over the instance default
+      (`HITL_REVIEW_CANCEL_GRACE_SECONDS`). It is resolved ONCE at gate fire
+      and stamped as the absolute `hitl_claims.terminalize_at`, so a later
+      config change never moves a live gate's deadline; the
+      dispatcher-reconcile terminaliser cancels the run at that deadline with
+      cancel reason `hitl_timeout` (`core/pipeline_engine/classify.py`) instead
+      of a generic cancel. The org control is deliberately NOT plan-gated: the
+      `org-hitl-review-window` card on `/admin/org` renders outside the
+      team_rbac FeatureGate and the route stays community-tier with an explicit
+      `admin` role (`test_admin_hitl_review_window`,
+      `test_hitl_review_window_resolution`, `test_hitl_review_window_terminalize`)
+- [x] Approaching-deadline warning (FAR-1270): while an undecided, unclaimed
+      gate still has time left, the `hitl_deadline_warning` SAQ cron (every
+      60s, unique) emails the same recipients the gate-fire alert uses
+      (`hitl_email_alerts` subscribers holding `hitl.claim` whose per-user
+      preference resolves TRUE for the pipeline) at a lead of
+      `min(max(window / 2, 60s), window, 3600s)` before the deadline, so a
+      human can act before the terminaliser cancels the run
+      (`core/hitl_manager/deadline_warning.py`, `test_deadline_warning`,
+      `test_hitl_deadline_warning`)
 - [x] Conditional HITL: an eval condition decides whether a gate activates at
       run time (conditional_hitl BDD + `test_conditional_hitl`)
 - [x] Fire-time decision briefing: a fired gate captures a bounded, redacted
@@ -244,6 +275,16 @@ may decide.
   (`expiry_job.py`).
 
 ## QA History
+
+- 2026-09-29: **product-map review pass** — reconciled this tracker with the
+  manifest `feat-hitl` behaviours: the configurable review window (FAR-1257 /
+  FAR-1269: three-level resolution stamped once as `hitl_claims.terminalize_at`,
+  `hitl_timeout` cancel reason, org control on every tier) and the
+  approaching-deadline warning cron (FAR-1270) both shipped without behaviour
+  lines here. Added them, cited `deadline_warning.py`, the org window route in
+  `admin.py`, and the review-window/deadline unit and integration suites, and
+  dropped a duplicate `hitl_review_config.py` frontmatter entry. Status:
+  covered.
 
 - 2026-09-17: **product-map review pass** — closed the "No
   executing BDD surface for modify-then-approve, `human_only` refusal, or

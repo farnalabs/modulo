@@ -17,7 +17,7 @@ import {
  */
 async function clickRowAction(page: Page, row: Locator, label: string): Promise<void> {
   await row.getByTestId('pipeline-list-action-menu').click()
-  await clickMenuItem(page, page.getByRole('menuitem', { name: label, exact: true }))
+  await clickMenuItem(page.getByRole('menuitem', { name: label, exact: true }))
 }
 
 /**
@@ -171,11 +171,18 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       // "menu not open". Asserting Delete visible first (as this test used to)
       // threw before the skip could run, failing the suite on every deployment
       // whose plan does not enable pipeline_delete.
-      await expect(page.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible({ timeout: 15_000 })
+      //
+      // Wait on the popup being ATTACHED, not visible: PrimeVue's Menu hides on
+      // any scroll and a Playwright visibility check can detach the overlay
+      // before the subsequent click runs (see setup/row-menu.ts).
+      await page
+        .locator('[data-pc-section="itemcontent"]')
+        .first()
+        .waitFor({ state: 'attached', timeout: 15_000 })
       if ((await deleteItem.count()) === 0) {
         test.skip(true, 'pipeline_delete is not enabled on this deployment')
       }
-      await clickMenuItem(page, deleteItem)
+      await clickMenuItem(deleteItem)
       const dialog = page.locator('dialog').filter({ hasText: 'Delete Pipeline' })
       await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Delete' }).click()

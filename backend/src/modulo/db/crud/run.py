@@ -2272,17 +2272,28 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
 
 
 # ---------------------------------------------------------------------------
-# FAR-1274 — the one-PR-per-run delivery contract, enforced OUTSIDE the sandbox
+# FAR-1274 — one-PR-per-run: POST-RUN detection + an admin alert, OUTSIDE the
+# sandbox (a stopgap, NOT a preventive guarantee)
 # ---------------------------------------------------------------------------
 #
-# The FAR-1264 ``gh`` shim that refuses a second ``gh pr create`` lives INSIDE
-# the sandbox as an agent-writable claim file: it handles the observed failure
-# mode (an accidental re-run of the PR step) but cannot be made tamper-proof,
-# so it is defence in depth, not a guarantee. The platform-side guarantee is
-# DETECTION — every terminal write re-scans the run's platform-CAPTURED
-# delivery evidence for distinct GitHub pull-request URLs and records a breach
-# loudly (error log + an admin-scoped in-app notification written in the SAME
-# transaction as the terminal status) when it finds two or more.
+# The mechanism here does NOT prevent a second PR — it detects after the fact
+# and alerts. The FAR-1264 ``gh`` shim that refuses a second ``gh pr create``
+# lives INSIDE the sandbox as an agent-writable claim file: it handles the
+# observed failure mode (an accidental re-run of the PR step) but cannot be
+# made tamper-proof, so it stays as defence in depth, bounded. A preventive,
+# platform-mediated PR-create path is the outstanding design work (XL); until
+# it exists, a terminal write re-scans the run's platform-CAPTURED delivery
+# evidence for distinct GitHub pull-request URLs and records a breach loudly
+# (error log + an admin-scoped in-app notification written inside a SAVEPOINT
+# of the SAME transaction as the terminal status, so a failed alert can never
+# poison that transaction).
+#
+# SCOPED TO THE RUN'S OWN DECLARED CONTRACT: the scan runs ONLY when the run's
+# frozen pipeline snapshot declares the FAR-1273 ``single_pr_per_run`` node
+# flag. Multi-PR-by-design pipelines (e.g. a batch ticket-to-PR pipeline that
+# prints one PR URL per ticket) never declare the flag and stay silent, as do
+# runs whose snapshot cannot be read (fail-safe: a read failure is a missed
+# DETECTION, never a false alert).
 #
 # Why the captured stdout and NOT the delivery sentinel: FAR-1254's second
 # ``gh pr create`` did NOT re-echo the sentinel, so counting sentinel lines —
@@ -2301,13 +2312,42 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
 #: raw-output ``pr_url`` extractor agree on what counts as a PR URL — two
 #: copies are the same deliberate layering trade-off recorded for the
 #: idempotency-ref regex above (``modulo.db`` may not import ``modulo.core``:
-#: import-linter contract ``db-does-not-import-core``).
-_PR_URL_PATTERN = re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
+#: import-linter contract ``db-does-not-import-core``). Case-INSENSITIVE so a
+#: scheme/host-case variant (``HTTP://GitHub.com/...``) still matches and then
+#: collapses onto one key in :func:`_normalise_pr_url` instead of being
+#: silently missed.
+_PR_URL_PATTERN = re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+", re.IGNORECASE)
+
+#: A line carrying a JSON ``"url":`` key is a ``gh pr list --json ...,url``
+#: LISTING of pre-existing open PRs (the delivery prompt's own pre-check),
+#: not this run's ``gh pr create`` echo — URL matches on such a line are
+#: skipped so listing other open PRs' URLs never reads as a second PR created
+#: by this run. Known residual (bounded): a listing flattened to one bare URL
+#: per line (``gh pr list --jq``) still counts.
+_PR_URL_LISTING_KEY = re.compile(r'"url"\s*:')
 
 #: Bounded walk depth when unwrapping the stored blobs looking for PR URLs
 #: (the envelopes nest ~5 deep: artifacts -> output -> output_json -> field).
 #: Self-referential blobs terminate via the seen-id set, never a RecursionError.
 _PR_SCAN_MAX_DEPTH = 8
+
+#: Hard ceiling on distinct PR URLs the walk collects — bounds both the walk's
+#: work and the alert's payload so a pathological/evidence-flood blob can
+#: never write a multi-megabyte notification ``body`` or ERROR log line.
+_PR_SCAN_MAX_URLS = 50
+
+#: How many URLs the alert body/log actually render; the rest becomes an
+#: "(and N more)" suffix (see :func:`format_pr_url_list`).
+_MAX_PR_URLS_REPORTED = 10
+
+#: Bounded depth when searching a snapshot node for the flag (top-level, or
+#: nested under a policy/config object — the scan tolerates either shape).
+_SINGLE_PR_FLAG_SCAN_DEPTH = 4
+
+#: The FAR-1273 node flag that arms the one-PR-per-run contract. Detection
+#: (FAR-1274) runs only for runs whose frozen snapshot declares it; pipelines
+#: that do not declare it (multi-PR-by-design) are silent.
+SINGLE_PR_PER_RUN_FLAG = "single_pr_per_run"
 
 #: Notification category for a one-PR-per-run breach (FAR-1274).
 NOTIFICATION_CATEGORY_DUPLICATE_PR = "run.duplicate_pr_delivery"
@@ -2316,21 +2356,44 @@ NOTIFICATION_CATEGORY_DUPLICATE_PR = "run.duplicate_pr_delivery"
 _DUPLICATE_PR_NOTIFICATION_TTL = timedelta(days=7)
 
 
+def _normalise_pr_url(url: str) -> str:
+    """Dedup key for one PR URL: scheme-insensitive, host+path lowercased.
+
+    Variants of the SAME PR (``http://`` vs ``https://``, ``GitHub.com`` vs
+    ``github.com``, a stray trailing ``.``/``)``) collapse onto one key so a
+    single PR can never count twice and manufacture a false breach. The
+    original (first-seen) spelling is what gets reported.
+    """
+    key = url.strip().rstrip(".,;:!?)]}\"'")
+    key = re.sub(r"^https?://", "", key, flags=re.IGNORECASE)
+    return key.lower()
+
+
 def _walk_pr_urls(value: Any, depth: int, seen: set[int], urls: list[str], seen_urls: set[str]) -> None:
     """Collect distinct GitHub PR URLs from every string in the *value* tree.
 
-    Bounded by *_PR_SCAN_MAX_DEPTH* and cycle-safe (dicts/lists are tracked by
-    ``id``), so a self-referential or pathologically nested blob terminates.
-    Strings are matched with :data:`_PR_URL_PATTERN` (``findall``); non-string
-    scalars are ignored.
+    Bounded three ways: *_PR_SCAN_MAX_DEPTH* on nesting, the seen-id set for
+    cycles (self-referential blobs terminate, never a RecursionError), and
+    *_PR_SCAN_MAX_URLS* on the number of distinct URLs collected (the walk
+    stops as soon as the ceiling is hit). Strings are matched line-by-line
+    with :data:`_PR_URL_PATTERN`; lines that are a ``gh pr list --json``
+    listing (see :data:`_PR_URL_LISTING_KEY`) are skipped, and matches are
+    deduplicated on :func:`_normalise_pr_url`. Non-string scalars are ignored.
     """
-    if depth > _PR_SCAN_MAX_DEPTH:
+    if depth > _PR_SCAN_MAX_DEPTH or len(seen_urls) >= _PR_SCAN_MAX_URLS:
         return
     if isinstance(value, str):
-        for match in _PR_URL_PATTERN.findall(value):
-            if match not in seen_urls:
-                seen_urls.add(match)
+        for line in value.splitlines():
+            if _PR_URL_LISTING_KEY.search(line):
+                continue
+            for match in _PR_URL_PATTERN.findall(line):
+                key = _normalise_pr_url(match)
+                if key in seen_urls:
+                    continue
+                seen_urls.add(key)
                 urls.append(match)
+                if len(seen_urls) >= _PR_SCAN_MAX_URLS:
+                    return
         return
     if isinstance(value, dict):
         if id(value) in seen:
@@ -2358,9 +2421,12 @@ def collect_delivery_pr_urls(
     (``outputs``), the per-node telemetry (``agent_stdout`` and friends, the
     platform-captured transcript), and the FAR-188 raw-output retention
     markers (``raw_output`` + the declared ``pr_url``) — for PR URLs, in
-    first-seen order and deduplicated. A URL the agent only DECLARED (its
-    ``output.json`` ``pr_url``) counts too, so evidence survives even when the
-    transcript was truncated away.
+    first-seen order and deduplicated on the normalised key (variants of one
+    PR never count twice). A URL the agent only DECLARED (its ``output.json``
+    ``pr_url``) counts too, so evidence survives even when the transcript was
+    truncated away. Bounded: at most *_PR_SCAN_MAX_URLS* distinct URLs are
+    returned (the alert truncates further for display —
+    :func:`format_pr_url_list`).
 
     Pure and DB-free: unit-testable without a database.
     """
@@ -2387,6 +2453,20 @@ def find_duplicate_pr_urls(
     return urls if len(urls) >= 2 else []
 
 
+def format_pr_url_list(pr_urls: list[str]) -> str:
+    """Render at most *_MAX_PR_URLS_REPORTED* URLs, then "… (and N more)".
+
+    Bounds the alert ``body`` and the ERROR log line: the raw collector allows
+    up to *_PR_SCAN_MAX_URLS* URLs, but only the first ten are ever rendered.
+    """
+    shown = pr_urls[:_MAX_PR_URLS_REPORTED]
+    rendered = ", ".join(shown)
+    remaining = len(pr_urls) - len(shown)
+    if remaining > 0:
+        rendered = f"{rendered} (and {remaining} more)"
+    return rendered
+
+
 async def _record_duplicate_pr_notification(session: AsyncSession, run: Run, pr_urls: list[str]) -> None:
     """Write the loud, durable breach alert (FAR-1274) — admin, error level.
 
@@ -2396,6 +2476,13 @@ async def _record_duplicate_pr_notification(session: AsyncSession, run: Run, pr_
     ``modulo.core``; and creating the row in the CALLER'S transaction makes the
     alert atomic with the terminal status write — a rolled-back terminalization
     can never leave a phantom alert behind (the Notifier opens its own session).
+    The caller (:func:`_enforce_one_pr_per_run`) runs this inside a SAVEPOINT,
+    so a DB-level failure of the SELECT or the INSERT rolls back only the alert
+    path — never the caller's terminal status transaction.
+
+    The URL list rendered into ``body`` is truncated by
+    :func:`format_pr_url_list` so the body stays bounded regardless of how many
+    URLs the collector returned.
 
     Idempotent per run: a re-terminalization (retry policy re-runs the run)
     finds the earlier alert by ``(org, category, action_url)`` and does not
@@ -2406,7 +2493,7 @@ async def _record_duplicate_pr_notification(session: AsyncSession, run: Run, pr_
         _log.error(
             "delivery_contract.duplicate_pr_missing_org run=%s pr_urls=%s",
             run.id,
-            pr_urls,
+            format_pr_url_list(pr_urls),
         )
         return
     action_url = f"/runs/{run.id}"
@@ -2433,9 +2520,9 @@ async def _record_duplicate_pr_notification(session: AsyncSession, run: Run, pr_
         body=(
             f"The one-PR-per-run delivery contract was breached: {label} captured "
             f"{len(pr_urls)} distinct pull-request URLs in its delivery evidence: "
-            f"{', '.join(pr_urls)}. Detection is platform-side (FAR-1274); the "
-            "in-sandbox gh guard is defence in depth. Review the run and close "
-            "the duplicate pull request(s)."
+            f"{format_pr_url_list(pr_urls)}. Detection is platform-side (FAR-1274); "
+            "the in-sandbox gh guard is defence in depth, bounded. Review the run "
+            "and close the duplicate pull request(s)."
         ),
         action_url=action_url,
         dismiss_strategy="org_admin",
@@ -2444,31 +2531,111 @@ async def _record_duplicate_pr_notification(session: AsyncSession, run: Run, pr_
     )
 
 
-async def _enforce_one_pr_per_run(session: AsyncSession, run: Run) -> None:
-    """FAR-1274: detect a run whose captured evidence holds >1 PR URL, loudly.
+def graph_declares_single_pr_per_run(graph_json: Any) -> bool:
+    """Whether a snapshot graph declares the FAR-1273 ``single_pr_per_run`` flag.
 
-    Reads the run's three stored blobs (one batched reader call, the same one
-    the classifier uses) and, on a breach, logs at ERROR level and writes the
-    admin-scoped notification in the SAME transaction. Best-effort and NEVER
-    raises (cancellation excepted): detection must never wedge or roll back a
-    terminal status write. A blob read that fails (RLS precheck, DB blip)
-    degrades to a logged miss — the guarantee is detection-of-retained-evidence,
-    so a read failure is a gap, not a reason to fail the run.
+    Fail-safe: ``None``, non-dicts, or a missing ``nodes`` list return
+    ``False`` — the detector stays SILENT rather than risking a false alert on
+    a pipeline whose contract it does not know. Only the top-level ``nodes``
+    list is walked (snapshots are expanded at creation, the same rule
+    :func:`_graph_contains_sandbox_agent` relies on), and each node is
+    searched a few levels deep so the flag is found whether it sits at the
+    node's top level or nested under a policy/config object.
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    nodes = graph_json.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    return any(_node_declares_single_pr_flag(node, 0) for node in nodes)
+
+
+def _node_declares_single_pr_flag(value: Any, depth: int) -> bool:
+    """Bounded, cycle-tolerant search for ``single_pr_per_run is True``."""
+    if depth > _SINGLE_PR_FLAG_SCAN_DEPTH:
+        return False
+    if isinstance(value, dict):
+        if value.get(SINGLE_PR_PER_RUN_FLAG) is True:
+            return True
+        return any(_node_declares_single_pr_flag(item, depth + 1) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_node_declares_single_pr_flag(item, depth + 1) for item in value)
+    return False
+
+
+async def _run_declares_single_pr_per_run(session: AsyncSession, run: Run) -> bool:
+    """Read the run's FROZEN snapshot graph and check the FAR-1273 flag.
+
+    The run reads its snapshot (``run.snapshot_id``), never the live pipeline —
+    the same rule every other run-scoped behaviour follows. A missing or
+    unreadable snapshot returns ``False`` (fail-safe: no alert, no exception).
+    """
+    snapshot_id = getattr(run, "snapshot_id", None)
+    if snapshot_id is None:
+        return False
+    result = await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+    return graph_declares_single_pr_per_run(result.scalar_one_or_none())
+
+
+async def _enforce_one_pr_per_run(session: AsyncSession, run: Run) -> None:
+    """FAR-1274: detect >1 distinct PR URL in the evidence and alert LOUDLY.
+
+    **Scope.** Runs only when the run's frozen snapshot declares the FAR-1273
+    ``single_pr_per_run`` node flag; every other pipeline (multi-PR-by-design
+    batch deliverers, prompt-to-PR-style flows that merely LIST other open PRs)
+    is silent, and an unreadable snapshot fails safe to silence. For an armed
+    run, one indexed snapshot SELECT gates the path — unarmed runs never read
+    the blobs at all.
+
+    **Transaction safety (SAVEPOINT).** The whole body — snapshot read, blob
+    read, idempotency SELECT and alert INSERT — sits inside
+    ``session.begin_nested()``. A bare ``try/except`` cannot un-poison a
+    Postgres transaction: a DB-level error there aborts it, and the caller's
+    commit would roll back the ALREADY-FLUSHED terminal status (a stuck run,
+    silently). The savepoint rolls back only the alert path; the terminal
+    write keeps its transaction. Best-effort and NEVER raises (cancellation
+    excepted): detection must never wedge or roll back a terminal status
+    write.
+
+    **Cost.** The regex walk is pure CPU and runs off the event loop via
+    ``asyncio.to_thread`` (the same treatment ``classify`` gives its compute),
+    and collection/display are bounded (``_PR_SCAN_MAX_URLS`` /
+    ``_MAX_PR_URLS_REPORTED``) so neither the loop nor the alert payload can
+    blow up on a fat transcript. Re-reading the blobs the classifier also read
+    in this transaction was rejected as out of scope here (it requires
+    changing ``classify.py``'s signature); the walk offload is the bounded
+    alternative.
+
+    A blob read that fails (RLS precheck, DB blip) degrades to a logged miss —
+    the guarantee is detection-of-retained-evidence, so a read failure is a
+    gap, not a reason to fail the run.
     """
     try:
-        blobs = await read_run_node_outputs_raw(
-            session,
-            run_id=run.id,
-            organisation_id=getattr(run, "organisation_id", None),
-        )
-        pr_urls = find_duplicate_pr_urls(blobs.outputs, blobs.telemetry, blobs.markers)
-        if not pr_urls:
-            return
-        _log.error(
-            "delivery_contract.duplicate_pr",
-            extra={"run_id": str(run.id), "pr_count": len(pr_urls), "pr_urls": pr_urls},
-        )
-        await _record_duplicate_pr_notification(session, run, pr_urls)
+        async with session.begin_nested():
+            if not await _run_declares_single_pr_per_run(session, run):
+                return
+            blobs = await read_run_node_outputs_raw(
+                session,
+                run_id=run.id,
+                organisation_id=getattr(run, "organisation_id", None),
+            )
+            pr_urls = await asyncio.to_thread(
+                find_duplicate_pr_urls,
+                blobs.outputs,
+                blobs.telemetry,
+                blobs.markers,
+            )
+            if not pr_urls:
+                return
+            _log.error(
+                "delivery_contract.duplicate_pr",
+                extra={
+                    "run_id": str(run.id),
+                    "pr_count": len(pr_urls),
+                    "pr_urls": format_pr_url_list(pr_urls),
+                },
+            )
+            await _record_duplicate_pr_notification(session, run, pr_urls)
     except asyncio.CancelledError:
         raise
     except Exception:
