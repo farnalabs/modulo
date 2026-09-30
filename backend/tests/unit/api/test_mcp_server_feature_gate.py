@@ -19,6 +19,7 @@ bug class this ticket's notes record for the SSO pre-auth routes).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
@@ -344,6 +345,27 @@ async def test_gate_is_fail_closed_on_flag_read_error() -> None:
 
     assert denied is not None
     assert denied.status_code == 402
+
+
+async def test_flag_read_cancellation_propagates() -> None:
+    """A cancellation during the flag read must propagate, never be swallowed.
+
+    ``CancelledError`` is a ``BaseException``; the explicit re-raise keeps a
+    task cancellation aborting the request instead of being turned into a
+    fail-closed 402. Exercises the ``except asyncio.CancelledError`` arm of
+    ``_mcp_server_flag_enabled`` (the sibling of the generic-exception arm
+    covered by ``test_gate_is_fail_closed_on_flag_read_error``).
+    """
+    session = _make_mock_session()
+
+    with (
+        patch(
+            "modulo.db.crud.organisation.get_organisation",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _mcp_server_flag_enabled(_ORG_ID, session)
 
 
 async def test_flag_enabled_reads_the_resolved_org_plan() -> None:

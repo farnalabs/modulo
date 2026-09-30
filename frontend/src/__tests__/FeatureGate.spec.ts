@@ -119,6 +119,43 @@ describe('FeatureGate', () => {
     expect(wrapper.find('[data-testid="feature-gate-lock"] a').exists()).toBe(false)
   })
 
+  it('keeps the upgrade copy for a required tier that is not in the catalog', () => {
+    const store = usePlanStore()
+    // 'enterprise' is absent from the default tierRanks catalog, so
+    // isCommunityTier cannot rank it and must fall back to the upgrade copy.
+    store.$patch({ features: { 'test-feature': false } })
+
+    const wrapper = mount(FeatureGate, {
+      props: { featureName: 'test-feature', requiredTier: 'enterprise' },
+      slots: { default: 'Gated Content' },
+    })
+
+    const lock = wrapper.find('[data-testid="feature-gate-lock"]')
+    expect(lock.text()).toContain('Team Feature')
+    expect(lock.find('a').exists()).toBe(true)
+  })
+
+  it('does not mislabel a paid tier as community when the catalog lacks a community rank', () => {
+    const store = usePlanStore()
+    // A catalog that landed without the community entry: communityRank is
+    // undefined, so a registered paid tier must keep the upgrade wording
+    // rather than being called a community feature. A function patch REPLACES
+    // the map (an object $patch would deep-merge and keep community).
+    store.$patch((state) => {
+      state.tierRanks = { team: 1 }
+      state.features = { 'test-feature': false }
+    })
+
+    const wrapper = mount(FeatureGate, {
+      props: { featureName: 'test-feature', requiredTier: 'team' },
+      slots: { default: 'Gated Content' },
+    })
+
+    const lock = wrapper.find('[data-testid="feature-gate-lock"]')
+    expect(lock.text()).toContain('Team Feature')
+    expect(lock.find('a').exists()).toBe(true)
+  })
+
   it('keeps the upgrade copy and pricing link for a disabled team-tier feature', () => {
     const store = usePlanStore()
     store.$patch({ features: { audit_viewer: false }, currentTier: 'community' })
