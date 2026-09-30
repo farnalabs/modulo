@@ -847,4 +847,40 @@ describe('PipelineListView', () => {
     expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor', params: { id: 'p1' } }))
     pushSpy.mockRestore()
   })
+
+  it('remounts the row-action Menu on every open so its item-click handler is fresh (staging @regression)', async () => {
+    // Regression pin for the staging @regression row-action no-op. PrimeVue's
+    // Menu caches its item `onClick` handler and carries an internal
+    // `overlayVisible` state machine; re-using the SAME Menu instance across
+    // opens left that cached handler observing a stale (already-hidden) overlay,
+    // so clicking Archive/Rename called `item.command()` then `this.hide()`
+    // against a closed overlay and silently did nothing. The view must bump the
+    // Menu's vnode key on every open so Vue remounts it with a fresh handler.
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Key Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as {
+      openActionMenu: (e: MouseEvent, p: unknown) => void
+      actionMenuKey: number
+    }
+    // The second open must produce a different key than the first (and the
+    // first must differ from the initial value) — proof the Menu is remounted.
+    const initialKey = vm.actionMenuKey
+    vm.openActionMenu({ currentTarget: document.createElement('button') } as unknown as MouseEvent, pipeline)
+    await nextTick()
+    const firstKey = vm.actionMenuKey
+    vm.openActionMenu({ currentTarget: document.createElement('button') } as unknown as MouseEvent, pipeline)
+    await nextTick()
+    const secondKey = vm.actionMenuKey
+
+    expect(firstKey).not.toBe(initialKey)
+    expect(secondKey).not.toBe(firstKey)
+  })
 })
