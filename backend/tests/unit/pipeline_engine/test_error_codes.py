@@ -706,7 +706,7 @@ def test_match_known_fixes_positive_profile_cap():
 def test_retired_e2b_cap_signature_no_longer_matches():
     """The pre-FAR-1359 code is gone; a stale run detail must not surface a fix
     pointing at a limit that no longer exists."""
-    assert match_known_fixes("SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP (3600 > 3300)") == []
+    assert not match_known_fixes("SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP (3600 > 3300)")
 
 
 def test_match_known_fixes_returns_every_match():
