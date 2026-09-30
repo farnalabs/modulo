@@ -3587,6 +3587,9 @@ elements:
       - testid: run-detail-cost-clamped
         type: element
         dynamic_testid: false
+      - testid: run-detail-zero-rejected
+        type: element
+        dynamic_testid: false
       - testid: run-detail-not-reported
         type: element
         dynamic_testid: false
