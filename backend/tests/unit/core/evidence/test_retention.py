@@ -2,10 +2,9 @@
 
 In-memory SQLite (aiosqlite) coverage of the policy CRUD, the batched purge
 sweep mechanics, the advisory-lock timeout exit, and the observability
-contract.  ``pg_advisory_lock`` is Postgres-only: here the lock boundary is
-mocked and the polling/timeout logic of ``_acquire_advisory_lock`` is
-exercised against a stub session.  The REAL advisory-lock behaviour (mutual
-exclusion between two sweeps) is covered in
+contract.  ``pg_advisory_lock`` is Postgres-only: here the shared
+``db.repositories.locks`` lock-service boundary is mocked.  The REAL
+advisory-lock behaviour (mutual exclusion between two sweeps) is covered in
 ``tests/integration/db/test_evidence_retention.py``.
 
 Batch-window insert safety: a row written between a batch's SELECT and its
@@ -39,9 +38,8 @@ from modulo.core.evidence_retention import (
     DEFAULT_LOCK_TIMEOUT_SECONDS,
     DEFAULT_MAX_AGE_DAYS,
     EvidenceRetentionPolicy,
-    _acquire_advisory_lock,
+    _lock_key_for_org,
     _record_deletion_metrics,
-    _release_advisory_lock,
     count_evidence_rows,
     load_policy,
     purge_evidence,
@@ -50,6 +48,7 @@ from modulo.core.evidence_retention import (
 from modulo.db.models import Base
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.organisation import Organisation
+from modulo.db.repositories.locks import LockAcquireError
 
 _RETENTION_LOGGER = "modulo.core.evidence_retention"
 
@@ -108,11 +107,11 @@ async def _seed_org(session: AsyncSession) -> uuid.UUID:
 
 
 def _grant_locks(monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock]:
-    """Replace the Postgres advisory-lock boundary with mocks (SQLite has no pg locks)."""
-    acquire = AsyncMock(return_value=True)
+    """Replace the shared lock-service boundary with mocks (SQLite has no pg locks)."""
+    acquire = AsyncMock()
     release = AsyncMock()
-    monkeypatch.setattr(evidence_retention, "_acquire_advisory_lock", acquire)
-    monkeypatch.setattr(evidence_retention, "_release_advisory_lock", release)
+    monkeypatch.setattr(evidence_retention._LOCK_SERVICE, "acquire_lock", acquire)
+    monkeypatch.setattr(evidence_retention._LOCK_SERVICE, "release_lock", release)
     return acquire, release
 
 
@@ -367,10 +366,10 @@ async def test_lock_timeout_exits_cleanly_without_deletions(
     org_id = await _seed_org(session)
     session.add(_evidence(org_id, "old.key", created_at=_utc_days_ago(100)))
     await session.commit()
-    acquire = AsyncMock(return_value=False)
+    acquire = AsyncMock(side_effect=LockAcquireError("lock not acquired within 0.2s"))
     release = AsyncMock()
-    monkeypatch.setattr(evidence_retention, "_acquire_advisory_lock", acquire)
-    monkeypatch.setattr(evidence_retention, "_release_advisory_lock", release)
+    monkeypatch.setattr(evidence_retention._LOCK_SERVICE, "acquire_lock", acquire)
+    monkeypatch.setattr(evidence_retention._LOCK_SERVICE, "release_lock", release)
 
     with caplog.at_level(logging.WARNING, logger=_RETENTION_LOGGER):
         result = await purge_evidence(session, org_id, EvidenceRetentionPolicy(lock_timeout_seconds=0.2))
@@ -389,45 +388,25 @@ async def test_purge_releases_advisory_lock_after_sweep(session: AsyncSession, m
 
     result = await purge_evidence(session, org_id, EvidenceRetentionPolicy())
 
+    expected_key = _lock_key_for_org(org_id)
     acquire.assert_awaited_once()
     release.assert_awaited_once()
+    assert acquire.await_args.args[1] == expected_key
+    assert release.await_args.args[1] == expected_key
     assert result.rows_deleted == 0
 
 
-class _StubResult:
-    def __init__(self, value: bool) -> None:
-        self._value = value
+def test_lock_key_is_namespaced_per_org() -> None:
+    """The sweep's advisory-lock key is namespaced to evidence retention —
+    disjoint from other per-org locks (e.g. the last-admin guard keys on
+    ``str(org_id)``) — and varies per org."""
+    org_id = uuid.uuid4()
 
-    def scalar_one(self) -> bool:
-        return self._value
+    key = _lock_key_for_org(org_id)
 
-
-class _StubSession:
-    def __init__(self, outcomes: list[bool]) -> None:
-        self._outcomes = list(outcomes)
-        self.execute_calls = 0
-
-    async def execute(self, *_args: Any, **_kwargs: Any) -> _StubResult:
-        self.execute_calls += 1
-        return _StubResult(self._outcomes.pop(0))
-
-
-async def test_acquire_advisory_lock_retries_until_granted() -> None:
-    stub = _StubSession([False, False, True])
-
-    acquired = await _acquire_advisory_lock(stub, uuid.uuid4(), lock_timeout=5.0)
-
-    assert acquired is True
-    assert stub.execute_calls == 3
-
-
-async def test_acquire_advisory_lock_times_out_without_grant() -> None:
-    stub = _StubSession([False] * 10)
-
-    acquired = await _acquire_advisory_lock(stub, uuid.uuid4(), lock_timeout=0.12)
-
-    assert acquired is False
-    assert stub.execute_calls >= 2
+    assert key == f"evidence_retention:{org_id}"
+    assert key != str(org_id)
+    assert _lock_key_for_org(uuid.uuid4()) != key
 
 
 # ---------------------------------------------------------------------------
@@ -530,47 +509,8 @@ async def test_save_policy_missing_org_raises_value_error(session: AsyncSession)
 
 
 # ---------------------------------------------------------------------------
-# Advisory-lock release boundary + policy-default + count-phase edge arms
+# Policy-default + count-phase edge arms
 # ---------------------------------------------------------------------------
-
-
-class _RecordingExecSession:
-    """Minimal session double that records executed statements and params."""
-
-    def __init__(self) -> None:
-        self.statements: list[str] = []
-        self.param_sets: list[dict[str, Any]] = []
-
-    async def execute(self, stmt: Any, params: Any = None) -> Any:
-        self.statements.append(str(stmt))
-        self.param_sets.append(dict(params) if params is not None else {})
-        return _StubResult(True)
-
-
-async def test_release_advisory_lock_executes_unlock_with_derived_org_keys() -> None:
-    """The release issues ``pg_advisory_unlock`` with the same derived (k1, k2)
-    key pair ``_acquire_advisory_lock`` used — otherwise it would unlock a
-    different lock namespace than the one held."""
-    org_id = uuid.uuid4()
-    stub = _RecordingExecSession()
-
-    await _release_advisory_lock(stub, org_id)  # type: ignore[arg-type]
-
-    k1, k2 = evidence_retention._org_lock_key(org_id.bytes)
-    assert stub.param_sets[0] == {"k1": k1, "k2": k2}
-    assert "pg_advisory_unlock" in stub.statements[0]
-
-
-async def test_release_advisory_lock_supports_non_uuid_org_ids() -> None:
-    """An org id without a ``.bytes`` attribute (e.g. a raw key) is hashed via
-    ``bytes(org_id)`` instead of crashing the release path."""
-    org_key_bytes = uuid.uuid4().bytes
-    stub = _RecordingExecSession()
-
-    await _release_advisory_lock(stub, org_key_bytes)  # type: ignore[arg-type]
-
-    k1, k2 = evidence_retention._org_lock_key(org_key_bytes)
-    assert stub.param_sets[0] == {"k1": k1, "k2": k2}
 
 
 def test_metrics_skipped_when_no_provider_configured(monkeypatch: pytest.MonkeyPatch) -> None:

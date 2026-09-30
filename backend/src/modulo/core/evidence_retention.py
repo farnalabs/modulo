@@ -5,27 +5,26 @@ The retention policy is stored in ``Organisation.settings_json`` under the
 sweep is the **single sanctioned deletion path** for evidence rows — no other
 module may delete from the ``evidence`` table (append-only carve-out, §2.4).
 
-Concurrency: the sweep acquires a per-org ``pg_advisory_lock`` via the
-``db.repositories.locks`` abstraction.  A second invocation that cannot
-acquire the lock within the configurable timeout logs a warning and exits
-cleanly (idempotent).
+Concurrency: the sweep acquires a per-org ``pg_advisory_lock`` via the shared
+``db.repositories.locks.PostgresLock`` service.  A second invocation that
+cannot acquire the lock within the configurable timeout logs a warning and
+exits cleanly (idempotent).
 """
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.organisation import Organisation
+from modulo.db.repositories.locks import LockAcquireError, PostgresLock
 
 _log = logging.getLogger(__name__)
 
@@ -34,22 +33,22 @@ _log = logging.getLogger(__name__)
 DEFAULT_MAX_AGE_DAYS: int = 90
 DEFAULT_BATCH_SIZE: int = 500
 DEFAULT_LOCK_TIMEOUT_SECONDS: float = 30.0
-DEFAULT_LOCK_POLL_INTERVAL: float = 0.05
 
 # Settings-json key inside ``Organisation.settings_json``.
 _POLICY_KEY = "evidence_retention"
 
-# Advisory lock namespace — arbitrary int8 within pg_advisory_lock's range.
-# Derived from "evidence_retention" to avoid collisions.
-_LOCK_KEY_NAMESPACE = 20250929
+# Advisory-lock key namespace — keeps the retention sweep's lock disjoint from
+# other per-org locks (e.g. the last-admin guard, which keys on ``str(org_id)``).
+_LOCK_KEY_NAMESPACE = "evidence_retention"
+
+# Shared Postgres advisory-lock service (``db.repositories.locks``) — the sweep
+# reuses it rather than re-implementing the try-lock / poll / unlock mechanics.
+_LOCK_SERVICE = PostgresLock()
 
 
-def _org_lock_key(org_id_bytes: bytes) -> tuple[int, int]:
-    """Derive two int4 keys from an org UUID for pg_advisory_lock."""
-    digest = hashlib.md5(org_id_bytes, usedforsecurity=False).digest()
-    k1 = int.from_bytes(digest[:4], "big", signed=True)
-    k2 = int.from_bytes(digest[4:8], "big", signed=True)
-    return (k1, k2)
+def _lock_key_for_org(org_id: Any) -> str:
+    """Return the namespaced advisory-lock key for an org's retention sweep."""
+    return f"{_LOCK_KEY_NAMESPACE}:{org_id}"
 
 
 # ── Policy dataclass ─────────────────────────────────────────────────────
@@ -148,40 +147,6 @@ class PurgeResult:
     max_rows: int | None = None
 
 
-async def _acquire_advisory_lock(
-    session: AsyncSession,
-    org_id: Any,
-    lock_timeout: float,
-) -> bool:
-    """Acquire a per-org advisory lock. Returns True if acquired."""
-    org_bytes = org_id.bytes if hasattr(org_id, "bytes") else bytes(org_id)
-    k1, k2 = _org_lock_key(org_bytes)
-    deadline = asyncio.get_running_loop().time() + lock_timeout
-
-    while True:
-        result = await session.execute(
-            text("SELECT pg_try_advisory_lock(:k1, :k2)"),
-            {"k1": k1, "k2": k2},
-        )
-        if result.scalar_one():
-            return True
-
-        if asyncio.get_running_loop().time() >= deadline:
-            return False
-
-        await asyncio.sleep(DEFAULT_LOCK_POLL_INTERVAL)
-
-
-async def _release_advisory_lock(session: AsyncSession, org_id: Any) -> None:
-    """Release the per-org advisory lock."""
-    org_bytes = org_id.bytes if hasattr(org_id, "bytes") else bytes(org_id)
-    k1, k2 = _org_lock_key(org_bytes)
-    await session.execute(
-        text("SELECT pg_advisory_unlock(:k1, :k2)"),
-        {"k1": k1, "k2": k2},
-    )
-
-
 def _record_deletion_metrics(org_id: Any, rows_deleted: int) -> None:
     """Emit deletion count via OTel counter (no-op when no meter is wired).
 
@@ -265,9 +230,12 @@ async def purge_evidence(
     if policy is None:
         policy = await load_policy(session, org_id)
 
-    # Acquire the advisory lock.
-    locked = await _acquire_advisory_lock(session, org_id, policy.lock_timeout_seconds)
-    if not locked:
+    # Acquire the shared per-org advisory lock (idempotent — a second
+    # invocation that cannot acquire it within the timeout exits cleanly).
+    lock_key = _lock_key_for_org(org_id)
+    try:
+        await _LOCK_SERVICE.acquire_lock(session, lock_key, lock_timeout=policy.lock_timeout_seconds)
+    except LockAcquireError:
         _log.warning(
             "evidence.retention.lock_timeout",
             extra={"org_id": str(org_id), "timeout_seconds": policy.lock_timeout_seconds},
@@ -334,7 +302,7 @@ async def purge_evidence(
                 batches += 1
 
     finally:
-        await _release_advisory_lock(session, org_id)
+        await _LOCK_SERVICE.release_lock(session, lock_key)
 
     return PurgeResult(
         rows_deleted=total_deleted,

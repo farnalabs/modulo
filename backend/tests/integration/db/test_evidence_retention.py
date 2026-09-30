@@ -30,11 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.evidence_retention import (
     EvidenceRetentionPolicy,
-    _org_lock_key,
+    _lock_key_for_org,
     count_evidence_rows,
     purge_evidence,
 )
 from modulo.db.models.evidence import Evidence
+from modulo.db.repositories.locks import _str_to_lock_keys
 
 pytestmark = pytest.mark.integration
 
@@ -331,7 +332,7 @@ async def test_second_sweep_while_locked_exits_cleanly_then_restarts(
     _add_evidence(db_session, org, "old.key", created_at=_utc_days_ago(100))
     await db_session.commit()
 
-    k1, k2 = _org_lock_key(org.bytes)
+    k1, k2 = _str_to_lock_keys(_lock_key_for_org(org))
     holder = await db_engine.connect()
     try:
         grabbed = (
