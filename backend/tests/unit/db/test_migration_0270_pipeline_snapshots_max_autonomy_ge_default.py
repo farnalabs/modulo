@@ -9,8 +9,9 @@ CHECK, mirroring 0264 statement-for-statement on the snapshot table.
 
 Lenses:
 
-* **Chain** - 0270 chains onto ``0269_webhook_dedup_check_constraints`` as the
-  single linear head. This migration was originally numbered 0268; main landed
+* **Chain** - 0270 chains onto ``0269_webhook_dedup_check_constraints``;
+  0271_org_api_keys_revocation_sweep_indexes chains onto 0270 as the single
+  linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
   so it was renumbered onto 0270.
@@ -52,7 +53,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0270_pipeline_snapshots_max_autonomy_ge_default"
+_HEAD_MIGRATION = "0271_org_api_keys_revocation_sweep_indexes"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264
