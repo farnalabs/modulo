@@ -44,14 +44,34 @@ const mockEndpoints = [
   },
 ]
 
+const mockAvailableEvents = [
+  'hitl_awaiting',
+  'run_failed',
+  'run_stalled',
+  'claim_expired',
+  'hitl_overdue',
+  'hitl_deadline_warning',
+  'budget_exceeded',
+  'circuit_breaker_tripped',
+  'trigger_deactivated',
+]
+
+// Hoisted function declaration so the (hoisted) vi.mock factory and the
+// per-test beforeEach restore below both reference the SAME default GET
+// behaviour — a test that overrides it never leaks its override.
+function defaultGet(url: string): Promise<{ data: unknown; error: unknown }> {
+  if (url === '/api/v1/notifications') {
+    return Promise.resolve({ data: mockEndpoints, error: undefined })
+  }
+  if (url === '/api/v1/admin/notifications/available-events') {
+    return Promise.resolve({ data: mockAvailableEvents, error: undefined })
+  }
+  return Promise.resolve({ data: null, error: undefined })
+}
+
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn().mockImplementation((url: string) => {
-      if (url === '/api/v1/notifications') {
-        return Promise.resolve({ data: mockEndpoints, error: undefined })
-      }
-      return Promise.resolve({ data: null, error: undefined })
-    }),
+    GET: vi.fn().mockImplementation((url: string) => defaultGet(url)),
     POST: vi.fn().mockResolvedValue({ data: { id: 'ep-new', url: 'https://example.com/new', events: [], description: null, auto_disabled: false, consecutive_dead_letter_count: 0, team_id: 'team-alpha' }, error: undefined }),
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     DELETE: vi.fn().mockResolvedValue({ response: { status: 204, ok: true }, error: undefined }),
@@ -60,6 +80,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
+import { api } from '../lib/api/client'
 
 async function flush() {
   await new Promise(resolve => setTimeout(resolve, 0))
@@ -69,6 +90,9 @@ async function flush() {
 describe('TeamNotificationEndpoints', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => defaultGet(url),
+    )
   })
 
   const stubs = {
@@ -173,6 +197,48 @@ describe('TeamNotificationEndpoints', () => {
         }),
       }),
     )
+  })
+
+  it('drives the picker from GET /api/v1/admin/notifications/available-events (FAR-1319)', async () => {
+    const { api } = await import('../lib/api/client')
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/admin/notifications/available-events')
+
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await nextTick()
+
+    const labels = wrapper.findAll('label').map((label) => label.text().trim())
+    // Registry events the old hardcoded array omitted must be offered.
+    expect(labels).toContain('run_stalled')
+    expect(labels).toContain('circuit_breaker_tripped')
+    expect(labels).toContain('trigger_deactivated')
+  })
+
+  it('shows a retryable message when the event registry fetch fails', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/notifications') {
+          return Promise.resolve({ data: mockEndpoints, error: undefined })
+        }
+        return Promise.resolve({ data: undefined, error: { detail: 'boom' } })
+      },
+    )
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await nextTick()
+
+    const msg = wrapper.find('[data-testid="team-notif-events-unavailable"]')
+    expect(msg.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="team-notif-events-retry"]').exists()).toBe(true)
   })
 
   it('deletes an endpoint with confirmation', async () => {

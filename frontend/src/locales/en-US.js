@@ -3958,7 +3958,9 @@ export default {
       "description": "Description",
       "url": "URL",
       "optional": "(optional)",
-      "leave_blank_to_keep_existing": "(leave blank to keep existing)"
+      "leave_blank_to_keep_existing": "(leave blank to keep existing)",
+      "event_list_unavailable": "Event list unavailable.",
+      "retry": "Retry"
     },
     "NotificationBell": {
       "notifications": "Notifications",

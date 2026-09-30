@@ -3,20 +3,44 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
+const mockAvailableEvents = [
+  'hitl_awaiting',
+  'run_failed',
+  'run_stalled',
+  'claim_expired',
+  'hitl_overdue',
+  'hitl_deadline_warning',
+  'budget_exceeded',
+  'circuit_breaker_tripped',
+  'trigger_deactivated',
+]
+
+function defaultGet(url: string): Promise<{ data: unknown; error: unknown }> {
+  if (url === '/api/v1/admin/notifications/available-events') {
+    return Promise.resolve({ data: mockAvailableEvents, error: undefined })
+  }
+  return Promise.resolve({ data: { items: [], total: 0, next_cursor: null }, error: undefined })
+}
+
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn().mockResolvedValue({ data: { items: [], total: 0, next_cursor: null }, error: undefined }),
+    GET: vi.fn().mockImplementation((url: string) => defaultGet(url)),
     POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
 import AdminNotificationDeliveryLogView from '../views/AdminNotificationDeliveryLogView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
+import { api } from '../lib/api/client'
 
 describe('AdminNotificationDeliveryLogView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => defaultGet(url),
+    )
   })
 
   it('renders without crashing', async () => {
@@ -120,5 +144,24 @@ describe('AdminNotificationDeliveryLogView', () => {
     await row.trigger('keydown', { key: ' ' })
     await nextTick()
     expect(wrapper.find('td[colspan="8"]').exists()).toBe(true)
+  })
+
+  it('offers every registry event in the event-type filter (FAR-1319)', async () => {
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+
+    // The filter's event list is fetched from the server-side registry, not
+    // hardcoded — hitl_deadline_warning and the other later-registered events
+    // must be selectable without a frontend edit.
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/admin/notifications/available-events')
+
+    // The event-type Select is the second AppSelect in the filter bar.
+    const eventSelect = wrapper.findAllComponents(AppSelect).at(1)
+    expect(eventSelect).toBeDefined()
+    const values = (eventSelect!.props('options') as Array<{ value: string }>).map((o) => o.value)
+    expect(values).toContain('__all__')
+    expect(values).toContain('hitl_deadline_warning')
+    expect(values).toContain('circuit_breaker_tripped')
   })
 })

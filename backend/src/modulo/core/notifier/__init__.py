@@ -1,10 +1,20 @@
 """Notifier — dispatch webhook notifications with HMAC signing, retry, and dead-letter tracking.
 
-Event types dispatched:
-  - hitl_awaiting     (run_id, review_id, pipeline_name, threshold)
-  - run_failed        (run_id, error_code, pipeline_name)
-  - claim_expired     (run_id, review_id, claimed_by)
-  - hitl_overdue      (run_id, review_id, minutes_overdue)
+Event types dispatched (the constants below are the registry's webhook/in-app
+events; per-event in-app render config lives in ``event_mapper._EVENT_CONFIG``
+and the subscribable webhook subset in ``api/routes.admin_notifications.py``
+``AVAILABLE_EVENTS`` — keep the three in sync):
+  - HITL:             hitl_awaiting, hitl_overdue, hitl_deadline_warning,
+                      claim_expired, hitl_approve_sweep_suspected
+  - Runs / cost:      run_failed, run_stalled, budget_exceeded,
+                      circuit_breaker_tripped
+  - Triggers:         trigger_deactivated, org_triggers_auto_paused
+  - Evals:            eval_regression, eval_blocked
+  - Feedback/system:  feedback_pending, system_announcement
+  - Guardrails:       guardrail_enforcement_gap, guardrail_kill_switch,
+                      guardrail_unexpected_skip
+  (event_mapper additionally configures the two HITL gate-removal events
+  hitl_review_removed / hitl_review_removal_denied, which are AuditEvent-only.)
 
 For each event, the notifier:
   1. Queries all active NotificationEndpoints subscribed to the event type.

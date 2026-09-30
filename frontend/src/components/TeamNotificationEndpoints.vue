@@ -193,6 +193,22 @@
                 {{ evt }}
               </label>
             </div>
+            <p
+              v-if="!eventsLoading && availableEvents.length === 0"
+              role="status"
+              class="mt-1 text-xs text-destructive"
+              data-testid="team-notif-events-unavailable"
+            >
+              {{ $t('components.TeamNotificationEndpoints.event_list_unavailable') }}
+              <button
+                type="button"
+                class="ml-1 underline"
+                data-testid="team-notif-events-retry"
+                @click="loadAvailableEvents"
+              >
+                {{ $t('components.TeamNotificationEndpoints.retry') }}
+              </button>
+            </p>
           </div>
           <div>
             <label for="teamnotificationendpoints-field-4" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.description') }}</label>
@@ -264,6 +280,22 @@
               {{ evt }}
             </label>
           </div>
+          <p
+            v-if="!eventsLoading && availableEvents.length === 0"
+            role="status"
+            class="mt-1 text-xs text-destructive"
+            data-testid="team-notif-events-unavailable"
+          >
+            {{ $t('components.TeamNotificationEndpoints.event_list_unavailable') }}
+            <button
+              type="button"
+              class="ml-1 underline"
+              data-testid="team-notif-events-retry"
+              @click="loadAvailableEvents"
+            >
+              {{ $t('components.TeamNotificationEndpoints.retry') }}
+            </button>
+          </p>
         </div>
         <div>
           <label for="teamnotificationendpoints-field-1" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.description') }}</label>
@@ -323,13 +355,35 @@ type TestResult = components["schemas"]["TestResult"];
 
 const props = defineProps<{ teamId: string }>();
 
-const availableEvents = [
-  "hitl_awaiting",
-  "run_failed",
-  "claim_expired",
-  "hitl_overdue",
-  "hitl_deadline_warning",
-];
+/**
+ * FAR-1319 — the subscribable event list is fetched from the server-side
+ * registry (GET /api/v1/admin/notifications/available-events), which is what
+ * `frontend/src/manifest.yaml` has always claimed drives this picker. The
+ * previous hardcoded array drifted behind the backend registry (it missed
+ * run_stalled / budget_exceeded / circuit_breaker_tripped /
+ * trigger_deactivated / org_triggers_auto_paused), so those events were
+ * unsubscribable from the UI even though the API accepted them.
+ */
+const availableEvents = ref<string[]>([]);
+const eventsLoading = ref(false);
+
+async function loadAvailableEvents() {
+  eventsLoading.value = true;
+  try {
+    const { data, error: err } = await api.GET(
+      "/api/v1/admin/notifications/available-events",
+    );
+    if (err || !Array.isArray(data)) {
+      availableEvents.value = [];
+    } else {
+      availableEvents.value = data;
+    }
+  } catch {
+    availableEvents.value = [];
+  } finally {
+    eventsLoading.value = false;
+  }
+}
 
 const endpoints = ref<NotificationEndpointResponse[]>([]);
 const loading = ref(true);
@@ -534,5 +588,11 @@ async function test(ep: NotificationEndpointResponse) {
   }
 }
 
-onMounted(() => loadEndpoints());
+onMounted(() => {
+  loadEndpoints();
+  // The registry endpoint requires admin.notification.manage — only fetch it
+  // for the principals who can actually reach the picker (avoids a 403 on
+  // every viewer mount).
+  if (canManage.value) loadAvailableEvents();
+});
 </script>
