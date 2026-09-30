@@ -13543,10 +13543,7 @@ def _superseded_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             if isinstance(stmt, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
                 dead = True
                 continue
-            if isinstance(stmt, ast.If):
-                _scan(stmt.body, fn_name, True)
-                _scan(stmt.orelse, fn_name, True)
-            elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            if isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While)):
                 _scan(stmt.body, fn_name, True)
                 _scan(stmt.orelse, fn_name, True)
             elif isinstance(stmt, (ast.With, ast.AsyncWith)):
@@ -13590,8 +13587,7 @@ def test_no_asserts_superseded_by_control_transfer():
     assert not violations, (
         f"Found {len(violations)} assertion(s) superseded by an unconditional control transfer.\n"
         "A statement after a direct return/raise/break/continue in the same body can never run,\n"
-        "so the assert verifies nothing. Move it above the transfer, or delete it.\n"
-        + "\n".join(violations)
+        "so the assert verifies nothing. Move it above the transfer, or delete it.\n" + "\n".join(violations)
     )
 
 
@@ -13642,8 +13638,7 @@ def test_control_transfer_lens_flags_dead_asserts():
         assert not _superseded_assert_violations(tree), f"lens should NOT flag:\n{source}"
 
     split = (
-        "def test_foo():\n    for item in items:\n        assert first()\n        continue\n"
-        "        assert second()\n"
+        "def test_foo():\n    for item in items:\n        assert first()\n        continue\n        assert second()\n"
     )
     found = _superseded_assert_violations(ast.parse(split))
     assert [lineno for lineno, _ in found] == [5], f"live/dead split wrong: {found}"
