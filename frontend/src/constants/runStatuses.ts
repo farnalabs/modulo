@@ -29,3 +29,17 @@ export function isTerminalStatus(status: string): boolean {
 export function isNonTerminalStatus(status: string): boolean {
   return !isTerminalStatus(status)
 }
+
+/**
+ * Run statuses under which an undecided HITL review is still actionable work.
+ * Mirrors the backend's ``HITL_ACTIONABLE_RUN_STATUSES`` (FAR-612): a claim
+ * flips the run from ``awaiting_human`` to ``claimed`` (a claim is not a
+ * decision, FAR-604), so a claimed-but-undecided gate must stay actionable —
+ * its approve/reject controls must not vanish on the next run-status poll. A
+ * ``hitl_parked`` run's gate also stays open and claimable.
+ */
+export const HITL_ACTIONABLE_STATUSES = ['awaiting_human', 'claimed', 'hitl_parked'] as const
+
+export function isHitlActionableStatus(status: string): boolean {
+  return (HITL_ACTIONABLE_STATUSES as readonly string[]).includes(status)
+}

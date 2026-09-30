@@ -4,6 +4,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, type Pinia } from 'pinia'
 import { nextTick, type Plugin } from 'vue'
 import { usePlanStore } from '../stores/planStore'
+import { resetHitlReviewState } from '../composables/useHitlReviewState'
 
 let mockRunStatus = 'complete'
 let mockModelBackends: { items: Array<{ has_credentials: boolean }> } | null = null
@@ -2089,11 +2090,12 @@ describe('RunDetailView HITL gates', () => {
     }
   }
 
-  async function mountAwaiting() {
+  async function mountAwaiting(status = 'awaiting_human') {
+    resetHitlReviewState()
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') {
-        return Promise.resolve({ data: { ...baseDetail(), status: 'awaiting_human' }, error: undefined })
+        return Promise.resolve({ data: { ...baseDetail(), status }, error: undefined })
       }
       if (url === '/api/v1/runs/{run_id}/io') {
         return Promise.resolve({ data: { outputs_json: null }, error: undefined })
@@ -2238,6 +2240,51 @@ describe('RunDetailView HITL gates', () => {
     expect(wrapper.text()).toContain('Approve failed:')
     expect(wrapper.text()).toContain('claim_expired')
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('keeps a claimed-but-undecided gate actionable while the run is claimed (FAR-612)', async () => {
+    // A claim flips the run from awaiting_human to `claimed` (a claim is not a
+    // decision). The section must keep rendering the gate so the decision can
+    // still be made — the staging journey regressed here: a transient 503 on
+    // approve left the run claimed, the section unmounted on the next poll, and
+    // the decision could never be re-issued.
+    mockPendingGates = [gate({ claimed_by: 'staging@modulo.run', claimed_by_me: true })]
+    mockClaimResult = { claim_token: 'ct-claimed' }
+    const wrapper = await mountAwaiting('claimed')
+
+    // The gate card (and its decision controls) stay mounted for a claimed run.
+    expect(wrapper.find('[data-testid="hitl-gate-card"]').exists()).toBe(true)
+    // No in-session token on a fresh page → the FAR-686 re-claim recovery path.
+    await wrapper.find('[data-testid="hitl-gate-reclaim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not resurrect a settled run when a decided event arrives after it left the gate states (FAR-612)', async () => {
+    // The shared card emits `decided` after a successful approve/reject. If the
+    // run has already left the HITL states by then (a concurrent poll saw it
+    // resume, or it was cancelled), the handler must not force it back to
+    // `running` — a stale decision would otherwise resurrect a settled run.
+    mockPendingGates = [gate({ claimed_by: 'me@example.com', claimed_by_me: true })]
+    mockClaimResult = { claim_token: 'ct-1' }
+    const wrapper = await mountAwaiting('claimed')
+    const HitlReviewCard = (await import('../components/hitl/HitlReviewCard.vue')).default
+    const card = wrapper.findComponent(HitlReviewCard)
+    expect(card.exists()).toBe(true)
+
+    const run = (wrapper.vm as unknown as { run: { status: string } }).run
+    run.status = 'complete'
+    // Emit before the next render flush so the card is still mounted; the
+    // handler reads the run's already-settled status.
+    card.vm.$emit('decided', { type: 'success', text: 'Gate approved. Pipeline resuming.' })
+    await flushPromises()
+    await nextTick()
+
+    expect(run.status).toBe('complete')
     wrapper.unmount()
   })
 

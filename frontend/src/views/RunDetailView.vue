@@ -95,7 +95,11 @@
 
       <!-- HITL Gate -->
       <!-- qa F4: a parked run still shows its open (claimable) gate — the status changed, the review did not. -->
-      <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingReviews.length > 0" class="rounded-lg border bg-card p-6 mb-6">
+      <!-- A claim flips the run to `claimed` (FAR-612), so the section must
+           include `claimed` too: otherwise the approve/reject controls unmount
+           on the next poll while the gate is still undecided (and a transient
+           approve failure can no longer be retried). -->
+      <section v-if="isHitlActionableStatus(run.status) && pendingReviews.length > 0" class="rounded-lg border bg-card p-6 mb-6">
         <h2 class="text-base font-semibold tracking-tight mb-4">{{ $t('views.RunDetailView.hitl_review') }}</h2>
         <!-- Shared card (FAR-686): the component owns claim token, notes and
              approve/reject actions. The FAR-631 invariant is preserved by
@@ -866,7 +870,7 @@ import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
-import { isTerminalStatus } from '../constants/runStatuses'
+import { isHitlActionableStatus, isTerminalStatus } from '../constants/runStatuses'
 import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
@@ -1886,7 +1890,7 @@ function onHitlClaimed(payload: { type: string; text: string }) {
 function onHitlDecided(payload: { type: string; text: string }) {
   hoistHitlMessage(payload)
   pendingReviews.value = []
-  if (run.value && (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked')) {
+  if (run.value && isHitlActionableStatus(run.value.status)) {
     run.value.status = 'running'
   }
 }
@@ -2186,7 +2190,7 @@ async function fetchRunData(runId: string) {
     })
     if (runData) {
       run.value = runData as unknown as RunResponse
-      if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
+      if (isHitlActionableStatus(run.value.status)) {
         fetchHitlReviews(runId)
       }
     }
@@ -2283,7 +2287,7 @@ const { loading, error } = useDataFetch<RunFetchResult>(
 
       if (runData) {
         run.value = runData as unknown as RunResponse
-        if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
+        if (isHitlActionableStatus(run.value.status)) {
           fetchHitlReviews(runId)
         }
       }
