@@ -43,12 +43,14 @@ from modulo.core.pipeline_engine.node_runner import (
 )
 from modulo.core.runtime_provider import (
     ExecResult,
+    ExecStreamChunk,
     IsolationPolicy,
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
     WorkspaceSpec,
 )
 from tests.unit.pipeline_engine.conftest import install_fake_dispatch
+from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -758,6 +760,44 @@ async def test_helper_threads_guard_owner_into_the_typed_policy(
     assert fake.calls[1][2].single_pr_per_run is False
 
 
+async def test_flagged_node_threads_guard_owner_at_the_real_call_site(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """FAR-1315 CRITICAL: ``guard_owner`` is threaded at the REAL
+    ``_sandbox_agent_impl`` call site, not just in the helper.
+
+    The helper-level test above proves ``_apply_isolation_via_provider``
+    forwards the argument it is GIVEN - it says nothing about the call site
+    actually giving it. With ``guard_owner=node_id`` deleted from
+    ``node_runner._sandbox_agent_impl``, every flagged node claims with owner
+    ``\"\"``, ``acquire_run_pr_guard`` returns ``\"acquired\"`` for EVERY node
+    (empty == empty), each installs a LIVE guard, and the run produces two
+    PRs - while every other test stays green. This test drives the REAL
+    ``make_sandbox_agent_fn(...)`` dispatch and pins the recorded policy's
+    owner to THIS node's id, the analogue of the ``single_pr_per_run is True``
+    assertion beside it."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-owner-wired")
+    install_fake_dispatch(monkeypatch, ref="sbx-owner-wired")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert len(fake.calls) == 1
+    policy = fake.calls[0][2]
+    assert policy.single_pr_per_run is True
+    # The node id ("n1" in _base_node_def) - WITHOUT this the run's one-PR
+    # ledger has no owner and every flagged node re-acquires the slot.
+    assert policy.guard_owner == "n1"
+
+
 async def test_flagged_node_settles_the_run_claim_ledger_on_finish(
     monkeypatch: pytest.MonkeyPatch,
     fake_file_io,
@@ -825,3 +865,178 @@ async def test_unflagged_node_never_settles_the_run_claim_ledger(
         await fn(_run_state())
 
     assert not recorded
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 gate hardening: the observation channel end to end (E2B tier)
+# ---------------------------------------------------------------------------
+#
+# The tests above MONKEYPATCH settle (wiring proofs). These drive the REAL
+# ``settle_run_pr_guard`` in the dispatch ``finally`` with real spend
+# evidence: shim-produced stdout, a harvested receipt, and a shim-read
+# transcript that must NOT spend. Fail-without-fix for the whole block: moving
+# the settle out of the finally (or passing ``None`` streams) leaves every
+# assertion below failing.
+
+
+class _ClaimingIsolationProvider(_RecordingIsolationProvider):
+    """Stands in for ``apply_sandbox_policy``'s run-ledger claim.
+
+    The real E2B ``apply_isolation`` takes the claim for
+    (scope=``spec.run_id``, owner=``policy.guard_owner``) BEFORE the node runs
+    — without it the dispatch finally's settle would have no entry to
+    spend/release and every ledger assertion would be vacuous."""
+
+    async def apply_isolation(
+        self,
+        provider_ref: str,
+        spec: WorkspaceSpec,
+        policy: IsolationPolicy,
+    ) -> None:
+        await super().apply_isolation(provider_ref, spec, policy)
+        if policy.single_pr_per_run and spec.run_id is not None:
+            from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard
+
+            acquire_run_pr_guard(str(spec.run_id), policy.guard_owner)
+
+
+def _override_harvest_reply(dispatch: Any, reply: str) -> None:
+    """Make the dispatch's claim-receipt harvest probe answer *reply*."""
+    original = dispatch.exec_command
+
+    async def _exec(ref: str, command: list[str], *, cmd_timeout: int | None = None) -> ExecResult:
+        if command and "MODULO_CLAIM_RECEIPT" in command[-1]:
+            return ExecResult(exit_code=0, stdout=reply, stderr="")
+        return await original(ref, command, cmd_timeout=cmd_timeout)
+
+    dispatch.exec_command = _exec
+
+
+async def _dispatch_flagged_e2b(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    *,
+    chunks: list[tuple[str, str]],
+    harvest_reply: str | None = None,
+    ref: str = "sbx-flag-e2e",
+) -> str:
+    """Run the REAL flagged E2B dispatch and return this run's id.
+
+    The node FAILS (no output.json), exactly like the wiring tests — the
+    assertion surface is the ledger the ``finally`` settles.
+    ``chunks`` is the agent's captured stdout/stderr; ``harvest_reply``
+    overrides the receipt-harvest probe (``None`` = the fake's empty reply,
+    i.e. the harvest ran but yielded no token -> unavailable)."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = install_fake_dispatch(
+        monkeypatch,
+        ref=ref,
+        chunks=[ExecStreamChunk(stream=stream, data=data) for stream, data in chunks],
+    )
+    if harvest_reply is not None:
+        _override_harvest_reply(dispatch, harvest_reply)
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox(ref)
+    state = _run_state()
+    run_id = str(uuid.uuid4())
+    state["_run_id"] = run_id
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(state)
+    return run_id
+
+
+async def test_flagged_node_observes_shim_produced_output_and_spends_the_run_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    tmp_path,
+) -> None:
+    """The observation channel, end to end: stdout produced by the REAL shim's
+    successful create flows through the dispatch capture into the REAL settle
+    in the ``finally`` — the run's claim is SPENT for every later flagged
+    node. The harvest yields no token here, so this is the sentinel FALLBACK
+    arm a dispatch reaches when its receipt probe is unavailable."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    shim_stdout = shim_created_pr_stdout(tmp_path)
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", shim_stdout)],
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_spends_from_the_harvested_receipt_when_the_sentinel_was_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """MAJOR 1 at the dispatch level: the node created the PR and then emitted
+    more than the 512 KB drain window, so the captured stream carries NO
+    sentinel. The platform-side receipt harvest must still spend the run —
+    releasing here would let the next flagged node install a live guard and
+    open a SECOND PR."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", "post-create agent noise\n" * 200)],
+        harvest_reply="MODULO_CLAIM_RECEIPT_PRESENT",
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_shim_read_transcript_never_spends_when_the_harvest_confirms_no_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    tmp_path,
+) -> None:
+    """MAJOR 2 at the dispatch level: the captured stdout contains the claim
+    sentinel (the agent read the shim / echoed its text), but the harvest RAN
+    and confirmed no receipt — so the run must NOT be spent and the holder's
+    hold must be RELEASED. Spending here is the fail-closed DoS: every later
+    flagged node pre-plants and the run delivers no PR at all."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    shim_stdout = shim_created_pr_stdout(tmp_path)
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", shim_stdout)],
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """A FAILING flagged node must not leak its hold: with no spend evidence
+    the ``finally`` releases the slot so a later flagged node of the run can
+    still claim it. Fail-without-fix: moving the settle out of the ``finally``
+    leaves the entry ``held`` forever and the assertion reads ``held``."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    run_id = await _dispatch_flagged_e2b(monkeypatch, fake_file_io, chunks=[])
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()

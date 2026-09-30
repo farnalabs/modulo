@@ -53,23 +53,45 @@ when the agent runs:
     per-SANDBOX, so two flagged nodes in one run would each install a fresh,
     claimable marker and could produce two PRs. A platform-side claim LEDGER
     keyed by the run id (``acquire_run_pr_guard`` / ``settle_run_pr_guard`` -
-    process-local, shared by every node of the run in the engine process) fixes
-    that: the FIRST flagged node of a run installs the live guard, every later
-    flagged node installs a PRE-PLANTED refusal (its marker directory already
-    exists, so its first ``gh pr create`` is refused without calling gh). The
-    shim prints a fixed claim sentinel to stdout after a successful create; the
-    dispatch layer settles the node's slot from the captured output when the
-    node finishes (observed -> the run's claim is SPENT for everyone; not
-    observed -> the slot is RELEASED so a later flagged node still gets its
-    chance). What is shared is the LEDGER, never the sandbox filesystem: the
-    claim marker itself stays inside each sandbox. See
-    ``docs/product-map/core/runtime-provider-core.md`` for the exact coverage
-    boundary (including the process-locality limitation).
+    process-local, shared by every node of the run in the engine process, and
+    BOUNDED to ``_MAX_RUN_PR_GUARD_CLAIMS`` entries) fixes that: the FIRST
+    flagged node of a run installs the live guard, every later flagged node
+    installs a PRE-PLANTED refusal (its marker directory already exists, so its
+    first ``gh pr create`` is refused without calling gh). The dispatch layer
+    settles the node's slot when the node finishes, from SPEND EVIDENCE that is
+    robust to output truncation and not forgeable by merely reading the shim
+    (the shim is mode 755 in a PATH dir, so ``cat $(command -v gh)`` exposes a
+    fixed sentinel string - a sentinel alone must therefore NEVER spend a run):
+      1. a platform-side HARVEST of the shim's success RECEIPT file
+         (``$MARKER/<receipt>``, written only when ``gh pr create`` exited 0 -
+         see ``harvest_gh_pr_claim_via_exec``), taken after the node while the
+         sandbox/container is still alive;
+      2. a platform-parsed, URL-valid delivered ``pr_url`` from the node's
+         ``output.json`` (survives stream truncation; also spends a run whose
+         guard was ABSENT but still delivered a PR);
+      3. ONLY when the harvest is unavailable (sandbox already gone - e.g. a
+         stall/timeout kill) does the stdout claim SENTINEL count, as the
+         best-effort fallback.
+    Receipt confirmed ABSENT -> the sentinel is ignored and the owner's hold is
+    RELEASED, so a node that merely printed the sentinel (by reading the shim)
+    can never burn the run's attempt. The residual (harvest unavailable AND
+    sentinel observed) is documented in
+    ``docs/product-map/core/runtime-provider-core.md``. What is shared across
+    nodes is the LEDGER, never the sandbox filesystem: the marker itself stays
+    inside each sandbox.
   - Non-E2B tiers (FAR-1315): ``apply_sandbox_policy`` runs in the E2B sandbox
     only. ``install_gh_pr_guard_via_exec`` installs the SAME shim (with the same
     ledger plan) through any provider's ``exec_command`` primitive - the Bundled
     Runner (``runner_docker``) dispatch calls it for flagged nodes and surfaces a
     LOUD warning naming the tier when the guard could not be installed.
+    HONEST TIER BOUNDARY: the shipped first-party runner image
+    (``deploy/docker/runner-opencode.Dockerfile``) ships NO ``gh`` and runs
+    ``ReadonlyRootfs`` as uid 1001 with no writable PATH dir, so on that image
+    the install always reports ``absent``/``failed`` and the tier is
+    prompt-level-guarded only. The machinery is best-effort and becomes
+    effective only on an image that provides a writable PATH entry holding
+    ``gh``; it is NOT effective on the shipped image today (see
+    ``GhPrGuardInstallResult`` and the product map).
 
 The enforcement is REAL (the sandbox cannot write / egress is scoped), never a
 declared flag. Script builders are pure string functions (unit-testable without
@@ -97,6 +119,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST as _GIT_ALLOWED_HOST
 
@@ -179,6 +202,31 @@ _GH_PR_GUARD_SCOPE_RE = re.compile(r"[^A-Za-z0-9._-]")
 # platform already relies on stdout capture for PR-URL extraction.
 _GH_PR_GUARD_CLAIM_SENTINEL = "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED"
 
+# FAR-1315 hardening: the sentinel above is a FIXED literal printed by a shim
+# the guarded agent can READ (mode 755 in a PATH dir), so substring-matching it
+# in captured output lets an agent that merely cats the shim spend the run's
+# claim (a fail-closed DoS: every later flagged node pre-plants and the run
+# delivers no PR). The unforgeable channel is the success RECEIPT: a file the
+# shim writes INSIDE the marker directory only when ``gh pr create`` exited 0.
+# Pre-planted markers (denied installs) never contain it, so its presence is a
+# platform-observable, agent-reading-proof "this node created the PR".
+_GH_PR_GUARD_CLAIM_RECEIPT = "claimed"
+
+# Harvest probe tokens: what ``harvest_gh_pr_claim_via_exec``'s one-shot shell
+# probe prints for receipt-present / receipt-absent. Kept as constants so the
+# probe script and the parser that reads it back cannot drift apart.
+_GH_PR_CLAIM_RECEIPT_PRESENT = "MODULO_CLAIM_RECEIPT_PRESENT"
+_GH_PR_CLAIM_RECEIPT_ABSENT = "MODULO_CLAIM_RECEIPT_ABSENT"
+
+# FAR-1315: the run claim LEDGER is process-local and lives for the life of the
+# engine process, so it must be BOUNDED. Beyond this many run scopes the OLDEST
+# entries (least likely to still have flagged nodes in flight - insertion
+# order) are evicted under the lock. Eviction degrades exactly one run to
+# "ledger entry forgotten" (its later flagged nodes can claim again); with the
+# bound far above any realistic number of CONCURRENT flagged runs, the hold in
+# flight is never the entry that is evicted.
+_MAX_RUN_PR_GUARD_CLAIMS = 512
+
 # Installer-outcome substrings (emitted by ``build_gh_pr_guard_script`` on
 # stderr; kept as constants so the script text and the classifier that reads it
 # back cannot drift apart).
@@ -241,6 +289,11 @@ def acquire_run_pr_guard(run_scope: str | None, guard_owner: str | None = None) 
         entry = _RUN_PR_GUARD_CLAIMS.get(key)
         if entry is None:
             _RUN_PR_GUARD_CLAIMS[key] = ("held", owner)
+            # Bounded ledger: evict the OLDEST run scopes (insertion order)
+            # once over capacity. The entry just written is the NEWEST, so it
+            # is never the one evicted here.
+            while len(_RUN_PR_GUARD_CLAIMS) > _MAX_RUN_PR_GUARD_CLAIMS:
+                del _RUN_PR_GUARD_CLAIMS[next(iter(_RUN_PR_GUARD_CLAIMS))]
             return "acquired"
         state, entry_owner = entry
         if state == "spent":
@@ -252,33 +305,88 @@ def settle_run_pr_guard(
     run_scope: str | None,
     guard_owner: str | None,
     *streams: str | None,
+    pr_url: str | None = None,
+    claim_receipt: bool | None = None,
 ) -> str:
-    """Settle this node's ledger slot from its captured output. Returns:
+    """Settle this node's ledger slot from platform-observed spend evidence.
 
-    ``"spent"`` - the claim sentinel was observed in *streams* (this node's
-    ``gh pr create`` succeeded), so the run's slot is now spent for every later
-    flagged node; ``"released"`` - no sentinel and this owner held the slot, so
-    the hold is dropped and a later flagged node may claim it; ``"noop"`` -
-    this run has no ledger entry for us (never acquired, or another owner's
-    hold) - nothing changes. Never raises: it runs in a dispatch ``finally``.
+    Returns:
+
+    ``"spent"`` - sufficient spend evidence was observed, so the run's slot is
+    now spent for every later flagged node; ``"released"`` - no spend evidence
+    and this owner held the slot, so the hold is dropped and a later flagged
+    node may claim it; ``"noop"`` - this run has no ledger entry for us (never
+    acquired, or another owner's hold) - nothing changes. Never raises: it
+    runs in a dispatch ``finally``.
+
+    SPEND EVIDENCE (FAR-1315 hardening - chosen so a lost/truncated sentinel
+    can never RELEASE a genuinely-spent run, and a READ shim can never SPEND
+    an unspent one):
+
+    1. ``claim_receipt is True`` (the platform harvested the shim's success
+       receipt from the sandbox after the node) -> SPENT. Unaffected by stream
+       truncation and unforgeable by reading the shim.
+    2. a URL-valid delivered ``pr_url`` (the platform parsed it from this
+       node's ``output.json``) -> SPENT. Also covers a run whose guard was
+       ABSENT but still delivered a PR. Non-URL strings (``"N/A"``, ``""``)
+       never spend.
+    3. ``claim_receipt is False`` (the harvest RAN and confirmed no receipt)
+       -> the sentinel in *streams* is IGNORED: an agent that printed the
+       sentinel by reading the shim must not burn the run's attempt.
+    4. ``claim_receipt is None`` (harvest unavailable - sandbox already
+       destroyed, exec failed) -> fall back to the stdout claim SENTINEL in
+       *streams* (the pre-existing best-effort channel; bounded residual,
+       documented in the product map).
     """
     key = _run_pr_guard_key(run_scope)
     if key is None:
         return "noop"
     owner = guard_owner or ""
     observed = any(_GH_PR_GUARD_CLAIM_SENTINEL in stream for stream in streams if stream)
+    if claim_receipt is True or _is_valid_delivered_pr_url(pr_url):
+        spend = True
+    elif claim_receipt is False:
+        spend = False
+    else:
+        spend = observed
     with _RUN_PR_GUARD_LOCK:
         entry = _RUN_PR_GUARD_CLAIMS.get(key)
         if entry is None:
-            return "noop"
+            if not spend:
+                return "noop"
+            # Spend evidence with no entry (the holder's entry was evicted by
+            # the ledger bound, or the claim happened in a dead process):
+            # record SPENT so a later flagged node of this run is still
+            # denied rather than installing a fresh live guard.
+            _RUN_PR_GUARD_CLAIMS[key] = ("spent", owner)
+            while len(_RUN_PR_GUARD_CLAIMS) > _MAX_RUN_PR_GUARD_CLAIMS:
+                del _RUN_PR_GUARD_CLAIMS[next(iter(_RUN_PR_GUARD_CLAIMS))]
+            return "spent"
         state, entry_owner = entry
-        if observed:
+        if spend:
             _RUN_PR_GUARD_CLAIMS[key] = ("spent", entry_owner)
             return "spent"
         if state == "held" and entry_owner == owner:
             del _RUN_PR_GUARD_CLAIMS[key]
             return "released"
         return "noop"
+
+
+def _is_valid_delivered_pr_url(pr_url: Any) -> bool:
+    """A delivered-``pr_url`` spend signal must actually PARSE as http(s).
+
+    Mirrors the classifier's spec (``classify._is_valid_pr_url``: scheme in
+    http/https AND a non-empty netloc) without importing it, so a sloppy
+    agent's ``pr_url: "N/A"`` / ``"none"`` never spends the run's claim while
+    a real PR URL survives stream truncation as spend evidence.
+    """
+    if not isinstance(pr_url, str) or not pr_url.strip():
+        return False
+    try:
+        parts = urlsplit(pr_url.strip())
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
 
 
 def reset_run_pr_guard_claims() -> None:
@@ -311,6 +419,17 @@ def gh_pr_guard_marker_path(run_scope: str | None = None) -> str:
     if not scope:
         return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.marker"
     return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.{scope}.marker"
+
+
+def gh_pr_claim_receipt_path(run_scope: str | None = None) -> str:
+    """Path of the shim's success RECEIPT inside the run-scoped marker dir.
+
+    Written by the shim ONLY when ``gh pr create`` exited 0 (never by the
+    pre-plant, which only ``mkdir -p``s the marker directory), so its
+    existence is the platform's unforgeable-by-reading spend signal. Same
+    scope sanitisation as :func:`gh_pr_guard_marker_path`.
+    """
+    return f"{gh_pr_guard_marker_path(run_scope)}/{_GH_PR_GUARD_CLAIM_RECEIPT}"
 
 
 def build_read_only_script() -> str:
@@ -613,11 +732,18 @@ if mkdir "$MARKER" 2>/dev/null; then
   if [ "$_rc" -ne 0 ]; then
     rmdir "$MARKER" 2>/dev/null || true
   else
-    # FAR-1315: claim SENTINEL on stdout - the only cross-node observation
-    # channel (this sandbox's /tmp marker dies with the sandbox). The platform
-    # scans the captured node output for it and marks the run's ledger claim
-    # spent, so the NEXT flagged node of this run installs a pre-planted
-    # refusal instead of a fresh claimable marker.
+    # FAR-1315: claim RECEIPT - the primary cross-node observation channel.
+    # A file INSIDE the marker directory, written ONLY when the real gh exited
+    # 0. The platform harvests it from the sandbox after the node
+    # (harvest_gh_pr_claim_via_exec) before the sandbox dies. It survives
+    # stdout truncation, and unlike the sentinel below it is NOT exposed by
+    # reading this shim (`cat $(command -v gh)`), so merely reading the guard
+    # can never mark the run spent. A pre-planted marker never contains it.
+    printf '%s\\n' "1" > "$MARKER/{_GH_PR_GUARD_CLAIM_RECEIPT}" 2>/dev/null || true
+    # FAR-1315: claim SENTINEL on stdout - the FALLBACK observation channel
+    # for when the harvest is unavailable (sandbox already destroyed). Fixed
+    # literal the guarded agent can read, so the platform only trusts it when
+    # the receipt harvest could not run at all.
     printf '%s\\n' "{_GH_PR_GUARD_CLAIM_SENTINEL}"
   fi
   exit "$_rc"
@@ -666,9 +792,11 @@ def build_gh_pr_guard_script(marker_path: str, *, pre_spent: bool = False) -> st
           releases it, so a transient failure (rate limit, empty diff, network)
           does not burn the run's only attempt. The marker path is embedded at
           install time and is run-scoped (see :func:`gh_pr_guard_marker_path`).
-          On a SUCCESSFUL create the shim also prints the FAR-1315 claim
-          sentinel to stdout (see :data:`_GH_PR_GUARD_CLAIM_SENTINEL`) so the
-          platform can observe the claim after this sandbox is gone.
+          On a SUCCESSFUL create the shim writes the FAR-1315 claim RECEIPT
+          inside the marker (see :func:`gh_pr_claim_receipt_path` — the
+          platform harvests it after the node) and prints the claim SENTINEL
+          to stdout (see :data:`_GH_PR_GUARD_CLAIM_SENTINEL` — the fallback
+          channel when the harvest cannot run).
        4. FAR-1315 ``pre_spent=True``: the install PRE-PLANTS the claim
           directory (``mkdir -p "$MARKER"``) before the shim lands, so this
           node's FIRST ``gh pr create`` is refused by the already-existing
@@ -804,6 +932,13 @@ class GhPrGuardInstallResult:
       platform-guarded — the caller must surface this loudly);
     - ``"failed"`` — the install could not be verified (non-zero exit, exec
       error, or a failed pre-plant — i.e. no run-scope enforcement).
+
+    SHIPPED-IMAGE TRUTH (FAR-1315): on the first-party runner image
+    (``deploy/docker/runner-opencode.Dockerfile`` — no ``gh`` installed,
+    ``ReadonlyRootfs``, uid 1001, no writable PATH dir) this resolves to
+    ``absent``/``failed`` by construction: the tier is NOT guarded there
+    today. ``"installed"``/``"pre_planted"`` require an image that ships a
+    ``gh`` in a PATH directory writable by the workspace user.
     """
 
     status: str
@@ -839,15 +974,20 @@ async def install_gh_pr_guard_via_exec(
     plan — first flagged node of the run gets the live guard, later ones get a
     pre-planted refusal) through an arbitrary provider's ``exec_command``
     primitive, so a tier whose dispatch never reaches ``apply_isolation`` (the
-    Bundled Runner / ``runner_docker``) still gets the guard. ``exec_command``
-    is a single-argument coroutine the CALLER binds to its provider ref and
-    timeout (the ABC primitive's shape), keeping this module free of any
-    runtime-provider import.
+    Bundled Runner / ``runner_docker``) has the guard ATTEMPTED at dispatch
+    instead of silently skipped. ``exec_command`` is a single-argument
+    coroutine the CALLER binds to its provider ref and timeout (the ABC
+    primitive's shape), keeping this module free of any runtime-provider
+    import.
 
     BEST-EFFORT by contract (parity with the E2B guard step): a failure never
     raises — it is returned as status ``"failed"``/``"absent"`` for the caller
     to surface loudly. The ledger claim taken here is settled by the caller
-    via :func:`settle_run_pr_guard` when the node finishes.
+    via :func:`settle_run_pr_guard` when the node finishes (spend evidence:
+    harvested receipt → delivered ``pr_url`` → sentinel fallback). Attempted
+    is not the same as effective — see :class:`GhPrGuardInstallResult` for the
+    shipped runner image's boundary (no ``gh``, read-only rootfs: the install
+    reports ``absent`` there and the run is prompt-level-guarded only).
     """
     marker_path, pre_spent, _claim_status = _gh_pr_guard_plan(run_scope, guard_owner)
     script = build_gh_pr_guard_script(marker_path, pre_spent=pre_spent)
@@ -863,6 +1003,50 @@ async def install_gh_pr_guard_via_exec(
         pre_spent=pre_spent,
     )
     return GhPrGuardInstallResult(status, detail[:1000], marker_path)
+
+
+async def harvest_gh_pr_claim_via_exec(
+    exec_command: Callable[[list[str]], Awaitable[Any]],
+    *,
+    run_scope: str | None,
+) -> bool | None:
+    """Harvest the shim's success RECEIPT from the sandbox after the node (FAR-1315).
+
+    The unforgeable spend channel behind :func:`settle_run_pr_guard`'s first
+    arm: run ONE bounded shell probe through the provider's ``exec_command``
+    primitive (the sandbox/container is still alive - the dispatch harvests
+    BEFORE its teardown) and ask whether the receipt file the shim writes only
+    on a SUCCESSFUL ``gh pr create`` exists.
+
+    Returns ``True`` (receipt present - this node created the PR), ``False``
+    (probe ran, receipt genuinely absent - no spend), or ``None`` (the harvest
+    could NOT run: exec raised, non-zero exit, or an unparseable reply - the
+    caller must fall back to the weaker stream evidence rather than guess).
+
+    BEST-EFFORT by contract: never raises except ``CancelledError``. The
+    receipt path is built from the sanitised run scope (``[A-Za-z0-9._-]``
+    only) and double-quoted into the probe, so no caller-controlled text can
+    reach the shell unquoted.
+    """
+    receipt_path = gh_pr_claim_receipt_path(run_scope)
+    script = (
+        f'if [ -f "{receipt_path}" ]; then printf "%s" "{_GH_PR_CLAIM_RECEIPT_PRESENT}"; '
+        f'else printf "%s" "{_GH_PR_CLAIM_RECEIPT_ABSENT}"; fi'
+    )
+    try:
+        result = await exec_command(["sh", "-c", script])
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return None
+    if getattr(result, "exit_code", None) != 0:
+        return None
+    reply = str(getattr(result, "stdout", "") or "")
+    if _GH_PR_CLAIM_RECEIPT_PRESENT in reply:
+        return True
+    if _GH_PR_CLAIM_RECEIPT_ABSENT in reply:
+        return False
+    return None
 
 
 async def apply_sandbox_policy(
@@ -942,8 +1126,10 @@ async def apply_sandbox_policy(
     the LIVE guard; a later one (or a concurrent one) finds the slot
     held/spent and installs a PRE-PLANTED refusal instead — a warning names
     the claim status so the denial is observable. The claim is settled by the
-    dispatch layer from the node's captured output
-    (:func:`settle_run_pr_guard`); an unscoped call (no ``run_scope``) keeps
+    dispatch layer from PLATFORM-OBSERVED spend evidence
+    (:func:`settle_run_pr_guard`: the harvested shim claim receipt, a
+    delivered ``pr_url``, and the captured output only as a fallback when the
+    harvest could not run); an unscoped call (no ``run_scope``) keeps
     the pre-FAR-1315 behaviour exactly (live guard, no ledger entry).
     """
 
@@ -1037,7 +1223,9 @@ __all__ = [
     "build_git_none_script",
     "build_git_scoped_script",
     "build_read_only_script",
+    "gh_pr_claim_receipt_path",
     "gh_pr_guard_marker_path",
+    "harvest_gh_pr_claim_via_exec",
     "install_gh_pr_guard_via_exec",
     "reset_run_pr_guard_claims",
     "settle_run_pr_guard",

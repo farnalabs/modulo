@@ -34,7 +34,9 @@ from modulo.core.pipeline_engine.sandbox_policy import (
     build_git_none_script,
     build_git_scoped_script,
     build_read_only_script,
+    gh_pr_claim_receipt_path,
     gh_pr_guard_marker_path,
+    harvest_gh_pr_claim_via_exec,
     install_gh_pr_guard_via_exec,
     reset_run_pr_guard_claims,
     settle_run_pr_guard,
@@ -986,28 +988,42 @@ def _reset_run_pr_guard_ledger():
 
 
 def test_gh_pr_guard_shim_prints_claim_sentinel_on_a_successful_create(tmp_path: Path) -> None:
-    """FAR-1315 observability: a SUCCESSFUL create emits the fixed claim
-    sentinel on stdout; a refused create emits none.
+    """FAR-1315 observability: a SUCCESSFUL create emits the FULL fixed claim
+    sentinel on stdout and writes the success RECEIPT; a refused create emits
+    neither.
 
-    The sentinel is the only channel by which the platform learns (after this
-    sandbox is destroyed) that the run's one PR was actually created — the
-    dispatch layer scans the captured output for it. The assertion uses the
-    literal text, not the module constant, so it fails behaviourally against a
-    shim that prints nothing."""
+    The full literal (not a substring like ``RUN CLAIM ACQUIRED``, and not the
+    imported constant) is asserted because ``settle_run_pr_guard`` matches the
+    ENTIRE constant — a substring assert would pass while the shim's text
+    drifted away from what settle looks for (a silent drift hole). Written as
+    literal text rather than the constant so a shim that prints nothing (or
+    something else) fails behaviourally. The receipt is the primary spend
+    signal; the sentinel is its truncation-fallback twin."""
     bindir = tmp_path / "bin"
     _fake_gh(bindir)
-    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
-    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    scope = f"pytest-{uuid.uuid4().hex}"
+    marker = gh_pr_guard_marker_path(scope)
+    receipt = gh_pr_claim_receipt_path(scope)
+    _run_in_sh(f"rm -rf '{marker}' '{receipt}'\n", cwd=tmp_path)
     _install_guard(bindir, tmp_path, marker)
 
     first = _gh(bindir, tmp_path, "gh pr create --title t")
     assert first.returncode == 0, f"first create must pass through: {first.stdout}\n{first.stderr}"
-    assert "RUN CLAIM ACQUIRED" in first.stdout, "a successful create must print the FAR-1315 claim sentinel"
+    assert "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED" in first.stdout, (
+        "a successful create must print the FULL FAR-1315 claim sentinel settle matches"
+    )
+    # The primary spend signal: a receipt file inside the marker dir, written
+    # only on a successful create (survives stdout truncation; not exposed by
+    # reading the shim text itself).
+    claim = _run_in_sh(f"test -f '{receipt}' && echo receipt-present\n", cwd=tmp_path)
+    assert claim.returncode == 0, f"a successful create must leave the claim receipt: {claim.stderr}"
 
     second = _gh(bindir, tmp_path, "gh pr create --title t2")
     assert second.returncode != 0, "the second create must be refused"
-    assert "RUN CLAIM ACQUIRED" not in second.stdout, "a refused create must never print the claim sentinel"
-    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    assert "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED" not in second.stdout, (
+        "a refused create must never print the claim sentinel"
+    )
+    _run_in_sh(f"rm -rf '{marker}' '{receipt}'\n", cwd=tmp_path)
 
 
 def test_run_pr_guard_ledger_holds_denies_releases_and_spends() -> None:
@@ -1066,7 +1082,8 @@ async def test_second_flagged_node_in_one_run_installs_a_pre_planted_refusal(
     assert 'mkdir -p "$MARKER"' not in first_script
     assert marker in first_script
 
-    # The platform observes node-1's claim sentinel in its captured output.
+    # The platform observes node-1's claim (sentinel fallback path; the
+    # harvested receipt / delivered pr_url arms are covered separately below).
     assert settle_run_pr_guard(scope, "node-1", f"created {_GH_PR_GUARD_CLAIM_SENTINEL}") == "spent"
 
     with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.sandbox_policy"):
@@ -1096,10 +1113,14 @@ def test_pre_planted_claim_refuses_the_first_create_in_a_second_sandbox(tmp_path
     """The pre-plant MECHANISM, executed: a shim installed with
     ``pre_spent=True`` refuses the FIRST ``gh pr create`` in its (separate)
     sandbox without ever calling the real gh — this is what node 2 of a
-    flagged run executes."""
+    flagged run executes. A refused create must leave NO claim receipt (the
+    pre-plant is a bare ``mkdir``; only a successful create writes the
+    receipt), so a denied node's harvest can never spend the run's claim."""
     bindir = tmp_path / "bin"
     _fake_gh(bindir)
-    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    scope = f"pytest-{uuid.uuid4().hex}"
+    marker = gh_pr_guard_marker_path(scope)
+    receipt = gh_pr_claim_receipt_path(scope)
     _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
     _install_guard(bindir, tmp_path, marker, pre_spent=True)
 
@@ -1107,6 +1128,8 @@ def test_pre_planted_claim_refuses_the_first_create_in_a_second_sandbox(tmp_path
     assert first.returncode != 0, "the pre-planted claim must refuse the FIRST create in this sandbox"
     assert "one-PR-per-run guard" in first.stderr
     assert not _gh_calls(bindir), "the real gh must never run when the run's claim is already spent"
+    claim = _run_in_sh(f"test -f '{receipt}' && echo receipt-present\n", cwd=tmp_path)
+    assert claim.returncode != 0, "a refused create must never leave a claim receipt"
     _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
 
 
@@ -1181,3 +1204,245 @@ async def test_install_gh_pr_guard_via_exec_failed_pre_plant_is_reported_as_abse
     result = await install_gh_pr_guard_via_exec(_exec_plant_failed, run_scope=scope, guard_owner="node-2")
     assert result.status == "failed"
     assert "could not pre-plant" in result.detail
+
+
+# --- FAR-1315 gate hardening: spend evidence that survives truncation AND
+# --- cannot be forged by merely READING the shim ----------------------------
+
+
+def shim_created_pr_stdout(tmp_path: Path) -> str:
+    """STDOUT produced by a REAL successful ``gh pr create`` through the shim.
+
+    Installed and executed under a real shell (Git Bash on Windows), so the
+    bytes are genuinely shim-produced. The dispatch-level observation-channel
+    tests (E2B + runner_docker) feed THIS into a real node dispatch instead of
+    hand-writing the sentinel literal, proving the shim's output -> dispatch
+    capture -> real ``settle_run_pr_guard`` channel end to end.
+    """
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    scope = f"pytest-{uuid.uuid4().hex}"
+    marker = gh_pr_guard_marker_path(scope)
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker)
+    result = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert result.returncode == 0, f"the setup create must succeed: {result.stdout}\n{result.stderr}"
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    return result.stdout
+
+
+def test_settle_spends_from_a_harvested_receipt_even_when_the_sentinel_was_truncated() -> None:
+    """MAJOR 1 (truncation): a node that created the PR and then emitted more
+    than the 512 KB drain window LOSES the mid-stream sentinel from the
+    captured output. The platform-side receipt harvest (claim_receipt=True)
+    must still spend the run - releasing it here would let the next flagged
+    node install a live guard and open a SECOND PR."""
+    scope = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    # Streams carry ONLY post-create noise: the sentinel was drained away.
+    assert settle_run_pr_guard(scope, "node-1", "x" * 100, claim_receipt=True) == "spent"
+    assert acquire_run_pr_guard(scope, "node-2") == "spent"
+
+
+def test_settle_ignores_a_sentinel_when_the_harvest_confirms_no_receipt() -> None:
+    """MAJOR 2 (shim-read fail-closed DoS): the sentinel is a fixed literal
+    embedded in a mode-755 shim, so ``cat $(command -v gh)`` (or prompt
+    injection that echoes it) puts it in captured output. When the harvest RAN
+    and confirmed no receipt, the sentinel must be IGNORED and the holder's
+    hold RELEASED - never spent, which would pre-plant every later flagged
+    node and deliver zero PRs."""
+    scope = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    shim_read = f"noise {_GH_PR_GUARD_CLAIM_SENTINEL} more noise"  # what reading the shim yields
+    assert settle_run_pr_guard(scope, "node-1", shim_read, claim_receipt=False) == "released"
+    # NOT spent: a later flagged node still gets its chance at the one PR.
+    assert acquire_run_pr_guard(scope, "node-2") == "acquired"
+
+
+def test_settle_falls_back_to_the_sentinel_only_when_the_harvest_is_unavailable() -> None:
+    """The bounded residual channel: with claim_receipt=None (sandbox already
+    destroyed, exec failed) the sentinel remains the fallback spend signal -
+    this is what keeps a genuine create spent when only the stream survived."""
+    scope = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    assert settle_run_pr_guard(scope, "node-1", "no claim evidence here") == "released"
+    assert acquire_run_pr_guard(scope, "node-2") == "acquired"
+    assert settle_run_pr_guard(scope, "node-2", f"noise {_GH_PR_GUARD_CLAIM_SENTINEL}", claim_receipt=None) == "spent"
+    assert acquire_run_pr_guard(scope, "node-3") == "spent"
+
+
+def test_settle_spends_on_a_url_valid_delivered_pr_url_and_never_on_junk() -> None:
+    """The pr_url arm: a platform-parsed delivery spends the run even when
+    sentinel AND receipt are both gone (robust to truncation), and also when
+    the guard was ABSENT but a PR was still delivered. Junk under the key
+    (``\"N/A\"``, a non-http string) must never spend - a sloppy agent writing
+    pr_url: \"N/A\" would otherwise burn the run's attempt."""
+    scope = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    assert settle_run_pr_guard(scope, "node-1", None, pr_url="https://github.com/org/repo/pull/42") == "spent"
+    assert acquire_run_pr_guard(scope, "node-2") == "spent"
+
+    scope2 = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope2, "node-1") == "acquired"
+    assert settle_run_pr_guard(scope2, "node-1", None, pr_url="N/A", claim_receipt=False) == "released"
+    assert acquire_run_pr_guard(scope2, "node-2") == "acquired"
+
+
+def test_settle_records_spent_even_without_a_prior_ledger_entry() -> None:
+    """Spend evidence must not be dropped just because the ledger entry is
+    gone (evicted by the bound, or the claim lived in a dead process): the
+    settle records SPENT so a later flagged node is still denied."""
+    scope = f"pytest-{uuid.uuid4().hex}"
+    # No prior acquire - the entry does not exist.
+    assert settle_run_pr_guard(scope, "node-1", None, claim_receipt=True) == "spent"
+    assert acquire_run_pr_guard(scope, "node-2") == "spent"
+    # Non-spending evidence with no entry stays a noop (never creates holds).
+    other = f"pytest-{uuid.uuid4().hex}"
+    assert settle_run_pr_guard(other, "node-1", "nothing to see") == "noop"
+    assert acquire_run_pr_guard(other, "node-2") == "acquired"
+
+
+def test_shim_produced_stdout_spends_the_run_claim_through_the_real_settle(tmp_path: Path) -> None:
+    """The observation channel at the unit level: stdout produced by the REAL
+    shim's successful create spends the run through the REAL settle - with the
+    harvest unavailable (claim_receipt=None), exactly the fallback arm a
+    dispatch reaches when its sandbox is already gone."""
+    stdout = shim_created_pr_stdout(tmp_path)
+    assert "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED" in stdout
+    scope = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    assert settle_run_pr_guard(scope, "node-1", stdout, claim_receipt=None) == "spent"
+    assert acquire_run_pr_guard(scope, "node-2") == "spent"
+
+
+@pytest.mark.asyncio
+async def test_harvest_gh_pr_claim_via_exec_parses_the_probe_reply() -> None:
+    """The harvest's contract: present / absent / unusable. A NON-ZERO probe
+    exit must be ``None`` (unavailable) even if its stdout happens to carry
+    the present token - a failed probe can never be read as a claim."""
+    scope = str(uuid.uuid4())
+
+    async def _present(command: list[str]) -> SimpleNamespace:
+        assert command[:2] == ["sh", "-c"]
+        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_PRESENT", stderr="")
+
+    async def _absent(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
+
+    async def _silent(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(exit_code=0, stdout="", stderr="")
+
+    async def _boom(command: list[str]) -> SimpleNamespace:
+        raise RuntimeError("exec transport down")
+
+    async def _nonzero(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(exit_code=1, stdout="MODULO_CLAIM_RECEIPT_PRESENT", stderr="sh: boom")
+
+    assert await harvest_gh_pr_claim_via_exec(_present, run_scope=scope) is True
+    assert await harvest_gh_pr_claim_via_exec(_absent, run_scope=scope) is False
+    assert await harvest_gh_pr_claim_via_exec(_silent, run_scope=scope) is None
+    assert await harvest_gh_pr_claim_via_exec(_boom, run_scope=scope) is None
+    assert await harvest_gh_pr_claim_via_exec(_nonzero, run_scope=scope) is None
+    # The probe targets THIS run's receipt path (sanitised scope, quoted).
+    captured: list[str] = []
+
+    async def _capture(command: list[str]) -> SimpleNamespace:
+        captured.append(command[-1])
+        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
+
+    await harvest_gh_pr_claim_via_exec(_capture, run_scope=scope)
+    assert gh_pr_claim_receipt_path(scope) in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_harvest_reads_a_real_receipt_written_by_a_real_create(tmp_path: Path) -> None:
+    """REAL shell end to end: a successful create through the installed shim
+    leaves the receipt, the REAL probe script reads it (``True``); removing it
+    flips the harvest to ``False``. Not a mocked exec_command - the probe's
+    own bytes are parsed by the real helper."""
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    scope = f"pytest-{uuid.uuid4().hex}"
+    marker = gh_pr_guard_marker_path(scope)
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker)
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode == 0
+
+    async def _real_exec(command: list[str]) -> SimpleNamespace:
+        # command == ["sh", "-c", <probe>]; execute the probe for real.
+        res = _run_in_sh(command[2], cwd=tmp_path)
+        return SimpleNamespace(exit_code=res.returncode, stdout=res.stdout, stderr=res.stderr)
+
+    assert await harvest_gh_pr_claim_via_exec(_real_exec, run_scope=scope) is True
+    _run_in_sh(f"rm -f '{gh_pr_claim_receipt_path(scope)}'\n", cwd=tmp_path)
+    assert await harvest_gh_pr_claim_via_exec(_real_exec, run_scope=scope) is False
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+def _ghless_path_bin(tmp_path: Path) -> Path:
+    """A single PATH directory holding the install script's needed tools but
+    NO ``gh`` - the shipped runner image's shape (no gh anywhere on PATH).
+    The script only needs ``tr`` when no ``gh`` exists (the per-directory
+    grep/chmod/cp/mv arms are unreachable without one)."""
+    toolbin = tmp_path / "shipped-image-path"
+    toolbin.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        candidates = [
+            Path(r"C:\Program Files\Git\usr\bin\tr.exe"),
+            Path(r"C:\Program Files (x86)\Git\usr\bin\tr.exe"),
+        ]
+        src = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if src is None:
+            pytest.skip("Git Bash coreutils not available on this Windows system")
+        shutil.copy2(src, toolbin / "tr.exe")
+    else:
+        found = shutil.which("tr")
+        if not found:
+            pytest.skip("tr not available on this system")
+        shutil.copy2(found, toolbin / "tr")
+    return toolbin
+
+
+@pytest.mark.asyncio
+async def test_install_via_exec_runs_the_real_script_and_reports_absent_on_a_gh_less_path(
+    tmp_path: Path,
+) -> None:
+    """MAJOR 3 (tier claim, non-mock): the REAL install script executed under
+    a real shell against a gh-less PATH - the shipped first-party runner image
+    (no ``gh``, read-only rootfs, no writable PATH dir) resolves to exactly
+    this - reports ``absent`` with the script's own diagnostic. The previous
+    test only fed a hand-written stderr string through the classifier; this one
+    executes the script the tier actually runs."""
+    toolbin = _ghless_path_bin(tmp_path)
+    posix_bin = _posixify(str(toolbin))
+
+    async def _real_exec(command: list[str]) -> SimpleNamespace:
+        body = f"PATH={posix_bin}\nexport PATH\n{command[2]}\n"
+        res = _run_in_sh(body, cwd=tmp_path)
+        return SimpleNamespace(exit_code=res.returncode, stdout=res.stdout, stderr=res.stderr)
+
+    result = await install_gh_pr_guard_via_exec(_real_exec, run_scope=str(uuid.uuid4()), guard_owner="node-1")
+    assert result.status == "absent", f"the shipped image shape must report absent: {result.detail}"
+    assert "no gh on PATH" in result.detail
+    assert "NOT platform-guarded" in result.detail
+
+
+def test_run_pr_guard_ledger_is_bounded() -> None:
+    """The process-local ledger must not grow without limit in a long-lived
+    engine process: eviction kicks in past the cap, the NEWEST entries (the
+    ones most likely to have flagged nodes in flight) survive, and the cap
+    holds afterwards."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    reset_run_pr_guard_claims()
+    cap = sandbox_policy._MAX_RUN_PR_GUARD_CLAIMS
+    last = f"pytest-bound-{cap + 4}"
+    for i in range(cap + 5):
+        assert acquire_run_pr_guard(f"pytest-bound-{i}", "node-1") == "acquired"
+    assert len(sandbox_policy._RUN_PR_GUARD_CLAIMS) <= cap
+    # The newest scope survived eviction: its slot is still HELD by node-1.
+    assert acquire_run_pr_guard(last, "node-2") == "held"
+    # An evicted (oldest) scope is forgotten - it can be claimed again.
+    assert acquire_run_pr_guard("pytest-bound-0", "node-2") == "acquired"
+    reset_run_pr_guard_claims()

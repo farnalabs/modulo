@@ -10375,14 +10375,44 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # for flagged nodes (the flag is bound before the try), is exception-
         # safe (never masks teardown), and reads the captured streams through
         # ``locals()`` because they are bound inside the try (same pattern as
-        # the truncation handling below): observed claim sentinel -> the run's
-        # ledger claim is SPENT for every later flagged node; no sentinel ->
-        # this node's hold is RELEASED so a later flagged node can still
-        # claim. An unbound stream simply contributes nothing.
+        # the truncation handling below).
+        #
+        # SPEND EVIDENCE (robust to a truncated drain window, unforgeable by
+        # reading the shim): first HARVEST the shim's success receipt from the
+        # still-alive sandbox (this runs BEFORE the finally's workspace kill
+        # below; a stall path already killed it -> the exec fails -> None),
+        # plus the platform-parsed delivered ``pr_url``; the captured streams
+        # (sentinel) only count as a fallback when the harvest could not run.
+        # Receipt absent -> the sentinel is ignored and this node's hold is
+        # RELEASED so a later flagged node can still claim; an unbound stream
+        # or an unavailable harvest simply contributes the weaker evidence.
         if single_pr_per_run:
             try:
-                from modulo.core.pipeline_engine.sandbox_policy import settle_run_pr_guard
+                from modulo.core.pipeline_engine.sandbox_policy import (
+                    harvest_gh_pr_claim_via_exec,
+                    settle_run_pr_guard,
+                )
 
+                _claim_receipt: bool | None = None
+                if _dispatch_provider is not None and _sandbox_id:
+
+                    async def _claim_receipt_exec(command: list[str]) -> Any:
+                        return await _require_dispatch_provider(_dispatch_provider).exec_command(
+                            _sandbox_id or "",
+                            command,
+                            cmd_timeout=15,
+                        )
+
+                    try:
+                        # Bounded: the harvest must never wedge or outlive the
+                        # teardown that follows it in this finally.
+                        _claim_receipt = await asyncio.wait_for(
+                            asyncio.shield(harvest_gh_pr_claim_via_exec(_claim_receipt_exec, run_scope=run_id)),
+                            timeout=20,
+                        )
+                    except Exception:
+                        _claim_receipt = None
+                _output_json = locals().get("output_json")
                 settle_run_pr_guard(
                     run_id,
                     node_id,
@@ -10391,6 +10421,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "".join(_drained_chunks) if _drained_chunks else None,
                     locals().get("agent_stdout"),
                     locals().get("agent_stderr"),
+                    pr_url=locals().get("pr_url")
+                    or (_output_json.get("pr_url") if isinstance(_output_json, dict) else None),
+                    claim_receipt=_claim_receipt,
                 )
             except Exception:
                 _log.debug("sandbox_agent.gh_guard_settle_failed", exc_info=True)

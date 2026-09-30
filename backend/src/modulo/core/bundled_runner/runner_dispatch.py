@@ -1579,22 +1579,49 @@ async def run_bundled_runner_node(
         )
     finally:
         # FAR-1315: settle this node's run-scoped one-PR guard slot (only if
-        # the install ran above). Exception-safe and best-effort: observed
-        # claim sentinel in the captured streams -> the run's ledger claim is
-        # SPENT for every later flagged node; no sentinel -> this node's hold
-        # is RELEASED so a later flagged node can still claim. Streams bound
-        # inside the try are read through ``locals()`` (same pattern the E2B
-        # path uses); an unbound stream (failure before capture) simply
-        # contributes nothing and the slot is released.
+        # the install ran above). Exception-safe and best-effort; runs BEFORE
+        # ``_teardown_and_clear`` destroys the workspace, so the shim's success
+        # receipt can still be HARVESTED here. SPEND EVIDENCE: harvested
+        # receipt -> a platform-parsed delivered ``pr_url`` -> the captured
+        # streams (sentinel) only as a fallback when the harvest could not
+        # run. Receipt confirmed absent -> the sentinel is IGNORED (reading
+        # the shim exposes it) and this node's hold is RELEASED so a later
+        # flagged node of the run may claim. Streams/pr_url bound inside the
+        # try are read through ``locals()`` (same pattern the E2B path uses);
+        # an unbound value simply contributes nothing.
         if _single_pr_guard_armed:
             try:
-                from modulo.core.pipeline_engine.sandbox_policy import settle_run_pr_guard
+                from modulo.core.pipeline_engine.sandbox_policy import (
+                    harvest_gh_pr_claim_via_exec,
+                    settle_run_pr_guard,
+                )
 
+                _claim_receipt: bool | None = None
+                _harvest_provider = locals().get("provider")
+                _harvest_ref = locals().get("provider_ref")
+                if _harvest_provider is not None and _harvest_ref:
+
+                    async def _claim_receipt_exec(command: list[str]) -> Any:
+                        return await _harvest_provider.exec_command(_harvest_ref, command, cmd_timeout=15)
+
+                    try:
+                        # Bounded: the harvest must never wedge or outlive the
+                        # teardown that follows it in this finally.
+                        _claim_receipt = await asyncio.wait_for(
+                            asyncio.shield(harvest_gh_pr_claim_via_exec(_claim_receipt_exec, run_scope=run_id)),
+                            timeout=20,
+                        )
+                    except Exception:
+                        _claim_receipt = None
+                _output_json = locals().get("output_json")
                 settle_run_pr_guard(
                     run_id,
                     node_id,
                     locals().get("agent_stdout_raw"),
                     locals().get("agent_stderr_raw"),
+                    pr_url=locals().get("pr_url")
+                    or (_output_json.get("pr_url") if isinstance(_output_json, dict) else None),
+                    claim_receipt=_claim_receipt,
                 )
             except Exception:
                 _log.debug("runner_dispatch.gh_guard_settle_failed", exc_info=True)

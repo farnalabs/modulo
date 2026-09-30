@@ -1040,3 +1040,123 @@ async def test_unflagged_node_never_installs_the_guard(patch_node_runner) -> Non
     provider = _FakeProvider()
     await runner_dispatch.run_bundled_runner_node(_state(), _config(), _route(provider))
     assert not _guard_scripts(provider)
+
+
+# --- FAR-1315 gate hardening: the observation channel end to end (runner tier)
+#
+# These drive the REAL settle_run_pr_guard in run_bundled_runner_node's
+# finally with real spend evidence. Fail-without-fix for this block: moving
+# the settle out of the finally (or passing None streams) makes every
+# assertion below fail.
+
+
+class _HarvestReplyProvider(_FakeProvider):
+    """A provider whose claim-receipt harvest probe answers a fixed reply,
+    while every other exec (guard install, file reads) behaves as the default
+    fake does."""
+
+    def __init__(self, *, harvest_reply: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._harvest_reply = harvest_reply
+
+    async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+        if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+            self.exec_calls.append(list(cmd))
+            return _ExecResult(exit_code=0, stdout=self._harvest_reply, stderr="")
+        return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+
+def _fresh_flagged_state() -> tuple[str, dict]:
+    """A flagged run's state with a fresh run id and an EMPTY ledger (so each
+    test's acquire/spend/release assertions start from a known state)."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    reset_run_pr_guard_claims()
+    run_id = str(uuid.uuid4())
+    state = _state()
+    state["_run_id"] = run_id
+    return run_id, state
+
+
+async def test_flagged_node_observes_shim_produced_output_and_spends_the_run_claim(
+    patch_node_runner,
+    tmp_path,
+) -> None:
+    """The observation channel, end to end on the ``runner_docker`` tier:
+    stdout produced by the REAL shim's successful create flows through the
+    dispatch stream capture into the REAL settle in the ``finally`` — the
+    run's claim is SPENT. The harvest probe yields no token here (the default
+    fake reply), i.e. the sentinel FALLBACK arm."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
+
+    run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider(stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))])
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_spends_from_the_harvested_receipt_without_a_sentinel(patch_node_runner) -> None:
+    """MAJOR 1 on the runner tier: no sentinel in the captured stream (lost or
+    never emitted there), but the platform-side receipt harvest confirms the
+    create — the run must be SPENT, not released."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    run_id, state = _fresh_flagged_state()
+    provider = _HarvestReplyProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_PRESENT",
+        stream_chunks=[("stdout", "post-create agent noise\n")],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_shim_read_transcript_never_spends_on_the_runner_tier(patch_node_runner, tmp_path) -> None:
+    """MAJOR 2 on the runner tier: the sentinel IS in the captured stream (the
+    agent read the shim), but the harvest confirms no receipt — the hold is
+    RELEASED and the run is NOT spent, so a later flagged node still gets its
+    chance at the one PR."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
+
+    run_id, state = _fresh_flagged_state()
+    provider = _HarvestReplyProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """FAILURE-path settlement on the runner tier: a flagged node that dies
+    (unparseable output.json) must release its hold in the ``finally`` so the
+    run's slot is free for a later node. Fail-without-fix: moving the settle
+    out of the ``finally`` leaves the entry ``held`` and the assertion below
+    reads ``held`` instead of ``acquired``."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value="not valid json {"))
+    run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        with pytest.raises(_FakeError):
+            await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()
