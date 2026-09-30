@@ -74,6 +74,22 @@ applications. Built on the auth + model-backend core.
       selectable role (`settings-mcp-create-key`), revokes keys, and shows the
       generated key value for copying — the configured key is what external
       agents authenticate with
+- [x] The MCP API-keys card distinguishes a **revoked** key from an
+      **expired** one by observed facts, not the derived `is_active` flag
+      (FAR-1296 / FAR-1299): the key serializer
+      (`auth/api_key._serialize_key`) emits `revoked_at` — ISO-8601 when set,
+      else `null`, "the revocation FACT, not an inference from `is_active`"
+      — alongside `lookup_prefix` / `role` / `scope` / `last_used_at` /
+      `expires_at`, and revocation is a `DELETE /api/v1/api-keys/{key_id}`
+      (`api_keys.py` route; the earlier PUT that silently dropped was fixed
+      by FAR-1291). The `/settings/mcp` table renders a per-key status badge
+      (`settings-mcp-key-status`) computed from the two facts: `revoked`
+      (`revoked_at` set — an operator's action, checked first), `expired`
+      (`revoked_at` null and the expiry elapsed — nobody revoked it), or
+      `active` — with the revoke button shown only for `is_active` keys
+      (`frontend/src/views/SettingsMcpView.vue`,
+      `frontend/src/__tests__/SettingsMcpView.spec.ts`,
+      `backend/tests/unit/api/test_api_keys_endpoint.py`)
 - [x] MCP OAuth client registration UI (2026-09-28, FAR-1251): the
       "Registered OAuth Clients" card on `/settings/mcp`
       (`components/settings/McpOauthClientsCard.vue`) lists the org's clients
@@ -192,6 +208,17 @@ applications. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-09-30: **Improve Architecture product-map walk** — closed the
+  `feat-mcp` API-key sub-surface gap for FAR-1291 / FAR-1296 / FAR-1299: the
+  key card's revoked-vs-expired status distinction (why `is_active: false`
+  cannot say WHY a key stopped working) shipped 2026-09-29/30 (DELETE
+  revocation, `revoked_at` in the serializer, the `settings-mcp-key-status`
+  badge read in the Settings MCP view) but the behaviour surface was not
+  described in either product-map layer. Added the behaviour line to the
+  manifest `feat-mcp` registry and sharpened this tracker's API-key bullet,
+  citing `auth/api_key._serialize_key`, `api_keys.py`, `SettingsMcpView.vue`
+  and `SettingsMcpView.spec.ts` / `test_api_keys_endpoint.py`.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-25: **product-map review pass** — closed the last pinned MCP
   legacy-`/mcp/tools/call` draft: the four `mcp/library_browse.feature`
   scenarios previously targeted the dead HTTP surface and never ran. They are

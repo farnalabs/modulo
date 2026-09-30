@@ -860,6 +860,23 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `test_graph_tracker_status_matches_manifest_registry` guard makes
 > manifest↔tracker status agreement an invariant so the two layers can never
 > drift again. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-09-30):** closed four stale sub-surface gaps —
+> shipped behaviour that neither product-map layer described. `feat-apply`
+> (FAR-1294): `modulo apply` manages the pipeline runtime limits
+> `node_timeout_seconds` / `max_duration_seconds` (declare-only, null rejected
+> at load, booleans rejected, hashed into the managed view for `--diff`);
+> added to the manifest registry + `configure/apply.md`. `feat-mcp`
+> (FAR-1291/FAR-1296/FAR-1299): the MCP API-keys card distinguishes a REVOKED
+> key from an EXPIRED one by the observed `revoked_at` fact (DELETE
+> revocation, `settings-mcp-key-status` badge), added to the manifest
+> registry + `configure/mcp.md`. `feat-notifications` (FAR-1295): the
+> approaching-deadline HITL sweep's webhook / in-app leg under the single
+> fire-once claim — the manifest tracked it but `notifications/notifications.md`
+> lagged; behaviour line + citations added. `feat-runs` (FAR-1305): the
+> truthful `missing_self_report_reason` (`agent_not_reported` vs
+> `zero_report_unproven`) — manifest tracked it but `build/runs.md` lagged;
+> behaviour line + citations added. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
