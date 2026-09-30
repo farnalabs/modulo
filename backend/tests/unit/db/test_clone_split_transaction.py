@@ -253,7 +253,8 @@ async def test_clone_bounds_postgres_lock_wait_before_for_share(
     executed = read_session.execute.call_args_list
     assert len(executed) >= 2, "expected the lock_timeout bind then the source select"
     bind_stmt, bind_params = executed[0].args[0], executed[0].args[1]
-    assert "set_config" in str(bind_stmt) and "lock_timeout" in str(bind_stmt)
+    assert "set_config" in str(bind_stmt)
+    assert "lock_timeout" in str(bind_stmt)
     # The bound comes from Settings (default 5000 ms) - prove it is a ms value,
     # not a hard-coded literal wedged into the helper.
     assert str(bind_params["val"]).endswith("ms")
