@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -205,6 +206,38 @@ def _record_deletion_metrics(org_id: Any, rows_deleted: int) -> None:
         pass
 
 
+async def _delete_batch(
+    session: AsyncSession,
+    org_id: Any,
+    ids: Sequence[Any],
+    policy: EvidenceRetentionPolicy,
+) -> int:
+    """Delete one batch of evidence ids inside a SAVEPOINT and emit metrics.
+
+    The SAVEPOINT keeps the caller's transaction (and its transaction-local
+    ``app.organisation_id`` RLS scope) intact — there is no per-batch COMMIT.
+    Returns the number of rows deleted.
+    """
+    async with session.begin_nested():
+        await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))
+
+    batch_count = len(ids)
+
+    _log.info(
+        "evidence.retention.batch_deleted",
+        extra={
+            "org_id": str(org_id),
+            "batch_size": policy.batch_size,
+            "rows_deleted": batch_count,
+            "max_age_days": policy.max_age_days,
+            "max_rows": policy.max_rows,
+        },
+    )
+    _record_deletion_metrics(org_id, batch_count)
+
+    return batch_count
+
+
 async def purge_evidence(
     session: AsyncSession,
     org_id: Any,
@@ -267,24 +300,8 @@ async def purge_evidence(
             # Delete within a SAVEPOINT — the caller's transaction (and its
             # transaction-local RLS scope) is preserved; there is no per-batch
             # COMMIT.
-            async with session.begin_nested():
-                await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))
-
-            batch_count = len(ids)
-            total_deleted += batch_count
+            total_deleted += await _delete_batch(session, org_id, ids, policy)
             batches += 1
-
-            _log.info(
-                "evidence.retention.batch_deleted",
-                extra={
-                    "org_id": str(org_id),
-                    "batch_size": policy.batch_size,
-                    "rows_deleted": batch_count,
-                    "max_age_days": policy.max_age_days,
-                    "max_rows": policy.max_rows,
-                },
-            )
-            _record_deletion_metrics(org_id, batch_count)
 
         # Phase 2: row-count purge (if max_rows is set)
         if policy.max_rows is not None:
@@ -313,24 +330,8 @@ async def purge_evidence(
 
                 # Same single-transaction contract as Phase 1: SAVEPOINT, no
                 # per-batch COMMIT.
-                async with session.begin_nested():
-                    await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))
-
-                batch_count = len(ids)
-                total_deleted += batch_count
+                total_deleted += await _delete_batch(session, org_id, ids, policy)
                 batches += 1
-
-                _log.info(
-                    "evidence.retention.batch_deleted",
-                    extra={
-                        "org_id": str(org_id),
-                        "batch_size": policy.batch_size,
-                        "rows_deleted": batch_count,
-                        "max_age_days": policy.max_age_days,
-                        "max_rows": policy.max_rows,
-                    },
-                )
-                _record_deletion_metrics(org_id, batch_count)
 
     finally:
         await _release_advisory_lock(session, org_id)

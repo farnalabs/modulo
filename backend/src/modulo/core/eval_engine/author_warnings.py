@@ -188,11 +188,6 @@ async def check_author_warnings(
     """
     warnings: list[AuthorWarning] = []
 
-    # When the binding node is indeterminate, temporal-ordering cannot be
-    # resolved — warn (the safe direction per §3.2: "if the producer set
-    # cannot be determined → warn").
-    indeterminate_binding = binding_node_id is None
-
     try:
         # Load the pipeline graph
         pipeline_result = await session.execute(
@@ -274,7 +269,7 @@ async def check_author_warnings(
         # ── Condition (b): temporal ordering ───────────────────────────────
         # Only check if we found a producer with a known node_id
         if producer_found and producer_node_id is not None:
-            if indeterminate_binding:
+            if binding_node_id is None:
                 # Binding node is unknown — ordering cannot be resolved → warn.
                 warnings.append(
                     AuthorWarning(
@@ -283,15 +278,13 @@ async def check_author_warnings(
                         f"node is indeterminate — temporal ordering cannot be verified.",
                     )
                 )
-            else:
-                assert binding_node_id is not None  # guarded by not indeterminate_binding
-                if _is_producer_downstream(producer_node_id, binding_node_id, edges):
-                    warnings.append(
-                        AuthorWarning(
-                            "temporal_ordering",
-                            f"Key '{evidence_key}' producer node runs after the gate's binding node.",
-                        )
+            elif _is_producer_downstream(producer_node_id, binding_node_id, edges):
+                warnings.append(
+                    AuthorWarning(
+                        "temporal_ordering",
+                        f"Key '{evidence_key}' producer node runs after the gate's binding node.",
                     )
+                )
 
         # ── Condition (c): recent undefined ────────────────────────────────
         # Query the evidence store for recent undefined outcomes on this key.
