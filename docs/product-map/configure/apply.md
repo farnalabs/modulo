@@ -149,10 +149,39 @@ schemas, model-backends, pipelines and triggers features.
 - [x] The API-key transport is org-scoped and operator-role gated; an
       unauthenticated or wrong-role key is rejected before any write
       (`backend/tests/unit/api/test_apply_api_key_auth.py`)
+- [x] Pipeline runtime limits (FAR-1294): `modulo apply` manages
+      `node_timeout_seconds` (per-node timeout, >= 1, platform default 300)
+      and `max_duration_seconds` (wall-clock run-duration cap, >= 1, platform
+      default 3600) on create AND update — but only when DECLARED. Omission
+      leaves a UI/API-set value untouched; the REST API rejects an explicit
+      null for both (the columns are never "no timeout" / "no cap"), so a
+      declared `null` is a load-time error with an actionable message instead
+      of a mid-apply 422; YAML booleans (`on`/`yes` — which pydantic's lax int
+      coercion would turn into a one-second kill-switch that applies cleanly
+      and then converges) are rejected at load by
+      `_validate_runtime_limit`. The two keys are gated independently
+      (`manages_node_timeout` / `manages_max_duration` via
+      `model_fields_set`), each declared limit is hashed into the canonical
+      `managed_view()` so the generic plan diff reports drift on it, and the
+      executor writes them into the create/PATCH payload only when declared
+      (`backend/src/modulo/cli/apply/models.py`,
+      `backend/src/modulo/cli/apply/pipeline_apply.py`,
+      `backend/tests/unit/cli/test_apply_models.py`)
 
 ## Known Gaps
 
 ## QA History
+- 2026-09-30: **Improve Architecture product-map walk** — closed the
+  `feat-apply` sub-surface gap for FAR-1294: `modulo apply` gained the two
+  pipeline runtime limits (`node_timeout_seconds` / `max_duration_seconds`)
+  on 2026-09-29 (PR #1105) but neither the manifest `feat-apply` registry nor
+  this tracker described them, so the shipped surface was invisible to
+  Assistant's `search_documentation` indexer. Added the behaviour line to
+  both layers, citing `cli/apply/models.py` (validation + `managed_view` gating),
+  `cli/apply/pipeline_apply.py` (create/PATCH payload) and
+  `tests/unit/cli/test_apply_models.py` (round-trip, omit-vs-declare,
+  per-key independence, boolean rejection). `_ORPHANED_BDD_FEATURES` stays
+  empty.
 - 2026-09-19: **product-map review pass** — closed the
   "`--diff` graph detail is pipeline-only" gap. Extended `drift_detail` so a
   drifted schema / model backend / trigger carries a per-entity managed-field

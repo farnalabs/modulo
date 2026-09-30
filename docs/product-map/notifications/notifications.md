@@ -4,6 +4,7 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/core/notifier
+  - backend/src/modulo/core/hitl_manager/deadline_warning.py
   - backend/src/modulo/api/routes/admin_notifications.py
   - backend/src/modulo/api/routes/notifications.py
   - backend/src/modulo/api/routes/in_app_notifications.py
@@ -15,6 +16,8 @@ unit-tests:
   - backend/tests/unit/notifier/test_notifier.py
   - backend/tests/unit/notifier/test_event_mapper.py
   - backend/tests/unit/notifier/test_hitl_awaiting_terminal_suppression.py
+  - backend/tests/unit/hitl_manager/test_deadline_warning.py
+  - backend/tests/integration/test_hitl_deadline_warning.py
   - backend/tests/unit/api/test_notifications_endpoint.py
   - backend/tests/unit/api/test_admin_notifications_webhooks.py
   - backend/tests/unit/api/test_in_app_notifications_preferences.py
@@ -147,6 +150,22 @@ events into typed notification payloads; and in-app notifications stream over SS
       enrichment (`run_status` / `run_terminal` / `run_cancel_reason`) is
       unchanged (`test_hitl_awaiting_terminal_suppression.py`, including the
       read-error fail-open case).
+- [x] **The approaching-deadline HITL sweep has a webhook + in-app leg
+      (FAR-1295).** The `hitl_deadline_warning` system cron
+      (`core/hitl_manager/deadline_warning.py`) dispatches
+      `EVENT_HITL_DEADLINE_WARNING` through `Notifier.dispatch_event` — the
+      webhook endpoints subscribe to it and the `NotificationEventMapper`
+      turns it into a typed in-app notification — under the SAME once-only
+      fire-once `SET NX EX` claim (`hitl:deadline_warning:{claim_id}`, with an
+      in-process monotonic backstop when Redis errors) as the email leg: ONE
+      claim guards BOTH channels, so a gate can never produce a second email
+      NOR a second webhook / in-app notification on a later tick, an org with
+      email recipients and/or a subscribed endpoint is warned exactly once per
+      gate, and an org with neither channel leaves the marker unset so a later
+      opt-in or subscription can still warn while the band is open
+      (`backend/tests/unit/hitl_manager/test_deadline_warning.py`,
+      `backend/tests/integration/test_hitl_deadline_warning.py`,
+      `backend/tests/unit/notifier/test_event_mapper.py`)
 
 #### Why the `expires_at IS NULL` arm is still there
 
@@ -178,6 +197,17 @@ coverage gate is satisfied by that test rather than by deleting the branch.
       version negotiation.
 
 ## QA History
+- 2026-09-30: **Improve Architecture product-map walk** — reconciled this
+  tracker with the shipped `hitl_deadline_warning` surface (FAR-1295,
+  merged 2026-09-29): the manifest `feat-notifications` registry tracked the
+  approaching-deadline warning's webhook / in-app leg but the human-readable
+  graph entry lagged behind (no behaviour line, no code/unit-test citation).
+  Added the checked behaviour (the single fire-once `hitl:deadline_warning`
+  claim guarding BOTH the email and the Notifier/webhook/in-app legs), the
+  `core/hitl_manager/deadline_warning.py` code citation, and the
+  `test_deadline_warning.py` / `test_hitl_deadline_warning.py` /
+  `test_event_mapper.py` unit citations.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-27: **qa-iterate follow-up pass** — closed six majors found by the
   multi-lens review of the fix above: (F1) `status` is now validated against
   its vocabulary at the route (422 before any DB read) with a fail-closed

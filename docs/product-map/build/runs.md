@@ -7,12 +7,15 @@ code:
   - backend/src/modulo/api/routes/run_ws.py
   - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/core/line_diff.py
+  - backend/src/modulo/core/cost_controller
 unit-tests:
   - backend/tests/unit/api/test_runs_endpoint.py
   - backend/tests/unit/api/test_run_events_endpoint.py
   - backend/tests/unit/api/test_run_ws.py
   - backend/tests/unit/api/test_run_api_key_auth.py
   - backend/tests/unit/api/test_runs_team_scope.py
+  - backend/tests/unit/core/cost_controller/test_run_warnings.py
+  - backend/tests/unit/core/cost_controller/test_cost_aggregate.py
 bdd:
   - backend/tests/bdd/features/errors
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
@@ -66,6 +69,24 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `require_team_membership_or_admin_any_credential` gate with a body-based
       resolver that reads `pipeline_id` from the JSON request (`test_runs_team_scope.py`,
       `runner_role.feature`)
+- [x] Run-level cost warnings (missing self-report surfacing, FAR-1305): a
+      `self_reported` cost component with an eligible sandbox node but no
+      accepted agent report stays visible in the run-detail breakdown — never
+      rendered as a phantom `$0.000000` money line — and the response's
+      structured `warnings` list (GET /api/v1/runs/{id}) carries a
+      `missing_self_report` entry whose `missing_self_report_reason`
+      distinguishes the two missing states truthfully: `agent_not_reported`
+      (no cost key ever presented) vs `zero_report_unproven` (a node DID
+      present an explicit `model_cost_usd: 0.0` but the trust boundary
+      refused it as unproven — token usage not all-zero). The run-detail and
+      compute-run-warnings copy render the two states distinctly (a rejected
+      zero is never described as "not reported by the agent"), the reason
+      rides the MCP breakdown wire (`_MCP_BREAKDOWN_KEYS`), and GET
+      /api/v1/runs carries `warnings_count` (a deferred single
+      `cost_breakdown` load, never N+1) so the list renders a warning badge
+      (`core/cost_controller/breakdown/params.py`,
+      `core/cost_controller/breakdown/aggregate.py`,
+      `test_run_warnings.py`, `test_runs_endpoint.py`)
 - [x] Run-execution service identity (ADR 038): a run executes with the
       pipeline owner's authority (service identity scoped to `owner_team_id`),
       not the triggering user's grants. Referenced resources (schema, connector,
@@ -106,6 +127,14 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-09-30: **Improve Architecture product-map walk** — reconciled this
+  tracker with the shipped FAR-1305 missing-cost surface (merged 2026-09-30):
+  the manifest `feat-runs` registry tracks the truthful
+  `missing_self_report_reason` (`agent_not_reported` vs `zero_report_unproven`)
+  but the human-readable graph entry was stale. Added the checked behaviour
+  line and the `core/cost_controller/` code + `test_run_warnings.py` /
+  `test_cost_aggregate.py` / `test_runs_endpoint.py` unit citations.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-24: **product-map walk** — closed the deferred run recovery/retry
   BDD drafts (`build/runs.md` error-state coverage). The run-level `/resume` /
   `/retry` endpoints those scenarios targeted never shipped — recovery is
