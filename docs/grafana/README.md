@@ -2,6 +2,19 @@
 
 Pre-built Grafana dashboards for Modulo's OpenTelemetry metrics. These provide observability into pipeline performance, human-in-the-loop review workflow, and LLM cost tracking.
 
+> **Known gap (verified 2026-09-30):** the shipped collector config
+> (`configs/otel-collector.yml`) has no spanmetrics connector, and the
+> bridge (`backend/src/modulo/otel_bridge/handler.py`) emits spans named
+> `modulo.pipeline.run` and `langgraph.chain/llm/tool.*`, not the
+> `pipeline.run` / `node.execute` names these dashboards filter on, with
+> `pipeline_id` / `organisation_id` truncated-hash attributes (there is no
+> `pipeline_name` attribute). No code emits the `modulo_runs_*`,
+> `modulo_hitl_*`, `modulo_cost_*`, or `modulo_llm_*` instruments either.
+> Until a spanmetrics connector mapping the real span names (or equivalent
+> recording rules) is added, these panels show no data. The attribute and
+> metric tables below describe what the dashboards query, not what the
+> current pipeline exports.
+
 ## Prerequisites
 
 - **Grafana 9+** (tested with 9.5 / 10.x)

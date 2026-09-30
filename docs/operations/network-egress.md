@@ -1,10 +1,11 @@
 # Network Egress Audit
 
-> Last updated: 2026-06-25
+> Last updated: 2026-09-30
 >
 > This document enumerates all outbound network connections made by Modulo
 > components. It is the single source of truth for data residency compliance
-> (PRD §10.5) and SOC 2 evidence.
+> (principle: `docs/core-principles.md` §9 "Self-hosted, no telemetry by
+> default"; the PRD is retired) and SOC 2 evidence.
 
 ---
 
@@ -37,9 +38,9 @@ This satisfies the "no external DNS calls in default config" requirement.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | not set | When set + telemetry enabled: HTTPS POST to configured endpoint |
 | OTel test connection (`POST /api/v1/settings/observability/test`) | – | Manual test: HTTPS POST to user-specified endpoint |
 
-✅ **Data residency OK**: Telemetry is off by default. When opted in via `MODULO_TELEMETRY_ENABLED=true` (Settings > Runtime Configuration), only aggregate counters and sanitised error categories are exported — no personal data, pipeline content, API keys, or raw error messages. Organisation ids are truncated hashes, not raw identifiers.
+✅ **Data residency OK**: Telemetry is off by default. When opted in via `MODULO_TELEMETRY_ENABLED=true` (Settings > Runtime Configuration), only aggregate counters and sanitised error categories are exported, no personal data, pipeline content, API keys, or raw error messages. Organisation ids are truncated hashes, not raw identifiers.
 
-> **Cross-process note:** the runtime-config override applies to the web process immediately. The SAQ worker is a separate process with its own store instance — for consistent cross-process behaviour, set `MODULO_TELEMETRY_ENABLED` in the deployment environment rather than relying on the runtime override.
+> **Cross-process note:** the runtime-config override applies to the web process immediately. The SAQ worker is a separate process with its own store instance, so for consistent cross-process behaviour, set `MODULO_TELEMETRY_ENABLED` in the deployment environment rather than relying on the runtime override.
 
 ### LangSmith
 
@@ -78,7 +79,10 @@ configuration of API keys and endpoints.
 Webhooks are fully user-configured. The operator provides the target URL. No
 webhook payloads are sent to hardcoded endpoints.
 
-- Delivery retries: up to 3 times with exponential backoff (5s, 25s, 125s)
+- Delivery retries: up to 4 attempts (1 initial + 3 retries) with backoff
+  delays of 1s, 5s, 30s (`MAX_ATTEMPTS` / `RETRY_DELAYS` in
+  `backend/src/modulo/core/notifier/__init__.py`); a 429 `Retry-After`
+  response header is honoured (capped at 60s)
 - Signing: HMAC-SHA256 with per-webhook secret
 - Payload: JSON body with run/event context
 
@@ -95,9 +99,14 @@ webhook payloads are sent to hardcoded endpoints.
 
 ## 6. Plugin Registry / Library
 
-The library registry is a local database table. Community registry protocol
-(v2) is planned but not yet implemented. No outbound calls occur during
-library browsing.
+The library registry is a local database table. Community library
+browse/install is implemented (FAR-363): when `MODULO_LIBRARY_ENDPOINT` is
+set (default empty, meaning no library is configured), the SAQ
+`library_sync` cron polls that endpoint for the signed manifest (outbound
+HTTPS every `MODULO_LIBRARY_SYNC_INTERVAL_SECONDS`, default 300s) and caches
+the catalog locally; installs fetch content-addressed blobs from the same
+endpoint with SHA-256 verification. With the default empty endpoint,
+library browsing makes no outbound calls.
 
 ---
 

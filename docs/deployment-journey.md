@@ -66,13 +66,18 @@ fly postgres create --name modulo-db
 fly redis create --name modulo-redis
 fly secrets set \
   SECRET_KEY="$(openssl rand -base64 32)" \
-  FERNET_KEY="$(openssl rand -base64 32)" \
+  FERNET_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")" \
   DATABASE_URL="postgresql+asyncpg://..." \
   REDIS_URL="redis://..." \
   MODULO_PUBLIC_URL="https://app.modulo.run" \
   MODULO_USERS="admin:your-password"
 fly deploy
 ```
+
+`SECRET_KEY` needs 32+ random bytes, but `FERNET_KEY` must decode to
+exactly 32 url-safe base64 bytes: generate it with `Fernet` itself as
+above. Plain `openssl rand -base64` can emit `+`/`/` characters that
+`Fernet` rejects at startup (see `docs/troubleshooting.md` §1).
 
 The production `fly.toml` is at the repository root; `deploy/fly/` holds `fly.staging.toml` plus the bootstrap and entrypoint scripts.
 
