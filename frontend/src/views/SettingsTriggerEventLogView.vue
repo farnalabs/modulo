@@ -7,7 +7,7 @@
         <div>
           <label for="settingstriggereventlogview-trigger-type" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
           <Select
-  aria-label="Trigger type"
+  :aria-label="$t('views.SettingsTriggerEventLogView.trigger_type')"
   v-model="filterTriggerType"
   :placeholder="$t('views.SettingsTriggerEventLogView.trigger_type')"
   data-testid="settings-trigger-event-log-trigger-type"
@@ -25,7 +25,7 @@
         <div>
           <label for="settingstriggereventlogview-result" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.result') }}</label>
           <Select
-  aria-label="Result"
+  :aria-label="$t('views.SettingsTriggerEventLogView.result')"
   v-model="filterResult"
   :placeholder="$t('views.SettingsTriggerEventLogView.result')"
   data-testid="settings-trigger-event-log-result"
@@ -42,19 +42,19 @@
         </div>
         <div class="flex items-end gap-2">
           <Button data-testid="settings-trigger-event-log-apply" @click="applyFilters">
-            Apply
+            {{ $t('views.SettingsTriggerEventLogView.apply') }}
           </Button>
           <button type="button"
             data-testid="settings-trigger-event-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetFilters"
           >
-            Reset
+            {{ $t('views.SettingsTriggerEventLogView.reset') }}
           </button>
         </div>
       </div>
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
-        {{ total }} event{{ total === 1 ? '' : 's' }}
+        {{ $t('views.SettingsTriggerEventLogView.events_count', { count: total }, total) }}
       </div>
     </div>
 
@@ -65,7 +65,7 @@
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">{{ $t('views.SettingsTriggerEventLogView.no_trigger_events_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
-        Try adjusting your filters or wait for trigger activity to be recorded.
+        {{ $t('views.SettingsTriggerEventLogView.try_adjusting_filters') }}
       </p>
     </div>
 
@@ -125,10 +125,10 @@
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPreviousPage()"
         >
-          Previous
+          {{ $t('views.SettingsTriggerEventLogView.previous') }}
         </button>
         <span class="text-sm text-muted-foreground">
-          {{ items.length }} of {{ total }} events
+          {{ $t('views.SettingsTriggerEventLogView.showing_of_total_events', { count: items.length, total: total }) }}
         </span>
         <button type="button"
           :disabled="!nextCursor"
@@ -136,7 +136,7 @@
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToNextPage()"
         >
-          Next
+          {{ $t('views.SettingsTriggerEventLogView.next') }}
         </button>
       </div>
     </template>
