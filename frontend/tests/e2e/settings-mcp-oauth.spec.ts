@@ -41,7 +41,7 @@ async function loginForMcp(page: Page, env: TestEnv) {
  * registered before loginAsAdmin loses to the local mock-API catch-all.
  */
 async function mockSettingsMcpApi(page: Page) {
-  await page.route('**/api/v1/api-keys*', async (route) => {
+  await page.route('**/api/v1/api-keys**', async (route) => {
     const url = route.request().url()
     if (url.includes('/mcp-config')) {
       return route.fulfill({
@@ -62,7 +62,7 @@ async function mockSettingsMcpApi(page: Page) {
 async function mockOAuthClientsApi(page: Page, existing: RegisteredClient[]) {
   const clients = [...existing]
 
-  await page.route('**/api/v1/mcp/oauth/clients*', async (route) => {
+  await page.route('**/api/v1/mcp/oauth/clients**', async (route) => {
     const request = route.request()
     if (request.method() === 'POST') {
       clients.push(SEED_CLIENT)
@@ -115,8 +115,11 @@ test.describe('Settings MCP OAuth clients', { tag: '@regression' }, () => {
     await page.getByTestId('settings-mcp-register-oauth-client').click()
     await expect(page.getByTestId('settings-mcp-oauth-name')).toBeVisible()
 
-    // Inline validation on blur
-    await page.getByTestId('settings-mcp-oauth-name').blur()
+    // Inline validation on blur. The field must actually hold focus for the
+    // `blur` event to fire (a no-op otherwise), so focus it first.
+    const nameInput = page.getByTestId('settings-mcp-oauth-name')
+    await nameInput.focus()
+    await nameInput.blur()
     await expect(page.getByTestId('settings-mcp-oauth-name-error')).toBeVisible()
 
     await page.getByTestId('settings-mcp-oauth-name').fill('E2E OAuth Client')
