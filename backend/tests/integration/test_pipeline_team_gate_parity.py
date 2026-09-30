@@ -246,8 +246,8 @@ async def test_get_graph_member_reads_the_graph(
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["nodes"] == []
-        assert body["edges"] == []
+        assert not body["nodes"]
+        assert not body["edges"]
     finally:
         await _cleanup(db_engine, pipeline_id)
 
@@ -266,7 +266,7 @@ async def test_get_graph_org_admin_reads_the_graph(
             headers=_auth_headers(test_org, test_user, role="admin"),
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["nodes"] == []
+        assert not resp.json()["nodes"]
     finally:
         await _cleanup(db_engine, pipeline_id)
 
