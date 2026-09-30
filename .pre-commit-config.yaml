@@ -129,7 +129,7 @@
         name: check C1 control characters in workflow files
         entry: uv run --project backend --no-sync python scripts/run_check_c1_chars.py
         language: system
-        files: ^\\.github/workflows/.*\\.yml$
+        files: ^\.github/workflows/.*\.ya?ml$
         pass_filenames: false
 
       - id: check-utf8
