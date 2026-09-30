@@ -200,7 +200,7 @@ class TestOAuthClientRoutesFlagOn:
             resp = admin_client.get(self.ENDPOINT)
 
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     def test_delete_returns_200(self, admin_client: TestClient) -> None:
         with (
