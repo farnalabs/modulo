@@ -5256,6 +5256,7 @@ features:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
             - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
+            - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
         deferrals:
             - "Per-token eval breakdown comparison is the remaining deferred comparison sub-surface, tracked under feat-variants"
     feat-feedback:

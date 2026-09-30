@@ -878,6 +878,25 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `zero_report_unproven`) — manifest tracked it but `build/runs.md` lagged;
 > behaviour line + citations added. `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-09-30):** closed the feature-graph gap left by
+> chunk 9a (FAR-961 evidence retention/cleanup + FAR-957 advisory author
+> warnings, commit `e64ddac0e`) — a whole evidence subsystem that shipped with
+> no product-map home, invisible to the feature graph and to Assistant's
+> `search_documentation` indexer. New behaviour tracker
+> `feat-core-evidence-store` (`core/evidence-store.md`) covers the append-only
+> evidence fact store (FAR-966 chunk 7 §3.1: subject-scoped key/value facts,
+> five-value producer vocabulary, RLS migration 0263, E1 append-only carve-out),
+> the evidence layer's subject-scoped fetch + producer write-authorisation +
+> RunEvidence fold-in, the per-org retention policy and the sanctioned batched
+> purge sweep (advisory `PostgresLock`, SAVEPOINT batches preserving the
+> transaction-local RLS scope, `modulo_evidence_retention_deletions_total`
+> counter), and the advisory author-warning checks (`no_producer` /
+> `temporal_ordering` / `recent_undefined`) surfaced on policy-gate binding
+> (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) via `PolicyGateResponse`'s
+> `warnings` field. The author-warning wire surface is also ticked in the
+> manifest `feat-evals` registry + `improve/evals.md`. `_ORPHANED_BDD_FEATURES`
+> stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
@@ -909,6 +928,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-assistant](configure/assistant.md) => PRD 8.23
 
 ### Core Platform
+- [feat-core-evidence-store](core/evidence-store.md) => PRD N/A
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
 - [feat-core-run-context](core/run-context.md) => PRD N/A

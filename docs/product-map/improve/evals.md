@@ -10,6 +10,7 @@ code:
   - backend/src/modulo/core/eval_engine/coverage_gap.py
   - backend/src/modulo/core/eval_engine/regression.py
   - backend/src/modulo/core/eval_engine/policy_gate.py
+  - backend/src/modulo/core/eval_engine/author_warnings.py
   - backend/src/modulo/core/pipeline_engine/eval_persist_order.py
   - backend/src/modulo/api/routes/feedback.py
   - frontend/src/views/EvalEditorView.vue
@@ -24,6 +25,7 @@ unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_persist_order_failopen.py
   - backend/tests/unit/core/eval_engine/test_policy_gate_decision_row.py
+  - backend/tests/unit/core/evidence/test_author_warnings.py
   - backend/tests/unit/db/test_eval_suite_run.py
   - frontend/src/__tests__/EvalEditorView.spec.ts
   - frontend/src/__tests__/EvalProposalsQueueView.spec.ts
@@ -85,6 +87,13 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) with pagination and
       pipeline / eval_type filters, plus `POST /api/v1/evals/from-run` to
       author a definition from run data
+- [x] Policy-gate binding (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`)
+      runs the FAR-957 advisory author-warning checks for the eval's
+      `evidence_key` (`no_producer` / `temporal_ordering` / `recent_undefined` —
+      the evidence store substrate tracked under `feat-core-evidence-store`) and
+      the `PolicyGateResponse` carries the non-blocking `warnings` list
+      (`core/eval_engine/author_warnings.py`,
+      `tests/unit/core/evidence/test_author_warnings.py`)
 - [x] Results are queryable per run (`GET /api/v1/runs/{run_id}/evals`) and
       comparable side-by-side between two runs (`POST /api/v1/evals/compare`)
 - [x] Leaderboards aggregate pass/fail over a window grouped by pipeline, node,
@@ -119,6 +128,17 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
+- 2026-09-30: **Improve Architecture product-map walk** — ticked the FAR-957
+  advisory author-warning surface: policy-gate binding
+  (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) runs
+  `check_author_warnings` for the eval's `evidence_key` and the
+  `PolicyGateResponse` carries non-blocking `warnings` (`no_producer` /
+  `temporal_ordering` / `recent_undefined`, warn on the safe direction). Added
+  `core/eval_engine/author_warnings.py` to `code:`,
+  `tests/unit/core/evidence/test_author_warnings.py` to `unit-tests:`, and the
+  manifest `feat-evals` registry behaviour line. The append-only evidence store
+  and the FAR-961 retention policy + purge sweep it sits on are tracked under
+  the new `feat-core-evidence-store` tracker (`core/evidence-store.md`).
 - 2026-09-28: **Improve Architecture product-map walk** — archived the stale
   `ui/eval_dashboard.feature` UI-journey BDD draft (pinned `@awaiting-implementation`
   since 2026-08, never ran). Its steps referenced testids that exist nowhere in the
