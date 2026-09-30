@@ -1125,13 +1125,22 @@ jobs:
           # side could not distinguish a duplicate event (same commit still
           # failing) from a genuinely new failure (new commit), and every
           # event launched a separate full fixer run.
+          #
+          # fingerprint: the same stable failure identity the Branch Fixer
+          # embeds in a fix PR body and matches on at run start, so it must be
+          # DETERMINISTIC rather than composed by the model (prose drifts
+          # between runs and let two runs raise two PRs for the same failure).
+          # Shape: <workflow>|<failed PR or main>|<head sha>. Mirrors the
+          # payload key deploy.yml sends (PR #1126).
+          FINGERPRINT="CI: Fast Validation|pr:${PR_NUM}|${HEAD_SHA}"
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber "${PR_NUM}" \
             --arg headSha "${HEAD_SHA}" \
             --arg runUrl "${RUN_URL}" \
             --arg failureDescription "CI checks failed on PR #${PR_NUM} (branch: ${BRANCH})" \
-            '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
+            --arg fingerprint "${FINGERPRINT}" \
+            '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription, fingerprint: $fingerprint}')
           echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
           echo "Sending to Modulo Branch Fixer pipeline..."
           # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
@@ -1244,13 +1253,15 @@ jobs:
           # headSha (FAR-1034): mirrors the notify-pr-failure payload so the
           # Branch Fixer trigger can coalesce repeated failures at the same
           # main SHA.
+          FINGERPRINT="CI: Fast Validation|main|${MAIN_SHA}"
           BODY=$(jq -n \
             --arg branchName "main" \
             --argjson prNumber 0 \
             --arg headSha "${MAIN_SHA}" \
             --arg runUrl "${RUN_URL}" \
             --arg failureDescription "CI checks failed on main at ${{ github.sha }}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR." \
-            '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription}')
+            --arg fingerprint "${FINGERPRINT}" \
+            '{branchName: $branchName, prNumber: $prNumber, headSha: $headSha, runUrl: $runUrl, failureDescription: $failureDescription, fingerprint: $fingerprint}')
           echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
           # Retry with exponential backoff on transient network failures (curl HTTP 000) and 429/5xx (max 5
           # attempts, ~5 min total). TIMESTAMP and HMAC are recomputed per
