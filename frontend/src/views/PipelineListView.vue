@@ -356,7 +356,20 @@
           </div>
         </dialog>
 
-      <Menu ref="actionMenuRef" :model="actionMenuItems" popup />
+      <!-- The row-action menu is keyed by hand via `openActionMenu` below, which
+           bumps `actionMenuKey` on every open. The `key` is load-bearing here:
+           PrimeVue's Menu compiles its
+           item click handler once (the `onClick` closure references the `onItemClick`
+           method), and Vue reuses that cached handler across patches when the Menu
+           vnode has no key. Re-resolving `actionMenuItems` (which happens the moment
+           a row action button is clicked, because `actionMenuPipeline` flips) is then
+           re-patched onto the SAME cached handler bound to the SAME Menu instance,
+           whose `overlayVisible` was flipped false when the previous popup closed.
+           The next native click on an item therefore calls `item.command()` and then
+           `this.hide()` against an already-hidden overlay, so nothing was ever
+           archived/renamed in previous staging runs. The key forces a fresh Menu
+           (and handler) per open. See `frontend/tests/e2e/setup/row-menu.ts`. -->
+      <Menu ref="actionMenuRef" :key="actionMenuKey" :model="actionMenuItems" popup />
   </div>
 </template>
 
@@ -774,6 +787,14 @@ function openPipeline(p: PipelineItem) {
 
 const actionMenuRef = ref<InstanceType<typeof Menu> | null>(null)
 const actionMenuPipeline = ref<PipelineItem | null>(null)
+// A monotonically increasing key for the row-action `<Menu>`. Bumping it on every
+// open remounts the Menu with a FRESH item-click handler: PrimeVue's Menu caches
+// its `onClick` closure, so re-patching a reused instance would leave the handler
+// observing a stale `overlayVisible`/target pair and the command would no-op (see
+// the template comment on the keyed `<Menu>`). Reopening with the SAME key across
+// routes is fine — this is only about not reusing a Menu instance whose overlay
+// state machine has already been through a close.
+const actionMenuKey = ref(0)
 const actionMenuItems = computed(() => {
   const p = actionMenuPipeline.value
   if (!p) return []
@@ -794,9 +815,19 @@ const actionMenuItems = computed(() => {
   ]
 })
 
-function openActionMenu(event: MouseEvent, p: PipelineItem) {
+async function openActionMenu(event: MouseEvent, p: PipelineItem) {
+  // Remount the Menu so the item-click handler observes the freshly-opened
+  // overlay (and the new `actionMenuItems`), never a cached/closed one. The
+  // remount is asynchronous, so toggle only AFTER the key change has flushed —
+  // toggling the old instance here would be thrown away when it unmounts and
+  // the fresh instance would mount closed (the menu never opens). The anchor
+  // is captured before the await because `event.currentTarget` is nulled once
+  // the handler yields; pass it to `toggle(event, target)` explicitly.
+  const target = event.currentTarget as HTMLElement
   actionMenuPipeline.value = p
-  actionMenuRef.value?.toggle(event)
+  actionMenuKey.value += 1
+  await nextTick()
+  actionMenuRef.value?.toggle(event, target)
 }
 
 function openRename(p: PipelineItem) {
