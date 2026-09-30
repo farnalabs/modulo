@@ -4254,10 +4254,13 @@ async def _finalize_locked_graph_save(
     and raises the mapped ``HTTPException`` UNCONDITIONALLY, so control does
     NOT return to the caller on that arm - the caller's ``saved is None`` ->
     404 branch below the ``except`` is reached only when ``_save_locked_graph``
-    found the pipeline row gone, never from this exception path. The other
-    errors are translated directly into an ``HTTPException``. Shared by the
-    convert-to-agent and revert-to-manual endpoints, which only differ in how
-    they prepare ``nodes``/``edges``.
+    found the pipeline row gone, never from this exception path. That arm
+    therefore carries NO ``return``: ``_deny_hitl_review`` is annotated
+    ``-> None`` rather than ``NoReturn``, so a type checker cannot prove the
+    raise and nothing below is reachable only by trusting this docstring. The
+    other errors are translated directly into an ``HTTPException``. Shared by
+    the convert-to-agent and revert-to-manual endpoints, which only differ in
+    how they prepare ``nodes``/``edges``.
     """
     if isinstance(exc, HitlReviewWeakeningDenied):
         await _deny_hitl_review(
@@ -4268,7 +4271,6 @@ async def _finalize_locked_graph_save(
             exc=exc,
             request_id=getattr(principal, "request_id", None),
         )
-        return
     if isinstance(exc, GuardrailBindingStripDenied):
         raise HTTPException(
             status_code=denial_http_status(exc.reason_code),

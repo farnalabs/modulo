@@ -2022,18 +2022,25 @@ async def test_finalize_locked_graph_save_denies_weakening() -> None:
     HTTP translation helper (``_deny_hitl_review``) rather than raising raw.
 
     ``_deny_hitl_review`` is patched here so the helper's own translation
-    (tested separately) does not mask this branch; the assertion pins that the
-    denial path is taken and the helper returns to its caller.
+    (tested separately) does not mask this branch. The stub reproduces the real
+    helper's contract - it raises UNCONDITIONALLY, so there is no ``return``
+    after the ``await`` - and the assertion pins both that the denial path is
+    taken and that the mapped HTTP error propagates to the caller rather than
+    the helper silently returning.
     """
     principal = MagicMock()
     principal.organisation_id = _ORG_ID
     principal.account_id = _USER_ID
     exc = HitlReviewWeakeningDenied(reason_code="gate-removal")
+    mapped = HTTPException(status_code=403, detail="Gate weakening denied.")
     with patch(f"{_PREFIX}_deny_hitl_review", new_callable=AsyncMock) as deny:
-        await _finalize_locked_graph_save(exc, AsyncMock(), principal=principal, pipeline_id=_PIPELINE_ID)
+        deny.side_effect = mapped
+        with pytest.raises(HTTPException) as raised:
+            await _finalize_locked_graph_save(exc, AsyncMock(), principal=principal, pipeline_id=_PIPELINE_ID)
 
     deny.assert_awaited_once()
     assert deny.await_args.kwargs["exc"] is exc
+    assert raised.value is mapped
 
 
 # ---------------------------------------------------------------------------

@@ -233,7 +233,7 @@ mutation transaction, including the clone's separate-connection step-(a)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MUTATION_ROW_LOCK_TIMEOUT_MS` | No | `5000` | Lock timeout in milliseconds for the whole pipeline-mutation transaction (graph save, update, delete, clone, folder move, node conversion). SQLSTATE 55P03 degrades to HTTP 409 `Timed out waiting for a lock on this resource; another change is in progress.` rather than an unbounded pooled-connection wait. Min 100, max 30000. |
+| `MUTATION_ROW_LOCK_TIMEOUT_MS` | No | `5000` | Lock timeout in milliseconds for the whole pipeline-mutation transaction (graph save, update, delete, clone, folder move, node conversion), not only the mutation row lock. Applied transaction-scoped (`SET LOCAL lock_timeout`) inside that transaction, so it also bounds every SUBSEQUENT lock wait the transaction takes after the row lock - the edge/index and FK locks of the graph write itself, and the per-organisation `audit_chain_heads` row lock taken by `append_audit_event` (contended by any concurrent audit append in the same org, not just by another pipeline mutation). Any of those waits expiring raises SQLSTATE 55P03, which degrades to HTTP 409 `Timed out waiting for a lock on this resource; another change is in progress. Re-issue the request once the other change completes.` - the mutation did NOT apply and is safe to re-issue - rather than an unbounded pooled-connection wait. Postgres only: the bound is dialect-gated and a no-op on sqlite/mariadb/mysql. Min 100, max 30000. |
 
 ---
 
