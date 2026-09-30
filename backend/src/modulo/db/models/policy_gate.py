@@ -4,9 +4,22 @@ Net-new table.  Absorbs EvalDefinition.failure_behaviour.
 """
 
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKeyConstraint, Index, Integer, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -42,5 +55,12 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
     # JSON-graph identifier (pipelines.graph_nodes_json), not a materialised row.
     node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
+    # FAR-967 operator safety control (chunk 10, s4.3): enabled/disabled
+    # toggle with symmetric audit trail.  enabled => enabled_at NOT NULL
+    # AND disabled_at NULL; NOT enabled => disabled_at NOT NULL AND
+    # enabled_at NULL (ck_policy_gates_enabled_timestamps).
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
+    enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # deleted_by exists but SoftDeleteMixin supplies deleted_at.
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

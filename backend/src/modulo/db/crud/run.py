@@ -987,6 +987,152 @@ async def _rebuild_pinned_guardrail_defs(
     return pinned_defs, skipped_guardrails, False, ""
 
 
+# ---------------------------------------------------------------------------
+# Policy-gate pin loading + fingerprint verification (FAR-967 chunk 10)
+# ---------------------------------------------------------------------------
+
+
+async def _load_snapshot_policy_gate_pins(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Read a snapshot's pinned policy-gate set + fingerprint (fail-open).
+
+    Column/table absent on an unmigrated DB during bluegreen (or a backend
+    that cannot resolve the column) → ``(None, None)`` so the replay falls
+    back to the live gates (pre-pinning behaviour).
+    """
+    try:
+        row = (
+            await session.execute(
+                select(
+                    PipelineSnapshot.policy_gate_pins_json,
+                    PipelineSnapshot.policy_gate_pins_fingerprint,
+                ).where(PipelineSnapshot.id == snapshot_id)
+            )
+        ).one_or_none()
+        if row is not None:
+            return row[0], row[1]
+    except SQLAlchemyError:
+        _log.warning(
+            "policy_gates.pins_read_unavailable",
+            extra={"org_id": str(org_id)},
+        )
+    return None, None
+
+
+async def _verify_policy_gate_pin_fingerprint(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    snap_pins: list[dict[str, Any]] | None,
+    saved_fingerprint: str | None,
+) -> tuple[bool, str]:
+    """Verify the policy-gate pin fingerprint at run start (§3.4, §6.1).
+
+    Implements the three-case table:
+
+    (i)   No pins + no fingerprint → fall back to pipeline's CURRENT live
+          gates.  Returns ``(False, "")`` — no block.
+    (ii)  Pins present (including empty list), no fingerprint → proceed
+          WITHOUT verification (a bug that verifies anyway would spuriously
+          block).  Returns ``(False, "")`` — no block.
+    (iii) Pins + fingerprint present but mismatched → fail CLOSED, terminal
+          and non-retryable.  Returns ``(True, block_message)``.
+
+    A match (pins + fingerprint, recomputed == stored) also returns
+    ``(False, "")`` — the pins are verified and trusted.
+    """
+    from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
+
+    # Case (i): no pins, no fingerprint → fallback to live gates.
+    if not snap_pins and saved_fingerprint is None:
+        return False, ""
+
+    # Case (ii): pins present, no fingerprint → trust as-is.
+    if saved_fingerprint is None:
+        return False, ""
+
+    # Case (iii) + match: pins + fingerprint present → verify.
+    recomputed = fingerprint_policy_gate_pins(snap_pins)
+    if recomputed == saved_fingerprint:
+        return False, ""
+
+    # Mismatch — fail closed (§3.4).
+    truncated_stored = saved_fingerprint[:12] if saved_fingerprint else ""
+    truncated_recomputed = recomputed[:12] if recomputed else ""
+    block_message = (
+        f"policy gate mechanism error: snapshot policy-gate pin fingerprint mismatch "
+        f"(pipeline snapshot {snapshot_id}, stored={truncated_stored}…, "
+        f"recomputed={truncated_recomputed}… — digest and content disagree; "
+        f"remediation: create a new run)"
+    )
+    _log.error(
+        "policy_gates.pin_fingerprint_mismatch",
+        extra={
+            "org_id": str(org_id),
+            "run_id": str(run_id),
+            "snapshot_id": str(snapshot_id),
+            "stored_fingerprint": saved_fingerprint,
+            "recomputed_fingerprint": recomputed,
+        },
+    )
+    return True, block_message
+
+
+async def _load_live_policy_gate_enabled_map(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    policy_gate_ids: list[str],
+) -> dict[str, bool]:
+    """Load the live ``enabled`` state for a set of PolicyGate rows.
+
+    Returns a dict mapping policy_gate_id (as string) → enabled (bool).
+    Missing rows (soft-deleted since snapshot creation) are treated as
+    disabled (the gate is excluded from evaluation).
+    """
+    from modulo.db.models.policy_gate import PolicyGate
+
+    if not policy_gate_ids:
+        return {}
+    import uuid as _uuid
+
+    uuid_ids = [_uuid.UUID(gid) for gid in policy_gate_ids]
+    stmt = select(PolicyGate.id, PolicyGate.enabled).where(
+        PolicyGate.id.in_(uuid_ids),
+        PolicyGate.organisation_id == org_id,
+        PolicyGate.deleted_at.is_(None),
+    )
+    rows = (await session.execute(stmt)).all()
+    return {str(row[0]): row[1] for row in rows}
+
+
+def _filter_disabled_policy_gates(
+    snap_pins: list[dict[str, Any]] | None,
+    enabled_map: dict[str, bool],
+) -> list[dict[str, Any]]:
+    """Operator control (§5): skip disabled gates from the pinned set.
+
+    A gate whose live ``enabled`` state is ``False`` (or whose row was
+    soft-deleted since snapshot creation and is absent from the map) is
+    excluded.  Pin membership remains immutable — this can only REMOVE
+    gates, never add them.
+    """
+    if not snap_pins:
+        return []
+    filtered = []
+    for entry in snap_pins:
+        gate_id = entry.get("policy_gate_id", "")
+        # If the gate is absent from the map (soft-deleted), treat as disabled.
+        enabled = enabled_map.get(gate_id, False)
+        if enabled:
+            filtered.append(entry)
+    return filtered
+
+
 def _select_guardrail_definitions(
     guardrail_rows: list[Any],
     pinned_defs: list[Any],
@@ -1408,6 +1554,9 @@ async def _intercept_guardrails(
     Mechanism errors FAIL CLOSED when any bound guardrail carries a block or
     redact action (item 7: warn-on-error applies to warn-action only);
     observe/warn-only guardrails log-and-continue on mechanism error.
+
+    FAR-967 chunk 10: also verifies the policy-gate pin fingerprint
+    (§3.4) and applies the operator control (§5) to filter disabled gates.
     """
     from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
 
@@ -1417,6 +1566,50 @@ async def _intercept_guardrails(
         organisation_id=request.org_id,
     )
     pinned = await _resolve_pinned_guardrail_state(session, request, guardrail_rows)
+
+    # ── FAR-967 chunk 10: policy-gate pin fingerprint verification ────────
+    policy_gate_blocked = False
+    policy_gate_block_message = ""
+    if request.is_replay and request.snapshot_id is not None:
+        pg_snap_pins, pg_saved_fp = await _load_snapshot_policy_gate_pins(session, request.org_id, request.snapshot_id)
+        policy_gate_blocked, policy_gate_block_message = await _verify_policy_gate_pin_fingerprint(
+            org_id=request.org_id,
+            run_id=request.run_id,
+            snapshot_id=request.snapshot_id,
+            snap_pins=pg_snap_pins,
+            saved_fingerprint=pg_saved_fp,
+        )
+        # Operator control (§5): filter disabled gates from the pinned set.
+        if pg_snap_pins and not policy_gate_blocked:
+            pg_ids = [e.get("policy_gate_id", "") for e in pg_snap_pins if e.get("policy_gate_id")]
+            enabled_map = await _load_live_policy_gate_enabled_map(
+                session, org_id=request.org_id, policy_gate_ids=pg_ids
+            )
+            filtered = _filter_disabled_policy_gates(pg_snap_pins, enabled_map)
+            if len(filtered) != len(pg_snap_pins):
+                _log.info(
+                    "policy_gates.operator_control_filtered",
+                    extra={
+                        "org_id": str(request.org_id),
+                        "run_id": str(request.run_id),
+                        "before": len(pg_snap_pins),
+                        "after": len(filtered),
+                    },
+                )
+
+    # If the policy-gate fingerprint mismatched, block immediately — do not
+    # proceed to the guardrail interception pass.
+    if policy_gate_blocked:
+        return _GuardrailInterception(
+            payload=request.payload,
+            results=[],
+            redactions=[],
+            blocked=True,
+            block_message=policy_gate_block_message,
+            blocking_eval_name="",
+            observed_by_eval={},
+            summary_json=None,
+        )
 
     if _has_guardrail_work(guardrail_rows, pinned.pinned_defs, pinned.skipped_guardrails, pinned.blocked):
         return await _run_guardrail_gate(session, request, guardrail_rows=guardrail_rows, pinned=pinned)

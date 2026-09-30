@@ -105,6 +105,15 @@ class PipelineSnapshot(OrgScoped):
     # change which guardrails evaluate. Nullable: legacy snapshots predating
     # the fingerprint are still trusted (verified only when present).
     guardrail_pins_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # FAR-967 chunk 10 (§3.3): policy-gate snapshot pin set and integrity
+    # fingerprint.  ``policy_gate_pins_json`` carries per-gate entries
+    # (policy_gate_id, eval_id, action, node_id) captured at snapshot creation;
+    # ``policy_gate_pins_fingerprint`` is a canonical SHA-256 over the
+    # serialized pin set.  Both nullable for backward compatibility with
+    # legacy snapshots (§6.1 three-case table: no pins + no fingerprint →
+    # fall back to live gates).
+    policy_gate_pins_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    policy_gate_pins_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     # FAR-402 P6: live-edit history + release channels. ``version_kind``

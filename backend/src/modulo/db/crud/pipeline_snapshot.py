@@ -21,6 +21,7 @@ from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.schema import Schema
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 
@@ -321,6 +322,77 @@ def _fingerprint_guardrail_pins(pins: list[dict[str, Any]] | None) -> str | None
     return fingerprint_guardrail_pins(pins)
 
 
+# ---------------------------------------------------------------------------
+# Policy-gate snapshot pins (FAR-967 chunk 10, s3.1 - s3.3)
+# ---------------------------------------------------------------------------
+
+
+async def _load_policy_gate_rows_for_pipeline(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+) -> list[PolicyGate]:
+    """Load live, enabled PolicyGate rows bound to a pipeline's evals.
+
+    Joins through ``evals`` (PolicyGate.eval_id → Eval.id) to scope to the
+    pipeline.  Excludes soft-deleted gates AND disabled gates (§3.1 /
+    criterion 14: disabled gates are NOT pinned at creation).
+    """
+    from modulo.db.models.eval import Eval
+
+    stmt = (
+        select(PolicyGate)
+        .join(Eval, (PolicyGate.eval_id == Eval.id) & (PolicyGate.organisation_id == Eval.organisation_id))
+        .where(
+            Eval.pipeline_id == pipeline_id,
+            PolicyGate.organisation_id == organisation_id,
+            PolicyGate.deleted_at.is_(None),
+            PolicyGate.enabled.is_(True),
+        )
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+def _build_policy_gate_pins(rows: list[PolicyGate]) -> list[dict[str, Any]] | None:
+    """Serialize PolicyGate rows into snapshot pin entries (§3.2).
+
+    Each entry carries ``policy_gate_id``, ``eval_id``, ``action``, and
+    ``node_id`` — enough identity to reconstruct the gate's evaluation
+    context and detect accidental corruption of the action field.
+
+    Returns ``None`` when no live, enabled gates exist (pre-migration or
+    zero-gate pipeline), preserving the legacy fallback semantics.
+    """
+    if not rows:
+        return None
+    return [
+        {
+            "policy_gate_id": str(row.id),
+            "eval_id": str(row.eval_id),
+            "action": row.action,
+            "node_id": str(row.node_id),
+        }
+        for row in rows
+    ]
+
+
+def _fingerprint_policy_gate_pins(pins: list[dict[str, Any]] | None) -> str | None:
+    """Canonical SHA-256 over the serialized policy-gate pin set (FAR-967 §3.3).
+
+    Localized wrapper so the snapshot CRUD layer never reaches into the
+    engine's internals — the fingerprint is computed by the shared
+    ``fingerprint_policy_gate_pins`` helper and only the digest is stored
+    on the snapshot.
+
+    **Different empty-set semantics from the guardrail predecessor:**
+    an empty list ``[]`` produces a deterministic digest (empty ≠ absent).
+    """
+    from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
+
+    return fingerprint_policy_gate_pins(pins)
+
+
 def _add_snapshot_schema_pins(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -446,6 +518,17 @@ async def create_snapshot_from_live_graph(
         # can detect a tampered/drifted pin set and fail closed.
         guardrail_pins_fingerprint = _fingerprint_guardrail_pins(guardrail_pins)
 
+        # FAR-967 chunk 10 (s3.1 - s3.3): policy-gate snapshot pins.  Only
+        # live, enabled gates are pinned (criterion 14); disabled gates are
+        # excluded from the pin set at creation time.
+        policy_gate_rows = await _load_policy_gate_rows_for_pipeline(
+            session,
+            pipeline_id=pipeline.id,
+            organisation_id=pipeline.organisation_id,
+        )
+        policy_gate_pins = _build_policy_gate_pins(policy_gate_rows)
+        policy_gate_pins_fingerprint = _fingerprint_policy_gate_pins(policy_gate_pins)
+
         snapshot = PipelineSnapshot(
             organisation_id=pipeline.organisation_id,
             pipeline_id=pipeline.id,
@@ -460,6 +543,8 @@ async def create_snapshot_from_live_graph(
             parameter_bindings_json=parameter_bindings or None,
             guardrail_pins_json=guardrail_pins,
             guardrail_pins_fingerprint=guardrail_pins_fingerprint,
+            policy_gate_pins_json=policy_gate_pins,
+            policy_gate_pins_fingerprint=policy_gate_pins_fingerprint,
             run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
             default_autonomy_level=pipeline.default_autonomy_level,
             max_autonomy_level=pipeline.max_autonomy_level,
