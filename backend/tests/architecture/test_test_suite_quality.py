@@ -954,6 +954,27 @@ regression that silently weakens the suite:
   empty iterable and a falsy ``while``/``if`` all run their ``else``), so
   asserts there ARE reachable and are deliberately left alone, as are loops
   over iterables whose emptiness depends on runtime state
+- ``assert`` statements that are provably *unable to execute* because a prior
+  statement in the *same* statement list unconditionally transfers control
+  before them — a bare ``return``/``raise`` unwinding the enclosing function,
+  or a bare ``break``/``continue`` unwinding the enclosing loop — *in any
+  nested scope*, not just the function top level. A statement after an
+  unconditional transfer can never run, so the assert is dead verification
+  that reports green no matter how broken the code under test is — the same
+  silent-false-green hazard as the function-top-level unreachable-assert lens
+  and the dead-scope lens, in bodies those two provably do not reach: the
+  unreachable-assert lens walks only the function's top-level statement list
+  (and only ``return``/``raise``), and the dead-scope lens walks only the
+  bodies of statically-empty or statically-false containers. An ``assert``
+  trailing a ``break`` inside a ``for`` that iterates runtime data (``for item
+  in items: break; assert item``), or a ``continue``/``return``/``raise`` twin
+  inside an ``if``/``elif``/``else`` branch, a ``while``, a ``with``, or a
+  ``try``/``except``/``finally`` block, is the remaining gap — almost always a
+  leftover from temporarily short-circuiting a loop while debugging. Only a
+  *direct* statement of the same list counts; a transfer behind a branch
+  (``if cond: break`` — the conditional early-exit idiom) leaves the assert
+  live, because the branch is not taken in every iteration, and function/
+  class top-level bodies stay owned by the unreachable-assert lens
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -13476,3 +13497,153 @@ def test_dead_scope_lens_flags_never_run_asserts():
     )
     found = _dead_scope_assert_violations(ast.parse(mixed_nested))
     assert [lineno for lineno, _ in found] == [4], f"dead-scope reachability split wrong: {found}"
+
+
+def _superseded_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` that is provably
+    dead because an earlier *direct* statement in the same statement list
+    unconditionally transfers control before it — ``return``/``raise``
+    unwinding the enclosing function, or ``break``/``continue`` unwinding the
+    enclosing loop — in any nested scope.
+
+    A statement after an unconditional transfer can never execute, so such an
+    assert reports green no matter how broken the behaviour under test is. The
+    unreachable-assert lens owns only the function top-level statement list
+    (and only ``return``/``raise``); the dead-scope lens owns only the bodies
+    of statically-empty/statically-false containers; every other body — a
+    ``for`` over runtime data, an ``if``/``elif``/``else`` branch, a ``while``,
+    a ``with``, a ``try``/``except``/``finally`` block — that reaches an
+    ``assert`` only through a bare ``break``/``continue``/``return``/``raise``
+    in the same list is this lens's gap. Only a *direct* statement of the list
+    counts: a transfer behind a branch (``if cond: break``) leaves the assert
+    live, because the branch is not taken in every iteration, and function/
+    class top-level bodies stay owned by the unreachable-assert lens.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _report(fn_name: str, stmt: ast.Assert) -> None:
+        found.append(
+            (
+                stmt.lineno,
+                (
+                    f"assert {ast.unparse(stmt.test)} in {fn_name} is unreachable — a direct "
+                    "return/raise/break/continue in the same statement list transfers control "
+                    "before it, so this assertion can never execute"
+                ),
+            )
+        )
+
+    def _scan(stmts: list[ast.stmt], fn_name: str, count_dead: bool) -> None:
+        dead = False
+        for stmt in stmts:
+            if dead:
+                if count_dead and isinstance(stmt, ast.Assert):
+                    _report(fn_name, stmt)
+                continue
+            if isinstance(stmt, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+                dead = True
+                continue
+            if isinstance(stmt, ast.If):
+                _scan(stmt.body, fn_name, True)
+                _scan(stmt.orelse, fn_name, True)
+            elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+                _scan(stmt.body, fn_name, True)
+                _scan(stmt.orelse, fn_name, True)
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                _scan(stmt.body, fn_name, True)
+            elif isinstance(stmt, ast.Try):
+                _scan(stmt.body, fn_name, True)
+                for handler in stmt.handlers:
+                    _scan(handler.body, fn_name, True)
+                _scan(stmt.orelse, fn_name, True)
+                _scan(stmt.finalbody, fn_name, True)
+            elif isinstance(stmt, ast.Match):
+                for case in stmt.cases:
+                    _scan(case.body, fn_name, True)
+
+    for fn in _all_nodes(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _scan(fn.body, fn.name, False)
+    return found
+
+
+def test_no_asserts_superseded_by_control_transfer():
+    """An ``assert`` that follows a *direct* unconditional control transfer in
+    the same statement list — ``return``/``raise`` unwinding the function or
+    ``break``/``continue`` unwinding the loop, in any nested scope — can never
+    execute, so it verifies nothing and reports green no matter how broken the
+    guarded behaviour is. The unreachable-assert lens owns only the function
+    top-level body (and only ``return``/``raise``), and the dead-scope lens
+    owns only statically-empty/falsy container bodies; every other body (a
+    ``for`` over runtime data, an ``if``/``elif``/``else`` branch, a ``while``,
+    a ``with``, a ``try``/``except``/``finally`` block) that reaches an assert
+    only through a bare ``break``/``continue``/``return``/``raise`` in the same
+    list is this lens's gap. Move the assert above the transfer, or delete it."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _superseded_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) superseded by an unconditional control transfer.\n"
+        "A statement after a direct return/raise/break/continue in the same body can never run,\n"
+        "so the assert verifies nothing. Move it above the transfer, or delete it.\n"
+        + "\n".join(violations)
+    )
+
+
+def test_control_transfer_lens_flags_dead_asserts():
+    """Synthetic positive/negative control for the superseded-assert lens: it
+    must flag an ``assert`` that follows a *direct* ``return``/``raise``/
+    ``break``/``continue`` in the same nested body, in every supported
+    container (``for``, ``while``, ``if``/``else``, ``with``, ``try``/
+    ``except``/``finally``), and ignore transfer-behind-a-branch idioms and
+    asserts that stay reachable."""
+    positive_sources = [
+        "def test_foo():\n    for item in items:\n        break\n        assert item\n",
+        "def test_foo():\n    for item in items:\n        continue\n        assert item\n",
+        "def test_foo():\n    for item in items:\n        return item\n        assert item\n",
+        "def test_foo():\n    while items:\n        break\n        assert items.pop()\n",
+        "def test_foo():\n    if flag:\n        raise RuntimeError\n        assert never()\n",
+        "def test_foo():\n    if flag:\n        pass\n    else:\n        continue\n        assert never()\n",
+        "def test_foo():\n    with open('f') as fh:\n        return None\n        assert fh.read()\n",
+        "def test_foo():\n    try:\n        probe()\n        return None\n        assert never()\n"
+        "    except ValueError:\n        pass\n",
+        "def test_foo():\n    try:\n        probe()\n    except ValueError:\n        return\n        assert never()\n",
+        "def test_foo():\n    try:\n        probe()\n    finally:\n        raise RuntimeError\n"
+        "        assert never()\n",
+        "async def test_foo():\n    async for item in stream:\n        continue\n        assert item\n",
+        "def test_foo():\n    for item in items:\n        if item:\n            return item\n"
+        "            assert inner_dead()\n",
+        "def test_foo():\n    for item in items:\n        assert first()\n        continue\n        assert second()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _superseded_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    for item in items:\n        assert item\n",
+        "def test_foo():\n    for item in items:\n        if done(item):\n            break\n        assert item\n",
+        "def test_foo():\n    for item in items:\n        continue\n    assert after_loop()\n",
+        "def test_foo():\n    for item in items:\n        assert item\n    else:\n        assert empty()\n",
+        "def test_foo():\n    if cond:\n        return\n    assert x == 1\n",
+        "def test_foo():\n    try:\n        return a\n    except Exception:\n        pass\n    assert x == 1\n",
+        "def test_foo():\n    while True:\n        if done():\n            break\n        assert pending()\n",
+        "def test_foo():\n    assert x\n    return\n",
+        "def test_foo():\n    return value\n",
+        "def test_foo():\n    with open('f') as fh:\n        assert fh.read()\n",
+        "def test_foo():\n    def helper():\n        return 1\n    assert helper() == 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _superseded_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+    split = (
+        "def test_foo():\n    for item in items:\n        assert first()\n        continue\n"
+        "        assert second()\n"
+    )
+    found = _superseded_assert_violations(ast.parse(split))
+    assert [lineno for lineno, _ in found] == [5], f"live/dead split wrong: {found}"
