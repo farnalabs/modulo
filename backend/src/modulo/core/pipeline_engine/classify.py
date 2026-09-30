@@ -65,7 +65,10 @@ per URL, how it was harvested (``declared`` = the run's own output contract
 asserted it; ``matched`` = it merely appears in emitted output), and
 ``delivery_confidence`` states plainly that every record written today is
 ``self_reported``. Neither key changes the verdict: a ``matched``-only URL
-still classifies ``delivered`` (the delivery rule is unchanged).
+still classifies ``delivered`` (the delivery rule is unchanged). The eight-key
+shape is forward-only: rows written before this change are six-key, are never
+backfilled, and readers must treat an absent ``pr_url_provenance`` /
+``delivery_confidence`` key on an older row as legacy/unknown, not an error.
 
 Terminalizers that write ``status='failed'`` via RAW SQL (never touching the
 crud/run.py hook) leave ``run_classification = NULL`` forever — those runs are
@@ -376,6 +379,15 @@ def _collect_node_run_pr_urls(
             if url not in seen:
                 seen.add(url)
                 urls.append(url)
+        # KNOWN LIMITATION (FAR-1336, conservative): the accessor falls back to
+        # the legacy INNER OUTPUT of ``outputs_json`` when the node has no
+        # telemetry entry, so a URL only reachable down this leg gets labelled
+        # ``matched`` even though its source is the node's return (the field
+        # defines ``declared`` = came from the structured return). Attributing
+        # by source would need the accessor's dispatch rule re-derived here (a
+        # second source of truth that can drift) or a source tag from
+        # ``node_output_split`` — the direction understates provenance, never
+        # overstates it, so it is left as-is.
         telemetry_value = node_telemetry(telemetry_json, outputs_json, node_id)
         if telemetry_value is not None:
             telemetry_url = _extract_pr_url_from_node(telemetry_value)
@@ -435,12 +447,17 @@ def collect_pr_urls(
     FAR-1336: pass a *provenance* dict to have it filled, in the SAME single
     walk, with one entry per collected URL — ``declared`` (the node's
     structured RETURN asserted it) or ``matched`` (telemetry/marker output
-    only). The map's keys are exactly the returned URL set, and collection
-    order is identical whether or not *provenance* is given.
+    only). The map's keys are exactly the returned URL set — a caller-supplied
+    dict is CLEARED first, so stale pre-seeded entries cannot survive — and
+    collection order is identical whether or not *provenance* is given.
     """
     seen: set[str] = set()
     urls: list[str] = []
     prov: dict[str, str] = provenance if provenance is not None else {}
+    # Make the documented invariant true: the map ends up keyed by EXACTLY the
+    # returned URL set, so any pre-seeded entries a caller hands in are dropped
+    # before the walk fills it (the sole production caller passes a fresh {}).
+    prov.clear()
 
     _collect_node_run_pr_urls(outputs_json, telemetry_json, seen, urls, prov)
     _collect_marker_pr_urls(raw_output_markers, seen, urls, prov)

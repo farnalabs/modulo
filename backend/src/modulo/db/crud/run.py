@@ -2209,6 +2209,16 @@ class _RunStatusUpdate:
     not_status: str | None = None
 
 
+#: Stall bound for the fail-closed marker write below. Deliberately a
+#: MODULE-LOCAL value mirroring ``classify._CLASSIFICATION_WRITE_TIMEOUT_SECONDS``
+#: (30s) rather than an import of it: this module is the fallback for when
+#: importing ``classify`` itself raised, so it may not reach into that module
+#: (and the ``db-does-not-import-core`` contract forbids a new core import
+#: either) — the value is duplicated on purpose, the shape it protects is held
+#: in lockstep by the anti-drift test in test_run_classification.py.
+_MARKER_WRITE_TIMEOUT_SECONDS = 30.0
+
+
 async def _write_unclassified_classification(session: AsyncSession, run: Run) -> None:
     """Fail-closed marker write for a terminal run the classifier could not process.
 
@@ -2217,30 +2227,44 @@ async def _write_unclassified_classification(session: AsyncSession, run: Run) ->
     self-contained (no ``classify`` import). A terminal run must NEVER commit
     with ``run_classification = NULL`` (a missing record breaks the FAR-190
     walk); the ``unclassified`` marker is what keeps the walk alive.
-    Best-effort and NEVER raises.
+    Best-effort and NEVER raises (cancellation excepted).
+
+    Structurally mirrors its twin ``classify._write_unclassified_marker``: the
+    UPDATE runs inside a SAVEPOINT so a server-side statement error rolls back
+    ONLY this write — a bare ``try/except`` cannot un-poison the caller's
+    aborted Postgres transaction, whose commit would then silently roll back
+    the already-flushed terminal status (the hazard documented on
+    :func:`_enforce_one_pr_per_run`) — and the statement is bounded by
+    ``_MARKER_WRITE_TIMEOUT_SECONDS`` so a stalled UPDATE cannot block
+    terminalization indefinitely (asyncpg sets no ``command_timeout``).
     """
-    try:
-        await session.execute(
-            update(Run)
-            .where(Run.id == run.id)
-            .values(
-                run_classification={
-                    "value": "unclassified",
-                    "reason": "classifier_error",
-                    "delivered_pr_urls": [],
-                    "computed_at": datetime.now(UTC).isoformat(),
-                    "work_intact": None,
-                    "declared_success_nodes": 0,
-                    # FAR-1336: provenance/confidence values are literals on
-                    # purpose — this module must stay self-contained (no
-                    # ``classify`` import, see the docstring above). The shape
-                    # is held in lockstep with ``classify._unclassified_marker_dict``
-                    # by an anti-drift test in test_run_classification.py.
-                    "pr_url_provenance": {},
-                    "delivery_confidence": "self_reported",
-                }
+
+    async def _do() -> Any:
+        async with session.begin_nested():
+            return await session.execute(
+                update(Run)
+                .where(Run.id == run.id)
+                .values(
+                    run_classification={
+                        "value": "unclassified",
+                        "reason": "classifier_error",
+                        "delivered_pr_urls": [],
+                        "computed_at": datetime.now(UTC).isoformat(),
+                        "work_intact": None,
+                        "declared_success_nodes": 0,
+                        # FAR-1336: provenance/confidence values are literals on
+                        # purpose — this module must stay self-contained (no
+                        # ``classify`` import, see the docstring above). The shape
+                        # is held in lockstep with ``classify._unclassified_marker_dict``
+                        # by an anti-drift test in test_run_classification.py.
+                        "pr_url_provenance": {},
+                        "delivery_confidence": "self_reported",
+                    }
+                )
             )
-        )
+
+    try:
+        await asyncio.wait_for(_do(), timeout=_MARKER_WRITE_TIMEOUT_SECONDS)
     except asyncio.CancelledError:
         raise
     except Exception:

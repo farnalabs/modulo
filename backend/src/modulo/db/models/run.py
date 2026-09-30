@@ -376,7 +376,10 @@ class Run(OrgScoped):
     # delivered_pr_urls are self-reported by the run's own output and
     # UNVERIFIED against an SCM; pr_url_provenance records how each URL was
     # harvested and delivery_confidence states that plainly (self_reported,
-    # FAR-1336). UNIQUE(run_id) is the runs PK; the record is
+    # FAR-1336). The eight-key shape is forward-only: rows written before
+    # FAR-1336 are six-key and are never backfilled, so readers must treat an
+    # absent pr_url_provenance/delivery_confidence key as legacy/unknown, not
+    # an error. UNIQUE(run_id) is the runs PK; the record is
     # written atomically with terminalization by the shared fenced terminal
     # write (crud/run) and refreshed (upsert) on re-terminalization. Generic
     # JSON here for SQLite/MariaDB parity (the run_classification precedent).

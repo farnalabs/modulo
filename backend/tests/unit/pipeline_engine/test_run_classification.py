@@ -447,7 +447,7 @@ class TestDeliveryProvenance:
         engine: AsyncEngine,
         session: AsyncSession,
     ) -> None:
-        """ANTI-DRIFT (FAR-1336): the TWO ``unclassified`` writers emit the SAME key set.
+        """ANTI-DRIFT (FAR-1336): the TWO ``unclassified`` writers emit the SAME record.
 
         ``classify._unclassified_marker_dict`` and the fail-closed fallback
         ``db.crud.run._write_unclassified_classification`` are deliberately
@@ -456,11 +456,16 @@ class TestDeliveryProvenance:
         nothing in code forces them into lockstep. This test does: it drives
         the real crud writer against the sqlite fixture and reads the persisted
         record back (never importing the fallback's private literal), then
-        asserts its key set equals ``classify._unclassified_marker_dict()`` AND
-        the explicit eight-key record shape. It exists so the two shapes cannot
-        silently drift — reviewer precedent: "dual gates kept in lockstep
+        compares the FULL record VALUE-BY-VALUE against
+        ``classify._unclassified_marker_dict()`` (minus the wall-clock
+        ``computed_at``), pins the serialised literals as plain strings, and
+        keeps the explicit eight-key shape. A key-set check alone would wave a
+        VALUE drift through (e.g. the crud literal reading
+        ``"delivery_confidence": "verified"``, a non-empty
+        ``pr_url_provenance``, or a renamed ``reason``), so the comparison is
+        value-level. Reviewer precedent: "dual gates kept in lockstep
         (anti-drift) with planted-violation proof". The test FAILS if either
-        writer adds, drops or renames a key.
+        writer adds, drops, renames OR re-values a key.
         """
         from modulo.core.pipeline_engine.classify import _unclassified_marker_dict
         from modulo.db.crud.run import _write_unclassified_classification
@@ -471,10 +476,23 @@ class TestDeliveryProvenance:
             await _write_unclassified_classification(session, run)
         record = await _read_classification(engine, run_id)
         assert record is not None
+        # Writer A (the crud fallback, observed via its PERSISTED output) vs
+        # writer B (classify) — the value-level lockstep assertion: identical
+        # once the non-deterministic wall-clock ``computed_at`` is dropped.
+        observed = dict(record)
+        expected = _unclassified_marker_dict()
+        observed.pop("computed_at", None)
+        expected.pop("computed_at", None)
+        assert observed == expected
+        # The serialised WIRE literals, pinned as explicit strings (never the
+        # module constants), so renaming ``REASON_UNCLASSIFIED`` or
+        # ``DELIVERY_CONFIDENCE_SELF_REPORTED`` cannot silently change the
+        # persisted format.
         assert record["value"] == "unclassified"
-        # Writer A (crud fallback, observed via its persisted output) vs
-        # writer B (classify) — the lockstep assertion.
-        assert set(record) == set(_unclassified_marker_dict())
+        assert record["reason"] == "classifier_error"
+        assert record["delivery_confidence"] == "self_reported"
+        assert not record["delivered_pr_urls"]
+        assert not record["pr_url_provenance"]
         # ...and against the canonical eight-key shape, so a SIMULTANEOUS drift
         # of both builders is caught too.
         assert set(record) == {
@@ -545,6 +563,16 @@ class TestDeliveryProvenance:
         assert set(provenance) == set(urls)
         for provenance_value in provenance.values():
             assert provenance_value in PR_URL_PROVENANCE_VALUES
+
+    def test_provenance_outparam_is_cleared_before_filling(self) -> None:
+        """A caller-supplied provenance dict is CLEARED first (FAR-1336), so
+        the documented invariant — "the map's keys are exactly the returned
+        URL set" — stays true for a pre-seeded dict instead of yielding a
+        superset of stale entries."""
+        preseeded: dict[str, str] = {_PR_2: PR_URL_PROVENANCE_MATCHED}
+        urls = collect_pr_urls({"n1": _node_return_with_pr(_PR)}, {"n1": {}}, None, preseeded)
+        assert urls == [_PR]
+        assert preseeded == {_PR: PR_URL_PROVENANCE_DECLARED}
 
 
 def _email_markers(*attempt_keys: str) -> dict[str, dict[str, Any]]:
