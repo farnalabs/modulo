@@ -144,6 +144,24 @@ export const usePlanStore = defineStore("plan", () => {
     return currentRank >= minRank;
   }
 
+  /**
+   * True when `tierId` is the free community tier — i.e. the lowest tier in
+   * the catalog. FAR-1283: `FeatureGate` uses this to keep a disabled
+   * community-tier flag's banner tier-accurate (no "team feature" / "upgrade"
+   * copy for a capability no plan upgrade can grant). An UNKNOWN tier id
+   * returns false, so a newly added tier keeps the (conservative) upgrade
+   * wording rather than being mislabelled community.
+   */
+  function isCommunityTier(tierId: string): boolean {
+    const communityRank = tierRanks.value.community;
+    const rank = tierRanks.value[tierId];
+    if (rank === undefined) return false;
+    // Before the tier catalog lands, fall back to the id itself so a gate on
+    // `community` is not labelled a paid feature while ranks are still empty.
+    if (communityRank === undefined) return tierId === "community";
+    return rank === communityRank;
+  }
+
   let fetchPlanPromise: Promise<void> | null = null;
 
   function applyFeatureFlagsPayload(res: ApiResult<FeatureFlagsPayload>, apiErrors: string[]): void {
@@ -318,6 +336,7 @@ export const usePlanStore = defineStore("plan", () => {
     featureEnabled,
     getTierLabel,
     isAtMinimumTier,
+    isCommunityTier,
     fetchOrgFlagOverride,
     setOrgFlagOverride,
     disposeHandlers,
