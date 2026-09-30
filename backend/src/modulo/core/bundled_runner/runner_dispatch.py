@@ -1239,6 +1239,9 @@ async def run_bundled_runner_node(
     script_lease_claimed = False
     output_json: Any = None
     start_time = time.monotonic()
+    # FAR-1315: set once this node's run-scoped one-PR guard install ran (so
+    # the finally settles the ledger slot only for nodes that actually armed).
+    _single_pr_guard_armed = False
 
     try:
         # Guard A (delivery-sentinel skip) — shared with the E2B path.
@@ -1297,6 +1300,52 @@ async def run_bundled_runner_node(
         dispatch_marker_set = True
         provider_ref = provision.provider_ref
         provider = route.provider
+
+        # FAR-1315: the one-PR-per-run ``gh`` guard on the Bundled Runner
+        # tier. The engine's sandbox-policy step (E2B-only) never runs on this
+        # dispatch branch — it returns to ``run_bundled_runner_node`` before
+        # the policy block — so a flagged node installs the SAME run-scoped
+        # shim here through the provider's exec primitive. The shared run
+        # LEDGER decides: the first flagged node of the run gets the live
+        # guard, a later or concurrent one gets a pre-planted refusal. Any
+        # absence or failure is surfaced LOUDLY at dispatch naming the tier
+        # (silent absence on a non-E2B tier is exactly the gap this closes).
+        if node_def.get("single_pr_per_run") is True:
+            _single_pr_guard_armed = True
+            from modulo.core.pipeline_engine.sandbox_policy import install_gh_pr_guard_via_exec
+
+            async def _guard_exec(command: list[str]) -> Any:
+                return await provider.exec_command(provider_ref, command, cmd_timeout=30)
+
+            _guard_install = await install_gh_pr_guard_via_exec(
+                _guard_exec,
+                run_scope=run_id,
+                guard_owner=node_id,
+            )
+            if _guard_install.status in ("absent", "failed"):
+                _log.warning(
+                    "runner_dispatch.gh_pr_guard_unavailable: tier=%s status=%s node=%s run=%s detail=%s",
+                    route.provider_type,
+                    _guard_install.status,
+                    node_id,
+                    run_id,
+                    (_guard_install.detail or "no detail")[:300],
+                )
+            elif _guard_install.status == "pre_planted":
+                _log.warning(
+                    "runner_dispatch.gh_guard_run_claim_denied: tier=%s node=%s run=%s - "
+                    "pre-planted refusal, this node cannot create a PR (FAR-1315)",
+                    route.provider_type,
+                    node_id,
+                    run_id,
+                )
+            else:
+                _log.info(
+                    "runner_dispatch.gh_pr_guard_installed: tier=%s node=%s run=%s",
+                    route.provider_type,
+                    node_id,
+                    run_id,
+                )
 
         sandbox_envs, script_lease_claimed = await _resolve_sandbox_envs_with_script_setup(
             node_def=node_def,
@@ -1529,6 +1578,26 @@ async def run_bundled_runner_node(
             exclude_from_output=frozenset({"changed_files", "pr_url"}),
         )
     finally:
+        # FAR-1315: settle this node's run-scoped one-PR guard slot (only if
+        # the install ran above). Exception-safe and best-effort: observed
+        # claim sentinel in the captured streams -> the run's ledger claim is
+        # SPENT for every later flagged node; no sentinel -> this node's hold
+        # is RELEASED so a later flagged node can still claim. Streams bound
+        # inside the try are read through ``locals()`` (same pattern the E2B
+        # path uses); an unbound stream (failure before capture) simply
+        # contributes nothing and the slot is released.
+        if _single_pr_guard_armed:
+            try:
+                from modulo.core.pipeline_engine.sandbox_policy import settle_run_pr_guard
+
+                settle_run_pr_guard(
+                    run_id,
+                    node_id,
+                    locals().get("agent_stdout_raw"),
+                    locals().get("agent_stderr_raw"),
+                )
+            except Exception:
+                _log.debug("runner_dispatch.gh_guard_settle_failed", exc_info=True)
         await _teardown_and_clear(
             route=route,
             session_factory=session_factory,

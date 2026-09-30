@@ -39,7 +39,9 @@ when the agent runs:
     untouched. Coverage is bounded: ``gh api`` PR creation, a ``gh`` copy
     outside the PATH, shell aliases/functions, a ``gh`` installed into the
     PATH after the install, and every non-E2B dispatch (docker / local) are
-    NOT intercepted — non-E2B runners are simply not covered. The
+    NOT intercepted — non-E2B runners are simply not covered unless the
+    FAR-1315 exec install below lands the shim (it does not on the shipped
+    runner image; see that bullet). The
     one-PR-per-run guarantee is this shim TOGETHER WITH the post-run
     detection + admin alert (FAR-1274); neither half prevents a second PR
     alone. The claim is held only for a create that SUCCEEDED — a non-zero
@@ -47,6 +49,27 @@ when the agent runs:
     attempt — and the install's own diagnostics (including the "no gh on
     PATH" case, where the shim is ABSENT) are mirrored into the policy log
     rather than discarded with the step result.
+  - ``single_pr_per_run`` RUN scope across nodes (FAR-1315): the marker above is
+    per-SANDBOX, so two flagged nodes in one run would each install a fresh,
+    claimable marker and could produce two PRs. A platform-side claim LEDGER
+    keyed by the run id (``acquire_run_pr_guard`` / ``settle_run_pr_guard`` -
+    process-local, shared by every node of the run in the engine process) fixes
+    that: the FIRST flagged node of a run installs the live guard, every later
+    flagged node installs a PRE-PLANTED refusal (its marker directory already
+    exists, so its first ``gh pr create`` is refused without calling gh). The
+    shim prints a fixed claim sentinel to stdout after a successful create; the
+    dispatch layer settles the node's slot from the captured output when the
+    node finishes (observed -> the run's claim is SPENT for everyone; not
+    observed -> the slot is RELEASED so a later flagged node still gets its
+    chance). What is shared is the LEDGER, never the sandbox filesystem: the
+    claim marker itself stays inside each sandbox. See
+    ``docs/product-map/core/runtime-provider-core.md`` for the exact coverage
+    boundary (including the process-locality limitation).
+  - Non-E2B tiers (FAR-1315): ``apply_sandbox_policy`` runs in the E2B sandbox
+    only. ``install_gh_pr_guard_via_exec`` installs the SAME shim (with the same
+    ledger plan) through any provider's ``exec_command`` primitive - the Bundled
+    Runner (``runner_docker``) dispatch calls it for flagged nodes and surfaces a
+    LOUD warning naming the tier when the guard could not be installed.
 
 The enforcement is REAL (the sandbox cannot write / egress is scoped), never a
 declared flag. Script builders are pure string functions (unit-testable without
@@ -69,6 +92,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
+import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST as _GIT_ALLOWED_HOST
@@ -111,10 +138,18 @@ _AGENT_GIT_CONFIG = f"{_WORKSPACE}/.gitconfig"
 # FAR-1264: the marker ROOT. ``/tmp`` is deliberately OUTSIDE the read-only
 # workspace seal (``build_read_only_script`` only chmods ``/home/user``), so
 # the agent user can always claim the marker at ``gh pr create`` time even on
-# a read-only node. The E2B sandbox is created per run (and destroyed after
-# it), so a marker under /tmp is run-scoped by construction; ``run_scope``
-# (the run id) additionally keys the marker so a workspace that somehow
-# outlived its run can never leak a claimed marker into the next run.
+# a read-only node. ``run_scope`` (the run id) keys the marker so a workspace
+# that somehow outlived its run can never leak a claimed marker into the next
+# run.
+#
+# FAR-1315 CORRECTION: the marker is scoped to a run only WITHIN ONE sandbox.
+# Each sandbox node provisions its own workspace, so a pipeline with TWO
+# flagged nodes has two separate marker filesystems and two independently
+# claimable markers — run-scoping the NAME does not stop one PR per node.
+# The cross-node guarantee is the platform-side run ledger above
+# (``acquire_run_pr_guard`` / ``settle_run_pr_guard``): the second node's
+# install is DENIED by the ledger and pre-plants its marker instead. What is
+# shared across nodes is that ledger (process-local), never this /tmp marker.
 #
 # The /tmp root is a deliberate, code-reviewed S5443 tradeoff — not an
 # unchecked host tempfile. It is a fixed in-SANDBOX path that must survive the
@@ -129,9 +164,136 @@ _AGENT_GIT_CONFIG = f"{_WORKSPACE}/.gitconfig"
 _GH_PR_GUARD_MARKER_ROOT = "/tmp"  # noqa: S108  # nosec B108  # NOSONAR S5443 - documented run-scoped in-sandbox marker root (see block comment above)
 
 # Scope fragments are embedded in a filesystem path and single-quoted into a
-# shell script — reduce them to a safe alphabet instead of raising (the guard
+# shell script - reduce them to a safe alphabet instead of raising (the guard
 # step is best-effort; it must never fail the dispatch).
 _GH_PR_GUARD_SCOPE_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+# FAR-1315: the claim SENTINEL the shim prints on stdout after its
+# ``gh pr create`` exited 0. The dispatch layer scans the platform-captured
+# node output for this exact string and, on a hit, marks the run's ledger claim
+# SPENT - which is how node N+1's guard install learns that node N really did
+# create a PR (the sandbox filesystem where the marker lives is destroyed with
+# node N's sandbox, so the sentinel in the captured transcript is the only
+# cross-node observation channel). stdout is the right stream: the agent
+# command's output is captured with ``2>&1`` on every dispatch path, and the
+# platform already relies on stdout capture for PR-URL extraction.
+_GH_PR_GUARD_CLAIM_SENTINEL = "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED"
+
+# Installer-outcome substrings (emitted by ``build_gh_pr_guard_script`` on
+# stderr; kept as constants so the script text and the classifier that reads it
+# back cannot drift apart).
+_GH_PR_GUARD_NO_GH_NOTE = "no gh on PATH"
+_GH_PR_GUARD_PRE_PLANT_FAILED_NOTE = "could not pre-plant"
+
+# ---------------------------------------------------------------------------
+# FAR-1315: the platform-side run claim ledger.
+#
+# A dict keyed by the sanitised run scope, mapping to (state, owner) where
+# state is ``"held"`` (a flagged node currently owns the run's one-PR slot) or
+# ``"spent"`` (a create succeeded somewhere in this run) and owner identifies
+# the holding node (so only THAT node can release its own hold - a node whose
+# install was denied must never release the holder's slot). Process-local:
+# every node of a run executes in the engine process, so the dict IS the
+# shared state the second node observes; it is deliberately NOT a claim about
+# cross-process durability (documented in the product map). Lock-guarded
+# because flagged nodes may execute concurrently in one event loop.
+# ---------------------------------------------------------------------------
+
+_RUN_PR_GUARD_CLAIMS: dict[str, tuple[str, str]] = {}
+_RUN_PR_GUARD_LOCK = threading.Lock()
+
+
+def _run_pr_guard_key(run_scope: str | None) -> str | None:
+    """Normalise a run scope into a ledger key, or ``None`` when unscoped.
+
+    UUID-shaped scopes are canonicalised (``str(uuid.UUID(x))``) so the key is
+    identical no matter which string form each call site threads (the E2B path
+    canonicalises through ``WorkspaceSpec.run_id``; dispatch sites pass the raw
+    run id). Non-UUID scopes fall back to the same sanitisation the marker path
+    uses. An empty/absent scope returns ``None``: no run id means no cross-node
+    sharing, and callers keep the pre-FAR-1315 live-guard behaviour.
+    """
+    if not run_scope:
+        return None
+    text = str(run_scope)
+    try:
+        return str(uuid.UUID(text))
+    except (ValueError, AttributeError, TypeError):
+        scope = _GH_PR_GUARD_SCOPE_RE.sub("_", text)[:64].strip("._-")
+        return scope or None
+
+
+def acquire_run_pr_guard(run_scope: str | None, guard_owner: str | None = None) -> str:
+    """Atomically take the run's one-PR guard slot. Returns the claim status.
+
+    Statuses: ``"acquired"`` (this node may install the LIVE guard - either it
+    took the free slot or it re-acquires its OWN hold, so a node retry installs
+    normally), ``"spent"`` (a create already succeeded in this run - install a
+    pre-planted refusal), ``"held"`` (a DIFFERENT node of this run holds the
+    slot - install a pre-planted refusal; this is the concurrent-node case),
+    ``"unscoped"`` (no run id - live guard, no sharing possible).
+    """
+    key = _run_pr_guard_key(run_scope)
+    if key is None:
+        return "unscoped"
+    owner = guard_owner or ""
+    with _RUN_PR_GUARD_LOCK:
+        entry = _RUN_PR_GUARD_CLAIMS.get(key)
+        if entry is None:
+            _RUN_PR_GUARD_CLAIMS[key] = ("held", owner)
+            return "acquired"
+        state, entry_owner = entry
+        if state == "spent":
+            return "spent"
+        return "acquired" if entry_owner == owner else "held"
+
+
+def settle_run_pr_guard(
+    run_scope: str | None,
+    guard_owner: str | None,
+    *streams: str | None,
+) -> str:
+    """Settle this node's ledger slot from its captured output. Returns:
+
+    ``"spent"`` - the claim sentinel was observed in *streams* (this node's
+    ``gh pr create`` succeeded), so the run's slot is now spent for every later
+    flagged node; ``"released"`` - no sentinel and this owner held the slot, so
+    the hold is dropped and a later flagged node may claim it; ``"noop"`` -
+    this run has no ledger entry for us (never acquired, or another owner's
+    hold) - nothing changes. Never raises: it runs in a dispatch ``finally``.
+    """
+    key = _run_pr_guard_key(run_scope)
+    if key is None:
+        return "noop"
+    owner = guard_owner or ""
+    observed = any(_GH_PR_GUARD_CLAIM_SENTINEL in stream for stream in streams if stream)
+    with _RUN_PR_GUARD_LOCK:
+        entry = _RUN_PR_GUARD_CLAIMS.get(key)
+        if entry is None:
+            return "noop"
+        state, entry_owner = entry
+        if observed:
+            _RUN_PR_GUARD_CLAIMS[key] = ("spent", entry_owner)
+            return "spent"
+        if state == "held" and entry_owner == owner:
+            del _RUN_PR_GUARD_CLAIMS[key]
+            return "released"
+        return "noop"
+
+
+def reset_run_pr_guard_claims() -> None:
+    """Clear the ledger (test/diagnostic seam - never called in production)."""
+    with _RUN_PR_GUARD_LOCK:
+        _RUN_PR_GUARD_CLAIMS.clear()
+
+
+def _gh_pr_guard_plan(run_scope: str | None, guard_owner: str | None) -> tuple[str, bool, str]:
+    """Resolve (marker_path, pre_spent, claim_status) for an install."""
+    marker_path = gh_pr_guard_marker_path(run_scope)
+    status = acquire_run_pr_guard(run_scope, guard_owner)
+    if status in ("held", "spent"):
+        return marker_path, True, status
+    return marker_path, False, status
 
 
 def gh_pr_guard_marker_path(run_scope: str | None = None) -> str:
@@ -388,11 +550,13 @@ _GH_PR_GUARD_FINGERPRINT = "# modulo-gh-pr-guard-shim"
 # FAR-1264: the shim body, embedded verbatim (quoted heredoc) into the install
 # script. Keep it POSIX ``sh`` only (no bashisms — the sandbox agent runs
 # ``sh -c``) and keep REAL_BIN / MARKER as the two header lines the install
-# script writes above it.
+# script writes above it. FAR-1315: f-string so the claim sentinel constant is
+# interpolated verbatim (the body contains no shell braces, verified) — the
+# sentinel and the classifier that reads it back can never drift apart.
 _GH_PR_GUARD_SHIM_BODY = (
     _GH_PR_GUARD_FINGERPRINT
     + "\n"
-    + """\
+    + f"""\
 is_pr_create=0
 saw_pr=0
 expect_val=0
@@ -448,6 +612,13 @@ if mkdir "$MARKER" 2>/dev/null; then
   _rc=$?
   if [ "$_rc" -ne 0 ]; then
     rmdir "$MARKER" 2>/dev/null || true
+  else
+    # FAR-1315: claim SENTINEL on stdout - the only cross-node observation
+    # channel (this sandbox's /tmp marker dies with the sandbox). The platform
+    # scans the captured node output for it and marks the run's ledger claim
+    # spent, so the NEXT flagged node of this run installs a pre-planted
+    # refusal instead of a fresh claimable marker.
+    printf '%s\\n' "{_GH_PR_GUARD_CLAIM_SENTINEL}"
   fi
   exit "$_rc"
 fi
@@ -468,7 +639,7 @@ exec "$REAL_BIN" "$@"
 )
 
 
-def build_gh_pr_guard_script(marker_path: str) -> str:
+def build_gh_pr_guard_script(marker_path: str, *, pre_spent: bool = False) -> str:
     """Build the shell script that installs the one-PR-per-run ``gh`` shim.
 
     FAR-1264. Runs as root before the agent command executes:
@@ -489,12 +660,22 @@ def build_gh_pr_guard_script(marker_path: str) -> str:
          guarded, a stale-scope shim (or a ``gh`` that is not our shim at all)
          is rewritten in place, and only a ``gh`` that genuinely could not be
          guarded is reported as a failure.
-      3. Each shim claims ``marker_path`` atomically (``mkdir``) on its first
-         ``gh pr create``; later ones exit non-zero WITHOUT calling the real
-         gh. The claim is held only for a SUCCESSFUL create — a non-zero exit
-         releases it, so a transient failure (rate limit, empty diff, network)
-         does not burn the run's only attempt. The marker path is embedded at
-         install time and is run-scoped (see :func:`gh_pr_guard_marker_path`).
+       3. Each shim claims ``marker_path`` atomically (``mkdir``) on its first
+          ``gh pr create``; later ones exit non-zero WITHOUT calling the real
+          gh. The claim is held only for a SUCCESSFUL create — a non-zero exit
+          releases it, so a transient failure (rate limit, empty diff, network)
+          does not burn the run's only attempt. The marker path is embedded at
+          install time and is run-scoped (see :func:`gh_pr_guard_marker_path`).
+          On a SUCCESSFUL create the shim also prints the FAR-1315 claim
+          sentinel to stdout (see :data:`_GH_PR_GUARD_CLAIM_SENTINEL`) so the
+          platform can observe the claim after this sandbox is gone.
+       4. FAR-1315 ``pre_spent=True``: the install PRE-PLANTS the claim
+          directory (``mkdir -p "$MARKER"``) before the shim lands, so this
+          node's FIRST ``gh pr create`` is refused by the already-existing
+          marker — the run's one attempt was already spent (or is being held)
+          by an earlier flagged node. A failed plant degrades loudly: it is
+          echoed to stderr (``could not pre-plant``) so the classifier reports
+          the run-scope enforcement as ABSENT rather than silently live.
 
     TAMPER MODEL (explicit — do not overstate what this buys): the claim is an
     in-sandbox marker file under ``/tmp``. It is predictable and writable by
@@ -527,10 +708,21 @@ def build_gh_pr_guard_script(marker_path: str) -> str:
     invocations ``gh pr create ...`` and ``gh --repo X pr create ...`` are
     both handled).
     """
+    # FAR-1315: pre-plant the claim directory when this node's install was
+    # DENIED by the run ledger (spent / held by another node). ``set -e`` is
+    # active, but a command used as an ``if`` condition never triggers it, so
+    # an unwritable marker root degrades to a loud stderr note instead of
+    # aborting the install.
+    pre_plant = (
+        'if ! mkdir -p "$MARKER" 2>/dev/null; then\n'
+        f'  echo "modulo: gh guard: WARNING {_GH_PR_GUARD_PRE_PLANT_FAILED_NOTE} the run claim at $MARKER" >&2\n'
+        "fi\n"
+        if pre_spent
+        else ""
+    )
     return (
         "set -e\n"
-        f"MARKER='{marker_path}'\n"
-        "guard_installed=0\n"
+        f"MARKER='{marker_path}'\n" + pre_plant + "guard_installed=0\n"
         # PATH entries are ':'-separated (E2B sandboxes are Linux); entries
         # containing whitespace are not supported by this word-split (the
         # sandbox image PATH has none).
@@ -599,6 +791,80 @@ def build_gh_pr_guard_script(marker_path: str) -> str:
     )
 
 
+@dataclass(frozen=True)
+class GhPrGuardInstallResult:
+    """FAR-1315 outcome of an exec-based one-PR guard install (non-E2B tiers).
+
+    ``status`` vocabulary:
+
+    - ``"installed"`` — the live guard landed (this node owns the run's slot);
+    - ``"pre_planted"`` — the shim landed with the run's claim already spent /
+      held by another node, so its first ``gh pr create`` is refused;
+    - ``"absent"`` — nothing to guard: no ``gh`` on PATH (the run is NOT
+      platform-guarded — the caller must surface this loudly);
+    - ``"failed"`` — the install could not be verified (non-zero exit, exec
+      error, or a failed pre-plant — i.e. no run-scope enforcement).
+    """
+
+    status: str
+    detail: str
+    marker_path: str
+
+
+def _classify_gh_pr_guard_outcome(exit_code: Any, stderr: str, *, pre_spent: bool) -> tuple[str, str]:
+    """Map an install script result to (status, detail) — shared by both install paths."""
+    detail = (stderr or "").strip()
+    if exit_code != 0:
+        return "failed", detail or f"guard install exited with {exit_code}"
+    if _GH_PR_GUARD_NO_GH_NOTE in detail:
+        return "absent", detail
+    if pre_spent and _GH_PR_GUARD_PRE_PLANT_FAILED_NOTE in detail:
+        # The shim may have landed, but the run-scoped refusal marker did not —
+        # without it the FIRST create in this (already-spent) run would be
+        # allowed: the run-scope enforcement is gone, so report absence loudly.
+        return "failed", detail
+    return ("pre_planted" if pre_spent else "installed"), detail
+
+
+async def install_gh_pr_guard_via_exec(
+    exec_command: Callable[[list[str]], Awaitable[Any]],
+    *,
+    run_scope: str | None,
+    guard_owner: str | None,
+) -> GhPrGuardInstallResult:
+    """Install the one-PR-per-run ``gh`` shim through a provider exec (FAR-1315).
+
+    The non-E2B twin of the guard step inside :func:`apply_sandbox_policy`: it
+    runs the SAME :func:`build_gh_pr_guard_script` (with the same run-ledger
+    plan — first flagged node of the run gets the live guard, later ones get a
+    pre-planted refusal) through an arbitrary provider's ``exec_command``
+    primitive, so a tier whose dispatch never reaches ``apply_isolation`` (the
+    Bundled Runner / ``runner_docker``) still gets the guard. ``exec_command``
+    is a single-argument coroutine the CALLER binds to its provider ref and
+    timeout (the ABC primitive's shape), keeping this module free of any
+    runtime-provider import.
+
+    BEST-EFFORT by contract (parity with the E2B guard step): a failure never
+    raises — it is returned as status ``"failed"``/``"absent"`` for the caller
+    to surface loudly. The ledger claim taken here is settled by the caller
+    via :func:`settle_run_pr_guard` when the node finishes.
+    """
+    marker_path, pre_spent, _claim_status = _gh_pr_guard_plan(run_scope, guard_owner)
+    script = build_gh_pr_guard_script(marker_path, pre_spent=pre_spent)
+    try:
+        result = await exec_command(["sh", "-c", script])
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        return GhPrGuardInstallResult("failed", f"{type(exc).__name__}: {exc}"[:500], marker_path)
+    status, detail = _classify_gh_pr_guard_outcome(
+        getattr(result, "exit_code", None),
+        str(getattr(result, "stderr", "") or ""),
+        pre_spent=pre_spent,
+    )
+    return GhPrGuardInstallResult(status, detail[:1000], marker_path)
+
+
 async def apply_sandbox_policy(
     sandbox: Any,
     *,
@@ -610,6 +876,7 @@ async def apply_sandbox_policy(
     command_timeout: float = 60.0,
     single_pr_per_run: bool = False,
     run_scope: str | None = None,
+    guard_owner: str | None = None,
 ) -> None:
     """Run the enforced sandbox policy in the sandbox (FAR-212 PR B).
 
@@ -666,6 +933,18 @@ async def apply_sandbox_policy(
     caller-controlled text is interpolated into the shell scripts. The flag
     is the ONLY trigger: a non-empty ``delivery_sentinel`` never arms the
     guard (it keeps its FAR-228 idempotency meaning alone).
+
+    FAR-1315 (run scope across MULTIPLE flagged nodes): the marker filesystem
+    lives inside THIS sandbox, so run-scoping the marker name alone still
+    allows one PR per node. ``guard_owner`` (the node id) plus ``run_scope``
+    are therefore first claimed against the process-local run ledger
+    (:func:`acquire_run_pr_guard`): the first flagged node of a run installs
+    the LIVE guard; a later one (or a concurrent one) finds the slot
+    held/spent and installs a PRE-PLANTED refusal instead — a warning names
+    the claim status so the denial is observable. The claim is settled by the
+    dispatch layer from the node's captured output
+    (:func:`settle_run_pr_guard`); an unscoped call (no ``run_scope``) keeps
+    the pre-FAR-1315 behaviour exactly (live guard, no ledger entry).
     """
 
     async def _run_step(script: str, *, user: str, enforce: bool) -> Any:
@@ -717,8 +996,23 @@ async def apply_sandbox_policy(
         # is logged-and-continued and the run degrades to the prompt-level
         # guard — never raises into the dispatch. Runs BEFORE the read-only
         # seal (it writes: system PATH dirs + /tmp).
+        #
+        # FAR-1315: claim the run's one-PR slot FIRST. A denied claim
+        # ("spent" — a create already succeeded in this run; "held" — a
+        # CONCURRENT flagged node owns the slot) flips the install to a
+        # pre-planted refusal and is logged loudly, so a second flagged node
+        # can never install a fresh claimable marker in the same run.
+        _marker_path, _pre_spent, _claim_status = _gh_pr_guard_plan(run_scope, guard_owner)
+        if _pre_spent:
+            _log.warning(
+                "sandbox_policy.gh_guard_run_claim_denied: claim=%s scope=%s owner=%s - "
+                "installing a pre-planted refusal for this node (FAR-1315)",
+                _claim_status,
+                _run_pr_guard_key(run_scope),
+                guard_owner,
+            )
         _guard_result = await _run_step(
-            build_gh_pr_guard_script(gh_pr_guard_marker_path(run_scope)),
+            build_gh_pr_guard_script(_marker_path, pre_spent=_pre_spent),
             user="root",
             enforce=False,
         )
@@ -734,6 +1028,8 @@ async def apply_sandbox_policy(
 
 
 __all__ = [
+    "GhPrGuardInstallResult",
+    "acquire_run_pr_guard",
     "apply_sandbox_policy",
     "build_egress_selected_script",
     "build_gh_pr_guard_script",
@@ -742,4 +1038,7 @@ __all__ = [
     "build_git_scoped_script",
     "build_read_only_script",
     "gh_pr_guard_marker_path",
+    "install_gh_pr_guard_via_exec",
+    "reset_run_pr_guard_claims",
+    "settle_run_pr_guard",
 ]

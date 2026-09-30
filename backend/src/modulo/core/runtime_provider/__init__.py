@@ -310,6 +310,14 @@ class IsolationPolicy:
     node's validated multi-host mapping (host -> env-var name) for
     ``scoped`` credentials; ``command_timeout`` bounds each in-sandbox
     step.
+
+    ``guard_owner`` (FAR-1315) is the identity of the NODE claiming the
+    run's one-PR guard slot (the node id). It rides this carrier alongside
+    ``single_pr_per_run`` so ``sandbox_policy``'s run ledger can tell
+    "the same node re-claiming its own slot" (allowed - node retries) from
+    "a different node of the same run" (denied - installed as a
+    pre-planted refusal). Optional and default ``None``, so every policy
+    built without it behaves exactly as before (unowned claim).
     """
 
     read_only: bool = False
@@ -319,6 +327,7 @@ class IsolationPolicy:
     allowed_hosts: dict[str, str] | None = None
     command_timeout: float = 60.0
     single_pr_per_run: bool = False
+    guard_owner: str | None = None
 
 
 @dataclass(frozen=True)

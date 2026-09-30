@@ -715,3 +715,113 @@ async def test_flagged_node_emits_no_disarm_warning(
     assert not _flag_missing_records(caplog)
     assert len(fake.calls) == 1
     assert fake.calls[0][2].single_pr_per_run is True
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315: guard_owner threading + the dispatch finally settling the ledger
+# ---------------------------------------------------------------------------
+
+
+async def test_helper_threads_guard_owner_into_the_typed_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1315: ``guard_owner`` (the claiming node's identity) rides the SAME
+    typed carrier as the flag from the call site to the provider, and its
+    default stays ``None`` so every policy built without it is unchanged."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+
+    await _apply_isolation_via_provider(
+        "sbx-owner",
+        org_id=_ORG_ID,
+        run_id="run-1",
+        read_only=False,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+        single_pr_per_run=True,
+        guard_owner="n7",
+    )
+    assert fake.calls[0][2].guard_owner == "n7"
+
+    await _apply_isolation_via_provider(
+        "sbx-owner",
+        org_id=_ORG_ID,
+        run_id="run-1",
+        read_only=False,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+    )
+    assert fake.calls[1][2].guard_owner is None
+    assert fake.calls[1][2].single_pr_per_run is False
+
+
+async def test_flagged_node_settles_the_run_claim_ledger_on_finish(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """FAR-1315 wiring: a flagged node settles its run-scoped one-PR slot in
+    the dispatch ``finally`` — keyed by the run id and THIS node's id as the
+    owner — so the next flagged node of the run installs a pre-planted
+    refusal after an observed claim, or a fresh live guard after a
+    claim-less finish."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+    recorded: list[tuple[Any, ...]] = []
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    monkeypatch.setattr(
+        sandbox_policy,
+        "settle_run_pr_guard",
+        lambda *args, **kwargs: recorded.append(args) or "noop",
+    )
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-settle")
+    install_fake_dispatch(monkeypatch, ref="sbx-settle")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert recorded, "a flagged node must settle its run claim slot in the finally"
+    run_scope, owner = recorded[0][0], recorded[0][1]
+    assert run_scope == "run-1"
+    assert owner == "n1"
+    # The captured streams ride along for the sentinel scan.
+    assert len(recorded[0]) > 2
+
+
+async def test_unflagged_node_never_settles_the_run_claim_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """Regression: the settle gate is the explicit flag — a node running the
+    policy step for an enforcement control only must never touch the ledger
+    (its own output could otherwise be mistaken for a claim sentinel)."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+    recorded: list[tuple[Any, ...]] = []
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    monkeypatch.setattr(
+        sandbox_policy,
+        "settle_run_pr_guard",
+        lambda *args, **kwargs: recorded.append(args) or "noop",
+    )
+
+    fn = make_sandbox_agent_fn(_base_node_def())  # read_only=True, NO flag
+    sandbox = await _completed_no_output_sandbox("sbx-settle-off")
+    install_fake_dispatch(monkeypatch, ref="sbx-settle-off")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert not recorded

@@ -25,7 +25,9 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     derive_sandbox_capabilities,
 )
 from modulo.core.pipeline_engine.sandbox_policy import (
+    _GH_PR_GUARD_CLAIM_SENTINEL,
     _GH_PR_GUARD_FINGERPRINT,
+    acquire_run_pr_guard,
     apply_sandbox_policy,
     build_egress_selected_script,
     build_gh_pr_guard_script,
@@ -33,6 +35,9 @@ from modulo.core.pipeline_engine.sandbox_policy import (
     build_git_scoped_script,
     build_read_only_script,
     gh_pr_guard_marker_path,
+    install_gh_pr_guard_via_exec,
+    reset_run_pr_guard_claims,
+    settle_run_pr_guard,
 )
 
 # ---------------------------------------------------------------------------
@@ -726,10 +731,10 @@ def _shim_text(bindir: Path) -> str:
     return (bindir / "gh").read_text(encoding="utf-8")
 
 
-def _install_guard(bindir: Path, workdir: Path, marker: str) -> None:
+def _install_guard(bindir: Path, workdir: Path, marker: str, *, pre_spent: bool = False) -> None:
     posix_bin = _posixify(str(bindir))
     install = workdir / "install.sh"
-    install.write_text(build_gh_pr_guard_script(marker), encoding="utf-8", newline="\n")
+    install.write_text(build_gh_pr_guard_script(marker, pre_spent=pre_spent), encoding="utf-8", newline="\n")
     body = f"PATH={posix_bin}:/usr/bin:/bin\nexport PATH\nsh '{_posixify(str(install))}'\n"
     result = _run_in_sh(body, cwd=workdir)
     assert result.returncode == 0, f"guard install failed: {result.stdout}\n{result.stderr}"
@@ -961,3 +966,218 @@ def test_gh_pr_guard_detects_flag_prefixed_create_and_passes_others_through(tmp_
         "--version",
     ]
     _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+# --- FAR-1315: run-scoped claim across MULTIPLE flagged nodes ---------------
+#
+# The FAR-1264 marker lives inside ONE sandbox, so a pipeline with two flagged
+# nodes had two independently claimable markers (one PR per node). These tests
+# cover the platform-side run ledger that closes that gap: first node holds,
+# concurrent/second nodes are denied, an observed claim spends the slot for the
+# whole run, and a node that never claimed releases its hold.
+
+
+@pytest.fixture(autouse=True)
+def _reset_run_pr_guard_ledger():
+    """Isolate the process-local run claim ledger between tests."""
+    reset_run_pr_guard_claims()
+    yield
+    reset_run_pr_guard_claims()
+
+
+def test_gh_pr_guard_shim_prints_claim_sentinel_on_a_successful_create(tmp_path: Path) -> None:
+    """FAR-1315 observability: a SUCCESSFUL create emits the fixed claim
+    sentinel on stdout; a refused create emits none.
+
+    The sentinel is the only channel by which the platform learns (after this
+    sandbox is destroyed) that the run's one PR was actually created — the
+    dispatch layer scans the captured output for it. The assertion uses the
+    literal text, not the module constant, so it fails behaviourally against a
+    shim that prints nothing."""
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker)
+
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode == 0, f"first create must pass through: {first.stdout}\n{first.stderr}"
+    assert "RUN CLAIM ACQUIRED" in first.stdout, "a successful create must print the FAR-1315 claim sentinel"
+
+    second = _gh(bindir, tmp_path, "gh pr create --title t2")
+    assert second.returncode != 0, "the second create must be refused"
+    assert "RUN CLAIM ACQUIRED" not in second.stdout, "a refused create must never print the claim sentinel"
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+def test_run_pr_guard_ledger_holds_denies_releases_and_spends() -> None:
+    """The ledger's state machine, exercised directly: acquire / concurrent
+    denial / owner-scoped release / sentinel-driven spend, with other runs
+    unaffected."""
+    scope = f"pytest-{uuid.uuid4().hex}"
+    # The first flagged node takes the run's slot...
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    # ...a CONCURRENT second node is denied while it is held...
+    assert acquire_run_pr_guard(scope, "node-2") == "held"
+    # ...the holder re-claiming (a node retry) stays allowed...
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    # ...a DENIED node's settle never releases someone else's hold...
+    assert settle_run_pr_guard(scope, "node-2", None) == "noop"
+    assert acquire_run_pr_guard(scope, "node-2") == "held"
+    # ...no claim observed -> the holder's own settle releases the slot...
+    assert settle_run_pr_guard(scope, "node-1", "created the PR, no sentinel here") == "released"
+    assert acquire_run_pr_guard(scope, "node-2") == "acquired"
+    # ...and an OBSERVED claim spends the slot for the whole run.
+    observed = f"noise {_GH_PR_GUARD_CLAIM_SENTINEL} more noise"
+    assert settle_run_pr_guard(scope, "node-2", observed) == "spent"
+    assert acquire_run_pr_guard(scope, "node-1") == "spent"
+    # A different run is a different slot.
+    assert acquire_run_pr_guard(f"pytest-{uuid.uuid4().hex}", "node-9") == "acquired"
+    # An absent scope keeps the pre-FAR-1315 behaviour: unscoped, never shared.
+    assert acquire_run_pr_guard(None, "node-9") == "unscoped"
+
+
+@pytest.mark.asyncio
+async def test_second_flagged_node_in_one_run_installs_a_pre_planted_refusal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The acceptance criterion, through the real install path: two flagged
+    nodes in ONE run — the first gets a live guard, and once its claim is
+    observed the second install is DENIED and pre-plants the same run-scoped
+    marker, so its first ``gh pr create`` is refused instead of opening a
+    second PR. The denial is logged loudly (claim status + scope + owner)."""
+    scope = str(uuid.uuid4())
+    marker = gh_pr_guard_marker_path(scope)
+
+    node1 = _FakeSandbox()
+    await apply_sandbox_policy(
+        node1,
+        read_only=False,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+        single_pr_per_run=True,
+        run_scope=scope,
+        guard_owner="node-1",
+    )
+    assert len(node1.commands.runs) == 1
+    first_script = node1.commands.runs[0]
+    # The first flagged node gets a LIVE guard: nothing is pre-planted.
+    assert 'mkdir -p "$MARKER"' not in first_script
+    assert marker in first_script
+
+    # The platform observes node-1's claim sentinel in its captured output.
+    assert settle_run_pr_guard(scope, "node-1", f"created {_GH_PR_GUARD_CLAIM_SENTINEL}") == "spent"
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.sandbox_policy"):
+        node2 = _FakeSandbox()
+        await apply_sandbox_policy(
+            node2,
+            read_only=False,
+            git_credentials=None,
+            egress_policy=None,
+            egress_allowlist=None,
+            single_pr_per_run=True,
+            run_scope=scope,
+            guard_owner="node-2",
+        )
+    assert len(node2.commands.runs) == 1
+    second_script = node2.commands.runs[0]
+    # Same run-scoped marker path, but PRE-PLANTED: the marker directory
+    # already exists, so node-2's first create hits the refusal branch.
+    assert marker in second_script
+    assert 'mkdir -p "$MARKER"' in second_script
+    # The denial is observable in the policy log.
+    assert "gh_guard_run_claim_denied" in caplog.text
+    assert "spent" in caplog.text
+
+
+def test_pre_planted_claim_refuses_the_first_create_in_a_second_sandbox(tmp_path: Path) -> None:
+    """The pre-plant MECHANISM, executed: a shim installed with
+    ``pre_spent=True`` refuses the FIRST ``gh pr create`` in its (separate)
+    sandbox without ever calling the real gh — this is what node 2 of a
+    flagged run executes."""
+    bindir = tmp_path / "bin"
+    _fake_gh(bindir)
+    marker = gh_pr_guard_marker_path(f"pytest-{uuid.uuid4().hex}")
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+    _install_guard(bindir, tmp_path, marker, pre_spent=True)
+
+    first = _gh(bindir, tmp_path, "gh pr create --title t")
+    assert first.returncode != 0, "the pre-planted claim must refuse the FIRST create in this sandbox"
+    assert "one-PR-per-run guard" in first.stderr
+    assert not _gh_calls(bindir), "the real gh must never run when the run's claim is already spent"
+    _run_in_sh(f"rm -rf '{marker}'\n", cwd=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_install_gh_pr_guard_via_exec_installs_then_denies() -> None:
+    """The non-E2B install helper (Bundled Runner tier): a live install the
+    first time, a pre-planted refusal for a second node of the SAME run."""
+    scope = str(uuid.uuid4())
+    marker = gh_pr_guard_marker_path(scope)
+    scripts: list[str] = []
+
+    async def _exec_ok(command: list[str]) -> SimpleNamespace:
+        scripts.append(command[-1])
+        return SimpleNamespace(exit_code=0, stderr="")
+
+    first = await install_gh_pr_guard_via_exec(_exec_ok, run_scope=scope, guard_owner="node-1")
+    assert first.status == "installed"
+    assert first.marker_path == marker
+    assert _GH_PR_GUARD_FINGERPRINT in scripts[0]
+    assert 'mkdir -p "$MARKER"' not in scripts[0]
+
+    second = await install_gh_pr_guard_via_exec(_exec_ok, run_scope=scope, guard_owner="node-2")
+    assert second.status == "pre_planted"
+    assert 'mkdir -p "$MARKER"' in scripts[1]
+
+
+@pytest.mark.asyncio
+async def test_install_gh_pr_guard_via_exec_reports_absent_and_failed() -> None:
+    """Absence and failure are returned as loud statuses (never silent): no
+    gh on PATH -> ``absent``; a non-zero install, a failed pre-plant, or a
+    transport error -> ``failed`` with the diagnostic attached."""
+
+    async def _exec_no_gh(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(exit_code=0, stderr="modulo: gh guard: WARNING no gh on PATH; nothing to guard")
+
+    absent = await install_gh_pr_guard_via_exec(_exec_no_gh, run_scope=str(uuid.uuid4()), guard_owner="node-1")
+    assert absent.status == "absent"
+    assert "no gh on PATH" in absent.detail
+
+    async def _exec_nonzero(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(
+            exit_code=1,
+            stderr="modulo: gh guard: FAILED - a gh exists on PATH but none could be guarded",
+        )
+
+    failed = await install_gh_pr_guard_via_exec(_exec_nonzero, run_scope=str(uuid.uuid4()), guard_owner="node-1")
+    assert failed.status == "failed"
+
+    async def _exec_boom(command: list[str]) -> SimpleNamespace:
+        raise RuntimeError("exec transport down")
+
+    boom = await install_gh_pr_guard_via_exec(_exec_boom, run_scope=str(uuid.uuid4()), guard_owner="node-1")
+    assert boom.status == "failed"
+    assert "exec transport down" in boom.detail
+
+
+@pytest.mark.asyncio
+async def test_install_gh_pr_guard_via_exec_failed_pre_plant_is_reported_as_absent() -> None:
+    """A denied claim whose marker could NOT be planted must not be reported
+    as a working guard: without the planted marker the first create in the
+    (already-spent) run would go through — the run-scope enforcement is gone."""
+    scope = str(uuid.uuid4())
+    # Hold the slot with another node so the install is denied (pre-spent).
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+
+    async def _exec_plant_failed(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(
+            exit_code=0,
+            stderr="modulo: gh guard: WARNING could not pre-plant the run claim at /tmp/marker",
+        )
+
+    result = await install_gh_pr_guard_via_exec(_exec_plant_failed, run_scope=scope, guard_owner="node-2")
+    assert result.status == "failed"
+    assert "could not pre-plant" in result.detail

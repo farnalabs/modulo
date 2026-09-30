@@ -31,6 +31,8 @@ unit-tests:
   - backend/tests/unit/core/runtime_provider/test_far1128_cap_environments_dispatch.py
   - backend/tests/unit/runtime_provider/test_docker_provider.py
   - backend/tests/unit/pipeline_engine/test_e2b_isolation_provider.py
+  - backend/tests/unit/pipeline_engine/test_sandbox_policy.py
+  - backend/tests/unit/core/bundled_runner/test_runner_dispatch_node.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
   - backend/tests/unit/db/test_run_one_pr_per_run.py
@@ -126,11 +128,19 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       absolute:** the guard intercepts only `gh pr create` resolved through the
       sandbox PATH at install time (and absolute paths to those same binaries);
       `gh api` PR creation, a `gh` copy outside the PATH, shell aliases/functions,
-      and a `gh` installed into the PATH AFTER the install are NOT intercepted;
-      nor is any non-E2B dispatch — only the E2B provider implements
-      `apply_isolation`, so `runner_docker` / `local` runs get NO guard. A
-      missing `gh` or a failed install degrades to the prompt-level guard
-      (both are logged). The install is BEST-EFFORT — a failure is logged and the
+      and a `gh` installed into the PATH AFTER the install are NOT intercepted.
+      **Tier coverage (FAR-1315):** `e2b` installs the guard through
+      `apply_isolation` → `apply_sandbox_policy`; `runner_docker` (the Bundled
+      Runner) installs the SAME shim at dispatch through the provider
+      `exec_command` primitive (`sandbox_policy.install_gh_pr_guard_via_exec`) —
+      a flagged node whose guard cannot be installed there (no `gh` on PATH,
+      non-writable PATH directory, exec failure, failed claim pre-plant) is
+      surfaced by a LOUD `runner_dispatch.gh_pr_guard_unavailable` warning
+      naming the tier and status, never silently; `local` / `local_docker` are
+      dispatch-unbound and never execute sandbox nodes, so no dispatchable tier
+      is left uncovered-but-unmentioned. A missing `gh` or a failed install
+      degrades to the prompt-level guard (both are logged). The install is
+      BEST-EFFORT — a failure is logged and the
       run degrades to the prompt-level guard, never wedges the dispatch (unlike
       the enforcement-critical steps); the gate
       `_should_apply_sandbox_policy(..., single_pr_per_run=...)` runs the
@@ -155,6 +165,42 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       predicate, the sentinel-only-gets-no-guard regression, and call-site
       routing/best-effort), with the e2b call site's own policy-flag read
       pinned in `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
+- [x] The one-PR claim is RUN-scoped across MULTIPLE flagged nodes (FAR-1315):
+      the FAR-1264 marker lives inside ONE sandbox, so two flagged nodes in one
+      run previously allowed one PR per node (one claimable marker each). The
+      engine now keeps a process-local run CLAIM LEDGER keyed by the run id
+      (`sandbox_policy.acquire_run_pr_guard` / `settle_run_pr_guard`,
+      lock-guarded): the FIRST flagged node of a run installs the live guard; a
+      later or concurrent flagged node is DENIED and installs a PRE-PLANTED
+      refusal (its marker directory already exists, so its first
+      `gh pr create` is refused without calling gh), with the denial logged
+      loudly (`sandbox_policy.gh_guard_run_claim_denied` — claim status, scope,
+      owner). A successful create prints a fixed claim SENTINEL to the shim's
+      stdout; the dispatch `finally` settles the node's slot from the captured
+      streams — observed → the run's claim is SPENT for every later flagged
+      node; not observed → the owner's hold is RELEASED so a later flagged node
+      still gets its chance (a node that never created a PR must not burn the
+      run's attempt). `guard_owner` (the node id) rides the typed
+      `IsolationPolicy` as the ledger owner, so a denied node can never release
+      another node's hold, while a node retry re-claims its own slot. **What is
+      shared across nodes is the LEDGER, never the sandbox filesystem** — the
+      marker itself stays per-sandbox. **Bounded:** the ledger is process-local
+      (all nodes of a run execute in the engine process; a run resumed in a
+      DIFFERENT process starts with an empty ledger), the sentinel is
+      observable only when the node's output was captured (a failure before
+      output capture releases the slot rather than stranding it), and a
+      CONCURRENT second flagged node is conservatively denied while the slot is
+      held even if the holder never claims. Unit-covered in
+      `tests/unit/pipeline_engine/test_sandbox_policy.py` (ledger state
+      machine, the two-node pre-planted refusal through the real
+      `apply_sandbox_policy` path, the shim sentinel and the pre-planted
+      first-create refusal both executed under `sh`, and the exec installer's
+      installed/pre_planted/absent/failed outcomes),
+      `tests/unit/core/bundled_runner/test_runner_dispatch_node.py`
+      (runner_docker flagged install + hold release, the loud tier-named
+      absence warning, and the unflagged control), and
+      `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
+      (`guard_owner` crossing `apply_isolation` into the ledger)
 - [x] One-PR-per-run: POST-RUN detection + an admin alert outside the sandbox
       (FAR-1274) — this DETECTS and alerts after the fact; it does **NOT
       prevent** a second PR. It is a stopgap until a preventive,

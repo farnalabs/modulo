@@ -1109,6 +1109,7 @@ async def _apply_isolation_via_provider(
     allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
     single_pr_per_run: bool = False,
+    guard_owner: str | None = None,
 ) -> None:
     """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
 
@@ -1136,6 +1137,11 @@ async def _apply_isolation_via_provider(
     ``IsolationPolicy`` is the SINGLE carrier: the pre-FAR-1273
     ``workspace_metadata`` sentinel key is deleted, and ``spec`` here carries
     workspace attribution only.
+
+    FAR-1315: ``guard_owner`` (optional, default ``None`` — the node id at the
+    call site) rides the same carrier into the run ledger, so a SECOND flagged
+    node of the same run is denied a fresh claimable marker and installs a
+    pre-planted refusal instead.
     """
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import (
@@ -1171,6 +1177,7 @@ async def _apply_isolation_via_provider(
         allowed_hosts=allowed_hosts,
         command_timeout=command_timeout,
         single_pr_per_run=single_pr_per_run,
+        guard_owner=guard_owner,
     )
     try:
         await provider.apply_isolation(sandbox_id, spec, policy)
@@ -9036,6 +9043,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     # FAR-1273: rides the typed IsolationPolicy (the single
                     # carrier) to the E2B policy call site.
                     single_pr_per_run=single_pr_per_run,
+                    # FAR-1315: the claiming node's identity for the run's
+                    # one-PR ledger (same typed carrier).
+                    guard_owner=node_id,
                 )
             except asyncio.CancelledError:
                 raise
@@ -10361,6 +10371,29 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             via_provider=True,
         )
     finally:
+        # FAR-1315: settle this node's run-scoped one-PR guard slot. Runs ONLY
+        # for flagged nodes (the flag is bound before the try), is exception-
+        # safe (never masks teardown), and reads the captured streams through
+        # ``locals()`` because they are bound inside the try (same pattern as
+        # the truncation handling below): observed claim sentinel -> the run's
+        # ledger claim is SPENT for every later flagged node; no sentinel ->
+        # this node's hold is RELEASED so a later flagged node can still
+        # claim. An unbound stream simply contributes nothing.
+        if single_pr_per_run:
+            try:
+                from modulo.core.pipeline_engine.sandbox_policy import settle_run_pr_guard
+
+                settle_run_pr_guard(
+                    run_id,
+                    node_id,
+                    locals().get("agent_stdout_raw"),
+                    locals().get("agent_stderr_raw"),
+                    "".join(_drained_chunks) if _drained_chunks else None,
+                    locals().get("agent_stdout"),
+                    locals().get("agent_stderr"),
+                )
+            except Exception:
+                _log.debug("sandbox_agent.gh_guard_settle_failed", exc_info=True)
         # FAR-211: stop the loop-interception callback server. Best-effort
         # (shielded + bounded) — a teardown failure must not mask the
         # sandbox kill or the marker clear below.

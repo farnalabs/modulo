@@ -519,6 +519,9 @@ class E2BRuntimeProvider(RuntimeProvider):
         ``spec.run_id`` scopes the guard's claim marker so a marker can never
         leak across runs. A policy built without the flag installs no guard,
         so every existing caller and the R3 parity test are unaffected.
+        ``policy.guard_owner`` (FAR-1315) threads the claiming node's identity
+        into the run ledger so a SECOND flagged node of the same run gets a
+        pre-planted refusal instead of a fresh claimable marker.
         """
         # Lazy import (house convention): sandbox_policy is dependency-free,
         # but importing it pulls the pipeline_engine package __init__ — the
@@ -537,6 +540,7 @@ class E2BRuntimeProvider(RuntimeProvider):
             command_timeout=policy.command_timeout,
             single_pr_per_run=policy.single_pr_per_run,
             run_scope=_run_scope,
+            guard_owner=policy.guard_owner,
         )
 
     # ------------------------------------------------------------------

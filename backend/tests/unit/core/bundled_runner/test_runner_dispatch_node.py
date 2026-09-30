@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -187,6 +188,7 @@ class _FakeProvider:
         self.created = []
         self.destroyed = []
         self.closed = False
+        self.exec_calls: list[list[str]] = []
         self._workspaces = {"ws-1": "container-1"}
 
     async def create_workspace(self, spec):
@@ -194,6 +196,7 @@ class _FakeProvider:
         return "ws-1"
 
     async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+        self.exec_calls.append(list(cmd))
         return self._exec_result
 
     async def exec_command_stream(self, ref, cmd, *, environment=None):
@@ -957,3 +960,83 @@ async def test_under_cap_stdout_stays_inline_no_artifact(patch_node_runner, monk
     # from the real envelope, defaulting to None in the FakeOutput).
     assert output.stdout_artifact is nrm._UNSET
     assert not call_log  # _persist_full_stdout_artifact was never invoked
+
+
+# --- FAR-1315: the one-PR guard on the Bundled Runner (runner_docker) tier --
+
+
+def _flagged_config() -> SimpleNamespace:
+    return _config(node_def={"capability_scope": {}, "single_pr_per_run": True})
+
+
+def _guard_scripts(provider: _FakeProvider) -> list[str]:
+    """Every guard-install script this provider was asked to run."""
+    return [cmd[-1] for cmd in provider.exec_calls if cmd and ".modulo-real" in cmd[-1]]
+
+
+async def test_flagged_node_installs_run_scoped_guard_on_runner_docker(patch_node_runner) -> None:
+    """FAR-1315 tier gap: a flagged node on the ``runner_docker`` tier installs
+    the run-scoped ``gh`` shim through the provider's exec primitive — this
+    dispatch branch returns before the engine's E2B-only sandbox-policy step,
+    so WITHOUT the install the guard would be silently absent. After the node
+    finishes with no observed claim, its ledger hold is released."""
+    from modulo.core.pipeline_engine.sandbox_policy import (
+        acquire_run_pr_guard,
+        gh_pr_guard_marker_path,
+        reset_run_pr_guard_claims,
+    )
+
+    reset_run_pr_guard_claims()
+    provider = _FakeProvider()
+    run_id = str(uuid.uuid4())
+    state = _state()
+    state["_run_id"] = run_id
+
+    out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+    assert out["envelope"] is True
+
+    scripts = _guard_scripts(provider)
+    assert scripts, "the flagged node must install the gh guard shim via exec"
+    assert gh_pr_guard_marker_path(run_id) in scripts[0], "the shim must carry this run's marker path"
+
+    # The node finished WITHOUT an observed claim, so its hold was released —
+    # another node of the same run may still claim the slot (a stuck hold here
+    # would deny every later flagged node of the run).
+    assert acquire_run_pr_guard(run_id, "other-node") == "acquired"
+
+
+async def test_flagged_node_surfaces_guard_absence_loudly_naming_the_tier(patch_node_runner, caplog) -> None:
+    """FAR-1315 (b): a flagged node whose guard could NOT be installed must be
+    surfaced LOUDLY at dispatch, naming the tier — never silently — while the
+    run itself keeps its best-effort semantics (the install never wedges the
+    dispatch)."""
+
+    class _GuardFailingProvider(_FakeProvider):
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and ".modulo-real" in cmd[-1]:
+                return _ExecResult(
+                    exit_code=1,
+                    stderr="modulo: gh guard: FAILED - a gh exists on PATH but none could be guarded",
+                )
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _GuardFailingProvider()
+    state = _state()
+    state["_run_id"] = str(uuid.uuid4())
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.bundled_runner.runner_dispatch"):
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+    assert out["envelope"] is True, "a failed guard install is best-effort and never wedges the run"
+
+    warnings = [record.getMessage() for record in caplog.records if "gh_pr_guard_unavailable" in record.getMessage()]
+    assert warnings, "an unguarded flagged run must be surfaced loudly at dispatch"
+    assert "tier=runner_docker" in warnings[0], "the warning must name the tier"
+    assert "failed" in warnings[0], "the warning must carry the install status"
+
+
+async def test_unflagged_node_never_installs_the_guard(patch_node_runner) -> None:
+    """Regression: a node WITHOUT ``single_pr_per_run`` installs no guard —
+    the FAR-1315 install is gated by the explicit flag alone."""
+    provider = _FakeProvider()
+    await runner_dispatch.run_bundled_runner_node(_state(), _config(), _route(provider))
+    assert not _guard_scripts(provider)
