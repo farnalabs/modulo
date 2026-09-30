@@ -815,12 +815,19 @@ const actionMenuItems = computed(() => {
   ]
 })
 
-function openActionMenu(event: MouseEvent, p: PipelineItem) {
+async function openActionMenu(event: MouseEvent, p: PipelineItem) {
   // Remount the Menu so the item-click handler observes the freshly-opened
-  // overlay (and the new `actionMenuItems`), never a cached/closed one.
-  actionMenuKey.value += 1
+  // overlay (and the new `actionMenuItems`), never a cached/closed one. The
+  // remount is asynchronous, so toggle only AFTER the key change has flushed —
+  // toggling the old instance here would be thrown away when it unmounts and
+  // the fresh instance would mount closed (the menu never opens). The anchor
+  // is captured before the await because `event.currentTarget` is nulled once
+  // the handler yields; pass it to `toggle(event, target)` explicitly.
+  const target = event.currentTarget as HTMLElement
   actionMenuPipeline.value = p
-  actionMenuRef.value?.toggle(event)
+  actionMenuKey.value += 1
+  await nextTick()
+  actionMenuRef.value?.toggle(event, target)
 }
 
 function openRename(p: PipelineItem) {
