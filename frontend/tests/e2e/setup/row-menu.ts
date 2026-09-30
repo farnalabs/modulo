@@ -79,8 +79,9 @@ export async function clickMenuItem(menuItem: Locator): Promise<void> {
       // if the previous attempt lost its handle to a re-render.
       await content.evaluate((el) => (el as HTMLElement).click())
       clicked = true
-    } catch {
+    } catch (err) {
       // Element detached between resolution and click — retry with a fresh one.
+      console.warn('clickMenuItem: menu item click attempt failed, retrying', err)
     }
 
     // Give Menu.itemClick's hide() a moment to unmount the overlay before
