@@ -442,6 +442,52 @@ class TestDeliveryProvenance:
         assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_SELF_REPORTED
         assert not record["pr_url_provenance"]
 
+    async def test_crud_fallback_marker_key_set_matches_classify_marker(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """ANTI-DRIFT (FAR-1336): the TWO ``unclassified`` writers emit the SAME key set.
+
+        ``classify._unclassified_marker_dict`` and the fail-closed fallback
+        ``db.crud.run._write_unclassified_classification`` are deliberately
+        INDEPENDENT builders — the fallback must never import ``classify``
+        (it fires when importing/calling the classifier itself raised), so
+        nothing in code forces them into lockstep. This test does: it drives
+        the real crud writer against the sqlite fixture and reads the persisted
+        record back (never importing the fallback's private literal), then
+        asserts its key set equals ``classify._unclassified_marker_dict()`` AND
+        the explicit eight-key record shape. It exists so the two shapes cannot
+        silently drift — reviewer precedent: "dual gates kept in lockstep
+        (anti-drift) with planted-violation proof". The test FAILS if either
+        writer adds, drops or renames a key.
+        """
+        from modulo.core.pipeline_engine.classify import _unclassified_marker_dict
+        from modulo.db.crud.run import _write_unclassified_classification
+
+        run_id = uuid.uuid4()
+        async with session.begin():
+            run = await _seed_run(session, run_id, status="complete")
+            await _write_unclassified_classification(session, run)
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "unclassified"
+        # Writer A (crud fallback, observed via its persisted output) vs
+        # writer B (classify) — the lockstep assertion.
+        assert set(record) == set(_unclassified_marker_dict())
+        # ...and against the canonical eight-key shape, so a SIMULTANEOUS drift
+        # of both builders is caught too.
+        assert set(record) == {
+            "value",
+            "reason",
+            "delivered_pr_urls",
+            "computed_at",
+            "work_intact",
+            "declared_success_nodes",
+            "pr_url_provenance",
+            "delivery_confidence",
+        }
+
     def test_matched_only_url_still_classifies_delivered(self) -> None:
         """DELIBERATE (FAR-1336): provenance is RECORD-ONLY metadata.
 

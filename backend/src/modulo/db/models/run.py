@@ -372,7 +372,11 @@ class Run(OrgScoped):
     # DROPPED legacy column node_telemetry_json, and now lives in the
     # `run_node_outputs` store (see the mapping note above). FAR-189 run-outcome
     # shape {value, reason, delivered_pr_urls, computed_at, work_intact,
-    # declared_success_nodes}. UNIQUE(run_id) is the runs PK; the record is
+    # declared_success_nodes, pr_url_provenance, delivery_confidence}.
+    # delivered_pr_urls are self-reported by the run's own output and
+    # UNVERIFIED against an SCM; pr_url_provenance records how each URL was
+    # harvested and delivery_confidence states that plainly (self_reported,
+    # FAR-1336). UNIQUE(run_id) is the runs PK; the record is
     # written atomically with terminalization by the shared fenced terminal
     # write (crud/run) and refreshed (upsert) on re-terminalization. Generic
     # JSON here for SQLite/MariaDB parity (the run_classification precedent).

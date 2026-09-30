@@ -2231,6 +2231,13 @@ async def _write_unclassified_classification(session: AsyncSession, run: Run) ->
                     "computed_at": datetime.now(UTC).isoformat(),
                     "work_intact": None,
                     "declared_success_nodes": 0,
+                    # FAR-1336: provenance/confidence values are literals on
+                    # purpose — this module must stay self-contained (no
+                    # ``classify`` import, see the docstring above). The shape
+                    # is held in lockstep with ``classify._unclassified_marker_dict``
+                    # by an anti-drift test in test_run_classification.py.
+                    "pr_url_provenance": {},
+                    "delivery_confidence": "self_reported",
                 }
             )
         )
