@@ -241,6 +241,51 @@ describe('TeamNotificationEndpoints', () => {
     expect(wrapper.find('[data-testid="team-notif-events-retry"]').exists()).toBe(true)
   })
 
+  it('opens the edit form and offers registry events (FAR-1319)', async () => {
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    const editBtns = wrapper.findAll('[data-testid="team-notif-edit"]')
+    expect(editBtns.length).toBeGreaterThan(0)
+    await editBtns[0].trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="team-notif-edit-url"]').exists()).toBe(true)
+    const labels = wrapper.findAll('label').map((label) => label.text().trim())
+    expect(labels).toContain('run_stalled')
+    expect(labels).toContain('circuit_breaker_tripped')
+    expect(wrapper.find('[data-testid="team-notif-events-unavailable"]').exists()).toBe(false)
+  })
+
+  it('degrades gracefully in the edit form when the registry fetch throws', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/notifications') {
+          return Promise.resolve({ data: mockEndpoints, error: undefined })
+        }
+        // A network-level rejection (not an {error} payload) exercises the
+        // loadAvailableEvents throw-path catch branch.
+        return Promise.reject(new Error('network down'))
+      },
+    )
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    const editBtns = wrapper.findAll('[data-testid="team-notif-edit"]')
+    await editBtns[0].trigger('click')
+    await nextTick()
+
+    const msg = wrapper.find('[data-testid="team-notif-events-unavailable"]')
+    expect(msg.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="team-notif-events-retry"]').exists()).toBe(true)
+  })
+
   it('deletes an endpoint with confirmation', async () => {
     const wrapper = mount(TeamNotificationEndpoints, {
       props: { teamId: 'team-alpha' },

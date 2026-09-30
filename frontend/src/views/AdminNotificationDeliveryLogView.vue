@@ -340,7 +340,7 @@ const { data: availableEventsData } = useDataFetch<string[]>(
 
 const eventTypeOptions = computed(() => [
   { value: '__all__', label: t('views.AdminNotificationDeliveryLogView.all_types') },
-  ...(availableEventsData.value ?? []).map(eventType => ({
+  ...availableEventsData.value.map(eventType => ({
     value: eventType,
     label: te(`views.AdminNotificationDeliveryLogView.${eventType}`)
       ? t(`views.AdminNotificationDeliveryLogView.${eventType}`)
