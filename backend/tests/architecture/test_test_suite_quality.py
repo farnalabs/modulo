@@ -13152,9 +13152,9 @@ def test_dict_keys_membership_lens_flags_redundant_views():
 
 
 _JOINED_STRING_TYPE = getattr(ast, "JoinedString", None) or getattr(ast, "JoinedStr", None)
-"""F-string AST node type, version-agnostic: ``ast.JoinedString`` on Python
-3.12+ and ``ast.JoinedStr`` on earlier versions. Used only to evaluate the
-static emptiness of an f-string whose parts are all constant strings."""
+"""F-string AST node type, version-agnostic: ``ast.JoinedStr`` (aliased as
+``ast.JoinedString`` since Python 3.12). Used only to evaluate the static
+emptiness of an f-string whose parts are all constant strings."""
 
 
 def _statically_empty_iterable(node: ast.AST) -> bool:
@@ -13203,8 +13203,11 @@ def _range_folds_to_length_zero(node: ast.Call) -> bool:
     length of zero (``range(0)``, ``range(5, 5)``, ``range(5, 1, 2)``, ``range(1,
     5, -1)``). Any non-constant or non-int argument makes the length
     runtime-dependent and returns False; a zero ``step`` (which raises at
-    runtime) is not treated as empty."""
-    if len(node.args) > 3:
+    runtime) is not treated as empty. Calls with no positional arguments
+    (``range()``) or any keyword argument (``range(stop=0)``) are rejected up
+    front: their positional-argument list cannot be indexed by the folding
+    logic below, and keyword bounds are not evaluated."""
+    if not (1 <= len(node.args) <= 3) or node.keywords:
         return False
 
     def _constant_int(expr: ast.AST) -> int | None:
@@ -13406,6 +13409,7 @@ def test_dead_scope_lens_flags_never_run_asserts():
         "def test_foo():\n    for x in list():\n        assert x\n",
         "def test_foo():\n    for x in dict():\n        assert x\n",
         'def test_foo():\n    for x in "":\n        assert x\n',
+        'def test_foo():\n    for x in f"":\n        assert x\n',
         "async def test_foo():\n    async for x in set():\n        assert x\n",
         "async def test_foo():\n    async for x in tuple():\n        assert x\n",
         "def test_foo():\n    while False:\n        assert never()\n",
@@ -13434,6 +13438,9 @@ def test_dead_scope_lens_flags_never_run_asserts():
         "def test_foo():\n    for i in range(0, 5, 2):\n        assert i\n",
         "def test_foo():\n    for i in range(n):\n        assert i\n",
         "def test_foo():\n    for i in range(len(items)):\n        assert i\n",
+        "def test_foo():\n    for i in range():\n        assert i\n",
+        "def test_foo():\n    for i in range(stop=0):\n        assert i\n",
+        "def test_foo():\n    for i in range(start=0, stop=5):\n        assert i\n",
         "def test_foo():\n    for x in [*items]:\n        assert x\n",
         "def test_foo():\n    for x in {**mapping}:\n        assert x\n",
         "def test_foo():\n    for x in get_items():\n        assert x\n",
