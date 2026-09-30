@@ -469,6 +469,7 @@ jobs:
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           BRANCH: main
           PR_NUMBER: "0"
+          HEAD_SHA: ${{ github.sha }}
           # FAR-912: detect which stage failed so the Branch Fixer gets
           # context-specific feedback. The Branch Fixer can also read the
           # workflow run logs, but explicit text in the webhook payload is
@@ -490,7 +491,28 @@ jobs:
           [ "${PROD_DEPLOY_RESULT}" = "failure" -o "${PROD_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
           [ "${PROD_SMOKE_RESULT}" = "failure" -o "${PROD_SMOKE_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
           FAILED_STAGES="${FAILED_STAGES# }"  # trim leading space
+          # FIRST failed stage, in the same canonical order FAILED_STAGES
+          # already uses (pre-deploy-gate, deploy-staging, staging-e2e,
+          # deploy-production, prod-smoke): the first word of FAILED_STAGES.
+          # Derived alongside — the FAILED_STAGES computation and its output
+          # are unchanged.
+          PRIMARY_STAGE="${FAILED_STAGES%% *}"
+          FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
 
+          # Coalesce/dedupe keys (FAR-1034 convention): the payload mirrors
+          # ci.yml's notify-pr-failure / main-fix dispatch — headSha lets the
+          # Branch Fixer webhook coalesce repeated dispatches for the same
+          # failed main SHA onto ONE run (key `ci-failure:pr:0:sha:<sha>`)
+          # instead of minting a duplicate run and a duplicate PR. Incident
+          # 2026-09-30: this job and notify-staging-e2e-failure both fired
+          # for the same staging-e2e failure and raised duplicate PRs #1124
+          # and #1125 because neither payload carried headSha. `fingerprint`
+          # makes the catch-all and the stage-specific dispatch of the SAME
+          # failure produce the SAME value, so the agent's dedupe checks still
+          # find an existing PR if the coalesce window has lapsed, while a
+          # different stage or a different commit still yields a different
+          # fingerprint. The Branch Fixer prompt consumes this value verbatim
+          # instead of composing its own.
           FEEDBACK="Deploy pipeline failed on main at ${{ github.sha }}. Failed stage(s): ${FAILED_STAGES}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR."
 
           TIMESTAMP=$(date +%s)
@@ -499,7 +521,9 @@ jobs:
             --argjson prNumber ${PR_NUMBER} \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
-            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+            --arg headSha "${HEAD_SHA}" \
+            --arg fingerprint "${FINGERPRINT}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           # Retry with exponential backoff on transient 429/5xx (mirrors
@@ -560,16 +584,23 @@ jobs:
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           BRANCH: main
           PR_NUMBER: "0"
+          HEAD_SHA: ${{ github.sha }}
+          PRIMARY_STAGE: staging-e2e
           FEEDBACK: "Staging E2E tests failed after deploy to staging. The Branch Fixer should create a fix branch from main, diagnose the Playwright @regression failure, fix it, and raise a PR."
         shell: bash
         run: |
+          # headSha + fingerprint: see notify-deploy-failure (FAR-1034
+          # coalesce/dedupe convention) — same failure, same fingerprint.
+          FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber ${PR_NUMBER} \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
-            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+            --arg headSha "${HEAD_SHA}" \
+            --arg fingerprint "${FINGERPRINT}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           DISPATCHED="false"
@@ -617,16 +648,23 @@ jobs:
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           BRANCH: main
           PR_NUMBER: "0"
+          HEAD_SHA: ${{ github.sha }}
+          PRIMARY_STAGE: prod-smoke
           FEEDBACK: "Production smoke tests failed after deploy to app.modulo.run. The Branch Fixer should create a fix branch from main, diagnose the Playwright @smoke failure, fix it, and raise a PR."
         shell: bash
         run: |
+          # headSha + fingerprint: see notify-deploy-failure (FAR-1034
+          # coalesce/dedupe convention) — same failure, same fingerprint.
+          FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber ${PR_NUMBER} \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
-            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+            --arg headSha "${HEAD_SHA}" \
+            --arg fingerprint "${FINGERPRINT}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           DISPATCHED="false"
@@ -682,16 +720,23 @@ jobs:
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           BRANCH: main
           PR_NUMBER: "0"
+          HEAD_SHA: ${{ github.sha }}
+          PRIMARY_STAGE: deploy-staging
           FEEDBACK: "INFRASTRUCTURE FAILURE: Deploy to staging failed (Fly API, image build, or migration). The Branch Fixer should triage this — it may not be fixable in code, but the run creates visibility. Check deploy-staleness-check and deploy-watchdog for re-dispatch."
         shell: bash
         run: |
+          # headSha + fingerprint: see notify-deploy-failure (FAR-1034
+          # coalesce/dedupe convention) — same failure, same fingerprint.
+          FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber ${PR_NUMBER} \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
-            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+            --arg headSha "${HEAD_SHA}" \
+            --arg fingerprint "${FINGERPRINT}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           DISPATCHED="false"
@@ -2888,16 +2933,23 @@ jobs:
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
           BRANCH: main
           PR_NUMBER: "0"
+          HEAD_SHA: ${{ github.sha }}
+          PRIMARY_STAGE: deploy-production
           FEEDBACK: "INFRASTRUCTURE FAILURE: Deploy to production failed (Fly API, image build, or migration). The Branch Fixer should triage this — it may not be fixable in code, but the run creates visibility. Check deploy-staleness-check and deploy-watchdog for re-dispatch."
         shell: bash
         run: |
+          # headSha + fingerprint: see notify-deploy-failure (FAR-1034
+          # coalesce/dedupe convention) — same failure, same fingerprint.
+          FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg branchName "${BRANCH}" \
             --argjson prNumber ${PR_NUMBER} \
             --arg failureDescription "${FEEDBACK}" \
             --arg repo "${{ github.repository }}" \
-            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+            --arg headSha "${HEAD_SHA}" \
+            --arg fingerprint "${FINGERPRINT}" \
+            '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, headSha: $headSha, fingerprint: $fingerprint}')
           HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           DISPATCHED="false"
