@@ -110,7 +110,9 @@ describe('AdminCostBreakdownView', () => {
     await nextTick()
     await nextTick()
 
-    expect(api.POST).toHaveBeenCalledWith('/api/v1/admin/costs/anomalies/dismiss/anomaly-1')
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/admin/costs/anomalies/dismiss/{anomaly_id}', {
+      params: { path: { anomaly_id: 'anomaly-1' } },
+    })
   })
 
   it('renders summary cards from org_total/org_run_count when items is empty', async () => {
