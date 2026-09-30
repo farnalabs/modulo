@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import decimal
 import logging
+from collections.abc import Set as AbstractSet
 from decimal import ROUND_HALF_UP, Decimal
 from operator import attrgetter
 from typing import Any
@@ -215,6 +216,7 @@ def _eval_calculated(
 def _eval_self_reported(
     component: CostComponentConfig,
     telemetry: RunCostTelemetry,
+    rejected_zero_nodes: AbstractSet[str] = frozenset(),
 ) -> tuple[dict[str, Any], Decimal]:
     rk = component.report_key or "model_cost_usd"
     amount = telemetry.reported.get(rk, Decimal(0)).quantize(_QUANT, rounding=ROUND_HALF_UP)
@@ -245,10 +247,18 @@ def _eval_self_reported(
             # rendering and the run-warnings surface, and stamp a reason so the
             # numeric basis is self-describing for audit. The renderer keys off
             # ``missing_self_report`` (see ``compute_run_warnings`` /
-            # ``RunDetailView``), not this reason field — ``missing_self_report_reason``
-            # is a diagnostic stamp only and is intentionally not consumed on the
-            # wire (``RunDetailView``'s interface field mirrors it but is dead).
-            entry["missing_self_report_reason"] = "agent_not_reported"
+            # ``RunDetailView``) and now also reads this reason to tell the two
+            # missing states apart (FAR-1305).
+            #
+            # ``zero_report_unproven`` — a node PRESENTED an explicit ``0.0``
+            # and the trust boundary refused it as unproven: the agent did
+            # report, so claiming ``agent_not_reported`` would be a lie.
+            # ``agent_not_reported`` — no cost key was presented at all.
+            # The rejection marker is stamped only for the ``model_cost_usd``
+            # fold, so only that report_key earns the distinct reason.
+            entry["missing_self_report_reason"] = (
+                "zero_report_unproven" if rejected_zero_nodes and rk == "model_cost_usd" else "agent_not_reported"
+            )
     return entry, amount
 
 
@@ -265,6 +275,8 @@ def build_cost_breakdown(
     telemetry: RunCostTelemetry,
     components: list[CostComponentConfig],
     settings: Any = None,
+    *,
+    rejected_zero_nodes: AbstractSet[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], Decimal]:
     """Build the breakdown list + the summed total (written together).
 
@@ -275,6 +287,13 @@ def build_cost_breakdown(
     "amount_usd": "0.000000"}`` — the ONE documented exception to
     ``total == sum``. Every component entry's serialized amount string is also
     string-clamped (never ``1E+40``).
+
+    ``rejected_zero_nodes`` (FAR-1305, keyword-only) is the set of nodes that
+    presented an explicit ``0.0`` self-report the trust boundary refused as
+    unproven — derived from the enriched union by
+    ``finalize._rejected_zero_nodes``. It is DIAGNOSTIC ONLY: it changes no
+    amount, no clamp, no acceptance decision — only which of the two truthful
+    ``missing_self_report_reason`` strings is stamped.
 
     The whole block runs under a ``decimal.localcontext()`` with ONLY
     ``DivisionByZero`` trapped; any other eval failure surfaces as a generic
@@ -289,7 +308,7 @@ def build_cost_breakdown(
         total = Decimal(0)
         for component in live:
             if component.kind == "self_reported":
-                entry, amount = _eval_self_reported(component, telemetry)
+                entry, amount = _eval_self_reported(component, telemetry, rejected_zero_nodes)
             else:
                 entry, amount = _eval_calculated(component, telemetry, settings)
             breakdown.append(entry)

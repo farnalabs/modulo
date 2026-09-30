@@ -732,7 +732,18 @@
                   <td class="py-2 pr-4 tabular-nums">{{ entry.missing_self_report ? '—' : formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
                   <td class="py-2 pr-4">
                     <template v-if="entry.missing_self_report">
-                      <span class="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
+                      <!-- FAR-1305: an explicit $0.00 that the trust boundary
+                           refused is NOT "not reported" — the agent did report. -->
+                      <span
+                        v-if="entry.missing_self_report_reason === 'zero_report_unproven'"
+                        class="inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning"
+                        data-testid="run-detail-zero-rejected"
+                      >{{ $t('views.RunDetailView.zero_report_unproven') }}</span>
+                      <span
+                        v-else
+                        class="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                        data-testid="run-detail-not-reported"
+                      >{{ $t('views.RunDetailView.not_reported') }}</span>
                     </template>
                     <template v-else>
                       <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
@@ -1697,6 +1708,12 @@ function breakdownBasisLine(entry: CostBreakdownEntry): string {
   // confusing ``reported=0, node_count=0`` numeric basis. Surface the human
   // message instead (the fix for the phantom $0.000000 row).
   if (entry.missing_self_report === true) {
+    // FAR-1305: the two missing states are NOT the same claim. A node that
+    // presented an explicit $0.00 which the trust boundary refused did report —
+    // only "no cost key was ever presented" is genuinely "not reported".
+    if (entry.missing_self_report_reason === 'zero_report_unproven') {
+      return t('views.RunDetailView.zero_report_unproven_basis')
+    }
     return t('views.RunDetailView.no_model_cost_reported_basis')
   }
   const basis = entry.basis
@@ -2049,16 +2066,36 @@ interface RunLevelWarning {
 
 const costSectionPresent = computed(() => run.value?.total_cost_usd != null)
 
-const hasUnreportedCostEntries = computed(() =>
-  breakdownRaw.value.some((e) => e.missing_self_report === true),
+// FAR-1305: the two missing-self-report states are NOT the same claim, so the
+// strip must not report them with one message. An explicit $0.00 the trust
+// boundary refused (``zero_report_unproven``) DID reach us - saying "not
+// reported by the agent" for it would be false. Split the entries so each
+// state gets its own truthful message.
+const missingCostEntries = computed(() =>
+  breakdownRaw.value.filter(
+    (e) => e.missing_self_report === true && e.missing_self_report_reason !== 'zero_report_unproven',
+  ),
+)
+
+const rejectedZeroCostEntries = computed(() =>
+  breakdownRaw.value.filter(
+    (e) => e.missing_self_report === true && e.missing_self_report_reason === 'zero_report_unproven',
+  ),
 )
 
 const runLevelWarnings = computed<RunLevelWarning[]>(() => {
   const warnings: RunLevelWarning[] = []
-  if (costSectionPresent.value && hasUnreportedCostEntries.value) {
+  if (costSectionPresent.value && missingCostEntries.value.length > 0) {
     warnings.push({
       id: 'unreported-cost',
       labelKey: 'views.RunDetailView.warnings_strip_unreported_cost',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (costSectionPresent.value && rejectedZeroCostEntries.value.length > 0) {
+    warnings.push({
+      id: 'rejected-zero-cost',
+      labelKey: 'views.RunDetailView.warnings_strip_rejected_zero_cost',
       targetId: 'run-detail-cost-section',
     })
   }

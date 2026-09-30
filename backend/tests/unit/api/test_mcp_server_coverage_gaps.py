@@ -279,6 +279,14 @@ class TestMcpSanitizerHelpers:
         assert "derived" in rate_only
         not_reported = _format_breakdown_line({"component": "c", "missing_self_report": True})
         assert "(not reported)" in not_reported
+        rejected_zero = _format_breakdown_line(
+            {
+                "component": "c",
+                "missing_self_report": True,
+                "missing_self_report_reason": "zero_report_unproven",
+            }
+        )
+        assert "(reported $0.00, rejected as unproven)" in rejected_zero
         errored = _format_breakdown_line({"component": "c", "error": "bad math"})
         assert "(bad math)" in errored
 

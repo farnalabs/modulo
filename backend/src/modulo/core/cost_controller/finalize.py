@@ -464,6 +464,60 @@ def _is_exact_zero(value: Any) -> bool:
     return d.is_finite() and d == 0
 
 
+def _stamp_rejected_zero(node_dict: dict[str, Any], *presented: Any) -> None:
+    """FAR-1305: record that a node PRESENTED an explicit exact-zero cost report
+    which the trust boundary REFUSED as unproven.
+
+    *presented* are the candidate values the node offered (raw and/or clamped —
+    ``None`` for an absent key, which is never a zero). The marker is DIAGNOSTIC
+    ONLY: it never feeds the money math, never changes which reports are
+    accepted, and never reaches the totals — it exists so the breakdown can say
+    ``zero_report_unproven`` ("the agent reported $0.00 and we rejected it")
+    instead of the false ``agent_not_reported`` ("the agent stayed silent").
+
+    Gated on ``sandbox_by_map``: only self-report-eligible nodes can have a
+    self-report rejected. An already-stamped marker is left alone.
+    """
+    if node_dict.get("model_cost_rejected") is True:
+        return
+    if node_dict.get("sandbox_by_map") is not True:
+        return  # not a self-report-eligible node
+    if any(_is_exact_zero(value) for value in presented):
+        node_dict["model_cost_rejected"] = True
+
+
+def _presented_zero_values(raw_output: Any) -> tuple[Any, ...]:
+    """The cost values a node's raw output PRESENTS, for ``_stamp_rejected_zero``.
+
+    Handles both stored shapes: the pure return of a split (P1) row — the
+    producer's raw ``output.json``, keys at top level — and a still-nested
+    legacy envelope, whose keys live under ``output`` (mirroring
+    ``_legacy_inner_output``). A non-dict (absent / skipped-recovery marker)
+    presents nothing.
+    """
+    if not isinstance(raw_output, dict):
+        return ()
+    values: list[Any] = [raw_output.get("model_cost_usd"), raw_output.get("model_cost_raw_usd")]
+    nested = raw_output.get("output")
+    if isinstance(nested, dict):
+        values.extend((nested.get("model_cost_usd"), nested.get("model_cost_raw_usd")))
+    return tuple(values)
+
+
+def _rejected_zero_nodes(enriched: dict[str, dict[str, Any]]) -> set[str]:
+    """Node ids that presented an explicit zero self-report which was rejected.
+
+    Derived from the ENRICHED union (the single source of truth for what was
+    accepted) and consumed by ``build_cost_breakdown`` to pick the truthful
+    ``missing_self_report_reason`` (FAR-1305).
+    """
+    return {
+        str(node_id)
+        for node_id, entry in enriched.items()
+        if isinstance(entry, dict) and entry.get("model_cost_rejected") is True
+    }
+
+
 def _fold_stored_clamped(node_dict: dict[str, Any]) -> None:
     """Branch (3): output ABSENT — re-clamp the stored-union value (fallback authority).
 
@@ -520,6 +574,11 @@ def _fold_from_output_obj(node_dict: dict[str, Any], output_obj: dict[str, Any])
             node_dict["model_cost_clamped"] = bool(output_obj.get("model_cost_clamped", False))
             node_dict["model_cost_out_of_band_high"] = bool(output_obj.get("model_cost_out_of_band_high", False))
             return
+        # FAR-1305: the report was REFUSED. If what was refused was an explicit
+        # exact zero, stamp the diagnostic marker FIRST (before the fields are
+        # popped) so the breakdown can tell "rejected $0.00" from "never
+        # reported". Does not change what is accepted — only what is claimed.
+        _stamp_rejected_zero(node_dict, fold_input, raw_field)
         _pop_model_cost_fields(node_dict)
         return
     clamped_val, _was_clamped, _oob = folded
@@ -663,6 +722,15 @@ def _enrich_union(
     for node_id, node_dict in union.items():
         output_obj = _node_output_dict(merged_outputs, node_id, merged_telemetry)
         map_type = _enrich_node_fields(node_dict, output_obj, node_type_map.get(node_id))
+        # FAR-1305 — stamp site 2. For split (P1) rows ``merged_outputs`` holds
+        # the PURE RETURN, i.e. the producer's raw ``output.json``: the only
+        # place an explicit ``model_cost_usd: 0.0`` survives, because producer-
+        # stage extraction already refused it and so never wrote the key into
+        # the telemetry envelope (``output_obj`` above therefore has no cost
+        # key, and ``_fold_from_output_obj`` never runs for this node). Stamp
+        # from the pure return when the fold accepted NO report.
+        if "model_cost_usd" not in node_dict and isinstance(merged_outputs, dict):
+            _stamp_rejected_zero(node_dict, *_presented_zero_values(merged_outputs.get(node_id)))
         if output_obj is not None:
             executed_types[map_type or "<map_absent>"] += 1
             if map_type is None:
@@ -2227,7 +2295,12 @@ async def _build_enriched_state(
         merged_telemetry=merged_telemetry,
     )
     telemetry, per_node_cost = build_telemetry(enriched, live_components)
-    breakdown, total = build_cost_breakdown(telemetry, live_components, settings=get_settings())
+    breakdown, total = build_cost_breakdown(
+        telemetry,
+        live_components,
+        settings=get_settings(),
+        rejected_zero_nodes=_rejected_zero_nodes(enriched),
+    )
     enriched = _write_back_node_cost(enriched, per_node_cost)
     total_tokens = _derive_total_tokens(enriched)
     _log_union_size_guardrail(enriched, run.id)
