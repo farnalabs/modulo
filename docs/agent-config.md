@@ -143,7 +143,8 @@ Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-
 | `SANDBOX_BAD_JINJA_TEMPLATE` | Error | `agent_command` is not Jinja-renderable (llm mode only) |
 | `SANDBOX_TIMEOUT_BOUNDS` | Warning | `timeout_seconds` outside recommended 60-604800s range |
 | `SANDBOX_TIMEOUT_INVALID` | Warning | `timeout_seconds` is not a valid integer |
-| `SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP` | Error | `timeout_seconds` exceeds the E2B 1-hour sandbox cap; use `<= 3300` for provisioning headroom (FAR-511) |
+| `SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP` | Error | `timeout_seconds` exceeds the SELECTED environment profile's `max_node_seconds` — the wall-clock capability of the provider behind that profile, not a product limit (FAR-1359). An E2B profile declares 3300 (the platform's 1-hour cap plus provisioning headroom), so an E2B customer still sees the same limit, now explained as the provider's; a provider that can host long-running agents declares a larger value on its own profiles |
+| `ENV_PROFILE_MAX_NODE_SECONDS_EXCEEDS_RUN_CEILING` | Error | The bound profile declares a `max_node_seconds` above the deployment's run transport ceiling (`MODULO_MAX_RUN_SECONDS`). A node on that profile could only ever be admitted and then killed at the ceiling with no run-level signal, so the profile is rejected at save time instead — raise `MODULO_MAX_RUN_SECONDS` or lower the profile's capability (FAR-1359) |
 | `SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM` | Error | an `agent_commands` list item ends with a heredoc terminator; list items are joined with the concatenation operator and the terminator would be corrupted – use a single `agent_command` or base64-embed the script body (FAR-664) |
 | `SANDBOX_STALL_TIMEOUT_INVALID` | Warning | `stall_timeout_seconds` is not a positive number |
 | `SANDBOX_STALL_TIMEOUT_GT_TIMEOUT` | Warning | `stall_timeout_seconds` exceeds `timeout_seconds` |

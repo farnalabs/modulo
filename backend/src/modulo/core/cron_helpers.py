@@ -45,7 +45,6 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
-from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
@@ -275,10 +274,19 @@ _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure
 # ---------------------------------------------------------------------------
 # Age-bound mid-graph wedge terminalizer (B4). A run stuck mid-graph for longer
 # than the max plausible run duration is wedged (heartbeat may still be fresh —
-# the mid-graph stall can outlive the SAQ timeout window). Default is the max
-# SAQ run timeout in minutes, floored at 2h, plus a 15-minute skew (~135 min).
-# ---------------------------------------------------------------------------
-_MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
+# the mid-graph stall can outlive the SAQ timeout window).
+#
+# FAR-1359: this window is deliberately a FIXED 135 minutes (the historical
+# ``max(SAQ_RUN_TIMEOUT // 60, 120) + 15`` = max(120, 120) + 15 with the shipped
+# 7200s ceiling), NOT derived from the transport ceiling. Raising
+# ``MODULO_MAX_RUN_SECONDS`` for a provider that can host long-running agents
+# must not silently stretch how long a genuinely wedged run holds its org
+# concurrency slot: the wedge is a stuck run, not a long run, and its age
+# budget is a product-side safety property, not the provider's capability. So
+# the transport ceiling (core/dispatch.py, settings.modulo_max_run_seconds) and
+# this backstop are deliberately decoupled — pinned by
+# ``tests/unit/core/test_cron_helpers_wedge_backstop.py``.
+_MID_GRAPH_WEDGE_MAX_AGE_MINUTES = 135
 _EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
 
 # ---------------------------------------------------------------------------

@@ -53,6 +53,7 @@ const profile = (overrides: Partial<EnvironmentProfile> = {}): EnvironmentProfil
   network_policy: 'isolated',
   initialisation_strategy: 'lazy',
   persistence_policy: 'ephemeral',
+  max_node_seconds: 3300,
   status: 'active',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',

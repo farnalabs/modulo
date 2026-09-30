@@ -14,6 +14,7 @@ unit-tests:
   - backend/tests/integration/crud/test_environment_profiles.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
+  - backend/tests/unit/graph_validator/test_profile_wallclock_cap.py
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
 depends-on:
@@ -59,6 +60,20 @@ into the Runners page as redirects.)
       naming the missing capability (e.g. `egress:github.com`) when the profile does
       not cover every capability the agent requires
       (`backend/tests/unit/graph_validator/test_environment_capabilities.py`)
+- [x] FAR-1359: a profile carries the PROVIDER's wall-clock capability
+      (`max_node_seconds`, default 3300 = E2B's 1-hour cap plus provisioning
+      headroom), and the GraphValidator validates a sandbox node's
+      `timeout_seconds` against the SELECTED profile's value instead of a
+      hardcoded E2B limit — so a provider that can host long-running agents is
+      configurable for one while an E2B customer still sees the same 1-hour
+      ceiling, now explained as the provider's. The capability is surfaced
+      read-only in the profile list and form; a value above the deployment's run
+      transport ceiling (`MODULO_MAX_RUN_SECONDS`, one source of truth for the
+      SAQ enqueue timeout) is rejected at profile-write and graph-save time with
+      an explicit message, never admitted to be silently SAQ-killed
+      (`backend/tests/unit/graph_validator/test_profile_wallclock_cap.py`). The
+      run-level org caps that queue around this ceiling are documented at
+      https://modulo.run/docs (Operations → Concurrency)
 - [x] Profiles resolve against the RuntimeProviderHub by capabilities / provider hint;
       local is the default provider (only `local_docker` auto-registers and stays
       authoritative when no provider hint is set), and `e2b` resolves when the profile

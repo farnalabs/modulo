@@ -59,6 +59,7 @@ async def create_environment_profile(
     persistence_policy: str = "ephemeral",
     owner_team_id: uuid.UUID | None = None,
     visibility: str = "org",
+    max_node_seconds: int | None = None,
 ) -> EnvironmentProfile:
     validate_runner_docker_persistence(provider_type, persistence_policy)
     validate_profile_workspace_network(config_json)
@@ -78,6 +79,8 @@ async def create_environment_profile(
         owner_team_id=owner_team_id,
         visibility=visibility,
     )
+    if max_node_seconds is not None:
+        profile.max_node_seconds = max_node_seconds
     session.add(profile)
     await session.flush()
     return profile

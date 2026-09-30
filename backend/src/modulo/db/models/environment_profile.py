@@ -1,7 +1,7 @@
 import uuid
 from typing import Any, Final
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, Uuid
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -17,6 +17,19 @@ PROVIDER_TYPES: Final[frozenset[str]] = frozenset({"local_docker", "e2b", "local
 # The model CHECK below and the migration 0227 CHECK constraint derive from
 # these values — never hardcode the list elsewhere.
 INITIALISATION_STRATEGIES: Final[frozenset[str]] = frozenset({"git_clone", "blank", "worktree", "managed_inputs"})
+
+# Single source of truth for the per-node wall-clock capability (FAR-1359).
+# This is the PROVIDER's limit, not the product's: the default reproduces the
+# long-standing hardcoded E2B headroom value (E2B itself refuses > 1h; 3300s
+# leaves provisioning headroom), so every existing profile is unchanged. A
+# provider that can host long-running agents raises its own profiles' value
+# instead of the product hardcoding E2B's limit as universal. Never hardcode the
+# number elsewhere — the GraphValidator reads it off the SELECTED profile
+# (``core/graph_validator/__init__.py``) and the migration CHECK derives from it.
+DEFAULT_MAX_NODE_SECONDS: Final[int] = 3300
+
+# Floor for a profile's capability: a sandbox node below this cannot provision.
+MIN_MAX_NODE_SECONDS: Final[int] = 60
 
 
 def _provider_type_check_sql() -> str:
@@ -51,6 +64,10 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
             _initialisation_strategy_check_sql(),
             name="ck_env_profiles_initialisation_strategy",
         ),
+        CheckConstraint(
+            f"max_node_seconds BETWEEN {MIN_MAX_NODE_SECONDS} AND 604800",
+            name="ck_env_profiles_max_node_seconds",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -69,6 +86,17 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     # Python-level default applies to new ORM instances only.
     workspace_inputs: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True, default=list)
     persistence_policy: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ephemeral")
+    # FAR-1359: the provider's per-node wall-clock capability, in seconds. The
+    # GraphValidator validates a node's ``timeout_seconds`` against the SELECTED
+    # profile's value (not a product-side constant), so a provider that can host
+    # long-running agents raises this and a customer on E2B still sees the
+    # 1-hour provider limit. Default 3300 = pre-FAR-1359 behaviour. Must stay
+    # <= the deploy's ``MODULO_MAX_RUN_SECONDS`` transport ceiling — the
+    # profile-write path and the graph validator both reject it loudly rather
+    # than admitting a run that the SAQ transport would later kill silently.
+    max_node_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=str(DEFAULT_MAX_NODE_SECONDS), default=DEFAULT_MAX_NODE_SECONDS
+    )
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True

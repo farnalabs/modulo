@@ -69,6 +69,11 @@
             </span>
           </div>
 
+          <p
+            class="text-xs text-muted-foreground"
+            data-testid="envprofile-list-max-node-seconds"
+          >{{ $t('views.RunnersProfilesTab.max_node_seconds') }}: {{ maxNodeSecondsLabel(row.profile.max_node_seconds) }}</p>
+
           <div
             v-if="row.drift.drifted"
             class="rounded-lg border border-warning/40 bg-warning/10 p-3"
@@ -290,6 +295,15 @@ const filteredRows = computed(() => {
       || r.profile.provider_type.toLowerCase().includes(q),
   )
 })
+
+/** FAR-1359: the provider's per-node wall-clock capability, read-only. */
+function maxNodeSecondsLabel(seconds: number | undefined): string {
+  const value = seconds || 3300
+  const hours = Math.floor(value / 3600)
+  const minutes = Math.round((value % 3600) / 60)
+  const humanised = hours > 0 ? `${hours}h ${minutes}m` : `${Math.round(value / 60)}m`
+  return `${humanised} (${value}s)`
+}
 
 function tierLabel(providerType: string): string {
   const tier = runnerTierForProvider(providerType)

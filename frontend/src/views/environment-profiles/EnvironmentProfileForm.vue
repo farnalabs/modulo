@@ -153,6 +153,15 @@
 </Select>
       </div>
 
+      <div>
+        <span class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.max_node_seconds') }}</span>
+        <p
+          class="rounded-lg border border-input bg-muted/30 px-3 py-2 font-mono text-sm text-muted-foreground"
+          data-testid="envprofile-form-max-node-seconds"
+        >{{ maxNodeSecondsLabel }}</p>
+        <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.EnvironmentProfileForm.max_node_seconds_hint') }}</p>
+      </div>
+
       <div v-if="store.error" class="text-sm text-destructive">{{ store.error }}</div>
       <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
 
@@ -182,6 +191,11 @@ import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
 import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
 import Button from 'primevue/button'
 import Select from '../../components/shared/AppSelect.vue'
+
+// FAR-1359: mirrors DEFAULT_MAX_NODE_SECONDS on the EnvironmentProfile model —
+// the shipped E2B 1-hour cap plus provisioning headroom, used when a profile
+// predates the field so the read-only display never renders blank.
+const DEFAULT_MAX_NODE_SECONDS = 3300
 
 const props = defineProps<{
   profileId?: string
@@ -216,10 +230,22 @@ const form = reactive({
   network_policy: 'outbound',
   initialisation_strategy: 'git_clone',
   persistence_policy: 'ephemeral',
+  // FAR-1359: the provider's wall-clock capability. Read-only here on purpose —
+  // it is a property of the provider behind the profile, not an authoring knob,
+  // so the form displays it and never sends it.
+  max_node_seconds: DEFAULT_MAX_NODE_SECONDS,
 })
 
 const submitted = ref(false)
 const formError = ref<string | null>(null)
+
+const maxNodeSecondsLabel = computed(() => {
+  const seconds = form.max_node_seconds || DEFAULT_MAX_NODE_SECONDS
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.round((seconds % 3600) / 60)
+  const humanised = hours > 0 ? `${hours}h ${minutes}m` : `${Math.round(seconds / 60)}m`
+  return `${humanised} (${seconds}s)`
+})
 
 const formTierLabel = computed(() => {
   const tier = runnerTierForProvider(form.provider_type)
@@ -280,6 +306,7 @@ onMounted(async () => {
       form.network_policy = p.network_policy
       form.initialisation_strategy = p.initialisation_strategy
       form.persistence_policy = p.persistence_policy
+      form.max_node_seconds = p.max_node_seconds || DEFAULT_MAX_NODE_SECONDS
     }
   }
 })

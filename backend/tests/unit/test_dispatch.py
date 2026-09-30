@@ -76,6 +76,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_retry_delay": 60,
         "saq_redis_pool_size": 50,
         "saq_run_claim_cap": 20,
+        "modulo_max_run_seconds": 7200,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -990,6 +991,35 @@ class TestEnqueueSaq:
         assert call_kwargs["retry_backoff"] is False
         assert call_kwargs["run_id"] == RUN_ID
         assert call_kwargs["org_id"] == ORG_ID
+
+    @pytest.mark.asyncio
+    async def test_enqueue_timeout_follows_the_run_ceiling_setting(self) -> None:
+        """FAR-1359: the enqueue timeout IS the deploy-level ceiling
+        (``MODULO_MAX_RUN_SECONDS``) — the module constant that used to silently
+        shadow it is gone, so raising the ceiling actually reaches the transport."""
+        enqueue_mock = AsyncMock(return_value=SimpleNamespace(id=JOB_ID))
+        queue_cls = MagicMock()
+        queue_instance = queue_cls.return_value
+        queue_instance.enqueue = enqueue_mock
+        queue_instance.job = AsyncMock(return_value=None)
+        queue_instance.job_id.return_value = JOB_ID
+        redis_cls = MagicMock()
+        redis_client = redis_cls.from_url.return_value
+        redis_client.aclose = AsyncMock(return_value=None)
+
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings(modulo_max_run_seconds=86400)),
+            patch.object(dispatch, "RedisQueue", queue_cls),
+            patch.object(dispatch, "AsyncRedis", redis_cls),
+        ):
+            await dispatch._enqueue_saq(RUN_ID, ORG_ID, "runs", "execute_run", None)
+
+        assert enqueue_mock.await_args.kwargs["timeout"] == 86400
+
+    def test_no_module_level_run_timeout_constant_remains(self) -> None:
+        """FAR-1359: one source of truth — a re-introduced module constant would
+        again be able to win over the setting with no authoring-time signal."""
+        assert not hasattr(dispatch, "SAQ_RUN_TIMEOUT")
 
     @pytest.mark.asyncio
     async def test_resume_run_passes_resume_data_and_function(self) -> None:

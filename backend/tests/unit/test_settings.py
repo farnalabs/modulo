@@ -24,26 +24,32 @@ def _make(**overrides: str) -> Settings:
 
 
 # ---------------------------------------------------------------------------
-# saq_run_timeout
+# modulo_max_run_seconds (FAR-1359 — the ONE run transport ceiling)
 # ---------------------------------------------------------------------------
 
 
-def test_saq_run_timeout_default() -> None:
-    assert _make().saq_run_timeout == 7200
+def test_modulo_max_run_seconds_default() -> None:
+    assert _make().modulo_max_run_seconds == 7200
 
 
-def test_saq_run_timeout_env_alias() -> None:
-    assert _make(SAQ_RUN_TIMEOUT="3600").saq_run_timeout == 3600
+def test_modulo_max_run_seconds_env_alias() -> None:
+    assert _make(MODULO_MAX_RUN_SECONDS="3600").modulo_max_run_seconds == 3600
 
 
-def test_saq_run_timeout_rejects_below_min() -> None:
+def test_modulo_max_run_seconds_rejects_below_min() -> None:
     with pytest.raises(ValidationError):
-        _make(SAQ_RUN_TIMEOUT="299")
+        _make(MODULO_MAX_RUN_SECONDS="299")
 
 
-def test_saq_run_timeout_rejects_above_max() -> None:
+def test_modulo_max_run_seconds_rejects_above_max() -> None:
     with pytest.raises(ValidationError):
-        _make(SAQ_RUN_TIMEOUT="90000")
+        _make(MODULO_MAX_RUN_SECONDS="90000")
+
+
+def test_saq_run_timeout_setting_absent() -> None:
+    """FAR-1359: the old two-artifact split is gone — no ``saq_run_timeout``
+    setting survives as a second, shadowed ceiling."""
+    assert not hasattr(_make(), "saq_run_timeout")
 
 
 # ---------------------------------------------------------------------------

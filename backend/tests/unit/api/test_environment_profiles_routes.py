@@ -36,12 +36,13 @@ _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 _ROUTES = "modulo.api.routes.environment_profiles"
 
 
-def _make_settings() -> Settings:
+def _make_settings(**overrides: str) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        **overrides,
     )
 
 
@@ -75,6 +76,7 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.timeout_seconds = overrides.get("timeout_seconds", 3600)
     p.resource_limits_json = overrides.get("resource_limits", {})
     p.persistence_policy = overrides.get("persistence_policy", "ephemeral")
+    p.max_node_seconds = overrides.get("max_node_seconds", 3300)
     p.status = overrides.get("status", "active")
     p.visibility = overrides.get("visibility", "org")
     p.owner_team_id = overrides.get("owner_team_id")
@@ -335,6 +337,113 @@ class TestGetProfile:
             resp = client.get(f"{self.URL}/{_PROFILE_ID}")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Environment profile not found"
+
+
+class TestProfileWallclockCapability:
+    """FAR-1359 — the provider wall-clock capability on the profile surface."""
+
+    URL = "/api/v1/environment-profiles"
+
+    def test_response_exposes_the_capability(self, client: TestClient) -> None:
+        """Read-only surface: a profile read must carry its provider capability."""
+        fake = _fake_profile(max_node_seconds=21600)
+        with (
+            patch(f"{_ROUTES}.get_environment_profile", return_value=fake),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.get(f"{self.URL}/{_PROFILE_ID}")
+        assert resp.status_code == 200
+        assert resp.json()["max_node_seconds"] == 21600
+
+    def test_default_capability_is_the_shipped_e2b_headroom(self, client: TestClient) -> None:
+        """An existing profile read without the field reports the shipped 3300,
+        so nothing changes for profiles provisioned before FAR-1359."""
+        fake = _fake_profile()
+        with (
+            patch(f"{_ROUTES}.get_environment_profile", return_value=fake),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.get(f"{self.URL}/{_PROFILE_ID}")
+        assert resp.json()["max_node_seconds"] == 3300
+
+    def test_create_persists_a_custom_capability(self, client: TestClient) -> None:
+        """A provider that can host long-running agents sets its own value —
+        at the deployment's ceiling here (the widest value the default allows)."""
+        fake = _fake_profile(max_node_seconds=7200)
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_create.return_value = fake
+            resp = client.post(self.URL, json={"name": "long", "provider_type": "e2b", "max_node_seconds": 7200})
+        assert resp.status_code == 201
+        assert mock_create.await_args.kwargs["max_node_seconds"] == 7200
+
+    def test_create_omitting_the_capability_leaves_it_unset(self, client: TestClient) -> None:
+        """Omitted -> the CRUD default (the profile's own default), not 0."""
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_create.return_value = _fake_profile()
+            resp = client.post(self.URL, json={"name": "defaulted", "provider_type": "e2b"})
+        assert resp.status_code == 201
+        assert mock_create.await_args.kwargs["max_node_seconds"] is None
+
+    def test_create_capability_above_the_run_ceiling_returns_422(self, client: TestClient) -> None:
+        """Loud and early: a capability a run could never honour is refused at
+        configuration time, never admitted to be SAQ-killed mid-run."""
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.post(self.URL, json={"name": "too-long", "provider_type": "e2b", "max_node_seconds": 86400})
+        assert resp.status_code == 422
+        assert "MODULO_MAX_RUN_SECONDS" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_update_capability_above_the_run_ceiling_returns_422(self, client: TestClient) -> None:
+        """Same refusal on the partial-merge update path."""
+        with (
+            patch(f"{_ROUTES}.update_environment_profile") as mock_update,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"max_node_seconds": 86400})
+        assert resp.status_code == 422
+        assert "MODULO_MAX_RUN_SECONDS" in resp.json()["detail"]
+        mock_update.assert_not_called()
+
+    def test_capability_below_the_floor_returns_422(self, client: TestClient) -> None:
+        """The 60s floor is enforced at the boundary, matching the model CHECK."""
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.post(self.URL, json={"name": "too-short", "provider_type": "e2b", "max_node_seconds": 30})
+        assert resp.status_code == 422
+        mock_create.assert_not_called()
+
+    def test_capability_above_the_storage_envelope_returns_422(self, client: TestClient) -> None:
+        """The 604800s (7 day) storage envelope is enforced at the boundary too."""
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.post(self.URL, json={"name": "absurd", "provider_type": "e2b", "max_node_seconds": 604801})
+        assert resp.status_code == 422
+        mock_create.assert_not_called()
+
+    def test_raised_ceiling_admits_a_long_capability(self, client: TestClient) -> None:
+        """Raising MODULO_MAX_RUN_SECONDS makes the same write legal — the bound
+        is the deployment's, read live, not a hardcoded ceiling."""
+        with (
+            patch(f"{_ROUTES}.create_environment_profile") as mock_create,
+            patch(f"{_ROUTES}.get_settings", return_value=_make_settings(MODULO_MAX_RUN_SECONDS="86400")),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_create.return_value = _fake_profile(max_node_seconds=86400)
+            resp = client.post(self.URL, json={"name": "very-long", "provider_type": "e2b", "max_node_seconds": 86400})
+        assert resp.status_code == 201
 
 
 class TestUpdateProfile:

@@ -37,8 +37,14 @@ from modulo.db.crud.environment_profile import (
     soft_delete_environment_profile,
     update_environment_profile,
 )
-from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
+from modulo.db.models.environment_profile import (
+    DEFAULT_MAX_NODE_SECONDS,
+    MIN_MAX_NODE_SECONDS,
+    PROVIDER_TYPES,
+    EnvironmentProfile,
+)
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.settings import get_settings
 from modulo.util import WorkspaceNetworkValidationError
 
 _CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE = "environment_profiles.create_profile"
@@ -83,6 +89,42 @@ _PROVIDER_TYPE_PATTERN = "^(" + "|".join(_PROVIDER_TYPE_VOCABULARY) + ")$"
 
 _PROFILE_TYPE_HELP = f"One of: {', '.join(_PROVIDER_TYPE_VOCABULARY)} (the provider_type vocabulary)."
 
+# FAR-1359: ``max_node_seconds`` is the PROVIDER's per-node wall-clock
+# capability, not an authoring knob — the graph validator reads it to bound a
+# node's ``timeout_seconds``. It is therefore writable only here (profile
+# provisioning), surfaced read-only in the UI, and hard-bounded by the
+# deployment's run-level transport ceiling so a capability that could only ever
+# produce a silently SAQ-killed run is rejected at configuration time.
+MAX_NODE_SECONDS_HELP = (
+    "The provider's per-node wall-clock capability in seconds (60-604800). Bounds every "
+    "sandbox node's timeout_seconds on graphs bound to this profile; defaults to "
+    f"{DEFAULT_MAX_NODE_SECONDS} (the E2B 1-hour cap plus provisioning headroom). Must not "
+    "exceed this deployment's MODULO_MAX_RUN_SECONDS."
+)
+
+
+def _validate_max_node_seconds(value: int) -> int:
+    """Reject a capability above the deploy's run-level transport ceiling.
+
+    The ceiling is the SAQ transport timeout for a whole run
+    (``settings.modulo_max_run_seconds``). A node asking for more than a whole run
+    can get can never complete, so admitting it would mean saving a configuration
+    that fails later with no authoring-time signal. Fail here, loudly, at write
+    time (the GraphValidator re-checks the same bound for profiles that predate a
+    lowered ceiling).
+    """
+    ceiling = get_settings().modulo_max_run_seconds
+    if value > ceiling:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"max_node_seconds {value} exceeds this deployment's run ceiling "
+                f"(MODULO_MAX_RUN_SECONDS={ceiling}); raise MODULO_MAX_RUN_SECONDS to at least "
+                f"{value} or lower the profile's capability"
+            ),
+        )
+    return value
+
 
 class ProfileCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -101,6 +143,12 @@ class ProfileCreate(BaseModel):
     persistence_policy: str = Field(default="ephemeral")
     owner_team_id: uuid.UUID | None = None
     visibility: str = Field(default="org")
+    max_node_seconds: int | None = Field(
+        None,
+        ge=MIN_MAX_NODE_SECONDS,
+        le=604800,
+        description=MAX_NODE_SECONDS_HELP,
+    )
 
 
 class ProfileUpdate(BaseModel):
@@ -120,6 +168,12 @@ class ProfileUpdate(BaseModel):
     persistence_policy: str | None = None
     owner_team_id: uuid.UUID | None = None
     visibility: str | None = None
+    max_node_seconds: int | None = Field(
+        None,
+        ge=MIN_MAX_NODE_SECONDS,
+        le=604800,
+        description=MAX_NODE_SECONDS_HELP,
+    )
 
 
 class ProfileResponse(BaseModel):
@@ -138,6 +192,9 @@ class ProfileResponse(BaseModel):
     status: str
     owner_team_id: uuid.UUID | None = None
     visibility: str
+    # FAR-1359: read-only provider capability surfaced to the UI (the author
+    # never edits a node timeout past it, so it is displayed, not authored).
+    max_node_seconds: int
     created_at: datetime
     updated_at: datetime
 
@@ -168,6 +225,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
         status=p.status,
         owner_team_id=p.owner_team_id,
         visibility=p.visibility,
+        max_node_seconds=p.max_node_seconds,
         created_at=p.created_at,
         updated_at=p.updated_at,
     )
@@ -221,6 +279,10 @@ async def create_profile(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("environment_profile.create"),
 ) -> ProfileResponse:
+    # FAR-1359: reject a capability the run transport could never honour,
+    # before anything is written.
+    if req.max_node_seconds is not None:
+        _validate_max_node_seconds(req.max_node_seconds)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -241,6 +303,7 @@ async def create_profile(
                 persistence_policy=req.persistence_policy,
                 owner_team_id=req.owner_team_id,
                 visibility=req.visibility,
+                max_node_seconds=req.max_node_seconds,
             )
     except IntegrityError:
         _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
@@ -326,6 +389,10 @@ async def update_profile(
         updates["capabilities_json"] = updates.pop("capabilities")
     if "secret_refs" in updates:
         updates["secret_refs_json"] = updates.pop("secret_refs")
+    # FAR-1359: reject a raised capability the run transport could never honour,
+    # before anything is written.
+    if updates.get("max_node_seconds") is not None:
+        _validate_max_node_seconds(int(updates["max_node_seconds"]))
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

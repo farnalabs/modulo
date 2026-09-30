@@ -28,9 +28,14 @@ SAQ_RESUME_RUN_FUNCTION = "modulo.core.saq_worker.resume_run"
 # pinned saq==0.26.4 source: saq/queue/redis.py:436-441 (_finish applies
 # ``setex(job_id, job.ttl, ...)`` ONLY when the job completes) and
 # saq/queue/redis.py:447-471 (_enqueue stores the job hash with a plain SET and
-# no TTL). A 300s ttl therefore never expires a mid-run job hash (timeout=7200
-# covers long agent runs); it only bounds how long a COMPLETED job is retained.
-SAQ_RUN_TIMEOUT = 7200
+# no TTL). A 300s ttl therefore never expires a mid-run job hash (the run
+# timeout from ``settings.modulo_max_run_seconds`` covers long agent runs); it
+# only bounds how long a COMPLETED job is retained.
+# FAR-1359: the run timeout is read from the ONE deploy-level transport ceiling
+# (``MODULO_MAX_RUN_SECONDS``) at enqueue time — this module constant used to be
+# a second, unconfigurable artifact that silently won over the setting, so a run
+# configured above it was admitted and then SAQ-killed with no authoring-time
+# error. Never reintroduce a local ceiling here; raise the deploy setting.
 SAQ_RUN_TTL = 300
 
 _shared_redis: AsyncRedis | None = None
@@ -366,7 +371,7 @@ async def _enqueue_saq(
     job = await q.enqueue(
         function,
         key=key,
-        timeout=SAQ_RUN_TIMEOUT,
+        timeout=settings.modulo_max_run_seconds,
         heartbeat=settings.saq_job_heartbeat,
         retries=settings.saq_run_retries,
         retry_delay=settings.saq_retry_delay,

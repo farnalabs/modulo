@@ -133,13 +133,15 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
         ),
     ),
     KnownFix(
-        fix_id="sandbox_timeout_exceeds_e2b_cap",
-        signature="SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
-        title="Sandbox node timeout exceeds the E2B 1-hour cap",
+        fix_id="sandbox_timeout_exceeds_profile_cap",
+        signature="SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP",
+        title="Sandbox node timeout exceeds the environment profile's wall-clock capability",
         body=(
-            "The node's `timeout_seconds` is above E2B's 1-hour sandbox timeout cap, "
-            "so provisioning fails. Set `timeout_seconds` to 3300 or less to keep "
-            "provisioning headroom (FAR-511)."
+            "The node's `timeout_seconds` is above the selected environment profile's "
+            "`max_node_seconds` — the provider behind that profile cannot host a longer agent "
+            "run (for E2B that is the 1-hour platform cap plus provisioning headroom, 3300s). "
+            "Set `timeout_seconds` to the profile's capability or less; a profile on a provider "
+            "that can host long-running agents raises it instead."
         ),
         link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
     ),

@@ -2464,6 +2464,9 @@ elements:
       - testid: envprofile-list-tier-badge
         type: element
         dynamic_testid: false
+      - testid: envprofile-list-max-node-seconds
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -2531,6 +2534,9 @@ elements:
       - testid: envprofile-form-persistence
         type: select
         dynamic_testid: false
+      - testid: envprofile-form-max-node-seconds
+        type: element
+        dynamic_testid: false
       - testid: envprofile-form-submit
         type: button
         dynamic_testid: false
@@ -2564,6 +2570,9 @@ elements:
         dynamic_testid: false
       - testid: envprofile-form-persistence
         type: select
+        dynamic_testid: false
+      - testid: envprofile-form-max-node-seconds
+        type: element
         dynamic_testid: false
       - testid: envprofile-form-submit
         type: button

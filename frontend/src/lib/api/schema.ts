@@ -16102,6 +16102,11 @@ export interface components {
              * @default org
              */
             visibility: string;
+            /**
+             * Max Node Seconds
+             * @description The provider's per-node wall-clock capability in seconds (60-604800). Bounds every sandbox node's timeout_seconds on graphs bound to this profile; defaults to 3300 (the E2B 1-hour cap plus provisioning headroom). Must not exceed this deployment's MODULO_MAX_RUN_SECONDS.
+             */
+            max_node_seconds?: number | null;
         };
         /** ProfileDriftResponse */
         ProfileDriftResponse: {
@@ -16210,6 +16215,8 @@ export interface components {
             owner_team_id?: string | null;
             /** Visibility */
             visibility: string;
+            /** Max Node Seconds */
+            max_node_seconds: number;
             /**
              * Created At
              * Format: date-time
@@ -16252,6 +16259,11 @@ export interface components {
             owner_team_id?: string | null;
             /** Visibility */
             visibility?: string | null;
+            /**
+             * Max Node Seconds
+             * @description The provider's per-node wall-clock capability in seconds (60-604800). Bounds every sandbox node's timeout_seconds on graphs bound to this profile; defaults to 3300 (the E2B 1-hour cap plus provisioning headroom). Must not exceed this deployment's MODULO_MAX_RUN_SECONDS.
+             */
+            max_node_seconds?: number | null;
         };
         /** PromptDiffEntry */
         PromptDiffEntry: {

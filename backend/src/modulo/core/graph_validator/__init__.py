@@ -34,12 +34,13 @@ from modulo.core.graph_validator.category_validator import validate_node_categor
 from modulo.db.models.agent import Agent
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.environment_profile import DEFAULT_MAX_NODE_SECONDS, EnvironmentProfile
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import SchemaVersion
+from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
@@ -616,15 +617,23 @@ def _check_sandbox_timeout(node: dict[str, Any], nid: str, result: ValidationRes
         )
 
 
-def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
-    """Sandbox check: timeout_seconds must stay under the E2B 1-hour cap (FAR-511).
+def _check_sandbox_timeout_profile_cap(
+    node: dict[str, Any],
+    nid: str,
+    max_node_seconds: int,
+    result: ValidationResult,
+) -> None:
+    """Sandbox check: ``timeout_seconds`` must stay within the PROFILE's capability (FAR-1359).
 
-    The e2b SDK upgrade shipped in the Aug 30 deploy (Python 3.14) began
-    enforcing E2B's 1-hour sandbox timeout cap: a sandbox_agent node with
-    ``timeout_seconds`` above the cap now fails provisioning with
-    ``400: Timeout cannot be greater than 1 hours`` (previously accepted).
-    Reject anything above 3300 at save time so there is provisioning headroom;
-    do NOT clamp — the author must pick a value explicitly.
+    The number is the SELECTED environment profile's ``max_node_seconds`` — the
+    provider's wall-clock capability, not a product constant. For E2B that is the
+    1-hour platform cap plus provisioning headroom (3300s), enforced here since
+    the Aug 30 deploy (Python 3.14 e2b SDK) started rejecting anything above it
+    with ``400: Timeout cannot be greater than 1 hours``; a provider that can host
+    long-running agents raises its own profiles' value instead of the product
+    hardcoding E2B's limit as universal. Reject (never clamp) so the author picks
+    a value explicitly; ``max_node_seconds`` is the profile's default when no
+    profile is bound.
     """
     timeout = node.get("timeout_seconds")
     if timeout is None:
@@ -633,11 +642,12 @@ def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: Valid
         t = int(timeout) if not isinstance(timeout, int) else timeout
     except (ValueError, TypeError):
         return
-    if t > 3300:
+    if t > max_node_seconds:
         result.error(
-            "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
-            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the E2B sandbox "
-            "cap (1 hour); use <= 3300 to leave provisioning headroom",
+            "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP",
+            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the selected environment "
+            f"profile's wall-clock capability ({max_node_seconds}s) — the provider behind this "
+            f"profile cannot host a longer agent run; pick a timeout_seconds of {max_node_seconds} or less",
             node_id=nid,
         )
 
@@ -1435,7 +1445,14 @@ class GraphValidator:
 
         self._check_edges(graph_json, result)
         self._check_ports(graph_json, result)
-        self._check_sandbox_agent_config(graph_json, result)
+        # FAR-1359: the node wall-clock cap is the SELECTED profile's provider
+        # capability, and a profile whose capability exceeds the run-level
+        # transport ceiling is rejected here rather than admitted.
+        self._check_sandbox_agent_config(
+            graph_json,
+            result,
+            await self._resolve_profile_max_node_seconds(environment_profile_id, session, result),
+        )
         self._check_node_idempotent(graph_json, result)
         self._check_failure_and_retry(graph_json, result)
         await self._check_node_send_budget_bindings(graph_json, connector_bindings or [], session, result)
@@ -1520,8 +1537,13 @@ class GraphValidator:
         elif not result.is_valid:
             return self._strip_warnings(result)
 
-        # Sandbox agent config check.
-        self._check_sandbox_agent_config(snapshot.graph_json, result)
+        # Sandbox agent config check (FAR-1359: the wall-clock cap comes from the
+        # snapshot's bound profile's provider capability, never a hardcoded one).
+        self._check_sandbox_agent_config(
+            snapshot.graph_json,
+            result,
+            await self._resolve_profile_max_node_seconds(snapshot.environment_profile_id, session, result),
+        )
 
         # Node idempotency flag check (FAR-295).
         self._check_node_idempotent(snapshot.graph_json, result)
@@ -2574,6 +2596,44 @@ class GraphValidator:
     # Environment capabilities
     # ------------------------------------------------------------------
 
+    async def _resolve_profile_max_node_seconds(
+        self,
+        environment_profile_id: uuid.UUID | None,
+        session: AsyncSession,
+        result: ValidationResult,
+    ) -> int:
+        """Resolve the effective per-node wall-clock cap for the SELECTED profile (FAR-1359).
+
+        Returns the profile's ``max_node_seconds`` capability — the PROVIDER's
+        limit, so an E2B profile still yields the 1-hour + headroom value and a
+        provider that can host long-running agents yields its own. Falls back to
+        ``DEFAULT_MAX_NODE_SECONDS`` when no profile is bound or the id resolves
+        to nothing (``_check_environment_capabilities`` owns the not-found error).
+
+        Also fails LOUDLY and EARLY when the profile's capability exceeds the
+        deploy's run-level transport ceiling (``MODULO_MAX_RUN_SECONDS``): such a
+        profile can only ever produce a run the SAQ transport kills at the
+        ceiling with no authoring-time signal, so it is rejected here — at
+        pipeline-save time (and again at run start for snapshots predating a
+        lowered ceiling) — instead of being admitted and silently SAQ-killed.
+        """
+        if environment_profile_id is None:
+            return DEFAULT_MAX_NODE_SECONDS
+        profile = await session.get(EnvironmentProfile, environment_profile_id)
+        if profile is None:
+            return DEFAULT_MAX_NODE_SECONDS
+        cap = int(profile.max_node_seconds)
+        ceiling = get_settings().modulo_max_run_seconds
+        if cap > ceiling:
+            result.error(
+                "ENV_PROFILE_MAX_NODE_SECONDS_EXCEEDS_RUN_CEILING",
+                f"EnvironmentProfile '{profile.name}' declares max_node_seconds {cap}, above this "
+                f"deployment's run ceiling (MODULO_MAX_RUN_SECONDS={ceiling}) — a node bound to this "
+                "profile would be admitted and then killed at the transport ceiling with no run-level "
+                f"signal; raise MODULO_MAX_RUN_SECONDS to at least {cap} or lower the profile's capability",
+            )
+        return cap
+
     async def _check_environment_capabilities(
         self,
         environment_profile_id: uuid.UUID | None,
@@ -2949,14 +3009,19 @@ class GraphValidator:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_sandbox_agent_config(graph_json: dict[str, Any], result: ValidationResult) -> None:
+    def _check_sandbox_agent_config(
+        graph_json: dict[str, Any],
+        result: ValidationResult,
+        max_node_seconds: int = DEFAULT_MAX_NODE_SECONDS,
+    ) -> None:
         """Validate sandbox_agent node configurations.
 
         Checks:
         1. agent_commands (llm mode) / script_command (script mode) is non-empty,
            per the shared mode-aware validator (FAR-296).
         2. template_id is set.
-        3. timeout_seconds within bounds (60-604800) if set.
+        3. timeout_seconds within bounds (60-604800) if set, and within the
+           selected profile's ``max_node_seconds`` capability (FAR-1359).
         4. context_files source paths start with /.
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.
@@ -2985,7 +3050,7 @@ class GraphValidator:
             _check_sandbox_jinja(node, nid, result)
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
-            _check_sandbox_timeout_e2b_cap(node, nid, result)
+            _check_sandbox_timeout_profile_cap(node, nid, max_node_seconds, result)
             _check_sandbox_heredoc_list_item(node, nid, result)
             _check_sandbox_stall_timeout(node, nid, result)
             _check_sandbox_context_files(node, nid, result)

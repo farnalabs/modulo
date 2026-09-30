@@ -606,7 +606,9 @@ export default {
       "persistence_policy": "Persistence Policy",
       "ephemeral_destroyed_after_run": "Ephemeral (destroyed after run)",
       "retained_available_for_inspection": "Retained (available for inspection)",
-      "cache_reusable_between_runs": "Cache (reusable between runs)"
+      "cache_reusable_between_runs": "Cache (reusable between runs)",
+      "max_node_seconds": "Max Node Runtime",
+      "max_node_seconds_hint": "Provider capability: the longest a single node may run on this profile. Set when the profile is provisioned — it bounds every node timeout, so it is shown here rather than edited.",
     },
     "SettingsNotificationLogView": {
       "error_detail": "Error Detail",
@@ -1790,6 +1792,7 @@ export default {
       "search_profiles": "Search profiles...",
       "no_profiles_match": "No profiles match \"{search}\"",
       "try_a_different_search_term": "Try a different search term.",
+      "max_node_seconds": "Max node runtime",
       "no_runner_profiles": "No runner profiles",
       "no_runner_profiles_hint": "Create one to define a workspace template for pipeline nodes that need shell access.",
       "status_active": "active",

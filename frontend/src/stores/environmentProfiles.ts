@@ -13,6 +13,8 @@ export interface EnvironmentProfile {
   network_policy: string
   initialisation_strategy: string
   persistence_policy: string
+  /** FAR-1359: the provider's per-node wall-clock capability (read-only). */
+  max_node_seconds: number
   status: string
   created_at: string
   updated_at: string
@@ -25,6 +27,7 @@ export interface EnvironmentProfileSummary {
   provider_type: string
   image_ref: string | null
   capabilities: string[]
+  max_node_seconds: number
   status: string
   created_at: string
 }
@@ -80,6 +83,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
         provider_type: created.provider_type,
         image_ref: created.image_ref,
         capabilities: created.capabilities,
+        max_node_seconds: created.max_node_seconds,
         status: created.status,
         created_at: created.created_at,
       })
@@ -105,6 +109,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
           provider_type: updated.provider_type,
           image_ref: updated.image_ref,
           capabilities: updated.capabilities,
+          max_node_seconds: updated.max_node_seconds,
           status: updated.status,
           created_at: updated.created_at,
         }

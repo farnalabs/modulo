@@ -374,9 +374,17 @@ class Settings(BaseSettings):
     saq_run_retries: int = Field(default=5, alias="SAQ_RUN_RETRIES", ge=1, le=20)
     # Deterministic fixed delay (retry_backoff=False).
     saq_retry_delay: int = Field(default=60, alias="SAQ_RETRY_DELAY", ge=1, le=3600)
-    # Per-run execution ceiling for SAQ execute_run (dispatch.py): the job must
-    # reach a terminal state within this budget or the worker fails it.
-    saq_run_timeout: int = Field(default=7200, alias="SAQ_RUN_TIMEOUT", ge=300, le=86400)
+    # FAR-1359: the ONE transport ceiling for a run. Every consumer derives from
+    # this single value: the SAQ enqueue timeout (core/dispatch.py) and the
+    # run-age backstops. It used to be two artifacts that disagreed — the old
+    # SAQ_RUN_TIMEOUT setting (default 7200, capped 24h) and a module constant
+    # ``SAQ_RUN_TIMEOUT = 7200`` in dispatch.py that the enqueue actually read —
+    # so a run configured above 7200s was admitted and then silently SAQ-killed.
+    # The default 7200 preserves the constant's shipped value; the bound is the
+    # same 24h the old setting had, and is what a profile's
+    # ``max_node_seconds`` capability is validated against (profile-write and
+    # graph-save time) so a capability above this is rejected loudly instead.
+    modulo_max_run_seconds: int = Field(default=7200, alias="MODULO_MAX_RUN_SECONDS", ge=300, le=86400)
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
     # Single source of truth (retro item 9): execute and resume claims in
     # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers

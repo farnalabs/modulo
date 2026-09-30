@@ -695,11 +695,18 @@ def test_match_known_fixes_positive_session_interrupted_is_case_insensitive():
     assert matches[0].fix_id == "session_interrupted_no_output"
 
 
-def test_match_known_fixes_positive_e2b_cap():
-    matches = match_known_fixes("validation failed: SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP (3600 > 3300)")
+def test_match_known_fixes_positive_profile_cap():
+    """FAR-1359: the known fix is the PROFILE capability, not a hardcoded E2B cap."""
+    matches = match_known_fixes("validation failed: SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP (21600 > 7200)")
     assert len(matches) == 1
-    assert matches[0].fix_id == "sandbox_timeout_exceeds_e2b_cap"
+    assert matches[0].fix_id == "sandbox_timeout_exceeds_profile_cap"
     assert matches[0].link is not None
+
+
+def test_retired_e2b_cap_signature_no_longer_matches():
+    """The pre-FAR-1359 code is gone; a stale run detail must not surface a fix
+    pointing at a limit that no longer exists."""
+    assert match_known_fixes("SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP (3600 > 3300)") == []
 
 
 def test_match_known_fixes_returns_every_match():
