@@ -113,10 +113,20 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       let status: string
       try {
         status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 60_000 })
-      } catch {
+      } catch (firstError) {
         const approve = page.getByTestId('hitl-gate-approve')
         if (await approve.isVisible().catch(() => false)) await approve.click()
-        status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 60_000 })
+        try {
+          status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 60_000 })
+        } catch (retryError) {
+          // Keep the original failure in the final message so triage is not
+          // left guessing whether the first poll or the re-issue was the cause.
+          throw new Error(
+            `run ${run.run_id} did not complete after re-issuing the approve decision; ` +
+              `first poll: ${firstError instanceof Error ? firstError.message : String(firstError)}; ` +
+              `retry poll: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+          )
+        }
       }
       expect(status).toBe('complete')
 

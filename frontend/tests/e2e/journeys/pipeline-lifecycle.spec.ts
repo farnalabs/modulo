@@ -39,6 +39,18 @@ async function clickRowAction(
     } catch (err) {
       lastError = err
     }
+    // The command can land just after `effect` timed out, making the row
+    // depart before the next attempt's click. Re-check the effect first and
+    // treat a satisfied effect as success, so a departing node's click error
+    // (a false negative) never masks a command that actually ran.
+    if (effect) {
+      try {
+        await effect()
+        return
+      } catch (err) {
+        lastError = err
+      }
+    }
   }
   throw lastError instanceof Error
     ? lastError
