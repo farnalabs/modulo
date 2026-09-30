@@ -1,18 +1,25 @@
 """Notification event mapping — maps platform events to in-app Notification records.
 
-Event categories and their notification config:
+Event categories and their notification config (every event configured here;
+the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
+``api/routes/admin_notifications.py``, which MUST stay a subset of these keys):
   - hitl_awaiting     → level: info,   scope: org,   category: "hitl.awaiting"
   - run_failed        → level: error,  scope: org,   category: "run.failed"
   - run_stalled       → level: warning, scope: org,   category: "run.stalled"
   - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
+  - circuit_breaker_tripped → level: warning, scope: admin, category: "costs.circuit_breaker_tripped"
   - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
   - hitl_overdue      → level: warning, scope: admin
   - hitl_deadline_warning → level: warning, scope: admin (FAR-1295)
   - hitl_approve_sweep_suspected → level: warning, scope: admin (FAR-611)
+  - hitl_review_removed / hitl_review_removal_denied → scope: admin (hitl-gate guard)
   - eval_regression   → level: warning, scope: org
+  - eval_blocked      → level: error,  scope: org
   - feedback_pending  → level: info,   scope: user (target_user_id assigned)
   - system_announcement → level: info,  scope: org
-  - eval_blocked      → level: error,  scope: org
+  - trigger_deactivated → level: warning, scope: org (FAR-190)
+  - org_triggers_auto_paused → level: warning, scope: admin (FAR-1183)
+  - guardrail_enforcement_gap / guardrail_kill_switch / guardrail_unexpected_skip → scope: admin (FAR-223)
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
+    EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_CLAIM_EXPIRED,
     EVENT_EVAL_BLOCKED,
     EVENT_EVAL_REGRESSION,
@@ -192,6 +200,20 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
+    # FAR-105 §8.10 — the per-pipeline monthly spend circuit breaker tripped
+    # (triggers paused until an admin resets it). Mirrors the
+    # ORG_TRIGGERS_AUTO_PAUSED operator-alert shape (warning / admin scope /
+    # org-admin dismissal). This entry was missing while the event was already
+    # dispatched by cost_controller.trip_pipeline_circuit_breaker, so the
+    # in-app leg hit the mapper's unknown-event no-op and never rendered.
+    EVENT_CIRCUIT_BREAKER_TRIPPED: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "costs.circuit_breaker_tripped",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: {
         "level": "error",
         "scope": "admin",
@@ -235,6 +257,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
     EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: "Triggers paused — budget exceeded",
+    EVENT_CIRCUIT_BREAKER_TRIPPED: "Circuit breaker tripped — {pipeline_name}",
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
     EVENT_GUARDRAIL_KILL_SWITCH: "Guardrails downgraded to observe (kill-switch enabled)",
     EVENT_GUARDRAIL_UNEXPECTED_SKIP: "Guardrail skipped unexpectedly — {guardrail}",
@@ -271,6 +294,10 @@ _BODY_TEMPLATES: dict[str, str] = {
         "All pipeline triggers were auto-paused because {reason_label}: spend reached {spend_usd} USD "
         "(limit {limit_usd} USD). In-flight runs are finishing; resume triggers from the admin org settings."
     ),
+    EVENT_CIRCUIT_BREAKER_TRIPPED: (
+        'The monthly spend circuit breaker for "{pipeline_name}" tripped: its triggers are paused, so no '
+        "new trigger-initiated runs start. An admin reset re-enables them."
+    ),
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: (
         'Guardrail "{guardrail}" could not be evaluated ({reason}) and is not enforcing. See the run for details.'
     ),
@@ -301,6 +328,9 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_SYSTEM_ANNOUNCEMENT: None,
     EVENT_TRIGGER_DEACTIVATED: None,
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: None,
+    # No deep link: there is no /pipelines/{id} detail route (only the editor),
+    # mirroring the sibling auto-pause event's None action.
+    EVENT_CIRCUIT_BREAKER_TRIPPED: None,
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: _RUN_DETAIL_URL,
     EVENT_GUARDRAIL_KILL_SWITCH: None,
     EVENT_GUARDRAIL_UNEXPECTED_SKIP: _RUN_DETAIL_URL,

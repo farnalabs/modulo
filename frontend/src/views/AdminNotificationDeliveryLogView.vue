@@ -30,7 +30,7 @@
   :placeholder="$t('views.AdminAuditView.event_type')"
   data-testid="admin-notification-log-event-type"
   class="w-full"
-  :options="[{ value: '__all__', label: $t('views.AdminNotificationDeliveryLogView.all_types') }, { value: 'hitl_awaiting', label: $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }, { value: 'run_failed', label: $t('views.AdminNotificationDeliveryLogView.run_failed') }, { value: 'claim_expired', label: $t('views.AdminNotificationDeliveryLogView.claim_expired') }, { value: 'hitl_overdue', label: $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }]"
+  :options="eventTypeOptions"
   option-label="label"
   option-value="value"
 >
@@ -38,6 +38,22 @@
     <span :data-value="option.value">{{ option.label }}</span>
   </template>
 </Select>
+          <p
+            v-if="availableEventsError"
+            role="status"
+            class="mt-1 text-xs text-destructive"
+            data-testid="admin-notification-log-events-unavailable"
+          >
+            {{ $t('views.AdminNotificationDeliveryLogView.event_list_unavailable') }}
+            <button
+              type="button"
+              class="ml-1 underline"
+              data-testid="admin-notification-log-events-retry"
+              @click="loadAvailableEvents"
+            >
+              {{ $t('views.AdminNotificationDeliveryLogView.retry') }}
+            </button>
+          </p>
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.from') }}</label>
@@ -286,7 +302,7 @@ import Select from '../components/shared/AppSelect.vue'
 import { ChevronRight } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 interface DeliveryLogPage {
@@ -318,6 +334,36 @@ const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFe
 )
 
 const items = computed(() => deliveriesData.value?.items ?? [])
+
+/**
+ * FAR-1319 — the event-type filter is driven by the server-side registry
+ * (GET /api/v1/admin/notifications/available-events) instead of a hardcoded
+ * subset, so a newly registered event (e.g. hitl_deadline_warning) is
+ * filterable without a frontend edit. Fetched independently of the deliveries
+ * query: a registry failure leaves the filter at "All types" rather than
+ * breaking the delivery list itself, and surfaces a small inline retry so the
+ * admin can re-fetch without reloading the page.
+ */
+const { data: availableEventsData, error: availableEventsError, load: loadAvailableEvents } = useDataFetch<string[]>(
+  async () => {
+    const response = await api.GET('/api/v1/admin/notifications/available-events')
+    // Guard the shape: a mocked/failed response must degrade to an empty
+    // event list, never throw inside the options computed.
+    const events = Array.isArray(response.data) ? response.data : []
+    return { data: events, error: response.error }
+  },
+  { initialValue: [] }
+)
+
+const eventTypeOptions = computed(() => [
+  { value: '__all__', label: t('views.AdminNotificationDeliveryLogView.all_types') },
+  ...availableEventsData.value.map(eventType => ({
+    value: eventType,
+    label: te(`views.AdminNotificationDeliveryLogView.${eventType}`)
+      ? t(`views.AdminNotificationDeliveryLogView.${eventType}`)
+      : eventType,
+  })),
+])
 const total = computed(() => deliveriesData.value?.total ?? 0)
 const nextCursor = computed(() => deliveriesData.value?.next_cursor ?? null)
 const prevCursor = computed(() => {

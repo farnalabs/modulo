@@ -190,9 +190,25 @@
                   v-model="editForm.events"
                   class="rounded border-input"
                 />
-                {{ evt }}
+                {{ eventLabel(evt) }}
               </label>
             </div>
+            <p
+              v-if="!eventsLoading && availableEvents.length === 0"
+              role="status"
+              class="mt-1 text-xs text-destructive"
+              data-testid="team-notif-events-unavailable"
+            >
+              {{ $t('components.TeamNotificationEndpoints.event_list_unavailable') }}
+              <button
+                type="button"
+                class="ml-1 underline"
+                data-testid="team-notif-events-retry"
+                @click="loadAvailableEvents"
+              >
+                {{ $t('components.TeamNotificationEndpoints.retry') }}
+              </button>
+            </p>
           </div>
           <div>
             <label for="teamnotificationendpoints-field-4" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.description') }}</label>
@@ -261,9 +277,25 @@
                 v-model="addForm.events"
                 class="rounded border-input"
               />
-              {{ evt }}
+              {{ eventLabel(evt) }}
             </label>
           </div>
+          <p
+            v-if="!eventsLoading && availableEvents.length === 0"
+            role="status"
+            class="mt-1 text-xs text-destructive"
+            data-testid="team-notif-events-unavailable"
+          >
+            {{ $t('components.TeamNotificationEndpoints.event_list_unavailable') }}
+            <button
+              type="button"
+              class="ml-1 underline"
+              data-testid="team-notif-events-retry"
+              @click="loadAvailableEvents"
+            >
+              {{ $t('components.TeamNotificationEndpoints.retry') }}
+            </button>
+          </p>
         </div>
         <div>
           <label for="teamnotificationendpoints-field-1" class="mb-1 block text-xs font-medium">{{ $t('components.TeamNotificationEndpoints.description') }}</label>
@@ -295,7 +327,7 @@
         v-if="canManage && !showAddForm && !editingId"
         class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline"
         data-testid="team-notif-add-button"
-        @click="showAddForm = true"
+        @click="openAddForm"
       >
         <Plus class="h-4 w-4" />
         Add webhook
@@ -312,6 +344,7 @@ import Button from 'primevue/button'
 import { formatApiError } from "../lib/api/formatError";
 import type { components } from "../lib/api/client";
 import { Pencil, Play, Trash2, Plus } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 
 type NotificationEndpointResponse =
   components["schemas"]["NotificationEndpointResponse"];
@@ -323,13 +356,48 @@ type TestResult = components["schemas"]["TestResult"];
 
 const props = defineProps<{ teamId: string }>();
 
-const availableEvents = [
-  "hitl_awaiting",
-  "run_failed",
-  "claim_expired",
-  "hitl_overdue",
-  "hitl_deadline_warning",
-];
+const { t, te } = useI18n();
+
+/**
+ * Render a registry event as a human-readable label, falling back to the raw
+ * snake_case name when no en-US key ships yet (mirrors the delivery-log
+ * filter). A server-side event registered ahead of its frontend label must
+ * still be selectable rather than rendering "undefined".
+ */
+function eventLabel(evt: string): string {
+  const key = `components.TeamNotificationEndpoints.${evt}`;
+  return te(key) ? t(key) : evt;
+}
+
+/**
+ * FAR-1319 — the subscribable event list is fetched from the server-side
+ * registry (GET /api/v1/admin/notifications/available-events), which is what
+ * `frontend/src/manifest.yaml` has always claimed drives this picker. The
+ * previous hardcoded array drifted behind the backend registry (it missed
+ * run_stalled / budget_exceeded / circuit_breaker_tripped /
+ * trigger_deactivated), so those events were unsubscribable from the UI even
+ * though the API accepted them.
+ */
+const availableEvents = ref<string[]>([]);
+const eventsLoading = ref(false);
+
+async function loadAvailableEvents() {
+  eventsLoading.value = true;
+  try {
+    const { data, error: err } = await api.GET(
+      "/api/v1/admin/notifications/available-events",
+    );
+    if (err || !Array.isArray(data)) {
+      availableEvents.value = [];
+    } else {
+      availableEvents.value = data;
+    }
+  } catch {
+    availableEvents.value = [];
+  } finally {
+    eventsLoading.value = false;
+  }
+}
 
 const endpoints = ref<NotificationEndpointResponse[]>([]);
 const loading = ref(true);
@@ -389,6 +457,9 @@ async function loadEndpoints() {
 
 function startEdit(ep: NotificationEndpointResponse) {
   cancelAdd();
+  // Self-heal the picker: re-fetch the registry each time the form opens so a
+  // recovered backend becomes visible without a manual Retry click.
+  loadAvailableEvents();
   deleteConfirmId.value = null;
   editingId.value = ep.id;
   editForm.value = {
@@ -436,6 +507,13 @@ async function saveEdit() {
   } finally {
     saving.value = false;
   }
+}
+
+function openAddForm() {
+  showAddForm.value = true;
+  // Self-heal the picker: re-fetch the registry each time the form opens so a
+  // recovered backend becomes visible without a manual Retry click.
+  loadAvailableEvents();
 }
 
 function cancelAdd() {
@@ -534,5 +612,11 @@ async function test(ep: NotificationEndpointResponse) {
   }
 }
 
-onMounted(() => loadEndpoints());
+onMounted(() => {
+  loadEndpoints();
+  // The registry endpoint requires admin.notification.manage — only fetch it
+  // for the principals who can actually reach the picker (avoids a 403 on
+  // every viewer mount).
+  if (canManage.value) loadAvailableEvents();
+});
 </script>

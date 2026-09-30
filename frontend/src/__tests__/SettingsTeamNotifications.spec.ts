@@ -14,6 +14,18 @@ function adminJwt(): string {
   return `${header}.${payload}.signature`
 }
 
+function viewerJwt(): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const payload = btoa(
+    JSON.stringify({
+      sub: 'viewer@example.com',
+      org_id: '00000000-0000-0000-0000-000000000001',
+      org_role: 'viewer',
+    }),
+  )
+  return `${header}.${payload}.signature`
+}
+
 const mockEndpoints = [
   {
     id: 'ep-1',
@@ -44,14 +56,34 @@ const mockEndpoints = [
   },
 ]
 
+const mockAvailableEvents = [
+  'hitl_awaiting',
+  'run_failed',
+  'run_stalled',
+  'claim_expired',
+  'hitl_overdue',
+  'hitl_deadline_warning',
+  'budget_exceeded',
+  'circuit_breaker_tripped',
+  'trigger_deactivated',
+]
+
+// Hoisted function declaration so the (hoisted) vi.mock factory and the
+// per-test beforeEach restore below both reference the SAME default GET
+// behaviour — a test that overrides it never leaks its override.
+function defaultGet(url: string): Promise<{ data: unknown; error: unknown }> {
+  if (url === '/api/v1/notifications') {
+    return Promise.resolve({ data: mockEndpoints, error: undefined })
+  }
+  if (url === '/api/v1/admin/notifications/available-events') {
+    return Promise.resolve({ data: mockAvailableEvents, error: undefined })
+  }
+  return Promise.resolve({ data: null, error: undefined })
+}
+
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn().mockImplementation((url: string) => {
-      if (url === '/api/v1/notifications') {
-        return Promise.resolve({ data: mockEndpoints, error: undefined })
-      }
-      return Promise.resolve({ data: null, error: undefined })
-    }),
+    GET: vi.fn().mockImplementation((url: string) => defaultGet(url)),
     POST: vi.fn().mockResolvedValue({ data: { id: 'ep-new', url: 'https://example.com/new', events: [], description: null, auto_disabled: false, consecutive_dead_letter_count: 0, team_id: 'team-alpha' }, error: undefined }),
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     DELETE: vi.fn().mockResolvedValue({ response: { status: 204, ok: true }, error: undefined }),
@@ -60,6 +92,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
+import { api, getAccessToken } from '../lib/api/client'
 
 async function flush() {
   await new Promise(resolve => setTimeout(resolve, 0))
@@ -69,6 +102,12 @@ async function flush() {
 describe('TeamNotificationEndpoints', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => defaultGet(url),
+    )
+    // A per-test override of the token (the non-operator case) must not leak
+    // into the next test — restore the admin principal default.
+    vi.mocked(getAccessToken).mockReturnValue(adminJwt())
   })
 
   const stubs = {
@@ -154,7 +193,7 @@ describe('TeamNotificationEndpoints', () => {
     // The FAR-1295 approaching-deadline event must be subscribable.
     const deadlineBox = wrapper
       .findAll('label')
-      .find((label) => label.text().trim() === 'hitl_deadline_warning')
+      .find((label) => label.text().trim() === 'HITL Deadline Warning')
       ?.find('input[type="checkbox"]')
     expect(deadlineBox).toBeDefined()
     await deadlineBox?.setValue(true)
@@ -173,6 +212,155 @@ describe('TeamNotificationEndpoints', () => {
         }),
       }),
     )
+  })
+
+  it('drives the picker from GET /api/v1/admin/notifications/available-events (FAR-1319)', async () => {
+    const { api } = await import('../lib/api/client')
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/admin/notifications/available-events')
+
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await nextTick()
+
+    const labels = wrapper.findAll('label').map((label) => label.text().trim())
+    // Registry events the old hardcoded array omitted must be offered, each
+    // rendered with its human-readable label (FAR-1319 review).
+    expect(labels).toContain('Run Stalled')
+    expect(labels).toContain('Circuit Breaker Tripped')
+    expect(labels).toContain('Trigger Deactivated')
+  })
+
+  it('shows a retryable message when the event registry fetch fails', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/notifications') {
+          return Promise.resolve({ data: mockEndpoints, error: undefined })
+        }
+        return Promise.resolve({ data: undefined, error: { detail: 'boom' } })
+      },
+    )
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await nextTick()
+
+    const msg = wrapper.find('[data-testid="team-notif-events-unavailable"]')
+    expect(msg.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="team-notif-events-retry"]').exists()).toBe(true)
+  })
+
+  it('opens the edit form and offers registry events (FAR-1319)', async () => {
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    const editBtns = wrapper.findAll('[data-testid="team-notif-edit"]')
+    expect(editBtns.length).toBeGreaterThan(0)
+    await editBtns[0].trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="team-notif-edit-url"]').exists()).toBe(true)
+    const labels = wrapper.findAll('label').map((label) => label.text().trim())
+    expect(labels).toContain('Run Stalled')
+    expect(labels).toContain('Circuit Breaker Tripped')
+    expect(wrapper.find('[data-testid="team-notif-events-unavailable"]').exists()).toBe(false)
+  })
+
+  it('falls back to the raw event name when no i18n label exists (FAR-1319)', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/notifications') {
+          return Promise.resolve({ data: mockEndpoints, error: undefined })
+        }
+        if (url === '/api/v1/admin/notifications/available-events') {
+          return Promise.resolve({ data: ['brand_new_event'], error: undefined })
+        }
+        return Promise.resolve({ data: null, error: undefined })
+      },
+    )
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await nextTick()
+
+    // An event registered on the server ahead of its en-US label must still be
+    // selectable — it degrades to its raw snake_case name rather than
+    // rendering "undefined".
+    const labels = wrapper.findAll('label').map((label) => label.text().trim())
+    expect(labels).toContain('brand_new_event')
+  })
+
+  it('re-fetches the event registry when the add form opens (FAR-1319)', async () => {
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    const registryCalls = () =>
+      vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mock.calls.filter(
+        ([url]) => url === '/api/v1/admin/notifications/available-events',
+      ).length
+
+    expect(registryCalls()).toBe(1)
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await flush()
+    // A registry failure on mount is self-healed by the fresh attempt when the
+    // picker opens — no manual Retry required.
+    expect(registryCalls()).toBe(2)
+  })
+
+  it('degrades gracefully in the edit form when the registry fetch throws', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/notifications') {
+          return Promise.resolve({ data: mockEndpoints, error: undefined })
+        }
+        // A network-level rejection (not an {error} payload) exercises the
+        // loadAvailableEvents throw-path catch branch.
+        return Promise.reject(new Error('network down'))
+      },
+    )
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    const editBtns = wrapper.findAll('[data-testid="team-notif-edit"]')
+    await editBtns[0].trigger('click')
+    await nextTick()
+
+    const msg = wrapper.find('[data-testid="team-notif-events-unavailable"]')
+    expect(msg.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="team-notif-events-retry"]').exists()).toBe(true)
+  })
+
+  it('does not fetch the event registry for a non-operator (FAR-1319)', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(viewerJwt())
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    // The registry endpoint requires admin.notification.manage; a non-operator
+    // never issues the request (avoids a guaranteed 403 on mount).
+    expect(api.GET).not.toHaveBeenCalledWith('/api/v1/admin/notifications/available-events')
+    expect(wrapper.find('[data-testid="team-notif-add-button"]').exists()).toBe(false)
   })
 
   it('deletes an endpoint with confirmation', async () => {
