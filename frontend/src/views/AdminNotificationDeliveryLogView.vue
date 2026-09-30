@@ -38,6 +38,22 @@
     <span :data-value="option.value">{{ option.label }}</span>
   </template>
 </Select>
+          <p
+            v-if="availableEventsError"
+            role="status"
+            class="mt-1 text-xs text-destructive"
+            data-testid="admin-notification-log-events-unavailable"
+          >
+            {{ $t('views.AdminNotificationDeliveryLogView.event_list_unavailable') }}
+            <button
+              type="button"
+              class="ml-1 underline"
+              data-testid="admin-notification-log-events-retry"
+              @click="loadAvailableEvents"
+            >
+              {{ $t('views.AdminNotificationDeliveryLogView.retry') }}
+            </button>
+          </p>
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.from') }}</label>
@@ -325,9 +341,10 @@ const items = computed(() => deliveriesData.value?.items ?? [])
  * subset, so a newly registered event (e.g. hitl_deadline_warning) is
  * filterable without a frontend edit. Fetched independently of the deliveries
  * query: a registry failure leaves the filter at "All types" rather than
- * breaking the delivery list itself.
+ * breaking the delivery list itself, and surfaces a small inline retry so the
+ * admin can re-fetch without reloading the page.
  */
-const { data: availableEventsData } = useDataFetch<string[]>(
+const { data: availableEventsData, error: availableEventsError, load: loadAvailableEvents } = useDataFetch<string[]>(
   async () => {
     const response = await api.GET('/api/v1/admin/notifications/available-events')
     // Guard the shape: a mocked/failed response must degrade to an empty

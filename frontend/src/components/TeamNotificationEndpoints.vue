@@ -190,7 +190,7 @@
                   v-model="editForm.events"
                   class="rounded border-input"
                 />
-                {{ evt }}
+                {{ eventLabel(evt) }}
               </label>
             </div>
             <p
@@ -277,7 +277,7 @@
                 v-model="addForm.events"
                 class="rounded border-input"
               />
-              {{ evt }}
+              {{ eventLabel(evt) }}
             </label>
           </div>
           <p
@@ -327,7 +327,7 @@
         v-if="canManage && !showAddForm && !editingId"
         class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline"
         data-testid="team-notif-add-button"
-        @click="showAddForm = true"
+        @click="openAddForm"
       >
         <Plus class="h-4 w-4" />
         Add webhook
@@ -344,6 +344,7 @@ import Button from 'primevue/button'
 import { formatApiError } from "../lib/api/formatError";
 import type { components } from "../lib/api/client";
 import { Pencil, Play, Trash2, Plus } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 
 type NotificationEndpointResponse =
   components["schemas"]["NotificationEndpointResponse"];
@@ -354,6 +355,19 @@ type NotificationEndpointUpdate =
 type TestResult = components["schemas"]["TestResult"];
 
 const props = defineProps<{ teamId: string }>();
+
+const { t, te } = useI18n();
+
+/**
+ * Render a registry event as a human-readable label, falling back to the raw
+ * snake_case name when no en-US key ships yet (mirrors the delivery-log
+ * filter). A server-side event registered ahead of its frontend label must
+ * still be selectable rather than rendering "undefined".
+ */
+function eventLabel(evt: string): string {
+  const key = `components.TeamNotificationEndpoints.${evt}`;
+  return te(key) ? t(key) : evt;
+}
 
 /**
  * FAR-1319 — the subscribable event list is fetched from the server-side
@@ -443,6 +457,9 @@ async function loadEndpoints() {
 
 function startEdit(ep: NotificationEndpointResponse) {
   cancelAdd();
+  // Self-heal the picker: re-fetch the registry each time the form opens so a
+  // recovered backend becomes visible without a manual Retry click.
+  loadAvailableEvents();
   deleteConfirmId.value = null;
   editingId.value = ep.id;
   editForm.value = {
@@ -490,6 +507,13 @@ async function saveEdit() {
   } finally {
     saving.value = false;
   }
+}
+
+function openAddForm() {
+  showAddForm.value = true;
+  // Self-heal the picker: re-fetch the registry each time the form opens so a
+  // recovered backend becomes visible without a manual Retry click.
+  loadAvailableEvents();
 }
 
 function cancelAdd() {

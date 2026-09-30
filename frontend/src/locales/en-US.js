@@ -2073,6 +2073,7 @@ export default {
       "admin_view_of_all_webhook_notification_deliveries": "Admin view of all webhook notification deliveries",
       "failed_to_load_delivery_logs": "Failed to load delivery logs:",
       "all_types": "All types",
+      "event_list_unavailable": "Event list unavailable.",
       "retry_all_failed_1": "Retry all failed:",
       "status": "Status",
       "delivered": "Delivered",
@@ -3965,7 +3966,16 @@ export default {
       "optional": "(optional)",
       "leave_blank_to_keep_existing": "(leave blank to keep existing)",
       "event_list_unavailable": "Event list unavailable.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "hitl_awaiting": "HITL Awaiting",
+      "run_failed": "Run Failed",
+      "run_stalled": "Run Stalled",
+      "claim_expired": "Claim Expired",
+      "hitl_overdue": "HITL Overdue",
+      "hitl_deadline_warning": "HITL Deadline Warning",
+      "budget_exceeded": "Budget Exceeded",
+      "circuit_breaker_tripped": "Circuit Breaker Tripped",
+      "trigger_deactivated": "Trigger Deactivated"
     },
     "NotificationBell": {
       "notifications": "Notifications",

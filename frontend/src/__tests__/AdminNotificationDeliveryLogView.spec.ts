@@ -198,4 +198,34 @@ describe('AdminNotificationDeliveryLogView', () => {
     expect(option).toBeDefined()
     expect(option!.label).toBe('brand_new_event')
   })
+
+  it('surfaces an inline retry when the registry fetch fails (FAR-1319)', async () => {
+    const mockGet = vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>)
+    let registryFails = true
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/admin/notifications/available-events') {
+        return registryFails
+          ? Promise.resolve({ data: undefined, error: { detail: 'boom' } })
+          : Promise.resolve({ data: mockAvailableEvents, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [], total: 0, next_cursor: null }, error: undefined })
+    })
+
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+
+    // A failed registry fetch degrades the filter to "All types" but is no
+    // longer silent: a small inline retry mirrors the team picker.
+    const msg = wrapper.find('[data-testid="admin-notification-log-events-unavailable"]')
+    expect(msg.exists()).toBe(true)
+    const retry = wrapper.find('[data-testid="admin-notification-log-events-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    registryFails = false
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-notification-log-events-unavailable"]').exists()).toBe(false)
+  })
 })

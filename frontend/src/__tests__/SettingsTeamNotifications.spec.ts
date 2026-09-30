@@ -193,7 +193,7 @@ describe('TeamNotificationEndpoints', () => {
     // The FAR-1295 approaching-deadline event must be subscribable.
     const deadlineBox = wrapper
       .findAll('label')
-      .find((label) => label.text().trim() === 'hitl_deadline_warning')
+      .find((label) => label.text().trim() === 'HITL Deadline Warning')
       ?.find('input[type="checkbox"]')
     expect(deadlineBox).toBeDefined()
     await deadlineBox?.setValue(true)
@@ -228,10 +228,11 @@ describe('TeamNotificationEndpoints', () => {
     await nextTick()
 
     const labels = wrapper.findAll('label').map((label) => label.text().trim())
-    // Registry events the old hardcoded array omitted must be offered.
-    expect(labels).toContain('run_stalled')
-    expect(labels).toContain('circuit_breaker_tripped')
-    expect(labels).toContain('trigger_deactivated')
+    // Registry events the old hardcoded array omitted must be offered, each
+    // rendered with its human-readable label (FAR-1319 review).
+    expect(labels).toContain('Run Stalled')
+    expect(labels).toContain('Circuit Breaker Tripped')
+    expect(labels).toContain('Trigger Deactivated')
   })
 
   it('shows a retryable message when the event registry fetch fails', async () => {
@@ -270,9 +271,56 @@ describe('TeamNotificationEndpoints', () => {
 
     expect(wrapper.find('[data-testid="team-notif-edit-url"]').exists()).toBe(true)
     const labels = wrapper.findAll('label').map((label) => label.text().trim())
-    expect(labels).toContain('run_stalled')
-    expect(labels).toContain('circuit_breaker_tripped')
+    expect(labels).toContain('Run Stalled')
+    expect(labels).toContain('Circuit Breaker Tripped')
     expect(wrapper.find('[data-testid="team-notif-events-unavailable"]').exists()).toBe(false)
+  })
+
+  it('falls back to the raw event name when no i18n label exists (FAR-1319)', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+      (url: string) => {
+        if (url === '/api/v1/notifications') {
+          return Promise.resolve({ data: mockEndpoints, error: undefined })
+        }
+        if (url === '/api/v1/admin/notifications/available-events') {
+          return Promise.resolve({ data: ['brand_new_event'], error: undefined })
+        }
+        return Promise.resolve({ data: null, error: undefined })
+      },
+    )
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await nextTick()
+
+    // An event registered on the server ahead of its en-US label must still be
+    // selectable — it degrades to its raw snake_case name rather than
+    // rendering "undefined".
+    const labels = wrapper.findAll('label').map((label) => label.text().trim())
+    expect(labels).toContain('brand_new_event')
+  })
+
+  it('re-fetches the event registry when the add form opens (FAR-1319)', async () => {
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    const registryCalls = () =>
+      vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mock.calls.filter(
+        ([url]) => url === '/api/v1/admin/notifications/available-events',
+      ).length
+
+    expect(registryCalls()).toBe(1)
+    await wrapper.find('[data-testid="team-notif-add-button"]').trigger('click')
+    await flush()
+    // A registry failure on mount is self-healed by the fresh attempt when the
+    // picker opens — no manual Retry required.
+    expect(registryCalls()).toBe(2)
   })
 
   it('degrades gracefully in the edit form when the registry fetch throws', async () => {
