@@ -25,13 +25,13 @@ answers) and assert:
   (``_save_graph`` is never called),
 * an org-visible or same-team connector is accepted,
 * ``_resolve_graph_references`` runs before the write and its 422 stops the write,
- * ``_validate_graph_save`` runs AFTER the write, receives the converted node's
-   connector binding, and its blocking 422 propagates (rolling the txn back),
- * the non-blocking (advisory) half of ``_validate_graph_save`` is RETURNED to
-   the caller as the third element so the conversion endpoints can surface
-   ``validation_issues`` like their siblings (FAR-1277),
- * a stored node the current schema can no longer parse fails closed with a
-   422 naming that node, rather than being reference-checked as unchecked.
+* ``_validate_graph_save`` runs AFTER the write, receives the converted node's
+  connector binding, and its blocking 422 propagates (rolling the txn back),
+* the non-blocking (advisory) half of ``_validate_graph_save`` is RETURNED to
+  the caller as the third element so the conversion endpoints can surface
+  ``validation_issues`` like their siblings (FAR-1277),
+* a stored node the current schema can no longer parse fails closed with a
+  422 naming that node, rather than being reference-checked as unchecked.
 
 The enforcement RULES themselves (the mismatch predicate, the capability-scope
 predicate) are covered by ``tests/unit/api/test_pipelines_routes_coverage.py``;

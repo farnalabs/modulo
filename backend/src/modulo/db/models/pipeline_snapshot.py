@@ -49,7 +49,7 @@ class PipelineSnapshot(OrgScoped):
         ),
         # FAR-1280: the snapshot pair gets the SAME ceiling >= default invariant
         # 0264 added to `pipelines` - byte-identical predicate, only the table
-        # and constraint name differ (migration 0268). Both columns are nullable
+        # and constraint name differ (migration 0270). Both columns are nullable
         # by design, so the `max IS NULL` arm is load-bearing (NULL ceiling =
         # effective ceiling is the default), and a NULL default ranks as
         # manual_approval under three-valued logic exactly as

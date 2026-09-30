@@ -1,10 +1,11 @@
 """FAR-1276: the team gate on clone / move-to-folder against real Postgres.
 
 ``POST /{id}/clone`` and ``PATCH /{id}/folder`` carried neither layer of the
-two-layer team gate their sibling mutations (update / delete / archive /
+two-layer team gate their sibling mutations (update / delete / replace-graph /
 convert-to-agent / revert-to-manual) carry: the request-time
 ``require_team_membership_or_admin(resolve_pipeline_team_scope)`` dependency and
-the in-txn ``_reapply_team_gate_inside_mutation_txn`` re-check.
+the in-txn ``_reapply_team_gate_inside_mutation_txn`` re-check. (``archive`` /
+``unarchive`` / ``restore`` still carry only the in-txn layer.)
 
 That is a parity gap, not a live Postgres hole: migration 0124 leaves
 ``rls_team_isolation`` as the sole policy on ``pipelines``, so a non-member's
@@ -35,6 +36,7 @@ reading the dependency's detail would mean the gate over-blocks.
 
 from __future__ import annotations
 
+import time
 import uuid
 
 import pytest
@@ -43,10 +45,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.auth.jwt import create_access_token
+from modulo.settings import get_settings
 
 pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
+#: Seconds added to ``mutation_row_lock_timeout_ms`` for the HTTP client's own
+#: timeout, so the client never gives up before the SERVER answers at any
+#: permitted setting (100 ms..30 s).
+_CLIENT_MARGIN_SECONDS = 20.0
+#: Seconds added to the expected wait for the "the wait was bounded" ceiling -
+#: tight enough that an UNBOUNDED wait still fails, loose enough for overhead.
+_BOUNDED_MARGIN_SECONDS = 10.0
 
 
 def _auth_headers(org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> dict[str, str]:
@@ -256,6 +266,72 @@ async def test_clone_org_admin_reaches_the_handler(
         cloned_id = uuid.UUID(resp.json()["id"])
     finally:
         await _cleanup_pipelines(db_engine, *((cloned_id,) if cloned_id else ()) + (pipeline_id,))
+
+
+async def test_contended_clone_degrades_to_a_bounded_409(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """A held source-row lock must make the clone DEGRADE, never park unboundedly.
+
+    The clone's step (a) runs on a SEPARATE connection (the torn-read fix) and
+    takes ``FOR SHARE`` on the source row. Until the read session got its own
+    transaction-scoped ``lock_timeout`` that wait was UNBOUNDED: a clone
+    overlapping a graph save (or a second clone of the same source) would park
+    its read connection - and the caller's main mutation transaction with it -
+    until the holder committed, with no degradation to the 409 the rest of the
+    mutation path produces.
+
+    Deterministic here: the holder takes ``FOR UPDATE`` on the source row and
+    NEVER releases it before the request returns, so the only thing that can
+    end the step-(a) ``FOR SHARE`` wait is the bounded ``lock_timeout``
+    (``Settings.mutation_row_lock_timeout_ms``, applied transaction-scoped
+    before the select). Both the client timeout and the ceiling derive from the
+    setting so the test stays valid across its whole permitted range.
+    """
+    pipeline_id, member, _outsider = await _seed_scenario(db_engine, test_org, test_user)
+    expected_seconds = get_settings().mutation_row_lock_timeout_ms / 1000
+    client_timeout = expected_seconds + _CLIENT_MARGIN_SECONDS
+    bounded_ceiling = expected_seconds + _BOUNDED_MARGIN_SECONDS
+    cloned_id: uuid.UUID | None = None
+    try:
+        # The holder is the container superuser (RLS bypassed), so it really
+        # does lock the row; the app's connections run as the non-superuser
+        # role and wait on that same row-level lock.
+        async with db_engine.connect() as holder:
+            await holder.execute(
+                text("SELECT id FROM pipelines WHERE id = :id FOR UPDATE"),
+                {"id": str(pipeline_id)},
+            )
+
+            started = time.monotonic()
+            resp = await integration_client.post(
+                f"/api/v1/pipelines/{pipeline_id}/clone",
+                json={},
+                headers=_auth_headers(test_org, member, role="operator"),
+                timeout=client_timeout,
+            )
+            elapsed = time.monotonic() - started
+            await holder.rollback()
+
+        if resp.status_code == 201:
+            # Only reachable if the bound did NOT fire - captured so the
+            # failure path still cleans the clone up.
+            cloned_id = uuid.UUID(resp.json()["id"])
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert "Timed out waiting for a lock" in detail, detail
+        # The wait really happened (it did not resolve instantly)...
+        assert elapsed >= expected_seconds * 0.5, (
+            f"the clone returned after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
+        )
+        # ...and it was really BOUNDED (the holder never released the lock).
+        assert elapsed < bounded_ceiling, f"the clone did NOT degrade - {elapsed:.2f}s for a held source-row lock"
+    finally:
+        ids = [pipeline_id] + ([cloned_id] if cloned_id is not None else [])
+        await _cleanup_pipelines(db_engine, *ids)
 
 
 # ---------------------------------------------------------------------------

@@ -4033,7 +4033,10 @@ async def move_pipeline_to_folder_endpoint(
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
     # FAR-1276: parity + defence-in-depth with the sibling mutations - the
     # request-time membership-or-admin gate plus the in-txn re-check below,
-    # exactly as update / delete / archive / convert-to-agent pair them. Plain
+    # exactly as update / delete / replace-graph / convert-to-agent /
+    # revert-to-manual pair them. (``archive`` / ``unarchive`` / ``restore``
+    # carry ONLY the in-txn layer - no request-time dependency - so they are
+    # deliberately not in this list.) Plain
     # (JWT) flavour, matching this endpoint's own ``require_permission``.
     # Not a live Postgres hole: ``rls_team_isolation`` (migration 0124, the
     # sole policy on ``pipelines``) already hides a non-member's row, so under
@@ -4241,11 +4244,15 @@ async def _finalize_locked_graph_save(
 ) -> None:
     """Translate a locked-graph save error into the correct HTTP response.
 
-    ``HitlReviewWeakeningDenied`` is recorded (the guarded write already rolled
-    back) and control returns to the caller, which then raises the 404
-    saved-graph response. The other errors are translated directly into an
-    ``HTTPException``. Shared by the convert-to-agent and revert-to-manual
-    endpoints, which only differ in how they prepare ``nodes``/``edges``.
+    ``HitlReviewWeakeningDenied`` is recorded and then translated here:
+    ``_deny_hitl_review`` appends the denial audit event in a fresh transaction
+    and raises the mapped ``HTTPException`` UNCONDITIONALLY, so control does
+    NOT return to the caller on that arm - the caller's ``saved is None`` ->
+    404 branch below the ``except`` is reached only when ``_save_locked_graph``
+    found the pipeline row gone, never from this exception path. The other
+    errors are translated directly into an ``HTTPException``. Shared by the
+    convert-to-agent and revert-to-manual endpoints, which only differ in how
+    they prepare ``nodes``/``edges``.
     """
     if isinstance(exc, HitlReviewWeakeningDenied):
         await _deny_hitl_review(

@@ -222,6 +222,21 @@ Controls runner-slot reservation for sandbox-agent dispatches (FAR-594 D8).
 
 ---
 
+## Pipeline Mutation Lock Timeout
+
+Bounds the row-lock wait of a pipeline-MUTATION transaction (FAR-1279) - not a
+runner knob: it is deliberately its own field so API PATCH contention stays
+decoupled from runner-capacity tuning. The bound is applied transaction-scoped
+(`SET LOCAL` semantics) before the lock is taken, so it covers the whole
+mutation transaction, including the clone's separate-connection step-(a)
+`FOR SHARE` read of the source row.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MUTATION_ROW_LOCK_TIMEOUT_MS` | No | `5000` | Lock timeout in milliseconds for the whole pipeline-mutation transaction (graph save, update, delete, clone, folder move, node conversion). SQLSTATE 55P03 degrades to HTTP 409 `Timed out waiting for a lock on this resource; another change is in progress.` rather than an unbounded pooled-connection wait. Min 100, max 30000. |
+
+---
+
 ## Observability
 
 | Variable | Required | Default | Description |

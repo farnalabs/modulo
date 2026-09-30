@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
-from sqlalchemy import ColumnElement, Connection, delete, func, select, update
+from sqlalchemy import ColumnElement, Connection, delete, func, select, text, update
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
@@ -36,7 +36,7 @@ from modulo.db.crud.hitl_review_guard import (
 )
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.crud.pipeline_owner import ACCOUNTABILITY_OWNER_FIELDS, validate_accountability_owner
-from modulo.db.crud.run import count_active_runs_for_pipeline
+from modulo.db.crud.run import count_active_runs_for_pipeline, get_dialect_name
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -44,6 +44,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
+from modulo.settings import get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _log = logging.getLogger(__name__)
@@ -1067,6 +1068,15 @@ async def _read_clone_source_snapshot(
     re-apply the caller's full RLS context: ``set_rls_org`` scopes the org, and
     ``set_rls_user_context`` (when *org_role* is given) makes team-scoped
     pipelines visible via ``app.user_id`` / ``app.org_role``.
+
+    The ``FOR SHARE`` wait on that separate connection is BOUNDED (FAR-1279's
+    ``Settings.mutation_row_lock_timeout_ms``, applied transaction-scoped
+    before the select). Without it a clone overlapping a graph save or a second
+    clone of the same source would park its read connection indefinitely while
+    the caller's mutation transaction stays open - exactly the unbounded
+    request-scoped wait the mutation path's own in-txn gate refuses to allow.
+    A bounded wait surfaces SQLSTATE 55P03, which ``handle_db_errors`` maps to
+    the same 409 the rest of the mutation path degrades to.
     """
     factory, read_engine = _resolve_read_session_factory(session, read_factory)
 
@@ -1079,6 +1089,23 @@ async def _read_clone_source_snapshot(
             # context when both identity parts are available.
             if user_id is not None and org_role is not None:
                 await set_rls_user_context(read_session, user_id, org_role)
+            # Bounded lock wait for the FOR SHARE below - the SAME dialect-gated
+            # ``set_config(..., is_local => true)`` the in-txn team gate uses
+            # (``api.routes.pipelines._reapply_team_gate_inside_mutation_txn``),
+            # reusing the shared ``db.crud.run.get_dialect_name`` helper rather
+            # than a fourth local bind dance. SQLite has no ``set_config`` and
+            # the unit fixtures run on SQLite mocks, so a bind that does not
+            # positively report ``postgresql`` skips the statement: the bound is
+            # a safety improvement, never a correctness requirement, so the safe
+            # direction to fail is the no-op. It must run BEFORE the FOR SHARE
+            # to bound that wait; ``is_local`` scopes it to this read
+            # transaction, so it never leaks onto the pooled connection.
+            if await get_dialect_name(read_session) == "postgresql":
+                lock_timeout_ms = get_settings().mutation_row_lock_timeout_ms
+                await read_session.execute(
+                    text("SELECT set_config('lock_timeout', :val, true)"),
+                    {"val": f"{lock_timeout_ms}ms"},
+                )
             src_result = await read_session.execute(
                 select(Pipeline)
                 .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
