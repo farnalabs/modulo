@@ -14,6 +14,18 @@ function adminJwt(): string {
   return `${header}.${payload}.signature`
 }
 
+function viewerJwt(): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const payload = btoa(
+    JSON.stringify({
+      sub: 'viewer@example.com',
+      org_id: '00000000-0000-0000-0000-000000000001',
+      org_role: 'viewer',
+    }),
+  )
+  return `${header}.${payload}.signature`
+}
+
 const mockEndpoints = [
   {
     id: 'ep-1',
@@ -80,7 +92,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
-import { api } from '../lib/api/client'
+import { api, getAccessToken } from '../lib/api/client'
 
 async function flush() {
   await new Promise(resolve => setTimeout(resolve, 0))
@@ -93,6 +105,9 @@ describe('TeamNotificationEndpoints', () => {
     vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
       (url: string) => defaultGet(url),
     )
+    // A per-test override of the token (the non-operator case) must not leak
+    // into the next test — restore the admin principal default.
+    vi.mocked(getAccessToken).mockReturnValue(adminJwt())
   })
 
   const stubs = {
@@ -284,6 +299,20 @@ describe('TeamNotificationEndpoints', () => {
     const msg = wrapper.find('[data-testid="team-notif-events-unavailable"]')
     expect(msg.exists()).toBe(true)
     expect(wrapper.find('[data-testid="team-notif-events-retry"]').exists()).toBe(true)
+  })
+
+  it('does not fetch the event registry for a non-operator (FAR-1319)', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(viewerJwt())
+    const wrapper = mount(TeamNotificationEndpoints, {
+      props: { teamId: 'team-alpha' },
+      global: { stubs },
+    })
+    await flush()
+
+    // The registry endpoint requires admin.notification.manage; a non-operator
+    // never issues the request (avoids a guaranteed 403 on mount).
+    expect(api.GET).not.toHaveBeenCalledWith('/api/v1/admin/notifications/available-events')
+    expect(wrapper.find('[data-testid="team-notif-add-button"]').exists()).toBe(false)
   })
 
   it('deletes an endpoint with confirmation', async () => {
