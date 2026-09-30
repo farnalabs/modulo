@@ -2,7 +2,9 @@
 
 > Use this checklist when deploying Modulo in a VPC with no public internet
 > access. Each item must be verified before marking the deployment as
-> compliant with data residency requirements (PRD §10.5).
+> compliant with data residency requirements (principle:
+> `docs/core-principles.md` §9 "Self-hosted, no telemetry by default";
+> the PRD is retired).
 
 ---
 
