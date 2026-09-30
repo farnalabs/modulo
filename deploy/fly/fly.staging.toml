@@ -2,8 +2,16 @@ app = 'staging-modulo'
 
 # ===== Machine budget (stay within the org limit) =====
 # Standing footprint (verified live 2026-09-02 via `fly scale show`): 1 x app
-# (2 CPU, 2gb) + 1 x worker (1 CPU, 2gb) = 2 machines. The [[vm]] blocks below match
+# (4 CPU, 2gb) + 1 x worker (1 CPU, 2gb) = 2 machines. The [[vm]] blocks below match
 # the live machines exactly.
+# 2026-09-29: staging app CPU bumped 2 -> 4 shared (parity with fly.toml's
+# 2026-09-02 prod wedge fix). A 2-shared-CPU app machine wedges - HTTP server
+# stops answering while the machine stays `started` - under the concurrent
+# pipeline-orchestration load of the staging @regression real-stack journeys;
+# the identical wedge on prod was cured by the 4-CPU bump. Staging app machines
+# are created fresh on each deploy, so the [[vm]] change applies without a
+# manual resize. Paired with the [checks.app_liveness] block below and the
+# web-watchdog staging coverage, which heal a wedge that still occurs.
 # Whole-org standing (verified 2026-09-02): 11 machines across 7 apps in org
 # `personal`, ~8 started 24/7: app-modulo 3 + staging-modulo 2 + modulo-telemetry 2
 # (fra, 1 running) + library-modulo 1 (ams, autostop, mostly stopped) + 3 Fly MPG
@@ -116,11 +124,32 @@ primary_region = 'lhr'
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
   CORS_ORIGINS = "https://modulo.run,https://staging.modulo.run,http://localhost:5173"
 
-# Worker process-group health check (ADR 021). Top-level [checks], not a service
-# check — it does not affect routing. The worker container exposes a liveness
-# server on 8082 (entrypoint.sh worker branch) that returns 200 only while BOTH
-# SAQ worker subprocesses (runs + system) are alive.
+# App process-group LIVENESS check (FAR-1193 / ADR 043 Decision 4), parity with
+# fly.toml. Top-level [checks], NOT a service check: observability only, it does
+# not affect routing. It probes /healthz on port 8080 - a PROCESS-LOCAL signal
+# that returns 200 whenever THIS machine's HTTP process answers, regardless of
+# deployment state. The external web-watchdog workflow
+# (.github/workflows/web-watchdog.yml) keys its restart of a wedged app machine
+# on THIS check, never on the deployment-scoped servicecheck-* readiness probe.
+# Without it, a wedged staging app machine (state `started`, HTTP server
+# unresponsive) has no recovery path: staging stays down, every signing-in
+# @regression test fails, and the Deploy pipeline stays blocked (observed
+# 2026-09-29 - 503s mid-run, then a full login cascade).
 [checks]
+  [checks.app_liveness]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    path = "/healthz"
+    port = 8080
+    type = "http"
+    processes = ['app']
+
+  # Worker process-group health check (ADR 021). Top-level [checks], not a service
+  # check — it does not affect routing. The worker container exposes a liveness
+  # server on 8082 (entrypoint.sh worker branch) that returns 200 only while BOTH
+  # SAQ worker subprocesses (runs + system) are alive.
   [checks.worker_health]
     interval = "15s"
     timeout = "5s"
@@ -145,7 +174,11 @@ primary_region = 'lhr'
   processes = ['app']
   memory = '2gb'
   cpu_kind = 'shared'
-  cpus = 2
+  # 4 shared CPU (not 2): the staging app machine carried the @regression
+  # real-stack suite on a 2-CPU box until it wedged (2026-09-29) - the same
+  # resource shortfall fly.toml records for the 2026-09-02 prod wedge. See the
+  # standing-footprint note at the top of this file.
+  cpus = 4
 
 [[vm]]
   processes = ['worker']
