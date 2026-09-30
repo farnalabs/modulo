@@ -13308,9 +13308,7 @@ def _dead_scope_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     def walk(node: ast.AST, dead: str | None) -> None:
         if isinstance(node, ast.Assert):
             if dead is not None:
-                found.append(
-                    (node.lineno, f"assert {ast.unparse(node.test)} is unreachable — {dead}")
-                )
+                found.append((node.lineno, f"assert {ast.unparse(node.test)} is unreachable — {dead}"))
             return
         if isinstance(node, (ast.For, ast.AsyncFor)):
             if _statically_empty_iterable(node.iter):
@@ -13331,10 +13329,7 @@ def _dead_scope_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 inner = dead
         elif isinstance(node, ast.If):
             if _always_falsy_condition(node.test):
-                inner = (
-                    f"the 'if {ast.unparse(node.test)}' guard is statically "
-                    "False (the guarded body never enters)"
-                )
+                inner = f"the 'if {ast.unparse(node.test)}' guard is statically False (the guarded body never enters)"
             else:
                 inner = dead
         else:
@@ -13410,7 +13405,7 @@ def test_dead_scope_lens_flags_never_run_asserts():
         "def test_foo():\n    for x in range(1, 5, -1):\n        assert x\n",
         "def test_foo():\n    for x in list():\n        assert x\n",
         "def test_foo():\n    for x in dict():\n        assert x\n",
-        "def test_foo():\n    for x in \"\":\n        assert x\n",
+        'def test_foo():\n    for x in "":\n        assert x\n',
         "async def test_foo():\n    async for x in set():\n        assert x\n",
         "async def test_foo():\n    async for x in tuple():\n        assert x\n",
         "def test_foo():\n    while False:\n        assert never()\n",
@@ -13461,32 +13456,16 @@ def test_dead_scope_lens_flags_never_run_asserts():
         tree = ast.parse(source)
         assert not _dead_scope_assert_violations(tree), f"lens should NOT flag:\n{source}"
 
-    mixed_for = (
-        "def test_foo():\n"
-        "    for item in []:\n"
-        "        assert item\n"
-        "    else:\n"
-        "        assert cleanup()\n"
-    )
+    mixed_for = "def test_foo():\n    for item in []:\n        assert item\n    else:\n        assert cleanup()\n"
     found = _dead_scope_assert_violations(ast.parse(mixed_for))
     assert [lineno for lineno, _ in found] == [3], f"body/else split wrong: {found}"
 
-    mixed_while = (
-        "def test_foo():\n"
-        "    while False:\n"
-        "        assert never()\n"
-        "    else:\n"
-        "        assert cleanup()\n"
-    )
+    mixed_while = "def test_foo():\n    while False:\n        assert never()\n    else:\n        assert cleanup()\n"
     found = _dead_scope_assert_violations(ast.parse(mixed_while))
     assert [lineno for lineno, _ in found] == [3], f"body/else split wrong: {found}"
 
     mixed_nested = (
-        "def test_foo():\n"
-        "    if False:\n"
-        "        for x in []:\n"
-        "            assert x\n"
-        "    assert reachable()\n"
+        "def test_foo():\n    if False:\n        for x in []:\n            assert x\n    assert reachable()\n"
     )
     found = _dead_scope_assert_violations(ast.parse(mixed_nested))
     assert [lineno for lineno, _ in found] == [4], f"dead-scope reachability split wrong: {found}"
