@@ -96,19 +96,24 @@ def is_local_endpoint(endpoint: str | None) -> bool:
     return False
 
 
+def _is_env_truthy(value: str) -> bool:
+    """Return True when an env-var *value* counts as explicitly enabled.
+
+    Empty and common false spellings (``"0"``/``"false"``/``"False"``) count
+    as unset so operators can export-but-disable a flag without unsetting it.
+    """
+    return bool(value and value not in ("0", "false", "False"))
+
+
 def is_tls_configured() -> bool:
     """Return True if the process environment signals Docker TLS is configured."""
-    for var in TLS_ENV_VARS:
-        val = os.environ.get(var, "").strip()
-        if val and val not in ("0", "false", "False"):
-            return True
-    return False
+    return any(_is_env_truthy(os.environ.get(var, "").strip()) for var in TLS_ENV_VARS)
 
 
 def is_insecure_endpoint_allowed() -> bool:
     """Return True if the operator explicitly opted in to insecure remote endpoints."""
     val = os.environ.get(ALLOW_INSECURE_ENDPOINT_ENV, "").strip()
-    return bool(val and val not in ("0", "false", "False"))
+    return _is_env_truthy(val)
 
 
 def validate_docker_endpoint_tls(endpoint: str | None) -> None:
