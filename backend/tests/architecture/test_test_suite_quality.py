@@ -936,6 +936,24 @@ regression that silently weakens the suite:
   flips the assertion's meaning from key to value. Membership against the
   ``.items()``/``.values()`` views is deliberately left alone — those views DO
   change the meaning and are the correct spellings when present
+- ``assert`` statements that are provably *unable to execute* because a
+  containing scope is statically empty or statically false — a ``for`` /
+  ``async for`` iterating a provably-empty iterable (an empty list/tuple/set/
+  dict literal, an empty ``""``/``b""`` string/bytes constant, a zero-argument
+  builtin container call such as ``list()``/``set()``/``dict()``, or a constant
+  ``range()`` folding to length zero like ``range(0)``/``range(5, 5)``), a
+  ``while`` whose condition is a statically-falsy constant (``while False:`` /
+  ``while 0:``), or an ``if`` guard that is statically falsy (``if False:`` /
+  ``if 0:``). The loop/guard never runs its body, so the assert is dead
+  verification that reports green no matter how broken the code under test is —
+  the exact silent-false-green hazard the no-op-test lens guards against,
+  except the assert is *present*, so the no-op lens (which treats any assert as
+  verification) cannot see it. These are almost always leftover debugging where
+  the whole block was disabled behind a hard-coded ``False`` or an emptied
+  fixture list. The ``else`` branches of these scopes execute (a ``for`` over an
+  empty iterable and a falsy ``while``/``if`` all run their ``else``), so
+  asserts there ARE reachable and are deliberately left alone, as are loops
+  over iterables whose emptiness depends on runtime state
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -13131,3 +13149,344 @@ def test_dict_keys_membership_lens_flags_redundant_views():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _dict_keys_membership_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_JOINED_STRING_TYPE = getattr(ast, "JoinedString", None) or getattr(ast, "JoinedStr", None)
+"""F-string AST node type, version-agnostic: ``ast.JoinedString`` on Python
+3.12+ and ``ast.JoinedStr`` on earlier versions. Used only to evaluate the
+static emptiness of an f-string whose parts are all constant strings."""
+
+
+def _statically_empty_iterable(node: ast.AST) -> bool:
+    """True when *node* is provably an empty iterable at source time.
+
+    An empty list/tuple/set/dict literal (``[]``/``()``/``{}``), an empty
+    string/bytes constant (``""``/``b""``), an f-string whose parts are all
+    constant strings joining to ``""``, and a zero-argument builtin container
+    call that always returns an empty container (``list()``, ``dict()``,
+    ``set()``, ``tuple()``, ``bytes()``, ``bytearray()``, ``frozenset()`` —
+    ``_EMPTY_BUILTIN_CALLS``) can never yield an element, so iterating over them
+    runs zero body iterations. A ``range`` call whose constant integer arguments
+    fold to a length of zero (``range(0)``, ``range(5, 5)``,
+    ``range(5, 1, 2)``) is empty too. ``*``-unpacked sequences (``[*items]``),
+    ``**``-spread dicts (``{**mapping}``), comprehensions, and anything whose
+    arity depends on runtime state can provably hold elements and is deliberately
+    left alone."""
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        if any(isinstance(elt, ast.Starred) for elt in node.elts):
+            return False
+        return not node.elts
+    if isinstance(node, ast.Dict):
+        return not node.keys
+    if isinstance(node, ast.Constant):
+        return node.value in ("", b"")
+    if _JOINED_STRING_TYPE is not None and isinstance(node, _JOINED_STRING_TYPE):
+        parts: list[str] = []
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                parts.append(part.value)
+            else:
+                break
+        else:
+            return "".join(parts) == ""
+        return False
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id in _EMPTY_BUILTIN_CALLS and not node.args and not node.keywords:
+            return True
+        if node.func.id == "range":
+            return _range_folds_to_length_zero(node)
+    return False
+
+
+def _range_folds_to_length_zero(node: ast.Call) -> bool:
+    """True when a ``range(...)`` call's constant integer arguments fold to a
+    length of zero (``range(0)``, ``range(5, 5)``, ``range(5, 1, 2)``, ``range(1,
+    5, -1)``). Any non-constant or non-int argument makes the length
+    runtime-dependent and returns False; a zero ``step`` (which raises at
+    runtime) is not treated as empty."""
+    if len(node.args) > 3:
+        return False
+
+    def _constant_int(expr: ast.AST) -> int | None:
+        """Fold a literal integer or its unary-minus twin (``-3`` parses as
+        ``UnaryOp(USub, Constant(3))``, not a constant) to an int, else None."""
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, int) and not isinstance(expr.value, bool):
+            return expr.value
+        if (
+            isinstance(expr, ast.UnaryOp)
+            and isinstance(expr.op, ast.USub)
+            and isinstance(expr.operand, ast.Constant)
+            and isinstance(expr.operand.value, int)
+            and not isinstance(expr.operand.value, bool)
+        ):
+            return -expr.operand.value
+        return None
+
+    values: list[int] = []
+    for arg in node.args:
+        folded = _constant_int(arg)
+        if folded is None:
+            return False
+        values.append(folded)
+    step = values[2] if len(values) == 3 else 1
+    if step == 0:
+        return False
+    if len(values) == 1:
+        length = values[0]
+    elif step > 0:
+        length = max(0, (values[1] - values[0] + step - 1) // step)
+    else:
+        length = max(0, (values[0] - values[1] - step - 1) // -step)
+    return length == 0
+
+
+def _constant_truth_value(value: object) -> bool | None:
+    """Static truthiness of a literal constant, or ``None`` when
+    runtime-dependent (an ``Ellipsis``/``NotImplemented`` or any other constant
+    object whose truthiness the builtin ``bool`` already decides statically is
+    handled by the caller's ``always-truthy`` arm)."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float, complex)):
+        return value != 0
+    if isinstance(value, str):
+        return value != ""
+    if isinstance(value, bytes):
+        return value != b""
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return None
+
+
+def _always_falsy_condition(node: ast.AST) -> bool:
+    """True when *node* is provably False at source time: a ``False``/``0``/
+    ``None``/``""``/``b""`` constant, the ``not`` of a provably-truthy
+    expression, or an empty container literal / zero-argument empty-container
+    builtin call (delegating to ``_container_literal_truthiness``)."""
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _always_truthy_condition(node.operand)
+    if isinstance(node, ast.Constant):
+        return _constant_truth_value(node.value) is False
+    return _container_literal_truthiness(node) == "always falsy"
+
+
+def _always_truthy_condition(node: ast.AST) -> bool:
+    """True when *node* is provably True at source time: a ``True``/non-zero
+    number/``None``-excepting non-empty str/bytes constant, a non-empty
+    container literal or a non-empty-builtin-call truthiness (via
+    ``_container_literal_truthiness``). ``None``-based or runtime-dependent
+    constants return False. Used by :func:`_always_falsy_condition` to invert
+    ``not`` expressions."""
+    if isinstance(node, ast.Constant):
+        truth = _constant_truth_value(node.value)
+        if truth is None:
+            return node.value is not None and node.value is not NotImplemented
+        return truth is True
+    return _container_literal_truthiness(node) == "always truthy"
+
+
+def _dead_scope_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` that is provably
+    unable to execute because a containing scope is statically empty or
+    statically false.
+
+    ``for x in []:`` / ``for x in range(0):`` / ``async for x in set():`` — a
+    loop over a provably-empty iterable — never runs its body, and ``while
+    False:`` / ``if 0:`` guards never run theirs, so an assertion nested (at any
+    depth) inside is dead verification: it reports green no matter how broken
+    the code under test is, exactly as if the assert were omitted. These are
+    almost always leftover-debugging artefacts where a block was disabled behind
+    a hard-coded ``False`` or an emptied fixture list. The ``else`` branches of
+    these scopes are deliberately NOT flagged: a ``for`` over an empty iterable
+    runs its ``else`` immediately and a falsy ``while``/``if`` runs its
+    ``else`` too, so asserts written there DO execute. Iterables/conditions
+    whose emptiness depends on runtime state are left alone."""
+    found: list[tuple[int, str]] = []
+
+    def walk(node: ast.AST, dead: str | None) -> None:
+        if isinstance(node, ast.Assert):
+            if dead is not None:
+                found.append(
+                    (node.lineno, f"assert {ast.unparse(node.test)} is unreachable — {dead}")
+                )
+            return
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            if _statically_empty_iterable(node.iter):
+                inner = (
+                    f"the loop iterates over the statically-empty "
+                    f"{ast.unparse(node.iter)} (zero iterations, so its body "
+                    "never runs)"
+                )
+            else:
+                inner = dead
+        elif isinstance(node, ast.While):
+            if _always_falsy_condition(node.test):
+                inner = (
+                    f"the 'while {ast.unparse(node.test)}' condition is "
+                    "statically False (zero iterations, so its body never runs)"
+                )
+            else:
+                inner = dead
+        elif isinstance(node, ast.If):
+            if _always_falsy_condition(node.test):
+                inner = (
+                    f"the 'if {ast.unparse(node.test)}' guard is statically "
+                    "False (the guarded body never enters)"
+                )
+            else:
+                inner = dead
+        else:
+            inner = dead
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.If)):
+            for child in node.body:
+                walk(child, inner)
+            for child in node.orelse:
+                walk(child, dead)
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child, inner)
+
+    walk(tree, None)
+    return found
+
+
+def test_no_asserts_in_dead_scopes():
+    """An ``assert`` provably unable to execute because a containing scope is
+    statically empty or statically false — a ``for``/``async for`` iterating a
+    provably-empty iterable (``for x in []:``, ``for x in range(0):``, ``async
+    for x in set():``), a ``while`` with a statically-falsy condition (``while
+    False:``/``while 0:``), or an ``if`` with a statically-falsy guard (``if
+    False:``/``if 0:``) — is dead verification: the loop/guard never runs its
+    body, so the assert reports green no matter how broken the code under test
+    is. That is the exact silent-false-green hazard the no-op-test lens exists
+    for, except the assert is *present*, so the no-op lens — which counts any
+    assert as verification regardless of reachability — cannot see it. These
+    are almost always leftover debugging where a block was disabled behind a
+    hard-coded ``False`` or an emptied fixture list. The ``else`` branches of
+    these scopes execute (a ``for`` over an empty iterable and a falsy
+    ``while``/``if`` both run their ``else``) and are left alone, as are loops
+    over iterables whose emptiness depends on runtime state."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _dead_scope_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) that can never execute.\n"
+        "The enclosing scope is statically empty (an empty list/tuple/set/dict literal,\n"
+        "an empty ''/b'' constant, a zero-argument list()/set()/dict()-style builtin call,\n"
+        "or a constant range() folding to length zero) or statically false\n"
+        "(while False / while 0 / if False / if 0). The loop/guard never runs its body, so\n"
+        "the assert is dead verification that reports green even when the behaviour it\n"
+        "appears to check is completely broken. Remove the assert, or make the scope\n"
+        "reachable by iterating a real collection / dropping the hard-coded guard.\n" + "\n".join(violations)
+    )
+
+
+def test_dead_scope_lens_flags_never_run_asserts():
+    """Synthetic positive/negative control for the dead-scope assert lens: it
+    must flag asserts nested (at any depth) under a loop over a provably-empty
+    iterable — empty literals, empty string/bytes constants, zero-argument
+    builtin containers, constant ranges folding to zero — and under statically
+    False ``while``/``if`` guards (including ``not``-wrapped truthy constants),
+    and must leave reachable asserts, runtime-dependent iterables/conditions,
+    and the *executing* ``else`` branches of dead scopes alone. The exact
+    reported lines for mixed body/else shapes are pinned so a future regression
+    in the body-vs-else distinction fails loudly."""
+    positive_sources = [
+        "def test_foo():\n    for item in []:\n        assert check(item)\n",
+        "def test_foo():\n    for item in ():\n        assert check(item)\n",
+        "def test_foo():\n    for key in {}:\n        assert lookup(key)\n",
+        "def test_foo():\n    for x in set():\n        assert x\n",
+        "def test_foo():\n    for x in range(0):\n        assert x > 0\n",
+        "def test_foo():\n    for x in range(5, 5):\n        assert x\n",
+        "def test_foo():\n    for x in range(5, 1, 2):\n        assert x\n",
+        "def test_foo():\n    for x in range(-3, -3):\n        assert x\n",
+        "def test_foo():\n    for x in range(1, 5, -1):\n        assert x\n",
+        "def test_foo():\n    for x in list():\n        assert x\n",
+        "def test_foo():\n    for x in dict():\n        assert x\n",
+        "def test_foo():\n    for x in \"\":\n        assert x\n",
+        "async def test_foo():\n    async for x in set():\n        assert x\n",
+        "async def test_foo():\n    async for x in tuple():\n        assert x\n",
+        "def test_foo():\n    while False:\n        assert never()\n",
+        "def test_foo():\n    while 0:\n        assert never()\n",
+        "def test_foo():\n    while not True:\n        assert never()\n",
+        "def test_foo():\n    while not [1, 2]:\n        assert never()\n",
+        "def test_foo():\n    if False:\n        assert never()\n",
+        "def test_foo():\n    if 0:\n        assert never()\n",
+        "def test_foo():\n    if None:\n        assert never()\n",
+        "def test_foo():\n    if not True:\n        assert never()\n",
+        "def test_foo():\n    if not 1:\n        assert never()\n",
+        "def test_foo():\n    if not [1, 2]:\n        assert never()\n",
+        "def test_foo():\n    for a in []:\n        if a:\n            assert a\n",
+        "def test_foo():\n    if False:\n        for x in [1]:\n            assert x\n",
+        "def test_foo():\n    for x in range(0):\n        for y in [1]:\n            assert y\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _dead_scope_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x\n",
+        "def test_foo():\n    for item in items:\n        assert check(item)\n",
+        "def test_foo():\n    for item in [1, 2]:\n        assert check(item)\n",
+        "def test_foo():\n    for i in range(1, 5):\n        assert i\n",
+        "def test_foo():\n    for i in range(0, 5, 2):\n        assert i\n",
+        "def test_foo():\n    for i in range(n):\n        assert i\n",
+        "def test_foo():\n    for i in range(len(items)):\n        assert i\n",
+        "def test_foo():\n    for x in [*items]:\n        assert x\n",
+        "def test_foo():\n    for x in {**mapping}:\n        assert x\n",
+        "def test_foo():\n    for x in get_items():\n        assert x\n",
+        "def test_foo():\n    for x in objects.values():\n        assert x\n",
+        "def test_foo():\n    for x in 'abc':\n        assert x\n",
+        "def test_foo():\n    while items:\n        assert items.pop()\n",
+        "def test_foo():\n    while True:\n        assert heartbeat()\n        break\n",
+        "def test_foo():\n    while x < 10:\n        assert x\n        x += 1\n",
+        "def test_foo():\n    if flag:\n        assert x\n",
+        "def test_foo():\n    if isinstance(x, int):\n        assert x > 0\n",
+        "def test_foo():\n    if x is not None:\n        assert x\n",
+        "def test_foo():\n    if x:\n        assert x\n",
+        "def test_foo():\n    if running:\n        for item in items:\n            assert item\n",
+        "async def test_foo():\n    async for x in queue:\n        assert x\n",
+        "def test_foo():\n    for item in []:\n        pass\n    else:\n        assert cleanup()\n",
+        "def test_foo():\n    while False:\n        pass\n    else:\n        assert cleanup()\n",
+        "def test_foo():\n    if False:\n        pass\n    else:\n        assert cleanup()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _dead_scope_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+    mixed_for = (
+        "def test_foo():\n"
+        "    for item in []:\n"
+        "        assert item\n"
+        "    else:\n"
+        "        assert cleanup()\n"
+    )
+    found = _dead_scope_assert_violations(ast.parse(mixed_for))
+    assert [lineno for lineno, _ in found] == [3], f"body/else split wrong: {found}"
+
+    mixed_while = (
+        "def test_foo():\n"
+        "    while False:\n"
+        "        assert never()\n"
+        "    else:\n"
+        "        assert cleanup()\n"
+    )
+    found = _dead_scope_assert_violations(ast.parse(mixed_while))
+    assert [lineno for lineno, _ in found] == [3], f"body/else split wrong: {found}"
+
+    mixed_nested = (
+        "def test_foo():\n"
+        "    if False:\n"
+        "        for x in []:\n"
+        "            assert x\n"
+        "    assert reachable()\n"
+    )
+    found = _dead_scope_assert_violations(ast.parse(mixed_nested))
+    assert [lineno for lineno, _ in found] == [4], f"dead-scope reachability split wrong: {found}"
