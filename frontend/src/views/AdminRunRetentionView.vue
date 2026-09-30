@@ -252,7 +252,7 @@ const { t } = useI18n()
 
 type CandidatesResponse = components['schemas']['CandidatesResponse']
 type RetentionCandidate = components['schemas']['RetentionCandidate']
-type PurgeResponse = components['schemas']['PurgeResponse']
+type PurgeResponse = components['schemas']['modulo__api__routes__admin_run_retention__PurgeResponse']
 type PipelineResponse = components['schemas']['PipelineResponse']
 
 const AVAILABLE_STATUSES = Object.values(RUN_STATUS)

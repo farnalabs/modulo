@@ -15,6 +15,7 @@ best-effort audit failure paths.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from types import SimpleNamespace
@@ -156,12 +157,18 @@ def _queue_execute(session: AsyncMock, results: list[MagicMock]) -> None:
     session.execute = AsyncMock(side_effect=_execute)
 
 
-def _eval_row(*, node_id: uuid.UUID | None = _NODE_ID, eval_type: str = "regex") -> MagicMock:
+def _eval_row(
+    *,
+    node_id: uuid.UUID | None = _NODE_ID,
+    eval_type: str = "regex",
+    config_json: dict | None = None,
+) -> MagicMock:
     row = MagicMock()
     row.id = _EVAL_ID
     row.organisation_id = _ORG_ID
     row.node_id = node_id
     row.eval_type = eval_type
+    row.config_json = config_json or {}
     return row
 
 
@@ -353,6 +360,40 @@ def test_create_gate_binding_violation_returns_400(client: tuple[TestClient, Asy
     assert "binding is invalid" in resp.json()["detail"]
 
 
+def test_create_gate_suite_scoped_eval_rejected_before_any_insert(client: tuple[TestClient, AsyncMock]) -> None:
+    """A node-less (suite-scoped) eval is rejected before the gate insert.
+
+    The route must not fabricate a ``node_id`` for a node-less eval, so the
+    binding validation 400 is returned and the insert is never attempted — the
+    failure cannot leak out as an IntegrityError mapped to a misleading 409.
+    """
+    http, session = client
+    _queue_execute(session, [_result(scalar_one_or_none=_eval_row(node_id=None))])
+    insert = AsyncMock()
+    with patch.object(evals_routes, "_create_or_replace_gate", new=insert):
+        resp = http.post(_GATE_URL, json={"action": "warn"})
+
+    assert resp.status_code == 400, resp.text
+    insert.assert_not_awaited()
+
+
+def test_create_gate_binds_the_evals_own_node_id(client: tuple[TestClient, AsyncMock]) -> None:
+    """The gate's ``node_id`` is the eval's ``node_id`` verbatim.
+
+    The retired ``eval_row.node_id or uuid.uuid4()`` placeholder would have
+    silently bound a gate to a fabricated node; pin the pass-through instead.
+    """
+    http, session = client
+    _queue_execute(session, [_result(scalar_one_or_none=_eval_row(node_id=_NODE_ID))])
+    insert = AsyncMock(return_value=_gate_row())
+    with patch.object(evals_routes, "_create_or_replace_gate", new=insert):
+        resp = http.post(_GATE_URL, json={"action": "warn"})
+
+    assert resp.status_code == 201, resp.text
+    gate_fields = insert.await_args.args[1]
+    assert gate_fields["node_id"] == _NODE_ID
+
+
 def test_create_gate_conflict_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     _queue_execute(session, [_result(scalar_one_or_none=_eval_row())])
@@ -534,6 +575,115 @@ def test_update_gate_unexpected_error_returns_500(client: tuple[TestClient, Asyn
     resp = http.put(_GATE_URL, json={"action": "block"})
 
     assert resp.status_code == 500, resp.text
+
+
+# ---------------------------------------------------------------------------
+# F4: update path returns author warnings (FAR-957)
+# ---------------------------------------------------------------------------
+
+
+def test_update_gate_returns_author_warnings(client: tuple[TestClient, AsyncMock]) -> None:
+    """F4: the update path must run check_author_warnings and return the
+    warnings in PolicyGateResponse.warnings — not create-only.
+    """
+    from modulo.core.eval_engine.author_warnings import AuthorWarning
+
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row(config_json={"evidence_key": "racy.key"})),
+            _result(scalar_one_or_none=_gate_row()),
+        ],
+    )
+    fake_warnings = [AuthorWarning("temporal_ordering", "Producer runs after gate.")]
+    with patch(
+        "modulo.api.routes.evals.check_author_warnings",
+        new_callable=AsyncMock,
+        return_value=fake_warnings,
+    ):
+        resp = http.put(_GATE_URL, json={"action": "block"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["warnings"] == [{"code": "temporal_ordering", "message": "Producer runs after gate."}]
+
+
+# ---------------------------------------------------------------------------
+# _collect_author_warnings (FAR-957 §3.2) — candidate extraction + failure fallback
+# ---------------------------------------------------------------------------
+
+
+def _make_admin_principal() -> TenantPrincipal:
+    return TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+
+async def test_collect_author_warnings_checks_top_level_and_nested_detection_keys() -> None:
+    """Both ``evidence_key`` mentions are checked: the top-level config key AND
+    ``detection.evidence_key`` (the guardrail-config nesting)."""
+    session = _make_session()
+    check = AsyncMock(return_value=[])
+    eval_row = _eval_row(config_json={"evidence_key": "top.key", "detection": {"evidence_key": "det.key"}})
+    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    checked_keys = {call.kwargs["evidence_key"] for call in check.await_args_list}
+    assert checked_keys == {"top.key", "det.key"}
+    assert session.execute.await_count == 0  # the helper only proxies the check
+
+
+async def test_collect_author_warnings_ignores_non_dict_detection() -> None:
+    """A ``detection`` that is not a mapping is not an evidence-key reference."""
+    session = _make_session()
+    check = AsyncMock(return_value=[])
+    eval_row = _eval_row(config_json={"detection": "not-a-mapping"})
+    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    check.assert_not_awaited()
+
+
+async def test_collect_author_warnings_ignores_detection_without_evidence_key() -> None:
+    """A ``detection`` mapping without ``evidence_key`` is not an evidence-key
+    reference (a bare ``key`` is too ambiguous)."""
+    session = _make_session()
+    check = AsyncMock(return_value=[])
+    eval_row = _eval_row(config_json={"detection": {"key": "threshold"}})
+    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    check.assert_not_awaited()
+
+
+async def test_collect_author_warnings_check_failure_is_logged_and_swallowed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An author-warning check failure is advisory: logged at WARNING with the
+    eval/evidence context and swallowed so the gate write still proceeds."""
+    session = _make_session()
+    eval_row = _eval_row(config_json={"evidence_key": "flaky.key"})
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.api.routes.evals"),
+        patch(
+            "modulo.api.routes.evals.check_author_warnings",
+            new=AsyncMock(side_effect=RuntimeError("author check down")),
+        ),
+    ):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    failure_records = [r for r in caplog.records if r.msg == "policy_gate.author_warnings_check_failed"]
+    assert len(failure_records) == 1
+    assert failure_records[0].evidence_key == "flaky.key"
+    assert failure_records[0].eval_id == str(_EVAL_ID)
 
 
 # ---------------------------------------------------------------------------
