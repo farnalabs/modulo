@@ -1545,8 +1545,12 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             set_request_allowed_tools(None)
 
         # FAR-1283: every authenticated continuation below goes through the
-        # mcp_server plan-feature gate.
-        gated_next = functools.partial(_call_next_if_feature_enabled, request)
+        # mcp_server plan-feature gate. ``gated_next`` keeps the plain
+        # ``Callable[[Request], Awaitable[Response]]`` shape every continuation
+        # expects, so it can be handed to ``_finalize_oauth_principal`` (which
+        # calls ``call_next(request)``) as well as called directly.
+        async def gated_next(req: Request) -> Response:
+            return await _call_next_if_feature_enabled(req, call_next)
 
         token, auth_err = _extract_bearer_token(request)
         if auth_err is not None:
@@ -1561,7 +1565,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 return api_err
             if handled:
                 await _set_authz_enforce(_ctx_org_id.get())
-                return await gated_next(call_next)
+                return await gated_next(request)
 
         # Try OAuth access token (JWT).
         settings = get_settings()
@@ -1570,7 +1574,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             return oauth_err
         if handled2:
             await _set_authz_enforce(_ctx_org_id.get())
-            return await gated_next(call_next)
+            return await gated_next(request)
 
         # Verify token family is not blacklisted.
         family_err = await _verify_oauth_token_family(token, claims)
