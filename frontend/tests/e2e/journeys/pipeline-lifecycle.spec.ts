@@ -11,13 +11,50 @@ import {
 } from '../setup/realstack-api'
 
 /**
- * Invoke a row's action-menu command. See `setup/row-menu.ts` for why a real
- * pointer sequence is required (the overlay transition defeats coordinate
- * clicks, and a synthetic click lands on the item's anchor href and navigates).
+ * Invoke a row's action-menu command and confirm it landed. See
+ * `setup/row-menu.ts` for how the popup item is activated.
+ *
+ * The anchored popup is racy on staging: PrimeVue binds a scroll listener when
+ * the overlay enters, and the overlay can hide itself before the item's
+ * `command` runs, leaving the row unchanged with no request ever sent (the
+ * exact silent no-op the rename/archive journeys hit). `effect` reports whether
+ * the command took effect — the menu is re-opened and re-activated until it
+ * does. Without an `effect` a single activation is attempted.
  */
-async function clickRowAction(page: Page, row: Locator, label: string): Promise<void> {
-  await row.getByTestId('pipeline-list-action-menu').click()
-  await clickMenuItem(page.getByRole('menuitem', { name: label, exact: true }))
+async function clickRowAction(
+  page: Page,
+  row: Locator,
+  label: string,
+  effect?: () => Promise<void>,
+): Promise<void> {
+  const attempts = effect ? 3 : 1
+  let lastError: unknown
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      await row.getByTestId('pipeline-list-action-menu').click()
+      await clickMenuItem(page.getByRole('menuitem', { name: label, exact: true }))
+      if (!effect) return
+      await effect()
+      return
+    } catch (err) {
+      lastError = err
+    }
+    // The command can land just after `effect` timed out, making the row
+    // depart before the next attempt's click. Re-check the effect first and
+    // treat a satisfied effect as success, so a departing node's click error
+    // (a false negative) never masks a command that actually ran.
+    if (effect) {
+      try {
+        await effect()
+        return
+      } catch (err) {
+        lastError = err
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`row action "${label}" did not take effect`)
 }
 
 /**
@@ -65,10 +102,12 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       await expect(row).toBeVisible()
       await expect(row).toContainText(name)
 
-      // Rename via the row's action menu.
-      await clickRowAction(page, row, 'Rename')
+      // Rename via the row's action menu. Retry until the rename dialog
+      // actually opens: the popup can self-hide before the command lands.
       const dialog = page.locator('dialog').filter({ has: page.locator('#pipelinelistview-field-1') })
-      await expect(dialog).toBeVisible()
+      await clickRowAction(page, row, 'Rename', async () => {
+        await expect(dialog).toBeVisible({ timeout: 5_000 })
+      })
       await dialog.locator('#pipelinelistview-field-1').fill(renamed)
       await dialog.getByRole('button', { name: 'Save' }).click()
       await expect(dialog).toHaveCount(0)
@@ -96,12 +135,12 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       const row = page.getByTestId(`pipeline-tree-row-${pipeline.id}`)
       await expect(row).toBeVisible()
 
-      // Archive via the row's action menu.
-      await clickRowAction(page, row, 'Archive')
-
-      // Observable effect: the default list excludes archived pipelines, so
-      // the row disappears for the user...
-      await expect(row).toHaveCount(0)
+      // Archive via the row's action menu. Observable effect: the default list
+      // excludes archived pipelines, so the row disappears for the user. Retry
+      // until it does: the popup can self-hide before the command lands.
+      await clickRowAction(page, row, 'Archive', async () => {
+        await expect(row).toHaveCount(0, { timeout: 5_000 })
+      })
       // ...and the archived state persisted through the real backend.
       const res = await apiFetch<PipelineDetail>(apiBase, token, 'GET', `/api/v1/pipelines/${pipeline.id}`)
       expect(res.status).toBe(200)

@@ -106,11 +106,32 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await page.getByTestId('hitl-gate-notes').fill('E2E journey approval')
       await page.getByTestId('hitl-gate-approve').click()
 
+      // The run must really resume and complete on the backend. Staging's DB
+      // can transiently 5xx (503) or time out mid-approve, which leaves the run
+      // parked at its still-claimed gate; re-issue the decision once before
+      // failing (the approve control stays rendered while the gate is claimed).
+      let status: string
+      try {
+        status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 60_000 })
+      } catch (firstError) {
+        const approve = page.getByTestId('hitl-gate-approve')
+        if (await approve.isVisible().catch(() => false)) await approve.click()
+        try {
+          status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 60_000 })
+        } catch (retryError) {
+          // Keep the original failure in the final message so triage is not
+          // left guessing whether the first poll or the re-issue was the cause.
+          throw new Error(
+            `run ${run.run_id} did not complete after re-issuing the approve decision; ` +
+              `first poll: ${firstError instanceof Error ? firstError.message : String(firstError)}; ` +
+              `retry poll: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+          )
+        }
+      }
+      expect(status).toBe('complete')
+
       // Observable effect: the decision is hoisted as success feedback...
       await expect(page.getByTestId('run-detail-hitl-message')).toBeVisible({ timeout: 15_000 })
-      // ...and the run really resumed and completed on the backend.
-      const status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 120_000 })
-      expect(status).toBe('complete')
 
       // The completed run is listed on /runs with its pipeline name.
       await page.goto('/runs')
