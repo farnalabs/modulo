@@ -16,8 +16,9 @@ Lenses:
   0266_guardrail_policy_gate_sweep (FAR-1107) chains onto 0265,
   0267_notification_hot_query_indexes chains onto 0266,
   0268_webhook_lookup_expiry_indexes chains onto 0267,
-  0269_webhook_dedup_check_constraints chains onto 0268, and
-  0270_pipeline_snapshots_max_autonomy_ge_default chains onto 0269 as the
+  0269_webhook_dedup_check_constraints chains onto 0268,
+  0270_pipeline_snapshots_max_autonomy_ge_default chains onto 0269, and
+  0271_org_api_keys_revocation_sweep_indexes chains onto 0270 as the
   single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -43,7 +44,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0270_pipeline_snapshots_max_autonomy_ge_default"
+_HEAD_MIGRATION = "0271_org_api_keys_revocation_sweep_indexes"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

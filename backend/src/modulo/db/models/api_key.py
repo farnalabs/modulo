@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -13,6 +13,28 @@ class OrgApiKey(OrgScoped):
         CheckConstraint("role IN ('operator', 'runner')", name="ck_org_api_keys_role"),
         CheckConstraint("scope IN ('org', 'user')", name="ck_org_api_keys_scope"),
         UniqueConstraint("lookup_prefix", name="uq_org_api_keys_lookup_prefix"),
+        # 0271_org_api_keys_revocation_sweep_indexes — per-run key revocation
+        # (auth/api_key.py::revoke_run_api_key UPDATE + revoke_run_api_key_sweep
+        # join) filters (organisation_id, run_id, revoked_at IS NULL); the
+        # single-column run_id/org indexes forced a bitmap-AND over the full
+        # org key set.
+        Index(
+            "ix_org_api_keys_live_run_keys",
+            "organisation_id",
+            "run_id",
+            postgresql_where=text("revoked_at IS NULL AND run_id IS NOT NULL"),
+            sqlite_where=text("revoked_at IS NULL AND run_id IS NOT NULL"),
+        ),
+        # 0271 — housekeeping stale-key scan (core/housekeeping.py::
+        # _scan_stale_api_keys) filters (organisation_id, revoked_at IS NULL,
+        # last_used_at NULL-or-old) with no supporting index.
+        Index(
+            "ix_org_api_keys_stale_sweep",
+            "organisation_id",
+            "last_used_at",
+            postgresql_where=text("revoked_at IS NULL"),
+            sqlite_where=text("revoked_at IS NULL"),
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
