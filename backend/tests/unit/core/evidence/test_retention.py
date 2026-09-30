@@ -41,6 +41,7 @@ from modulo.core.evidence_retention import (
     EvidenceRetentionPolicy,
     _acquire_advisory_lock,
     _record_deletion_metrics,
+    _release_advisory_lock,
     count_evidence_rows,
     load_policy,
     purge_evidence,
@@ -526,3 +527,133 @@ async def test_save_policy_missing_org_raises_value_error(session: AsyncSession)
     """
     with pytest.raises(ValueError, match="not found"):
         await save_policy(session, uuid.uuid4(), EvidenceRetentionPolicy())
+
+
+# ---------------------------------------------------------------------------
+# Advisory-lock release boundary + policy-default + count-phase edge arms
+# ---------------------------------------------------------------------------
+
+
+class _RecordingExecSession:
+    """Minimal session double that records executed statements and params."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+        self.param_sets: list[dict[str, Any]] = []
+
+    async def execute(self, stmt: Any, params: Any = None) -> Any:
+        self.statements.append(str(stmt))
+        self.param_sets.append(dict(params) if params is not None else {})
+        return _StubResult(True)
+
+
+async def test_release_advisory_lock_executes_unlock_with_derived_org_keys() -> None:
+    """The release issues ``pg_advisory_unlock`` with the same derived (k1, k2)
+    key pair ``_acquire_advisory_lock`` used — otherwise it would unlock a
+    different lock namespace than the one held."""
+    org_id = uuid.uuid4()
+    stub = _RecordingExecSession()
+
+    await _release_advisory_lock(stub, org_id)  # type: ignore[arg-type]
+
+    k1, k2 = evidence_retention._org_lock_key(org_id.bytes)
+    assert stub.param_sets[0] == {"k1": k1, "k2": k2}
+    assert "pg_advisory_unlock" in stub.statements[0]
+
+
+async def test_release_advisory_lock_supports_non_uuid_org_ids() -> None:
+    """An org id without a ``.bytes`` attribute (e.g. a raw key) is hashed via
+    ``bytes(org_id)`` instead of crashing the release path."""
+    org_key_bytes = uuid.uuid4().bytes
+    stub = _RecordingExecSession()
+
+    await _release_advisory_lock(stub, org_key_bytes)  # type: ignore[arg-type]
+
+    k1, k2 = evidence_retention._org_lock_key(org_key_bytes)
+    assert stub.param_sets[0] == {"k1": k1, "k2": k2}
+
+
+def test_metrics_skipped_when_no_provider_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no meter provider configured the deletion metric is skipped
+    entirely — the counter is never created and nothing raises.
+
+    Note: the installed OpenTelemetry SDK's ``get_meter_provider()`` itself
+    never returns ``None`` (it falls back to a proxy provider), so this guard
+    is only reachable with a stubbed provider — it is defensive for provider
+    implementations that do.
+    """
+    provider_reads: list[object] = []
+
+    def _no_provider() -> object:
+        provider_reads.append(object())
+        return None
+
+    monkeypatch.setattr(otel_metrics, "get_meter_provider", _no_provider)
+
+    assert _record_deletion_metrics(uuid.uuid4(), 4) is None
+    assert len(provider_reads) == 1  # the provider was consulted, then the guard bailed
+
+
+async def test_purge_without_policy_loads_org_defaults(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``purge_evidence`` called without an explicit policy loads the org's
+    policy (defaulting to the module defaults when none is configured)."""
+    org_id = await _seed_org(session)
+    session.add(_evidence(org_id, "old.key", created_at=_utc_days_ago(120)))
+    await session.commit()
+    _grant_locks(monkeypatch)
+
+    result = await purge_evidence(session, org_id)  # policy=None → load_policy(session, org_id)
+
+    assert result.rows_deleted == 1
+    assert result.batches == 1
+    assert result.max_age_days == DEFAULT_MAX_AGE_DAYS
+    assert result.max_rows is None
+    assert await count_evidence_rows(session, org_id) == 0
+
+
+class _ScalarOnlyResult:
+    """Result double exposing only ``.scalar()`` (the count query's usage)."""
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def scalar(self) -> Any:
+        return self._value
+
+
+class _OvercountSession:
+    """Session proxy whose ``count(*)`` reads report rows that are not there.
+
+    Simulates the count/ids race in the max_rows phase: the count read says
+    the org is far over the limit, but the id-pick query that follows finds
+    no rows (e.g. another worker deleted them between the two reads). The
+    sweep must break out of the count loop instead of spinning.
+    """
+
+    def __init__(self, inner: AsyncSession) -> None:
+        self._inner = inner
+
+    async def execute(self, stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        if "count(" in str(stmt).lower():
+            return _ScalarOnlyResult(999)
+        return await self._inner.execute(stmt, *args, **kwargs)
+
+
+async def test_count_purge_breaks_when_batch_ids_are_empty(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inflated count with an empty id batch terminates the count phase
+    cleanly (no deletions, no spin) and still releases the advisory lock."""
+    org_id = await _seed_org(session)  # zero evidence rows
+    _grant_locks(monkeypatch)
+
+    result = await purge_evidence(
+        _OvercountSession(session),  # type: ignore[arg-type]
+        org_id,
+        EvidenceRetentionPolicy(max_rows=1),
+    )
+
+    assert result.rows_deleted == 0
+    assert result.batches == 0
+    assert result.max_rows == 1
+    assert await count_evidence_rows(session, org_id) == 0

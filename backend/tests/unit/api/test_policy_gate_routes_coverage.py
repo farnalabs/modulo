@@ -15,6 +15,7 @@ best-effort audit failure paths.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from types import SimpleNamespace
@@ -606,6 +607,83 @@ def test_update_gate_returns_author_warnings(client: tuple[TestClient, AsyncMock
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["warnings"] == [{"code": "temporal_ordering", "message": "Producer runs after gate."}]
+
+
+# ---------------------------------------------------------------------------
+# _collect_author_warnings (FAR-957 §3.2) — candidate extraction + failure fallback
+# ---------------------------------------------------------------------------
+
+
+def _make_admin_principal() -> TenantPrincipal:
+    return TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+
+async def test_collect_author_warnings_checks_top_level_and_nested_detection_keys() -> None:
+    """Both ``evidence_key`` mentions are checked: the top-level config key AND
+    ``detection.evidence_key`` (the guardrail-config nesting)."""
+    session = _make_session()
+    check = AsyncMock(return_value=[])
+    eval_row = _eval_row(config_json={"evidence_key": "top.key", "detection": {"evidence_key": "det.key"}})
+    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    checked_keys = {call.kwargs["evidence_key"] for call in check.await_args_list}
+    assert checked_keys == {"top.key", "det.key"}
+    assert session.execute.await_count == 0  # the helper only proxies the check
+
+
+async def test_collect_author_warnings_ignores_non_dict_detection() -> None:
+    """A ``detection`` that is not a mapping is not an evidence-key reference."""
+    session = _make_session()
+    check = AsyncMock(return_value=[])
+    eval_row = _eval_row(config_json={"detection": "not-a-mapping"})
+    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    check.assert_not_awaited()
+
+
+async def test_collect_author_warnings_ignores_detection_without_evidence_key() -> None:
+    """A ``detection`` mapping without ``evidence_key`` is not an evidence-key
+    reference (a bare ``key`` is too ambiguous)."""
+    session = _make_session()
+    check = AsyncMock(return_value=[])
+    eval_row = _eval_row(config_json={"detection": {"key": "threshold"}})
+    with patch("modulo.api.routes.evals.check_author_warnings", new=check):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    check.assert_not_awaited()
+
+
+async def test_collect_author_warnings_check_failure_is_logged_and_swallowed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An author-warning check failure is advisory: logged at WARNING with the
+    eval/evidence context and swallowed so the gate write still proceeds."""
+    session = _make_session()
+    eval_row = _eval_row(config_json={"evidence_key": "flaky.key"})
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.api.routes.evals"),
+        patch(
+            "modulo.api.routes.evals.check_author_warnings",
+            new=AsyncMock(side_effect=RuntimeError("author check down")),
+        ),
+    ):
+        warnings = await evals_routes._collect_author_warnings(session, _make_admin_principal(), eval_row, _EVAL_ID)
+
+    assert not warnings
+    failure_records = [r for r in caplog.records if r.msg == "policy_gate.author_warnings_check_failed"]
+    assert len(failure_records) == 1
+    assert failure_records[0].evidence_key == "flaky.key"
+    assert failure_records[0].eval_id == str(_EVAL_ID)
 
 
 # ---------------------------------------------------------------------------

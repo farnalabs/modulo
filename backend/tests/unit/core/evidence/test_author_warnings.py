@@ -12,6 +12,7 @@ Spec criteria covered here: 11, 12, 13, 14, 15, 16.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -20,12 +21,19 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.eval_engine.author_warnings import AuthorWarning, check_author_warnings
+from modulo.core.eval_engine.author_warnings import (
+    AuthorWarning,
+    _extract_evidence_keys_from_node,
+    _is_producer_downstream,
+    check_author_warnings,
+)
 from modulo.db.models import Base
 from modulo.db.models.eval import Eval
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
+
+_AUTHOR_WARNINGS_LOGGER = "modulo.core.eval_engine.author_warnings"
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -448,3 +456,135 @@ async def test_bare_key_in_detection_does_not_suppress_no_producer(session: Asyn
     warnings = await _check(session, org_id, pipeline_id, "threshold")
 
     assert _codes(warnings) == {"no_producer"}
+
+
+# ---------------------------------------------------------------------------
+# Node-config extraction arms (defensive shapes) — unit-level
+# ---------------------------------------------------------------------------
+
+
+def test_extract_keys_from_node_ignores_non_list_agent_commands() -> None:
+    """A non-list ``agent_commands`` value is ignored, not crashed on."""
+    keys = _extract_evidence_keys_from_node({"agent_commands": "run-something"})
+
+    assert not keys
+
+
+def test_extract_keys_from_node_ignores_non_dict_command_entries() -> None:
+    """Non-mapping command entries carry no evidence-key reference."""
+    keys = _extract_evidence_keys_from_node({"agent_commands": [42, "ls"]})
+
+    assert not keys
+
+
+def test_extract_keys_from_node_ignores_commands_without_evidence_key() -> None:
+    """Command mappings without ``evidence_key`` are ambiguous, not producers."""
+    keys = _extract_evidence_keys_from_node({"agent_commands": [{"key": "feature-flag"}]})
+
+    assert not keys
+
+
+def test_extract_keys_from_node_reads_command_evidence_key() -> None:
+    """The positive arm: ``{"evidence_key": ...}`` inside a command is a producer."""
+    keys = _extract_evidence_keys_from_node({"agent_commands": [{"evidence_key": "cmd.key"}]})
+
+    assert keys == {"cmd.key"}
+
+
+# ---------------------------------------------------------------------------
+# Graph walk arms (defensive shapes) — unit-level
+# ---------------------------------------------------------------------------
+
+
+def test_is_producer_downstream_skips_edges_with_missing_endpoints() -> None:
+    """Edges with a missing source or target are skipped without breaking the walk."""
+    binding = uuid.uuid4()
+    producer = uuid.uuid4()
+    edges = [
+        {"source_node_id": None, "target_node_id": binding},
+        {"source_node_id": binding, "target_node_id": None},
+        {"source_node_id": binding, "target_node_id": producer},
+    ]
+
+    assert _is_producer_downstream(producer, binding, edges) is True
+
+
+def test_is_producer_downstream_returns_false_when_all_edges_malformed() -> None:
+    """A graph made only of malformed edges yields no downstream ordering."""
+    binding = uuid.uuid4()
+    edges = [
+        {"source_node_id": None, "target_node_id": binding},
+        {"source_node_id": binding, "target_node_id": None},
+    ]
+
+    assert _is_producer_downstream(uuid.uuid4(), binding, edges) is False
+
+
+def test_is_producer_downstream_ignores_revisits_of_already_visited_nodes() -> None:
+    """A cycle back into an already-visited node must not requeue it (the BFS
+    terminates and returns the correct verdict for unreachable producers)."""
+    binding, mid = uuid.uuid4(), uuid.uuid4()
+    edges = [
+        {"source_node_id": binding, "target_node_id": mid},
+        {"source_node_id": mid, "target_node_id": binding},  # cycle back to visited
+    ]
+
+    assert _is_producer_downstream(uuid.uuid4(), binding, edges) is False
+
+
+async def test_node_producer_without_node_id_skips_temporal_ordering(session: AsyncSession) -> None:
+    """A node-config producer whose graph entry has no ``id`` suppresses
+    ``no_producer`` but cannot seed temporal ordering (position unknown)."""
+    org_id, pipeline_id = await _seed_pipeline(
+        session,
+        nodes=[{"config": {"evidence_key": "no.id.key"}}],  # no "id" field
+    )
+
+    warnings = await _check(session, org_id, pipeline_id, "no.id.key", binding_node_id=uuid.uuid4())
+
+    assert not warnings
+
+
+# ---------------------------------------------------------------------------
+# Evidence-store query failure → recent_undefined fallback (safe direction)
+# ---------------------------------------------------------------------------
+
+
+class _EvidenceStoreFailingSession:
+    """Session proxy that fails every query against the evidence store.
+
+    Everything else (pipeline graph, edges, eval definitions) is delegated to
+    the real in-memory session, so only condition (c)'s evidence read dies.
+    """
+
+    def __init__(self, inner: AsyncSession) -> None:
+        self._inner = inner
+
+    async def execute(self, stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        if "evidence" in str(stmt).lower():
+            raise RuntimeError("evidence store unavailable")
+        return await self._inner.execute(stmt, *args, **kwargs)
+
+
+async def test_evidence_store_query_failure_falls_back_to_recent_undefined(
+    session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When the evidence-store read fails the check warns ``recent_undefined``
+    (cannot determine → warn) instead of silently skipping condition (c)."""
+    org_id, pipeline_id = await _seed_pipeline(session)
+    await _seed_eval(session, org_id, pipeline_id, config={"evidence_key": "flaky.probe"}, node_id=uuid.uuid4())
+
+    with caplog.at_level(logging.WARNING, logger=_AUTHOR_WARNINGS_LOGGER):
+        warnings = await check_author_warnings(
+            _EvidenceStoreFailingSession(session),  # type: ignore[arg-type]
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            evidence_key="flaky.probe",
+            binding_node_id=uuid.uuid4(),
+        )
+
+    assert _codes(warnings) == {"recent_undefined"}
+    assert "Cannot determine recent undefined status" in warnings[0].message
+    failure_records = [r for r in caplog.records if r.msg == "author_warnings.evidence_store_query_failed"]
+    assert len(failure_records) == 1
+    assert failure_records[0].key == "flaky.probe"
