@@ -13512,9 +13512,10 @@ def _superseded_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     (and only ``return``/``raise``); the dead-scope lens owns only the bodies
     of statically-empty/statically-false containers; every other body — a
     ``for`` over runtime data, an ``if``/``elif``/``else`` branch, a ``while``,
-    a ``with``, a ``try``/``except``/``finally`` block — that reaches an
-    ``assert`` only through a bare ``break``/``continue``/``return``/``raise``
-    in the same list is this lens's gap. Only a *direct* statement of the list
+    a ``with``, a ``try``/``except``/``finally`` block (including the
+    ``except*``/``ast.TryStar`` twin) — that reaches an ``assert`` only through
+    a bare ``break``/``continue``/``return``/``raise`` in the same list is this
+    lens's gap. Only a *direct* statement of the list
     counts: a transfer behind a branch (``if cond: break``) leaves the assert
     live, because the branch is not taken in every iteration, and function/
     class top-level bodies stay owned by the unreachable-assert lens.
@@ -13548,7 +13549,7 @@ def _superseded_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 _scan(stmt.orelse, fn_name, True)
             elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                 _scan(stmt.body, fn_name, True)
-            elif isinstance(stmt, ast.Try):
+            elif isinstance(stmt, (ast.Try, ast.TryStar)):
                 _scan(stmt.body, fn_name, True)
                 for handler in stmt.handlers:
                     _scan(handler.body, fn_name, True)
@@ -13573,9 +13574,10 @@ def test_no_asserts_superseded_by_control_transfer():
     top-level body (and only ``return``/``raise``), and the dead-scope lens
     owns only statically-empty/falsy container bodies; every other body (a
     ``for`` over runtime data, an ``if``/``elif``/``else`` branch, a ``while``,
-    a ``with``, a ``try``/``except``/``finally`` block) that reaches an assert
-    only through a bare ``break``/``continue``/``return``/``raise`` in the same
-    list is this lens's gap. Move the assert above the transfer, or delete it."""
+    a ``with``, a ``try``/``except``/``finally`` block, including the
+    ``except*``/``ast.TryStar`` twin) that reaches an assert only through a
+    bare ``break``/``continue``/``return``/``raise`` in the same list is this
+    lens's gap. Move the assert above the transfer, or delete it."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
@@ -13596,8 +13598,9 @@ def test_control_transfer_lens_flags_dead_asserts():
     must flag an ``assert`` that follows a *direct* ``return``/``raise``/
     ``break``/``continue`` in the same nested body, in every supported
     container (``for``, ``while``, ``if``/``else``, ``with``, ``try``/
-    ``except``/``finally``), and ignore transfer-behind-a-branch idioms and
-    asserts that stay reachable."""
+    ``except``/``finally``, including the ``except*``/``ast.TryStar`` twin),
+    and ignore transfer-behind-a-branch idioms and asserts that stay
+    reachable."""
     positive_sources = [
         "def test_foo():\n    for item in items:\n        break\n        assert item\n",
         "def test_foo():\n    for item in items:\n        continue\n        assert item\n",
@@ -13611,6 +13614,7 @@ def test_control_transfer_lens_flags_dead_asserts():
         "def test_foo():\n    try:\n        probe()\n    except ValueError:\n        return\n        assert never()\n",
         "def test_foo():\n    try:\n        probe()\n    finally:\n        raise RuntimeError\n"
         "        assert never()\n",
+        "def test_foo():\n    try:\n        probe()\n    except* ValueError:\n        raise\n        assert never()\n",
         "async def test_foo():\n    async for item in stream:\n        continue\n        assert item\n",
         "def test_foo():\n    for item in items:\n        if item:\n            return item\n"
         "            assert inner_dead()\n",
