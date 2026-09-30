@@ -175,4 +175,27 @@ describe('AdminNotificationDeliveryLogView', () => {
     expect(labelFor('trigger_deactivated')).toBe('Trigger Deactivated')
     expect(labelFor('hitl_deadline_warning')).toBe('HITL Deadline Warning')
   })
+
+  it('falls back to the raw event name when no i18n label exists (FAR-1319)', async () => {
+    const mockGet = vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>)
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/admin/notifications/available-events') {
+        return Promise.resolve({ data: ['brand_new_event'], error: undefined })
+      }
+      return Promise.resolve({ data: { items: [], total: 0, next_cursor: null }, error: undefined })
+    })
+
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+
+    // An event registered on the server before its en-US label ships must
+    // still be selectable — it degrades to its raw snake_case name rather than
+    // rendering "undefined" or dropping out of the filter.
+    const eventSelect = wrapper.findAllComponents(AppSelect).at(1)
+    const options = eventSelect!.props('options') as Array<{ value: string; label: string }>
+    const option = options.find((o) => o.value === 'brand_new_event')
+    expect(option).toBeDefined()
+    expect(option!.label).toBe('brand_new_event')
+  })
 })
