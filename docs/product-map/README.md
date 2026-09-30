@@ -891,9 +891,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > purge sweep (advisory `PostgresLock`, SAVEPOINT batches preserving the
 > transaction-local RLS scope, `modulo_evidence_retention_deletions_total`
 > counter), and the advisory author-warning checks (`no_producer` /
-> `temporal_ordering` / `recent_undefined`) surfaced on eval create/update. The
-> author-warning wire surface is also ticked in the manifest `feat-evals`
-> registry + `improve/evals.md`. `_ORPHANED_BDD_FEATURES` stays empty.
+> `temporal_ordering` / `recent_undefined`) surfaced on policy-gate binding
+> (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) via `PolicyGateResponse`'s
+> `warnings` field. The author-warning wire surface is also ticked in the
+> manifest `feat-evals` registry + `improve/evals.md`. `_ORPHANED_BDD_FEATURES`
+> stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

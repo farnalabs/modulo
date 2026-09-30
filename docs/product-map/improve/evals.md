@@ -86,11 +86,12 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 - [x] Eval definitions are org-scoped admin CRUD (`POST/GET/PUT/DELETE
       /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) with pagination and
       pipeline / eval_type filters, plus `POST /api/v1/evals/from-run` to
-      author a definition from run data; eval create/update run the FAR-957
-      advisory author-warning checks for the eval's `evidence_key`
-      (`no_producer` / `temporal_ordering` / `recent_undefined` — the evidence
-      store substrate tracked under `feat-core-evidence-store`) and the
-      response carries the non-blocking `author_warnings` list
+      author a definition from run data
+- [x] Policy-gate binding (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`)
+      runs the FAR-957 advisory author-warning checks for the eval's
+      `evidence_key` (`no_producer` / `temporal_ordering` / `recent_undefined` —
+      the evidence store substrate tracked under `feat-core-evidence-store`) and
+      the `PolicyGateResponse` carries the non-blocking `warnings` list
       (`core/eval_engine/author_warnings.py`,
       `tests/unit/core/evidence/test_author_warnings.py`)
 - [x] Results are queryable per run (`GET /api/v1/runs/{run_id}/evals`) and
@@ -128,10 +129,11 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 
 ## QA History
 - 2026-09-30: **Improve Architecture product-map walk** — ticked the FAR-957
-  advisory author-warning surface: eval create/update run
-  `check_author_warnings` for the eval's `evidence_key` and the response
-  carries non-blocking `author_warnings` (`no_producer` / `temporal_ordering` /
-  `recent_undefined`, warn on the safe direction). Added
+  advisory author-warning surface: policy-gate binding
+  (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) runs
+  `check_author_warnings` for the eval's `evidence_key` and the
+  `PolicyGateResponse` carries non-blocking `warnings` (`no_producer` /
+  `temporal_ordering` / `recent_undefined`, warn on the safe direction). Added
   `core/eval_engine/author_warnings.py` to `code:`,
   `tests/unit/core/evidence/test_author_warnings.py` to `unit-tests:`, and the
   manifest `feat-evals` registry behaviour line. The append-only evidence store

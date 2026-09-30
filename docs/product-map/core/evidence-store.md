@@ -83,15 +83,16 @@ the manifest registry.
       `modulo_evidence_retention_deletions_total` OTel counter (tagged with the
       `organisation_id`), and the purge response carries `rows_deleted` /
       `batches` / `max_age_days` / `max_rows` (no-op when no meter is wired)
-- [x] Advisory author warnings (FAR-957 §3): eval create/update run
-      `check_author_warnings` for the eval's `evidence_key` and the response
-      carries advisory (never blocking) `author_warnings` for three conditions —
-      `no_producer` (no guaranteed producer in eval definitions / evidence-
-      producing node config / system-state patterns), `temporal_ordering`
-      (producer node runs downstream of the gate's binding node, or the binding
-      position is indeterminate) and `recent_undefined` (the key produced
-      undefined in recent runs); failure falls back to warnings (the safe
-      direction) and a warning never prevents binding
+- [x] Advisory author warnings (FAR-957 §3): policy-gate binding
+      (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) runs
+      `check_author_warnings` for the eval's `evidence_key` and the
+      `PolicyGateResponse` carries advisory (never blocking) `warnings` for three
+      conditions — `no_producer` (no guaranteed producer in eval definitions /
+      evidence-producing node config / system-state patterns),
+      `temporal_ordering` (producer node runs downstream of the gate's binding
+      node, or the binding position is indeterminate) and `recent_undefined` (the
+      key produced undefined in recent runs); failure falls back to warnings (the
+      safe direction) and a warning never prevents binding
       (`core/eval_engine/author_warnings.py`, wired from `api/routes/evals.py` —
       also tracked under `feat-evals`)
 
