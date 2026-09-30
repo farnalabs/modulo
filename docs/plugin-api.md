@@ -69,7 +69,7 @@ registry = get_plugin_registry()
 def discover_plugins(self) -> list[PluginManifest]
 ```
 
-Iterates all registered entry point groups (`modulo.connectors`, `modulo.model_backends`), loads each entry point, and stores its builder. Returns a list of discovered manifests. Plugins whose entry points fail to load are still recorded (appear in listings) but marked unhealthy.
+Iterates all registered entry point groups (`modulo.connectors`, `modulo.model_backends`, `modulo.evals`, `modulo.schema_types`), loads each entry point, and stores its builder. Returns a list of discovered manifests. Plugins whose entry points fail to load are still recorded (appear in listings) but marked unhealthy.
 
 #### Builder lookup
 
@@ -371,7 +371,7 @@ RUN pip install modulo-connector-slack==0.1.0
 ### What happens at startup
 
 1. On application startup, `PluginRegistry.discover_plugins()` is called if `MODULO_PLUGIN_DISCOVERY` is `true`.
-2. The registry iterates both entry point groups (`modulo.connectors`, `modulo.model_backends`).
+2. The registry iterates all four entry point groups (`modulo.connectors`, `modulo.model_backends`, `modulo.evals`, `modulo.schema_types`).
 3. For each entry point, it reads distribution metadata and loads the builder function.
 4. Successful loads are stored keyed by entry point name; failed loads are recorded as unhealthy.
 5. The singleton is shared across `ConnectorHub`, `ModelBackendHub`, and the REST API.

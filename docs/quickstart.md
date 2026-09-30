@@ -98,16 +98,20 @@ Everything above gets you a running stack. Now you'll build and run your first r
 2. Click **Add Model Backend** and fill in the form: a name, a display name, a **Provider** (e.g. `openai` or `anthropic`), a **Model ID**, and the provider's **API key**.
 3. Click **Create**. The new backend runs a best-effort health check on save and shows a **Configured** badge once its credentials are stored.
 
-No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/modulo/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`:
+No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/modulo/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`. The API authenticates with Bearer tokens, so log in first (the seeded `admin` account from `MODULO_USERS` in your `.env`):
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/model-backends \
-  -u admin:admin \
+TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"name":"stub","display_name":"Stub","provider":"custom","model_id":"stub","default_params":{"fixture_map":{"hello":"hello from the stub"}}}'
+  -d '{"email":"admin","password":"admin"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+curl -X POST http://localhost:8000/api/v1/model-backends \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"stub","display_name":"Stub","provider":"custom","model_id":"stub","api_key":"not-needed-for-stub","default_params":{"fixture_map":{"hello":"hello from the stub"}}}'
 ```
 
-(`-u admin:admin` are the credentials configured via `MODULO_USERS` in your `.env`.)
+(`api_key` is a required field on the endpoint; the stub ignores credentials, so any placeholder works.)
 
 **2. Define schemas**
 
@@ -124,11 +128,15 @@ curl -X POST http://localhost:8000/api/v1/model-backends \
 
 **4. Trigger a run**
 
-With the pipeline open in the editor, click **Run Pipeline** (a dialog opens; enter a prompt or leave it blank) and confirm. You can also trigger from the pipelines list via the **Run** button on a pipeline card. Both call `POST /api/v1/runs` with a `pipeline_id` and `input_payload`:
+With the pipeline open in the editor, click **Run Pipeline** (a dialog opens; enter a prompt or leave it blank) and confirm. You can also trigger from the pipelines list via the **Run** button on a pipeline card. Both call `POST /api/v1/runs` with a `pipeline_id` and `input_payload` (same login as step 1, then Bearer auth):
 
 ```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin","password":"admin"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
 curl -X POST http://localhost:8000/api/v1/runs \
-  -u admin:admin \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"pipeline_id":"<pipeline-id>","input_payload":{"prompt":"hello"}}'
 ```

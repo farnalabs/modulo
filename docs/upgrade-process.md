@@ -154,7 +154,7 @@ The manual playbook. Run it when either trigger fires:
    When you need an EXPLICIT re-point, run the rollback-verify target:
    `gh workflow run "Native: release smoke + canary (bundle-v*)" -f rollback_version=bundle-v<good>`.
    This verifies the target release exists with its artifact servable.
-3. **Cut a patch.** Branch, fix, tag `bundle-v<somer+1>`; the release
+3. **Cut a patch.** Branch, fix, tag the next `bundle-v*` patch version; the release
    smoke runs against the exact artifact before Merge Queue can bless it.
 4. **Operator-side recovery.** Any operator already holding the bad
    bundle restores from their pre-upgrade snapshot: the upgrade refusal

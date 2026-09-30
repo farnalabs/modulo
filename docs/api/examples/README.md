@@ -153,10 +153,12 @@ bash library/curl.sh
 - `auth-login/python.py`, `auth-login/js.js`, `auth-login/curl.sh` and the
   login/refresh/logout steps of `full-workflow.py` still implement the
   pre-FAR-1197 contract: they read `refresh_token` from the login response
-  body (the field no longer exists, so the Python example raises `KeyError`
-  and the JavaScript example throws on `.slice`) and POST the refresh token
-  back in the request body (ignored by the server). Until they are ported to
+  body (the field no longer exists, so the Python examples raise `KeyError`
+  while parsing the login response and the JavaScript example throws on
+  `.slice`) and POST the refresh token back in the request body (ignored by
+  the server). The curl script gets further – its login succeeds and the
+  Bearer calls work – but its refresh step fails. Until they are ported to
   the cookie + CSRF flow described under [Authentication
-  model](#authentication-model), these examples fail at the login step. Every
+  model](#authentication-model), none of these four runs end-to-end. Every
   other example only uses the access token from the login response and runs
   as documented.

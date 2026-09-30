@@ -527,7 +527,7 @@ Configure alerts for these events in your monitoring system:
 1. **Before deploying a new version**, review the Alembic migration:
    ```bash
    uv run alembic history
-   uv run alembic upgrade head --sql  # preview SQL
+   uv run alembic upgrade heads --sql  # preview SQL
    ```
 
 2. **Back up the database** before upgrading:
@@ -544,8 +544,9 @@ Configure alerts for these events in your monitoring system:
 
 4. **Verify migration completed:**
    ```bash
-   docker compose -f deploy/compose/docker-compose.prod.yml logs modulo | grep alembic
-   # Expected: "Migration successful"
+   docker compose -f deploy/compose/docker-compose.prod.yml logs modulo | grep -i alembic
+   # Expected: no migration errors; confirm the backend is serving traffic:
+   curl http://localhost:8000/healthz
    ```
 
 ### 7.2 Rollback Procedure
@@ -553,7 +554,7 @@ Configure alerts for these events in your monitoring system:
 ```bash
 # Docker Compose – re-tag and restart the previous image
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag modulo:old modulo:latest
+docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:latest
 docker compose -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
