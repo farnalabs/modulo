@@ -31,15 +31,22 @@ when the agent runs:
     "functionally equivalent to deny_all" state to a REAL allowlist.
   - ``single_pr_per_run`` (FAR-1273; guard introduced by FAR-1264): install a
     run-scoped ``gh`` shim that permits exactly ONE ``gh pr create`` per
-    sandbox run — the platform-side hard guard behind the prompt-level
-    "exactly one PR per run" rule (FAR-1254). A second ``gh pr create`` in
-    the same run exits non-zero WITHOUT invoking the real ``gh``; every other
-    ``gh`` invocation passes through untouched. The claim is held only for a
-    create that SUCCEEDED — a non-zero exit releases it, so a transient
-    failure does not burn the run's only attempt — and the install's own
-    diagnostics (including the "no gh on PATH" case, where the guard is
-    ABSENT) are mirrored into the policy log rather than discarded with the
-    step result.
+    sandbox run — a bounded, best-effort, E2B-only defence-in-depth layer
+    behind the prompt-level "exactly one PR per run" rule (FAR-1254), NOT an
+    absolute guarantee on its own. For the ``gh`` binaries it managed to
+    guard, a second ``gh pr create`` in the same run exits non-zero WITHOUT
+    invoking the real ``gh``; every other ``gh`` invocation passes through
+    untouched. Coverage is bounded: ``gh api`` PR creation, a ``gh`` copy
+    outside the PATH, shell aliases/functions, a ``gh`` installed into the
+    PATH after the install, and every non-E2B dispatch (docker / local) are
+    NOT intercepted — non-E2B runners are simply not covered. The
+    one-PR-per-run guarantee is this shim TOGETHER WITH the post-run
+    detection + admin alert (FAR-1274); neither half prevents a second PR
+    alone. The claim is held only for a create that SUCCEEDED — a non-zero
+    exit releases it, so a transient failure does not burn the run's only
+    attempt — and the install's own diagnostics (including the "no gh on
+    PATH" case, where the shim is ABSENT) are mirrored into the policy log
+    rather than discarded with the step result.
 
 The enforcement is REAL (the sandbox cannot write / egress is scoped), never a
 declared flag. Script builders are pure string functions (unit-testable without

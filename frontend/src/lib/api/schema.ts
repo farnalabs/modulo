@@ -15469,7 +15469,7 @@ export interface components {
             delivery_sentinel?: string | null;
             /**
              * Single Pr Per Run
-             * @description Install the run-scoped one-PR-per-run gh guard in the node's sandbox (a second 'gh pr create' in the same run is refused).
+             * @description Install the run-scoped one-PR-per-run gh shim in the node's sandbox: a bounded, best-effort, E2B-only defence-in-depth layer, NOT an absolute guarantee on its own. For gh binaries resolved through the PATH at install time a second 'gh pr create' in the same run is refused; 'gh api' PR creation, a gh copy outside the PATH, shell aliases or functions, a gh installed after the fact, and non-E2B runners (docker / local) are not covered. The one-PR-per-run guarantee is this shim together with post-run detection (FAR-1274); neither alone prevents a second PR.
              * @default false
              */
             single_pr_per_run: boolean;

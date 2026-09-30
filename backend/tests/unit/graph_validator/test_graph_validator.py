@@ -1839,8 +1839,9 @@ def test_single_pr_per_run_rejected_on_non_sandbox_nodes():
 
 
 def test_single_pr_per_run_accepted_on_sandbox_nodes_and_default_elsewhere():
-    """The flag is legal on a sandbox_agent node (whatever its value) and the
-    default False/absent on other node types raises nothing."""
+    """The flag is legal on a sandbox_agent node (its VALUE is type-checked by
+    the separate FAR-1316 check below) and the default False/absent on other
+    node types raises nothing."""
     from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
 
     result = ValidationResult()
@@ -1858,3 +1859,50 @@ def test_single_pr_per_run_accepted_on_sandbox_nodes_and_default_elsewhere():
 
     assert result.is_valid
     assert not result.issues
+
+
+@pytest.mark.parametrize("bad_value", ["true", "yes", 1, 0])
+async def test_single_pr_per_run_non_bool_rejected_on_sandbox_nodes(bad_value: Any):
+    """FAR-1316: a raw import that carries a non-bool single_pr_per_run on a
+    SANDBOX node fails closed at save time.
+
+    The API model types the field StrictBool and the runtime reads it with
+    ``is True``, so a lax value would save cleanly, silently resolve to false
+    at dispatch, and arm a one-PR-per-run guard nothing installs.
+    """
+    graph = {"nodes": [_sandbox_node(single_pr_per_run=bad_value)], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+
+    assert not result.is_valid
+    flagged = [i for i in result.issues if i.code == "SANDBOX_SINGLE_PR_PER_RUN_INVALID"]
+    assert flagged
+    assert flagged[0].node_id == _UUID_A
+    assert "single_pr_per_run" in flagged[0].message
+
+
+async def test_single_pr_per_run_true_still_passes_on_sandbox_nodes():
+    """A genuine boolean True on a sandbox node is the arming case — never rejected."""
+    graph = {"nodes": [_sandbox_node(single_pr_per_run=True)], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+
+    assert result.is_valid
+    assert not any(i.code == "SANDBOX_SINGLE_PR_PER_RUN_INVALID" for i in result.issues)
+
+
+@pytest.mark.parametrize("value_case", ["false", "absent"])
+async def test_single_pr_per_run_false_and_absent_still_pass(value_case: str):
+    """``false`` and an absent flag are legal on a sandbox node AND on a plain
+    agent node — neither is ever rejected by the FAR-1316 type check."""
+    if value_case == "absent":
+        nodes = [_sandbox_node(), {"id": _UUID_B, "node_type": "agent"}]
+    else:
+        nodes = [
+            _sandbox_node(single_pr_per_run=False),
+            {"id": _UUID_B, "node_type": "agent", "single_pr_per_run": False},
+        ]
+    graph = {"nodes": nodes, "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+
+    assert result.is_valid
+    codes = {i.code for i in result.issues}
+    assert codes.isdisjoint({"SANDBOX_SINGLE_PR_PER_RUN_INVALID", "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX"})
