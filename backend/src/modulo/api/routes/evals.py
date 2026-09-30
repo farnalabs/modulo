@@ -17,6 +17,11 @@ URLs:
     GET    /api/v1/eval-suites/{id}   — get eval suite (team-scoped)
     PATCH  /api/v1/eval-suites/{id}   — update eval suite (team-scoped, admin only)
     DELETE /api/v1/eval-suites/{id}   — delete eval suite (team-scoped, admin only)
+    POST   /api/v1/evals/{eval_id}/policy-gate       — create/replace a policy gate
+    PUT    /api/v1/evals/{eval_id}/policy-gate       — update a policy gate's action
+    DELETE /api/v1/evals/{eval_id}/policy-gate       — soft-delete a policy gate
+    GET    /api/v1/evals/{eval_id}/policy-gate       — read a policy gate
+    PATCH  /api/v1/evals/{eval_id}/policy-gate/toggle — enable/disable a policy gate
 """
 
 import logging
@@ -268,6 +273,19 @@ class PolicyGateUpdateRequest(BaseModel):
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
 
 
+class PolicyGateToggleRequest(BaseModel):
+    """Request body for PATCH /api/v1/evals/{eval_id}/policy-gate/toggle.
+
+    Toggles the operator safety control (CO-5).  Setting ``enabled``
+    atomically stamps the corresponding timestamp so the symmetric CHECK
+    constraint (ck_policy_gates_enabled_timestamps) is always satisfied.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool
+
+
 class PolicyGateResponse(BaseModel):
     """Response body for GET /api/v1/evals/{eval_id}/policy-gate."""
 
@@ -277,6 +295,10 @@ class PolicyGateResponse(BaseModel):
     version: int
     pre_version_raw: dict[str, Any] | None = None
     warnings: list[dict[str, str]] = Field(default_factory=list)
+    # FAR-967 operator safety control (CO-5): surfaced on every gate read.
+    enabled: bool
+    enabled_at: datetime | None = None
+    disabled_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -342,13 +364,19 @@ async def _create_or_replace_gate(
             # Soft-delete the conflicting gate
             live_gate.deleted_at = func.now()
             live_gate.deleted_by = principal.account_id
-        # Insert the new gate
+        # Insert the new gate — enabled_at must be set to creation time so
+        # the symmetric CHECK constraint (ck_policy_gates_enabled_timestamps)
+        # is satisfied at insert (CO-2).
+        now = datetime.now(UTC)
         new_gate = PolicyGate(
             organisation_id=principal.organisation_id,
             eval_id=eval_id,
             node_id=gate_fields["node_id"],
             action=gate_fields["action"],
             version=1,
+            enabled=True,
+            enabled_at=now,
+            disabled_at=None,
         )
         session.add(new_gate)
         await session.flush()
@@ -613,6 +641,9 @@ async def create_policy_gate(
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         warnings=author_warnings,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
     )
 
 
@@ -754,6 +785,9 @@ async def update_policy_gate(
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         warnings=author_warnings,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
     )
 
 
@@ -860,6 +894,151 @@ async def delete_policy_gate(
         ) from None
 
 
+# ---------------------------------------------------------------------------
+# Policy Gate toggle endpoint (FAR-967, CO-5 / CO-3)
+# ---------------------------------------------------------------------------
+
+_CODE_EVALS_POLICY_GATE_TOGGLE = "evals.policy_gate.toggle"
+_MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION = (
+    "Toggle would violate the enabled/disabled timestamp constraint. This is a server-side bug — please report it."
+)
+
+
+@router.patch(
+    "/evals/{eval_id}/policy-gate/toggle",
+    responses={
+        404: {"description": "Policy gate not found"},
+        500: {"description": "Internal Server Error"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_POLICY_GATE_TOGGLE)
+async def toggle_policy_gate(
+    eval_id: uuid.UUID,
+    req: PolicyGateToggleRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
+) -> PolicyGateResponse:
+    """Enable or disable a PolicyGate (admin only).
+
+    Toggles the ``enabled`` boolean and atomically stamps the corresponding
+    timestamp so the symmetric CHECK constraint is always satisfied:
+
+    - ``enabled=true``  → ``enabled_at=now(), disabled_at=NULL``
+    - ``enabled=false`` → ``disabled_at=now(), enabled_at=NULL``
+
+    The gate inherits the eval's edit permission (OQ-3).  ``enabled`` is
+    product state toggled via API/UI only — NEVER declarative / config-as-code
+    (CO-3).
+
+    An audit-log entry is emitted (best-effort, same path as create/update).
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can toggle policy gates",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Load eval + live gate (404 when either is missing)
+            await _load_eval_or_404(session, eval_id, principal)
+            gate = await _load_live_gate_or_404(session, eval_id, principal)
+
+            now = datetime.now(UTC)
+            pre_enabled = gate.enabled
+
+            # Atomic toggle with timestamp stamping.
+            # The CHECK constraint will reject invalid states at the DB layer;
+            # we set the fields correctly so that never fires.
+            if req.enabled:
+                gate.enabled = True
+                gate.enabled_at = now
+                gate.disabled_at = None
+            else:
+                gate.enabled = False
+                gate.disabled_at = now
+                gate.enabled_at = None
+
+            # Audit log (best-effort — a failed audit never blocks the toggle)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="policy_gate.toggled",
+                    actor_user_id=principal.account_id,
+                    resource_type="policy_gate",
+                    resource_id=gate.id,
+                    payload_json={
+                        "eval_id": str(eval_id),
+                        "enabled": req.enabled,
+                        "pre_enabled": pre_enabled,
+                        "action": gate.action,
+                    },
+                )
+            except Exception:
+                _log.exception(
+                    "policy_gate.toggle_audit_failed",
+                    extra={
+                        "org_id": str(principal.organisation_id),
+                        "eval_id": str(eval_id),
+                    },
+                )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_TOGGLE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        # Detect CHECK-constraint violation (symmetric timestamp invariant)
+        if sqlstate_of(exc) == "23514":
+            _log.warning(
+                "policy_gate.toggle_check_violation",
+                extra={
+                    "org_id": str(principal.organisation_id),
+                    "eval_id": str(eval_id),
+                    "enabled": req.enabled,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=_MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION,
+            ) from None
+        _log.exception(_CODE_EVALS_POLICY_GATE_TOGGLE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception(
+            "policy_gate.toggle_error",
+            extra={
+                "org_id": str(principal.organisation_id),
+                "eval_id": str(eval_id),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while toggling the policy gate.",
+        ) from None
+
+    return PolicyGateResponse(
+        id=gate.id,
+        eval_id=gate.eval_id,
+        action=gate.action,
+        version=gate.version,
+        pre_version_raw=gate.pre_version_raw,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
+    )
+
+
 @router.get(
     "/evals/{eval_id}/policy-gate",
     responses={
@@ -916,6 +1095,9 @@ async def get_policy_gate(
         action=gate.action,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
     )
 
 

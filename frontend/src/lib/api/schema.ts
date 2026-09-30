@@ -6794,6 +6794,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evals/{eval_id}/policy-gate/toggle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Toggle Policy Gate
+         * @description Enable or disable a PolicyGate (admin only).
+         *
+         *     Toggles the ``enabled`` boolean and atomically stamps the corresponding
+         *     timestamp so the symmetric CHECK constraint is always satisfied:
+         *
+         *     - ``enabled=true``  → ``enabled_at=now(), disabled_at=NULL``
+         *     - ``enabled=false`` → ``disabled_at=now(), enabled_at=NULL``
+         *
+         *     The gate inherits the eval's edit permission (OQ-3).  ``enabled`` is
+         *     product state toggled via API/UI only — NEVER declarative / config-as-code
+         *     (CO-3).
+         *
+         *     An audit-log entry is emitted (best-effort, same path as create/update).
+         */
+        patch: operations["toggle_policy_gate_api_v1_evals__eval_id__policy_gate_toggle_patch"];
+        trace?: never;
+    };
     "/api/v1/evals": {
         parameters: {
             query?: never;
@@ -16004,6 +16036,24 @@ export interface components {
             warnings?: {
                 [key: string]: string;
             }[];
+            /** Enabled */
+            enabled: boolean;
+            /** Enabled At */
+            enabled_at?: string | null;
+            /** Disabled At */
+            disabled_at?: string | null;
+        };
+        /**
+         * PolicyGateToggleRequest
+         * @description Request body for PATCH /api/v1/evals/{eval_id}/policy-gate/toggle.
+         *
+         *     Toggles the operator safety control (CO-5).  Setting ``enabled``
+         *     atomically stamps the corresponding timestamp so the symmetric CHECK
+         *     constraint (ck_policy_gates_enabled_timestamps) is always satisfied.
+         */
+        PolicyGateToggleRequest: {
+            /** Enabled */
+            enabled: boolean;
         };
         /**
          * PolicyGateUpdateRequest
@@ -34860,6 +34910,57 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    toggle_policy_gate_api_v1_evals__eval_id__policy_gate_toggle_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyGateToggleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyGateResponse"];
+                };
+            };
+            /** @description Policy gate not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
