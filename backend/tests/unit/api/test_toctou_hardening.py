@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -28,10 +28,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from modulo.api.routes.pipelines import (
-    _MUTATION_ROW_LOCK_TIMEOUT_MS,
-    _reapply_team_gate_inside_mutation_txn,
-)
+from modulo.api.routes.pipelines import _reapply_team_gate_inside_mutation_txn
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking import DEFAULT_ALERT_RULES, seed_default_alert_rules_for_org
 from modulo.core.exceptions import RateLimitConflictError
@@ -652,9 +649,39 @@ class TestTeamGateBoundedLockWait:
         # is_local => true: transaction-scoped, i.e. SET LOCAL semantics.
         assert "set_config('lock_timeout', :val, true)" in sql, sql
         value = str(params["val"])
-        assert value == f"{_MUTATION_ROW_LOCK_TIMEOUT_MS}ms", value
         milliseconds = int(value.removesuffix("ms"))
         assert 0 < milliseconds <= 30_000, f"lock timeout must be bounded and positive, got {value}"
+
+    async def test_lock_timeout_value_is_read_from_settings(self) -> None:
+        """FAR-1279: the bound is operator-tunable, not a module constant.
+
+        A non-default Settings instance must reach the ``set_config`` parameter
+        verbatim - if the call site still hard-coded a constant, this would emit
+        the default and fail. The default itself is pinned separately so
+        "unchanged at the default" is an assertion, not an assumption.
+        """
+        session, log = _recording_session("postgresql")
+        tuned = MagicMock()
+        tuned.mutation_row_lock_timeout_ms = 1234
+
+        with patch("modulo.api.routes.pipelines.get_settings", return_value=tuned):
+            await _reapply_team_gate_inside_mutation_txn(session, _admin_principal(), _PIPELINE)
+
+        timeout_calls = [params for sql, params in log if "lock_timeout" in sql]
+        assert len(timeout_calls) == 1, timeout_calls
+        assert str(timeout_calls[0]["val"]) == "1234ms", timeout_calls[0]
+
+    def test_lock_timeout_settings_default_is_unchanged(self) -> None:
+        """The settings field must default to the value the constant shipped with."""
+        from modulo.settings import Settings
+
+        settings = Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key="a" * 32,
+            fernet_key="a" * 32,
+            modulo_admin_password="test",
+        )
+        assert settings.mutation_row_lock_timeout_ms == 5000
 
     async def test_non_postgres_bind_skips_the_statement(self) -> None:
         """SQLite (and the unit fixtures) have no ``set_config`` - gate it out."""

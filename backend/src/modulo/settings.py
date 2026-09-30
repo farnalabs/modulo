@@ -448,6 +448,18 @@ class Settings(BaseSettings):
     runner_marker_sweep_lock_timeout_seconds: int = Field(
         default=5, alias="RUNNER_MARKER_SWEEP_LOCK_TIMEOUT_SECONDS", ge=1, le=30
     )
+    # FAR-1279: operator-tunable bound for the pipeline MUTATION transaction's
+    # row-lock wait (`routes.pipelines._reapply_team_gate_inside_mutation_txn`
+    # issues `set_config('lock_timeout', ..., true)` before its `SELECT ...
+    # FOR UPDATE`). The bound applies to the WHOLE mutation transaction, so a
+    # deploy that surfaces new 409s (SQLSTATE 55P03 -> api.db_error_handling)
+    # can be relaxed without a code change. A module constant could not be
+    # raised by an operator; this mirrors `runner_capacity_lock_timeout_ms`'s
+    # naming/typing/validation (int, ms, alias, ge/le) while staying scoped to
+    # its OWN subsystem - reusing either runner knob would couple API PATCH
+    # contention to runner-capacity tuning. Default 5000 = the value the
+    # constant shipped with, so behaviour is unchanged at the default.
+    mutation_row_lock_timeout_ms: int = Field(default=5000, alias="MUTATION_ROW_LOCK_TIMEOUT_MS", ge=100, le=30000)
     # Machine deployment identity for the runner workspace-identity label
     # (reconciler scoping; hostname fallback when unset).
     runner_machine_id: str = Field(default="", alias="MODULO_RUNNER_MACHINE_ID")

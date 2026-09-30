@@ -27,6 +27,9 @@ answers) and assert:
 * ``_resolve_graph_references`` runs before the write and its 422 stops the write,
 * ``_validate_graph_save`` runs AFTER the write, receives the converted node's
   connector binding, and its blocking 422 propagates (rolling the txn back),
+* the non-blocking (advisory) half of ``_validate_graph_save`` is RETURNED to
+  the caller as the third element so the conversion endpoints can surface
+  ``validation_issues`` like their siblings (FAR-1277),
 * a stored node the current schema can no longer parse fails closed with a
   422 naming that node, rather than being reference-checked as unchecked.
 
@@ -153,7 +156,7 @@ def _principal() -> TenantPrincipal:
 async def _save(
     session: AsyncMock,
     nodes: list[dict[str, Any]] | None = None,
-) -> tuple[list[dict[str, Any]], list[Any]] | None:
+) -> tuple[list[dict[str, Any]], list[Any], list[Any]] | None:
     from modulo.api.routes.pipelines import _save_locked_graph
 
     return await _save_locked_graph(
@@ -359,6 +362,10 @@ async def test_validate_graph_save_failure_propagates_out_of_the_save() -> None:
     ``_save_locked_graph`` deliberately does NOT swallow it: the sibling
     endpoints let ``_reject_graph_validation_issues``'s 422 propagate out of
     ``session.begin()`` so the already-performed write is undone.
+
+    FAR-1277 widened the SUCCESS return to ``(nodes, edges, issues)``; this
+    test is the pairing half of that change - the blocking path must still
+    raise rather than come back as a third tuple element.
     """
     session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
     validate = AsyncMock(side_effect=HTTPException(status_code=422, detail="GUARDRAIL_CAP_EXCEEDED"))
@@ -374,6 +381,38 @@ async def test_validate_graph_save_failure_propagates_out_of_the_save() -> None:
     assert excinfo.value.status_code == 422
     assert excinfo.value.detail == "GUARDRAIL_CAP_EXCEEDED"
     validate.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# 4b. FAR-1277: advisory (non-blocking) issues come BACK to the caller
+# ---------------------------------------------------------------------------
+
+
+async def test_advisory_issues_are_returned_by_the_save() -> None:
+    """A non-blocking issue must be RETURNED, not only logged.
+
+    ``PATCH /graph`` and ``PATCH /{id}`` answer with ``validation_issues``; the
+    conversion endpoints must be able to do the same, so the shared chokepoint
+    widens its return to ``(nodes, edges, issues)``. Anything that only logged
+    the advisory half would leave the two surfaces inconsistent.
+    """
+    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    saved_nodes = [_converted_node()]
+    advisory = MagicMock(code="guardrail_cap_advisory", severity="warning", message="over cap", node_id=_NODE_ID)
+
+    with (
+        patch(f"{_PREFIX}_save_graph", new=AsyncMock(return_value=(saved_nodes, []))),
+        patch(f"{_PREFIX}_resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch(f"{_PREFIX}_validate_graph_save", new=AsyncMock(return_value=[advisory])),
+    ):
+        result = await _save(session)
+
+    assert result is not None
+    assert len(result) == 3, f"expected (nodes, edges, issues), got {len(result)} elements"
+    saved_result_nodes, saved_edges, issues = result
+    assert saved_result_nodes == saved_nodes
+    assert saved_edges == []
+    assert issues == [advisory], issues
 
 
 # ---------------------------------------------------------------------------

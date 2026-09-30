@@ -134,6 +134,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.settings import get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_PIPELINE_LIST = "pipeline.list"
@@ -2718,10 +2719,12 @@ async def _require_team_membership(
 
 
 #: Bounded wait for the in-txn row lock (the ``SELECT ... FOR UPDATE`` below),
-#: in milliseconds. Without it a contended PATCH parks a pooled connection on
-#: an UNBOUNDED lock wait; with it the wait degrades to a clear, mapped
-#: response (``api.db_error_handling`` translates SQLSTATE 55P03
-#: ``lock_not_available`` to 409) instead of a generic 503.
+#: in milliseconds - read from ``Settings.mutation_row_lock_timeout_ms`` (FAR-
+#: 1279) at the call site rather than held as a module constant. Without it a
+#: contended PATCH parks a pooled connection on an UNBOUNDED lock wait; with it
+#: the wait degrades to a clear, mapped response (``api.db_error_handling``
+#: translates SQLSTATE 55P03 ``lock_not_available`` to 409) instead of a
+#: generic 503.
 #:
 #: ``set_config(..., is_local => true)`` is transaction-scoped - the SQL
 #: equivalent of ``SET LOCAL`` - so the bound also covers any row lock this
@@ -2729,13 +2732,14 @@ async def _require_team_membership(
 #: gate in ``core/runner_capacity.py``). That is deliberate: no part of a
 #: request-scoped mutation should hang indefinitely.
 #:
-#: A module constant, not a Settings field, mirroring
-#: ``core.run_outputs_dualwrite._MARK_RUN_FAILED_LOCK_TIMEOUT_MS``. The two
-#: existing lock-timeout settings (``runner_capacity_lock_timeout_ms``,
+#: It is a Settings field (default 5000 ms, unchanged from the constant this
+#: replaced) rather than a constant because the bound spans the WHOLE mutation
+#: transaction: a deploy can surface new 409s that an operator must be able to
+#: relax without shipping code. It stays its OWN field - the two pre-existing
+#: lock-timeout settings (``runner_capacity_lock_timeout_ms``,
 #: ``runner_marker_sweep_lock_timeout_seconds``) are pinned to their own
 #: subsystems; reusing either would silently couple API PATCH contention to an
 #: operator's runner-capacity tuning.
-_MUTATION_ROW_LOCK_TIMEOUT_MS = 5000
 
 
 async def _reapply_team_gate_inside_mutation_txn(
@@ -2754,10 +2758,11 @@ async def _reapply_team_gate_inside_mutation_txn(
     locked row's CURRENT visibility/``owner_team_id`` - the same matrix the
     dependency enforces, evaluated atomically with the mutation.
 
-    The wait for that lock is BOUNDED (``_MUTATION_ROW_LOCK_TIMEOUT_MS``, set
-    via ``SET LOCAL`` semantics immediately before the select): a contended
-    mutation surfaces SQLSTATE 55P03, which ``handle_db_errors`` maps to a
-    clear 409 rather than an unbounded pooled-connection wait.
+    The wait for that lock is BOUNDED (``Settings.mutation_row_lock_timeout_ms``,
+    read at the call site and set via ``SET LOCAL`` semantics immediately before
+    the select): a contended mutation surfaces SQLSTATE 55P03, which
+    ``handle_db_errors`` maps to a clear 409 rather than an unbounded
+    pooled-connection wait.
 
     Fail closed: 404 when the row is gone (the caller's crud call would 404
     anyway), 403 when the locked row is team-private and the caller is neither
@@ -2773,9 +2778,12 @@ async def _reapply_team_gate_inside_mutation_txn(
     # safety improvement, never a correctness requirement, so the safe direction
     # to fail is the no-op.
     if await get_dialect_name(session) == "postgresql":
+        # Read at the call site (FAR-1279): an operator can raise the bound via
+        # MUTATION_ROW_LOCK_TIMEOUT_MS without a code change.
+        lock_timeout_ms = get_settings().mutation_row_lock_timeout_ms
         await session.execute(
             text("SELECT set_config('lock_timeout', :val, true)"),
-            {"val": f"{_MUTATION_ROW_LOCK_TIMEOUT_MS}ms"},
+            {"val": f"{lock_timeout_ms}ms"},
         )
     stmt = select(Pipeline).where(
         Pipeline.id == pipeline_id,
@@ -3253,11 +3261,29 @@ async def _clone_pipeline_into_org(
     account_id: uuid.UUID,
     org_role: str | None,
     requested_name: str | None,
+    principal: TenantPrincipal,
 ) -> tuple[Any, str]:
     """Clone a pipeline within an org, validating the source and target name.
 
     Returns ``(cloned_row, target_name)``. Raises ``HTTPException`` for a missing
     source or an already-used name.
+
+    Team gate (FAR-1276): the endpoint pairs the request-time
+    ``require_team_membership_or_admin`` dependency with an in-txn re-check of
+    its own, like every sibling mutation. The re-check is NOT taken up front -
+    it is passed as ``clone_pipeline``'s ``_on_step_a_committed`` hook, so it
+    runs INSIDE this mutation transaction but only AFTER step (a) has committed
+    its ``FOR SHARE`` read of the source row.
+
+    Ordering matters: step (a) runs on a SEPARATE connection (the clone's
+    torn-read fix) and takes ``FOR SHARE`` on the source pipeline row. A share
+    lock conflicts with this gate's ``FOR UPDATE``, so taking the gate up front
+    would have this transaction hold the row while waiting for step (a)'s
+    share lock on that same row - the two would wait on each other and neither
+    could proceed. After step (a) commits the share lock is released, so the
+    gate's ``FOR UPDATE`` is uncontended - and it still sits IMMEDIATELY before
+    the copy write (``_clone_pipeline_config`` + edges + snapshots), which is
+    the window the in-txn re-check exists to close.
     """
     source = await get_pipeline(session, pipeline_id)
     if source is None:
@@ -3279,6 +3305,11 @@ async def _clone_pipeline_into_org(
             detail=(f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"),
         )
 
+    async def _in_txn_team_gate() -> None:
+        # Bound to this transaction + principal; awaited by clone_pipeline right
+        # after step (a) commits (see the docstring's ordering note).
+        await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+
     cloned = await clone_pipeline(
         session,
         org_id=org_id,
@@ -3286,12 +3317,28 @@ async def _clone_pipeline_into_org(
         account_id=account_id,
         org_role=org_role,
         new_name=requested_name,
+        _on_step_a_committed=_in_txn_team_gate,
     )
     if cloned is None:
         logger.warning("Copy aborted: source pipeline %s disappeared during copy", pipeline_id)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]"),
+        )
+
+    # FAR-1276: the clone inherits the SOURCE's ``visibility``/
+    # ``owner_team_id``, so the source gate above normally covers the target
+    # too - this re-check makes that inheritance explicit and keeps the target
+    # gated if the clone ever grows a client-supplied team. Same matrix as the
+    # rest of the module: org admins bypass, a team-private target requires
+    # membership of ITS owner team.
+    clone_team_id = cloned.owner_team_id
+    if clone_team_id is not None and org_role != "admin" and _is_team_private(cloned.visibility, clone_team_id):
+        await _require_team_membership(
+            session,
+            account_id=account_id,
+            team_id=clone_team_id,
+            denial_detail="Not a member of the team that owns this resource",
         )
 
     await append_audit_event(
@@ -3316,6 +3363,17 @@ async def clone_pipeline_endpoint(
     req: PipelineCloneRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission("pipeline.create"),
+    # FAR-1276: parity + defence-in-depth with the sibling mutations (update /
+    # replace-graph / convert-to-agent / revert-to-manual) - the request-time
+    # membership-or-admin gate, then the in-txn re-check inside
+    # ``_clone_pipeline_into_org`` (via clone_pipeline's step-(a) commit hook).
+    # Plain (JWT) flavour, matching this endpoint's own ``require_permission``.
+    # Not a live Postgres hole: ``rls_team_isolation`` (migration 0124, the sole
+    # policy on ``pipelines``) already hides a non-member's source row, so
+    # under Postgres the resolver 404s before the handler - this is the only
+    # team layer where RLS does NOT apply (non-Postgres backends, break-glass /
+    # execution_context sessions, missing or misconfigured policies).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     logger.info(
         "Copy request: pipeline=%s org=%s user=%s",
@@ -3345,6 +3403,7 @@ async def clone_pipeline_endpoint(
                 account_id=principal.account_id,
                 org_role=principal.org_role,
                 requested_name=req.name,
+                principal=principal,
             )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
@@ -3977,10 +4036,22 @@ async def move_pipeline_to_folder_endpoint(
     req: PipelineFolderMoveRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1276: parity + defence-in-depth with the sibling mutations - the
+    # request-time membership-or-admin gate plus the in-txn re-check below,
+    # exactly as update / delete / replace-graph / convert-to-agent /
+    # revert-to-manual pair them. (``archive`` / ``unarchive`` / ``restore``
+    # carry ONLY the in-txn layer - no request-time dependency - so they are
+    # deliberately not in this list.) Plain
+    # (JWT) flavour, matching this endpoint's own ``require_permission``.
+    # Not a live Postgres hole: ``rls_team_isolation`` (migration 0124, the
+    # sole policy on ``pipelines``) already hides a non-member's row, so under
+    # Postgres the resolver 404s before the handler.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             pipeline = await move_pipeline_to_folder(session, pipeline_id, req.folder_id)
     except ValueError as e:
         raise HTTPException(
@@ -4094,8 +4165,13 @@ async def _save_locked_graph(
     pipeline_owner_team_id: uuid.UUID | None,
     nodes: list[dict[str, Any]],
     edges: list[Any],
-) -> tuple[list[dict[str, Any]], list[Any]] | None:
+) -> tuple[list[dict[str, Any]], list[Any], list[GraphValidationIssue]] | None:
     """Persist a locked node-conversion graph via the shared save path.
+
+    Returns ``(saved_nodes, saved_edges, validation_issues)`` - the same
+    advisory issue list the sibling graph-write endpoints return in their
+    response's ``validation_issues`` (FAR-1277) - or ``None`` when the pipeline
+    row is gone (the caller maps that to 404).
 
     This is the single chokepoint both node-conversion endpoints write
     through, and it runs the SAME save-time enforcement the sibling
@@ -4110,17 +4186,19 @@ async def _save_locked_graph(
     3. the write itself (``replace_pipeline_graph`` + the Agent-row command
        sync, via ``_save_graph``),
     4. ``_validate_graph_save`` - save-time graph validation; its blocking
-       codes raise 422 and roll the write back.
+       codes raise 422 and roll the write back, and whatever non-blocking
+       (advisory) issues survive that gate are returned to the caller.
 
     Steps 1-2 run BEFORE the write and 4 after it, exactly as the siblings
     order them. Without them a convert-to-agent request could persist a
     cross-team connector binding or a scope-widening node that PATCH /graph
     rejects.
 
-    The advisory (non-blocking) issues step 4 returns are logged rather than
-    returned in the response: this helper's ``tuple[nodes, edges]`` shape is
-    what its callers - and the unit tests that stub it - unpack, and the
-    blocking codes, which are the enforcement, still raise identically.
+    Advisory issues are both LOGGED and RETURNED: the log keeps the existing
+    server-side trace, and the return lets the conversion endpoints surface
+    them exactly like ``PATCH /graph`` / ``PATCH /{id}`` do. The blocking codes
+    are the enforcement and still raise identically, so widening the return
+    changes no rejection path.
     """
     connector_bindings = extract_connector_bindings(nodes)
     await _enforce_connector_team_bindings(session, org_id, pipeline_owner_team_id, connector_bindings)
@@ -4159,7 +4237,7 @@ async def _save_locked_graph(
             pipeline_id,
             issue.message,
         )
-    return saved_nodes, saved_edges
+    return saved_nodes, saved_edges, issues
 
 
 async def _finalize_locked_graph_save(
@@ -4171,11 +4249,15 @@ async def _finalize_locked_graph_save(
 ) -> None:
     """Translate a locked-graph save error into the correct HTTP response.
 
-    ``HitlReviewWeakeningDenied`` is recorded (the guarded write already rolled
-    back) and control returns to the caller, which then raises the 404
-    saved-graph response. The other errors are translated directly into an
-    ``HTTPException``. Shared by the convert-to-agent and revert-to-manual
-    endpoints, which only differ in how they prepare ``nodes``/``edges``.
+    ``HitlReviewWeakeningDenied`` is recorded and then translated here:
+    ``_deny_hitl_review`` appends the denial audit event in a fresh transaction
+    and raises the mapped ``HTTPException`` UNCONDITIONALLY, so control does
+    NOT return to the caller on that arm - the caller's ``saved is None`` ->
+    404 branch below the ``except`` is reached only when ``_save_locked_graph``
+    found the pipeline row gone, never from this exception path. The other
+    errors are translated directly into an ``HTTPException``. Shared by the
+    convert-to-agent and revert-to-manual endpoints, which only differ in how
+    they prepare ``nodes``/``edges``.
     """
     if isinstance(exc, HitlReviewWeakeningDenied):
         await _deny_hitl_review(
@@ -4334,8 +4416,8 @@ async def convert_node_to_agent_endpoint(
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-    saved_nodes, saved_edges = saved
-    return _graph_response(saved_nodes, saved_edges)
+    saved_nodes, saved_edges, validation_issues = saved
+    return _graph_response(saved_nodes, saved_edges, validation_issues=validation_issues)
 
 
 # Team gate: same parity + defence-in-depth rationale as the shared comment
@@ -4432,8 +4514,8 @@ async def revert_node_to_manual_endpoint(
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-    saved_nodes, saved_edges = saved
-    return _graph_response(saved_nodes, saved_edges)
+    saved_nodes, saved_edges, validation_issues = saved
+    return _graph_response(saved_nodes, saved_edges, validation_issues=validation_issues)
 
 
 def _find_node_in_list(nodes: list[dict[str, Any]], node_id: uuid.UUID) -> dict[str, Any] | None:

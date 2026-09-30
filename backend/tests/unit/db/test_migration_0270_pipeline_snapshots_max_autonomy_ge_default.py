@@ -1,21 +1,19 @@
-"""0264: ``pipelines.max_autonomy_level >= default_autonomy_level`` at the DB layer.
+"""0270: ``pipeline_snapshots.max_autonomy_level >= default_autonomy_level`` at the DB layer.
 
-Migration 0256/0259 guarded the VOCABULARY of both autonomy columns but not
-their RELATIVE ORDER - the ``ceiling >= default`` invariant lived only in the
-app-layer PATCH lock, so a race could still commit an inverted row. 0264
-repairs existing inverted rows (behaviour-preserving: resolution already
-computed ``base = min(default, ceiling) = ceiling`` for them) and then adds
-the composite CHECK.
+Migration 0259 guarded the VOCABULARY of both snapshot autonomy columns but not
+their RELATIVE ORDER, while 0264 added exactly that pair invariant to
+``pipelines`` - so the two tables were asymmetric. 0270 repairs inverted
+snapshot rows (behaviour-preserving: run-time resolution already computed
+``base = min(default, ceiling) = ceiling`` for them) and then adds the composite
+CHECK, mirroring 0264 statement-for-statement on the snapshot table.
 
 Lenses:
 
-* **Chain** - 0264 chains onto ``0263_evidence_layer``; 0265_hitl_review_window
-  (FAR-1257) chains onto 0264, 0266_guardrail_policy_gate_sweep (FAR-1107)
-  chains onto 0265, 0267_notification_hot_query_indexes chains onto 0266,
-  0268_webhook_lookup_expiry_indexes chains onto 0267,
-  0269_webhook_dedup_check_constraints chains onto 0268, and
-  0270_pipeline_snapshots_max_autonomy_ge_default chains onto 0269 as the
-  single linear head (0259's test documents the run-up through 0270).
+* **Chain** - 0270 chains onto ``0269_webhook_dedup_check_constraints`` as the
+  single linear head. This migration was originally numbered 0268; main landed
+  ``0268_webhook_lookup_expiry_indexes`` and
+  ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
+  so it was renumbered onto 0270.
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -28,9 +26,13 @@ Lenses:
   NULL AND rank(default) > rank(ceiling)`` (the NULL arms never match) and
   lowers the DEFAULT onto the ceiling (never the other way round - raising the
   ceiling would change behaviour).
-* **Model parity** - ``Pipeline.__table_args__`` declares the same constraint
-  name with the byte-identical predicate, so ``test_initial_migration``'s
-  ORM-vs-migrated-DB parity check cannot diverge.
+* **Table qualification** - every existence gate names
+  ``public.pipeline_snapshots``, not just the constraint: 0264 uses the same
+  constraint BODY on ``pipelines``, so an unqualified gate could be satisfied
+  by the sibling table's constraint and silently skip the snapshot add.
+* **Model parity** - ``PipelineSnapshot.__table_args__`` declares the same
+  constraint name with the byte-identical predicate, so
+  ``test_initial_migration``'s ORM-vs-migrated-DB parity check cannot diverge.
 * **Docstring loudness** - the migration must say out loud that it mutates
   data.
 """
@@ -46,16 +48,17 @@ import pytest
 from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint
 
-from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
-_MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_MIGRATION_DOWN_REVISION = "0263_evidence_layer"
+_MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
+_MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
 _HEAD_MIGRATION = "0270_pipeline_snapshots_max_autonomy_ge_default"
-_CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
+_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
-#: The existence gates must name the TABLE, not just the constraint - a
-#: same-named constraint on another table must not satisfy the gate.
-_REGCLASS = "'public.pipelines'::regclass"
+#: The existence gates must name the TABLE, not just the constraint - 0264
+#: declares the same predicate on ``pipelines``, so an unqualified gate would
+#: be satisfied by the WRONG table's constraint.
+_REGCLASS = "'public.pipeline_snapshots'::regclass"
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
@@ -117,11 +120,11 @@ def _executed() -> list[str]:
 
 
 class TestChain:
-    def test_single_head_is_0265(self) -> None:
+    def test_single_head_is_0270(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0263(self) -> None:
+    def test_down_revision_is_0269_webhook_dedup_check_constraints(self) -> None:
         module = _load_migration()
         assert module.down_revision == _MIGRATION_DOWN_REVISION
 
@@ -148,9 +151,9 @@ class TestUpgrade:
         assert "IF NOT EXISTS (SELECT 1 FROM pg_constraint" in add_ddl, add_ddl
         assert f"conrelid = {_REGCLASS}" in add_ddl, add_ddl
         assert "NOT VALID;" in add_ddl, add_ddl
-        assert "ALTER TABLE public.pipelines ADD CONSTRAINT" in add_ddl, add_ddl
+        assert "ALTER TABLE public.pipeline_snapshots ADD CONSTRAINT" in add_ddl, add_ddl
         # 2. The DATA-MUTATING repair.
-        assert repair.startswith("UPDATE pipelines SET default_autonomy_level = max_autonomy_level"), repair
+        assert repair.startswith("UPDATE pipeline_snapshots SET default_autonomy_level = max_autonomy_level"), repair
         # 3. The VALIDATE.
         assert f"conname='{_CONSTRAINT}'" in validate_ddl, validate_ddl
         assert f"conrelid = {_REGCLASS}" in validate_ddl, validate_ddl
@@ -172,7 +175,9 @@ class TestUpgrade:
         bind_execute_calls = op.get_bind.return_value.execute.call_args_list
         assert len(bind_execute_calls) == 1, "the repair must run through op.get_bind().execute exactly once"
         repair_sql = str(bind_execute_calls[0].args[0].text)
-        assert repair_sql.startswith("UPDATE pipelines SET default_autonomy_level = max_autonomy_level"), repair_sql
+        assert repair_sql.startswith("UPDATE pipeline_snapshots SET default_autonomy_level = max_autonomy_level"), (
+            repair_sql
+        )
         assert logger.info.call_count == 1, "the repair rowcount must be logged exactly once"
         fmt, *args = logger.info.call_args.args
         assert "%s" in fmt or "%d" in fmt, fmt
@@ -193,7 +198,7 @@ class TestUpgrade:
         assert "SET max_autonomy_level" not in repair, repair
 
     def test_existence_gates_are_table_qualified(self) -> None:
-        """conname alone would let a same-named constraint elsewhere skip the gate."""
+        """conname alone would match 0264's same-named-body constraint on pipelines."""
         executed = _executed()
         for ddl in (executed[0], executed[2]):
             assert f"conname='{_CONSTRAINT}'" in ddl, ddl
@@ -209,7 +214,7 @@ class TestUpgrade:
         assert "max_autonomy_level IS NULL OR " in add_ddl, add_ddl
         assert f"{_REPAIR_RANK_DEFAULT} <= {_REPAIR_RANK_CEILING}" in add_ddl, add_ddl
         for value in _VOCABULARY:
-            assert f"'{value}'" in add_ddl, f"0264 CHECK vocabulary missing {value!r}"
+            assert f"'{value}'" in add_ddl, f"0270 CHECK vocabulary missing {value!r}"
 
     def test_no_string_formatted_ddl(self) -> None:
         """S608 / migration-fstring-sql: the DDL must be literal, not f-string."""
@@ -223,10 +228,10 @@ class TestUpgrade:
         assert "Behaviour-preserving" in _source()
 
     def test_docstring_does_not_claim_not_valid_blocks_on_existing_rows(self) -> None:
-        """The old rationale was wrong: NOT VALID checks no existing rows.
+        """NOT VALID checks no existing rows - the docstring must say so.
 
-        The docstring must say so explicitly rather than repeat the claim that
-        the CHECK cannot be added while an inverted row exists.
+        The pre-0264 rationale claimed the opposite; it must not be repeated
+        here.
         """
         source = _source()
         assert "NOT VALID checks no existing rows" in source, source
@@ -242,9 +247,9 @@ class TestDowngrade:
 
 
 def _model_check() -> CheckConstraint:
-    checks = [c for c in Pipeline.__table_args__ if isinstance(c, CheckConstraint)]
+    checks = [c for c in PipelineSnapshot.__table_args__ if isinstance(c, CheckConstraint)]
     match = next((c for c in checks if c.name == _CONSTRAINT), None)
-    assert match is not None, f"Pipeline.__table_args__ missing {_CONSTRAINT}"
+    assert match is not None, f"PipelineSnapshot.__table_args__ missing {_CONSTRAINT}"
     return match
 
 
@@ -267,7 +272,9 @@ class TestModelParity:
         assert predicate == str(_model_check().sqltext), (predicate, str(_model_check().sqltext))
 
     def test_migration_and_model_declare_the_same_name(self) -> None:
-        declared = {c.name for c in Pipeline.__table_args__ if isinstance(c, CheckConstraint) and c.name is not None}
+        declared = {
+            c.name for c in PipelineSnapshot.__table_args__ if isinstance(c, CheckConstraint) and c.name is not None
+        }
         assert _CONSTRAINT in declared, "model missing the constraint"
         assert _CONSTRAINT in _source(), "migration missing the constraint"
 

@@ -132,11 +132,12 @@ _MIGRATION_PATH = (
 # 0264_pipelines_max_autonomy_ge_default, and
 # 0266_guardrail_policy_gate_sweep (FAR-1107) chained onto 0265,
 # 0267_notification_hot_query_indexes chained onto 0266,
-# 0268_webhook_lookup_expiry_indexes chained onto 0267, and
-# 0269_webhook_dedup_check_constraints chained onto 0268 as the chain head.
+# 0268_webhook_lookup_expiry_indexes chained onto 0267,
+# 0269_webhook_dedup_check_constraints chained onto 0268, and
+# 0270_pipeline_snapshots_max_autonomy_ge_default chained onto 0269 as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0269_webhook_dedup_check_constraints"
+_CHAIN_HEAD_MIGRATION_NAME = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

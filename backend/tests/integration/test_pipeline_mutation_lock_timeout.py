@@ -10,8 +10,8 @@ holds the pipeline row lock, a PATCH arrives, and the endpoint must come back
 with HTTP 409 + the lock-timeout detail (SQLSTATE 55P03 mapped by
 ``handle_db_errors``) rather than hanging or answering the generic 503.
 
-The wait is ``_MUTATION_ROW_LOCK_TIMEOUT_MS`` (5 s), so this test takes ~5 s
-by design - it is timing the bounded wait, not a fixed sleep.
+The wait is ``Settings.mutation_row_lock_timeout_ms`` (5 s by default), so this
+test takes ~5 s by design - it is timing the bounded wait, not a fixed sleep.
 """
 
 from __future__ import annotations
@@ -24,13 +24,21 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.api.routes.pipelines import _MUTATION_ROW_LOCK_TIMEOUT_MS
 from modulo.auth.jwt import create_access_token
+from modulo.settings import get_settings
 
 pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
 _MANUAL = "manual_approval"
+#: Seconds added to ``mutation_row_lock_timeout_ms`` for the HTTP client's own
+#: timeout - enough headroom to OBSERVE the server's answer at every permitted
+#: setting (100 ms..30 s) without the client giving up first.
+_CLIENT_MARGIN_SECONDS = 20.0
+#: Seconds added to the expected wait for the "the wait was bounded" ceiling -
+#: tight enough that an UNBOUNDED wait (the holder never releases) still fails,
+#: loose enough for request/DB overhead at any permitted setting.
+_BOUNDED_MARGIN_SECONDS = 10.0
 
 
 def _auth_headers(org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> dict[str, str]:
@@ -96,6 +104,17 @@ async def test_contended_patch_times_out_with_a_mapped_409(
 ) -> None:
     """A held row lock turns the PATCH into a bounded 409, not a hang or a 503."""
     pipeline_id = await _insert_pipeline(db_engine, test_org, test_user)
+    # The whole timing contract derives from the SETTING, not from constants:
+    # MUTATION_ROW_LOCK_TIMEOUT_MS is operator-tunable across 100 ms..30 s, and
+    # a hard-coded 30 s client timeout would give up BEFORE the server answered
+    # at the field's max - the mapping would then be unobservable and the test
+    # would collapse precisely when it is tuned.
+    expected_seconds = get_settings().mutation_row_lock_timeout_ms / 1000
+    # The client must outlive the server's bounded wait by enough to OBSERVE the
+    # answer; the upper-bound assertion sits just above the wait so it still
+    # proves the wait ENDED (bounded) rather than hanging.
+    client_timeout = expected_seconds + _CLIENT_MARGIN_SECONDS
+    bounded_ceiling = expected_seconds + _BOUNDED_MARGIN_SECONDS
     try:
         # Concurrent holder: takes the row lock and KEEPS IT OPEN across the
         # whole PATCH - nothing releases it, so only the bounded lock_timeout
@@ -111,15 +130,14 @@ async def test_contended_patch_times_out_with_a_mapped_409(
                 f"/api/v1/pipelines/{pipeline_id}",
                 json={"description": "lock-timeout probe"},
                 headers=_auth_headers(test_org, test_user, role="admin"),
-                # The wait is the lock_timeout (~5 s); the client must not
+                # The wait is the lock_timeout; the client must not
                 # give up before the SERVER answers, or the mapping is never
                 # observable.
-                timeout=30.0,
+                timeout=client_timeout,
             )
             elapsed = time.monotonic() - started
             await holder.rollback()
 
-        expected_seconds = _MUTATION_ROW_LOCK_TIMEOUT_MS / 1000
         assert resp.status_code == 409, resp.text
         detail = resp.json()["detail"]
         assert "Timed out waiting for a lock" in detail, detail
@@ -128,7 +146,7 @@ async def test_contended_patch_times_out_with_a_mapped_409(
             f"the wait ended after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
         )
         # ...and it was really BOUNDED (the holder never released the lock).
-        assert elapsed < 30.0, f"the wait was NOT bounded - {elapsed:.2f}s for a held row lock"
+        assert elapsed < bounded_ceiling, f"the wait was NOT bounded - {elapsed:.2f}s for a held row lock"
 
         # The rejected PATCH left the row untouched.
         async with db_engine.connect() as conn:
