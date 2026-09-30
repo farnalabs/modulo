@@ -3161,7 +3161,14 @@ export default {
       "deduplicated": "Deduplicated",
       "type": "Type",
       "timestamp": "Timestamp",
-      "run": "Run"
+      "run": "Run",
+      "apply": "Apply",
+      "reset": "Reset",
+      "previous": "Previous",
+      "next": "Next",
+      "events_count": "{count} event | {count} events",
+      "showing_of_total_events": "{count} of {total} events",
+      "try_adjusting_filters": "Try adjusting your filters or wait for trigger activity to be recorded."
     },
     "variantCompare": {
       "title": "Variant Comparison",
