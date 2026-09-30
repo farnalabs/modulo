@@ -41,7 +41,11 @@ async function loginForMcp(page: Page, env: TestEnv) {
  * registered before loginAsAdmin loses to the local mock-API catch-all.
  */
 async function mockSettingsMcpApi(page: Page) {
-  await page.route('**/api/v1/api-keys*', async (route) => {
+  // `**` (not `*`) so the `/api/v1/api-keys/mcp-config` sub-path is matched too:
+  // a URL glob `*` does not cross a `/`, so `api-keys*` would leave the
+  // mcp-config request to hit the real backend and render the live server URL
+  // instead of the fixture.
+  await page.route('**/api/v1/api-keys**', async (route) => {
     const url = route.request().url()
     if (url.includes('/mcp-config')) {
       return route.fulfill({
@@ -62,7 +66,12 @@ async function mockSettingsMcpApi(page: Page) {
 async function mockOAuthClientsApi(page: Page, existing: RegisteredClient[]) {
   const clients = [...existing]
 
-  await page.route('**/api/v1/mcp/oauth/clients*', async (route) => {
+  // `**` (not `*`) is required: the DELETE verb targets
+  // `/api/v1/mcp/oauth/clients/{client_id}`, and a URL glob `*` does not match
+  // across the `/`, so `clients*` only intercepted the bare list request and
+  // the revoke fell through to the real backend (which answers 404 "OAuth
+  // client not found" for this fixture-only client id).
+  await page.route('**/api/v1/mcp/oauth/clients**', async (route) => {
     const request = route.request()
     if (request.method() === 'POST') {
       clients.push(SEED_CLIENT)
@@ -115,8 +124,13 @@ test.describe('Settings MCP OAuth clients', { tag: '@regression' }, () => {
     await page.getByTestId('settings-mcp-register-oauth-client').click()
     await expect(page.getByTestId('settings-mcp-oauth-name')).toBeVisible()
 
-    // Inline validation on blur
-    await page.getByTestId('settings-mcp-oauth-name').blur()
+    // Inline validation on blur. Focus the field first: the dialog's initial
+    // focus lands on PrimeVue's own Close button, so a bare `.blur()` on an
+    // unfocused input is a no-op and the @blur handler (which arms the error)
+    // never runs.
+    const oauthName = page.getByTestId('settings-mcp-oauth-name')
+    await oauthName.focus()
+    await oauthName.blur()
     await expect(page.getByTestId('settings-mcp-oauth-name-error')).toBeVisible()
 
     await page.getByTestId('settings-mcp-oauth-name').fill('E2E OAuth Client')

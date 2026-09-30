@@ -45,9 +45,53 @@ import { type Locator } from '@playwright/test'
  * bounded `attached` wait (which does not scroll or require visibility) keeps
  * a genuinely absent command failing fast instead of hanging to the test
  * timeout.
+ *
+ *   7. the single native DOM `.click()` above is STILL not enough. A staging
+ *      trace (2026-09-30, `archiving a pipeline` retry) shows the popup OPEN
+ *      immediately before the click and STILL OPEN after it, with no
+ *      `/pipelines/{id}/archive` request ever sent: the item list re-rendered
+ *      during the anchored-overlay enter transition, so the resolved node was
+ *      already detached when `.click()` ran and the native click was a silent
+ *      no-op. `Menu.itemClick` hides the popup immediately after invoking the
+ *      item's `command`, so a popup that stays open is proof the command did
+ *      NOT fire. Re-resolve the item and re-click until the popup closes.
  */
+
+// The anchored-overlay enter/leave animation is 300ms, so the overlay stays
+// attached for ~300ms after hide(); the close budget must exceed that or the
+// retry loop would click the departing popup a second time.
+const POPUP_CLOSE_POLL_MS = 40
+const POPUP_CLOSE_BUDGET_MS = 800
+const MAX_CLICK_ATTEMPTS = 10
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export async function clickMenuItem(menuItem: Locator): Promise<void> {
   const content = menuItem.locator('[data-pc-section="itemcontent"]').first()
   await content.waitFor({ state: 'attached', timeout: 10_000 })
-  await content.evaluate((el) => (el as HTMLElement).click())
+
+  let clicked = false
+  for (let attempt = 0; attempt < MAX_CLICK_ATTEMPTS && (await menuItem.count()) > 0; attempt++) {
+    try {
+      // A Locator re-resolves on each call, so this targets the LIVE node even
+      // if the previous attempt lost its handle to a re-render.
+      await content.evaluate((el) => (el as HTMLElement).click())
+      clicked = true
+    } catch {
+      // Element detached between resolution and click — retry with a fresh one.
+    }
+
+    // Give Menu.itemClick's hide() a moment to unmount the overlay before
+    // deciding whether another attempt is needed (avoids a double command).
+    const deadline = Date.now() + POPUP_CLOSE_BUDGET_MS
+    while ((await menuItem.count()) > 0 && Date.now() < deadline) {
+      await sleep(POPUP_CLOSE_POLL_MS)
+    }
+  }
+
+  if (!clicked || (await menuItem.count()) > 0) {
+    throw new Error('clickMenuItem: row-action popup never closed — the menu command did not fire')
+  }
 }
