@@ -34,3 +34,22 @@ def test_migration_collision_check_runs_through_cross_platform_python_script():
         config,
     )
     assert Path(REPO_ROOT, "scripts", "run_check_migration_heads.py").is_file()
+
+
+def test_check_c1_chars_files_pattern_matches_workflow_files():
+    """Regression guard (FAR-1350): a doubled-backslash pattern (``\\\\.github``)
+    requires a literal backslash in the path, so the hook never fired. The
+    pattern must stay single-backslash and match real workflow paths."""
+    config = _config()
+    lines = config.splitlines()
+    id_indexes = [i for i, line in enumerate(lines) if line.strip() == "- id: check-c1-chars"]
+    assert id_indexes, "check-c1-chars hook missing from .pre-commit-config.yaml"
+    pattern_lines = [line for line in lines[id_indexes[0] + 1 :] if line.strip().startswith("files:")]
+    assert pattern_lines, "check-c1-chars hook has no files: pattern"
+    pattern = pattern_lines[0].split("files: ", 1)[1].strip()
+    assert "\\\\" not in pattern
+    compiled = re.compile(pattern)
+    assert compiled.search(".github/workflows/ci.yml")
+    assert compiled.search(".github/workflows/ci.yaml")
+    assert compiled.search(".github/workflows/sub/deploy.yml")
+    assert not compiled.search("backend/src/modulo/api/routes/runs.py")

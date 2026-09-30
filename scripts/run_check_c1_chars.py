@@ -2,7 +2,8 @@
 """Cross-platform pre-commit wrapper for the workflow-file character scan.
 
 Replaces `powershell -NoProfile -File tools/check-c1-chars.ps1`. Scans
-.github/workflows/*.yml for UTF-8 BOMs, C1 control characters (U+0080-U+009F)
+.github/workflows/ (recursively, *.yml and *.yaml) for UTF-8 BOMs, C1 control
+characters (U+0080-U+009F)
 and non-ASCII characters (with an allowlist of legitimate punctuation). With
 ``--fix``, removes BOMs and C1 control chars. Exit 0 clean, 1 issues found.
 """
@@ -44,7 +45,7 @@ def main() -> int:
     fix = "--fix" in sys.argv
     found = False
 
-    files = sorted(WORKFLOWS_DIR.glob("*.yml"))
+    files = sorted(p for ext in ("*.yml", "*.yaml") for p in WORKFLOWS_DIR.glob(f"**/{ext}"))
     if not files:
         print("No C1 control characters or BOMs found in .github/workflows/", file=sys.stderr)
         return 0
