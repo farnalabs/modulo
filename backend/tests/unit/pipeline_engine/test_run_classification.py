@@ -27,6 +27,12 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session as SASession
 
 from modulo.core.pipeline_engine.classify import (
+    DELIVERY_CONFIDENCE_SELF_REPORTED,
+    DELIVERY_CONFIDENCE_VALUES,
+    DELIVERY_CONFIDENCE_VERIFIED,
+    PR_URL_PROVENANCE_DECLARED,
+    PR_URL_PROVENANCE_MATCHED,
+    PR_URL_PROVENANCE_VALUES,
     REASON_BUDGET_EXCEEDED,
     REASON_CANCELLED,
     REASON_COMPENSATION_FAILED,
@@ -60,6 +66,7 @@ _SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
 
 _PR = "https://github.com/farnalabs/modulo/pull/123"
 _PR_2 = "https://github.com/farnalabs/modulo/pull/456"
+_PR_3 = "https://github.com/farnalabs/modulo/pull/789"
 
 
 def _node_return_with_pr(pr_url: str) -> dict[str, Any]:
@@ -306,6 +313,192 @@ class TestPrUrlSources:
             raw_output_markers=_markers(_PR),
         )
         assert result.value == RunClassificationValue.no_delivery
+
+
+class TestDeliveryProvenance:
+    """FAR-1336: the record must stop overstating what we know about delivery.
+
+    ``pr_url_provenance`` records, per URL, HOW it was harvested (``declared``
+    = the node's structured RETURN asserted it; ``matched`` = it only appears
+    in telemetry/marker output), and ``delivery_confidence`` states that the
+    record is ``self_reported`` — nothing in it is confirmed against an SCM.
+
+    These keys are ADDITIVE metadata: ``value``, ``reason``,
+    ``delivered_pr_urls``, ``computed_at``, ``work_intact`` and
+    ``declared_success_nodes`` are unchanged, and a ``matched``-only URL still
+    classifies ``delivered`` (see ``test_matched_only_url_still_classifies_
+    delivered``).
+    """
+
+    def test_pr_url_in_structured_return_is_declared(self) -> None:
+        """A URL present in the node's structured RETURN (outputs_json) — the
+        run's own output contract asserting delivery — is ``declared``."""
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        result = classify_run("complete", None, outputs_json=outputs, telemetry_json={"n1": {}})
+        assert result.value == RunClassificationValue.delivered
+        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_DECLARED}
+        assert set(result.pr_url_provenance.values()) <= PR_URL_PROVENANCE_VALUES
+
+    def test_marker_only_pr_url_is_matched_and_still_delivered(self) -> None:
+        """A URL present ONLY in a FAR-188 raw-output marker is emitted output
+        the run never asserted as a delivery -> ``matched`` — and the record
+        STILL classifies delivered (the delivery rule is not tightened)."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json=None,
+            telemetry_json=None,
+            raw_output_markers=_markers(_PR),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_MATCHED}
+
+    def test_telemetry_only_pr_url_is_matched(self) -> None:
+        """A URL present ONLY in the node telemetry value (not the node
+        return) -> ``matched``: it appears in emitted output but the run never
+        asserted it via its output contract."""
+        outputs = {"n1": {"summary": "no pr_url here"}}
+        telemetry = {"n1": {"agent_status": "completed", "agent_outcome": "success", "pr_url": _PR}}
+        result = classify_run("complete", None, outputs_json=outputs, telemetry_json=telemetry)
+        assert result.value == RunClassificationValue.delivered
+        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_MATCHED}
+
+    def test_per_url_provenance_across_routes(self) -> None:
+        """Several URLs harvested via different routes each carry their own
+        provenance, and ``delivered_pr_urls`` keeps its collection order."""
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        telemetry = {"n2": {"agent_status": "completed", "agent_outcome": "success", "pr_url": _PR_2}}
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json=outputs,
+            telemetry_json=telemetry,
+            raw_output_markers=_markers(_PR_3),
+        )
+        assert result.delivered_pr_urls == (_PR, _PR_2, _PR_3)
+        assert result.pr_url_provenance == {
+            _PR: PR_URL_PROVENANCE_DECLARED,
+            _PR_2: PR_URL_PROVENANCE_MATCHED,
+            _PR_3: PR_URL_PROVENANCE_MATCHED,
+        }
+
+    def test_url_reachable_via_return_and_marker_is_declared(self) -> None:
+        """Stronger provenance wins: a URL reachable via BOTH the structured
+        return and a marker is tagged ``declared``, never ``matched``."""
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json=outputs,
+            telemetry_json={"n1": {}},
+            raw_output_markers=_markers(_PR),
+        )
+        assert result.delivered_pr_urls == (_PR,)
+        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_DECLARED}
+
+    def test_declared_wins_even_when_matched_is_observed_first(self) -> None:
+        """Route order must not downgrade a URL: node ids are walked in sorted
+        order, so a telemetry-only sighting (matched) on an earlier node is
+        upgraded to ``declared`` when a later node's RETURN carries it."""
+        outputs = {"a1": {"summary": "no pr_url"}, "b2": _node_return_with_pr(_PR)}
+        telemetry = {"a1": {"agent_status": "completed", "pr_url": _PR}}
+        result = classify_run("complete", None, outputs_json=outputs, telemetry_json=telemetry)
+        assert result.delivered_pr_urls == (_PR,)
+        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_DECLARED}
+
+    def test_delivery_confidence_is_self_reported_on_delivered_record(self) -> None:
+        """A delivered record states plainly that it is self_reported, and the
+        vocabulary declares a home for a future ``verified`` value."""
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        record = classify_run("complete", None, outputs_json=outputs, telemetry_json={"n1": {}}).to_dict()
+        assert record["value"] == "delivered"
+        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_SELF_REPORTED
+        assert DELIVERY_CONFIDENCE_SELF_REPORTED in DELIVERY_CONFIDENCE_VALUES
+        assert DELIVERY_CONFIDENCE_VERIFIED in DELIVERY_CONFIDENCE_VALUES
+
+    def test_delivery_confidence_is_self_reported_on_no_delivery_record(self) -> None:
+        """The no_delivery shape carries the confidence key too (with no
+        provenance entries — there are no delivered URLs to explain)."""
+        record = classify_run("complete", None).to_dict()
+        assert record["value"] == "no_delivery"
+        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_SELF_REPORTED
+        assert not record["pr_url_provenance"]
+
+    async def test_unclassified_marker_record_carries_provenance_keys(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """The fail-closed ``unclassified`` marker written on a classifier
+        failure carries the same two keys (empty provenance, self_reported)."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await _seed_run(session, run_id)
+            with patch("modulo.core.pipeline_engine.classify.classify_run", side_effect=RuntimeError("boom")):
+                await update_run_status(session, run_id, "complete")
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "unclassified"
+        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_SELF_REPORTED
+        assert not record["pr_url_provenance"]
+
+    def test_matched_only_url_still_classifies_delivered(self) -> None:
+        """DELIBERATE (FAR-1336): provenance is RECORD-ONLY metadata.
+
+        A URL harvested ONLY from telemetry/markers (``matched``) still yields
+        ``value == delivered``. The delivery rule must NOT be tightened to
+        require a ``declared`` URL — a sandbox that echoes the PR URL into
+        marker/stdout output rather than the structured return is a real
+        delivery. This test exists so a future reader cannot silently change
+        it."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json=None,
+            telemetry_json=None,
+            raw_output_markers=_markers(_PR),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED
+        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_MATCHED}
+
+    def test_existing_record_keys_are_unchanged_by_the_provenance_keys(self) -> None:
+        """The six pre-FAR-1336 keys keep their exact names, types and values;
+        the two provenance keys are purely additive to the record shape."""
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        telemetry = {"n1": {"agent_status": "completed", "agent_outcome": "success"}}
+        record = classify_run(
+            "complete", None, outputs_json=outputs, telemetry_json=telemetry, work_intact=True
+        ).to_dict()
+        assert record["value"] == "delivered"
+        assert record["reason"] == REASON_DELIVERED
+        assert record["delivered_pr_urls"] == [_PR]
+        assert record["work_intact"] is True
+        assert record["declared_success_nodes"] == 1
+        assert "computed_at" in record
+        assert set(record) == {
+            "value",
+            "reason",
+            "delivered_pr_urls",
+            "computed_at",
+            "work_intact",
+            "declared_success_nodes",
+            "pr_url_provenance",
+            "delivery_confidence",
+        }
+
+    def test_provenance_map_keys_exactly_the_delivered_url_set(self) -> None:
+        """The collector's provenance map covers every returned URL and
+        nothing else — no orphan provenance entries, no unexplained URLs —
+        and collection is identical with and without the provenance out-param."""
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        markers = _markers(_PR, _PR_3)
+        provenance: dict[str, str] = {}
+        urls = collect_pr_urls(outputs, {"n1": {}}, markers, provenance)
+        assert urls == collect_pr_urls(outputs, {"n1": {}}, markers)
+        assert set(provenance) == set(urls)
+        for provenance_value in provenance.values():
+            assert provenance_value in PR_URL_PROVENANCE_VALUES
 
 
 def _email_markers(*attempt_keys: str) -> dict[str, dict[str, Any]]:
