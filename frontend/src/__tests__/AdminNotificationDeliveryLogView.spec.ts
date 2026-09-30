@@ -159,9 +159,20 @@ describe('AdminNotificationDeliveryLogView', () => {
     // The event-type Select is the second AppSelect in the filter bar.
     const eventSelect = wrapper.findAllComponents(AppSelect).at(1)
     expect(eventSelect).toBeDefined()
-    const values = (eventSelect!.props('options') as Array<{ value: string }>).map((o) => o.value)
+    const options = eventSelect!.props('options') as Array<{ value: string; label: string }>
+    const values = options.map((o) => o.value)
     expect(values).toContain('__all__')
     expect(values).toContain('hitl_deadline_warning')
     expect(values).toContain('circuit_breaker_tripped')
+
+    // Every registry event renders a human-readable label, never its raw
+    // snake_case name: the later-registered events used to fall through to
+    // the raw name for want of an en-US key (FAR-1319 review).
+    const labelFor = (value: string) => options.find((o) => o.value === value)?.label
+    expect(labelFor('run_stalled')).toBe('Run Stalled')
+    expect(labelFor('budget_exceeded')).toBe('Budget Exceeded')
+    expect(labelFor('circuit_breaker_tripped')).toBe('Circuit Breaker Tripped')
+    expect(labelFor('trigger_deactivated')).toBe('Trigger Deactivated')
+    expect(labelFor('hitl_deadline_warning')).toBe('HITL Deadline Warning')
   })
 })

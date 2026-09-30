@@ -361,8 +361,8 @@ const props = defineProps<{ teamId: string }>();
  * `frontend/src/manifest.yaml` has always claimed drives this picker. The
  * previous hardcoded array drifted behind the backend registry (it missed
  * run_stalled / budget_exceeded / circuit_breaker_tripped /
- * trigger_deactivated / org_triggers_auto_paused), so those events were
- * unsubscribable from the UI even though the API accepted them.
+ * trigger_deactivated), so those events were unsubscribable from the UI even
+ * though the API accepted them.
  */
 const availableEvents = ref<string[]>([]);
 const eventsLoading = ref(false);
