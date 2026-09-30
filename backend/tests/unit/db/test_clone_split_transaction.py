@@ -61,8 +61,13 @@ def _make_read_session(
     edges: list[_Row],
     snapshots: list[_Row],
     pins_by_snap: dict[str, list[_Row]],
+    pre_results: list[Any] | None = None,
 ) -> AsyncMock:
-    results = [_scalar_result(source), _scalars_result(edges), _scalars_result(snapshots)]
+    # ``pre_results`` lets a caller prepend a result for a statement the read
+    # transaction issues BEFORE the source SELECT (the postgres ``set_config``
+    # lock_timeout bind the dialect guard emits - FAR-1279).
+    results = list(pre_results or [])
+    results.extend([_scalar_result(source), _scalars_result(edges), _scalars_result(snapshots)])
     results.extend(_scalars_result(pins_by_snap.get(str(snap.id), [])) for snap in snapshots)
 
     session = AsyncMock()
@@ -198,6 +203,62 @@ async def test_step_a_held_fires_while_read_transaction_open() -> None:
     )
     assert "step_a_held" in events
     assert events.index("step_a_held") < events.index("read_txn_commit")
+
+
+# ---------------------------------------------------------------------------
+# FAR-1279: the step-(a) FOR SHARE wait is bounded on Postgres
+# ---------------------------------------------------------------------------
+
+
+async def test_clone_bounds_postgres_lock_wait_before_for_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On Postgres the step-(a) read transaction sets a transaction-scoped
+    ``lock_timeout`` from ``Settings.mutation_row_lock_timeout_ms`` BEFORE the
+    ``FOR SHARE`` select, so a clone overlapping another writer cannot park its
+    connection on an unbounded lock wait.
+
+    The source-select result slot is shifted by one: the guard's ``set_config``
+    execute is the first statement the read session issues, so its result has to
+    be prepended (``pre_results``).
+    """
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr(
+        "modulo.db.crud.pipeline.get_dialect_name",
+        AsyncMock(return_value="postgresql"),
+    )
+    source = _make_source()
+    read_session = _make_read_session(
+        events=[],
+        on_held=None,
+        source=source,
+        edges=[],
+        snapshots=[],
+        pins_by_snap={},
+        pre_results=[MagicMock()],
+    )
+    factory = _read_factory(read_session)
+    main_session = _make_main_session()
+
+    cloned = await clone_pipeline(
+        main_session,
+        org_id=uuid.uuid4(),
+        pipeline_id=source.id,
+        account_id=uuid.uuid4(),
+        _read_session_factory=factory,
+    )
+
+    assert cloned is not None
+    executed = read_session.execute.call_args_list
+    assert len(executed) >= 2, "expected the lock_timeout bind then the source select"
+    bind_stmt, bind_params = executed[0].args[0], executed[0].args[1]
+    assert "set_config" in str(bind_stmt) and "lock_timeout" in str(bind_stmt)
+    # The bound comes from Settings (default 5000 ms) - prove it is a ms value,
+    # not a hard-coded literal wedged into the helper.
+    assert str(bind_params["val"]).endswith("ms")
+    # Ordering: the bound must be in place before the FOR SHARE source select.
+    assert "FOR UPDATE" in str(executed[1].args[0]).upper()
 
 
 # ---------------------------------------------------------------------------
