@@ -1726,6 +1726,12 @@ elements:
       - testid: admin-notification-log-retry-all-cancel
         type: button
         dynamic_testid: false
+      - testid: admin-notification-log-events-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: admin-notification-log-events-retry
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
