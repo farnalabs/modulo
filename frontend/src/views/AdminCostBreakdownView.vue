@@ -72,17 +72,17 @@
                   {{ formatMoney(value as number, currencyCode) }}
                 </template>
                 <template #cell-avg_per_run="{ row }">
-                  {{ formatMoney((row as any).total_runs > 0 ? (row as any).total_spend_usd / (row as any).total_runs : 0, currencyCode) }}
+                  {{ formatMoney((row as TeamTableRow).total_runs > 0 ? (row as TeamTableRow).avg_per_run : 0, currencyCode) }}
                 </template>
                 <template #cell-annotations="{ row }">
                   <div class="text-xs">
-                    <p v-if="(row as any).refused_total_usd != null" class="text-warning" data-testid="cost-annotation-refused">
-                      {{ $t('views.AdminCostBreakdownView.refused_limit_line', { amount: (row as any).refused_total_usd.toFixed(2) }) }}
+                    <p v-if="(row as TeamTableRow).refused_total_usd != null" class="text-warning" data-testid="cost-annotation-refused">
+                      {{ $t('views.AdminCostBreakdownView.refused_limit_line', { amount: (row as TeamTableRow).refused_total_usd!.toFixed(2) }) }}
                     </p>
-                    <p v-if="(row as any).clamped_total_usd != null" class="text-muted-foreground" data-testid="cost-annotation-clamped">
+                    <p v-if="(row as TeamTableRow).clamped_total_usd != null" class="text-muted-foreground" data-testid="cost-annotation-clamped">
                       {{ $t('views.AdminCostBreakdownView.day_ledger_clamped_line') }}
                     </p>
-                    <span v-if="(row as any).refused_total_usd == null && (row as any).clamped_total_usd == null">—</span>
+                    <span v-if="(row as TeamTableRow).refused_total_usd == null && (row as TeamTableRow).clamped_total_usd == null">—</span>
                   </div>
                 </template>
               </DataTable>
@@ -139,7 +139,9 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import type { components } from '../lib/api/schema'
 import { formatApiError } from '../lib/api/formatError'
 import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
@@ -153,49 +155,29 @@ import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
+const { t } = useI18n()
 const planStore = usePlanStore()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 
-interface CostReportRow {
-  entity_id: string
-  entity_name: string
-  total_spend_usd: number
-  total_runs: number
-  components?: Array<{ name: string; amount_usd: string }>
-  annotations?: { refused_total_usd?: number | null; clamped_total_usd?: number | null } | null
-}
-
-interface CostReportResponse {
-  period: string
-  group_by: string
-  items: CostReportRow[]
-  org_unassigned_components?: string | null
-  legacy_total?: string | null
-  org_total?: string | null
-  org_run_count?: number | null
-  has_more?: boolean
-}
-
-interface AnomalyResponse {
-  id: string
-  anomaly_date: string
-  pipeline_id: string | null
-  amount: number
-  baseline: number
-  percent_above: number
-  dismissed: boolean
+type CostReportRow = components['schemas']['CostReportRow']
+type CostReportResponse = components['schemas']['CostReportResponse']
+type AnomalyResponse = components['schemas']['AnomalyResponse']
+type TeamTableRow = CostReportRow & {
+  avg_per_run: number
+  refused_total_usd: number | null
+  clamped_total_usd: number | null
 }
 
 const { loading, error: loadError, data, load: loadData } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/costs', {
+  () => api.GET('/api/v1/admin/costs', {
     params: { query: { group_by: 'team', period: 'month' } },
   }),
   { immediate: false },
 )
 
-const items = computed(() => (data.value as CostReportResponse)?.items ?? [])
+const items = computed<CostReportRow[]>(() => (data.value as CostReportResponse | undefined)?.items ?? [])
 
-const tableRows = computed(() => items.value.map(item => ({
+const tableRows = computed<TeamTableRow[]>(() => items.value.map(item => ({
   ...item,
   avg_per_run: item.total_runs > 0 ? item.total_spend_usd / item.total_runs : 0,
   refused_total_usd: item.annotations?.refused_total_usd ?? null,
@@ -207,12 +189,12 @@ const anomaliesError = ref<string | null>(null)
 const anomalies = ref<AnomalyResponse[]>([])
 
 const totalSpend = computed(() => {
-  const ot = (data.value as CostReportResponse)?.org_total
+  const ot = (data.value as CostReportResponse | undefined)?.org_total
   if (ot != null) return Number.parseFloat(ot)
   return items.value.reduce((sum, i) => sum + i.total_spend_usd, 0)
 })
 const totalRuns = computed(() => {
-  const orc = (data.value as CostReportResponse)?.org_run_count
+  const orc = (data.value as CostReportResponse | undefined)?.org_run_count
   if (orc != null) return orc
   return items.value.reduce((sum, i) => sum + i.total_runs, 0)
 })
@@ -222,16 +204,8 @@ const avgCostPerRun = computed(() => totalRuns.value > 0 ? totalSpend.value / to
 // Each bucket carries `count` (total runs) and `success_rate` (complete / count).
 // Summing count * success_rate across all day-buckets for the period gives the
 // total successful-run count. No new backend endpoint needed.
-interface AnalyticsBucket {
-  date: string
-  count: number
-  success_rate: number | null
-  total_cost_usd: number | null
-}
-
-interface AnalyticsResponse {
-  buckets: AnalyticsBucket[]
-}
+type AnalyticsBucket = components['schemas']['AnalyticsBucket']
+type AnalyticsResponse = components['schemas']['AnalyticsResponse']
 
 const successfulRuns = ref(0)
 
@@ -241,12 +215,12 @@ async function loadSuccessCount() {
     const dateFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
     const dateTo = now.toISOString().slice(0, 10)
 
-    const { data: analyticsData, error: analyticsErr } = await (api as any).GET('/api/v1/analytics/query', {
+    const { data: analyticsData, error: analyticsErr } = await api.GET('/api/v1/analytics/query', {
       params: { query: { group_by: 'day', date_from: dateFrom, date_to: dateTo } },
     })
     if (!analyticsErr && analyticsData) {
       const resp = analyticsData as AnalyticsResponse
-      successfulRuns.value = resp.buckets.reduce((sum: number, b: AnalyticsBucket) => {
+      successfulRuns.value = (resp.buckets ?? []).reduce((sum: number, b: AnalyticsBucket) => {
         if (b.success_rate != null) {
           return sum + Math.round(b.count * b.success_rate)
         }
@@ -268,14 +242,14 @@ async function loadAnomalies() {
   anomaliesLoading.value = true
   anomaliesError.value = null
   try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/anomalies')
+    const { data, error: err } = await api.GET('/api/v1/admin/costs/anomalies')
     if (err) {
-      anomaliesError.value = `Failed to load anomalies: ${formatApiError(err)}`
+      anomaliesError.value = `${t('views.AdminCostBreakdownView.failed_to_load_anomalies')}: ${formatApiError(err)}`
     } else if (data) {
-      anomalies.value = (data as AnomalyResponse[]) ?? []
+      anomalies.value = data
     }
   } catch (e: unknown) {
-    anomaliesError.value = `Failed to load anomalies: ${formatApiError(e)}`
+    anomaliesError.value = `${t('views.AdminCostBreakdownView.failed_to_load_anomalies')}: ${formatApiError(e)}`
   } finally {
     anomaliesLoading.value = false
   }
@@ -286,10 +260,12 @@ const dismissLoading = ref<Record<string, boolean>>({})
 async function dismissAnomaly(id: string) {
   dismissLoading.value[id] = true
   try {
-    await (api as any).POST(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
+    await api.POST('/api/v1/admin/costs/anomalies/dismiss/{anomaly_id}', {
+      params: { path: { anomaly_id: id } },
+    })
     await loadAnomalies()
   } catch (e) {
-    anomaliesError.value = `Failed to dismiss anomaly: ${formatApiError(e)}`
+    anomaliesError.value = `${t('views.AdminCostBreakdownView.failed_to_dismiss_anomaly')}: ${formatApiError(e)}`
   } finally {
     dismissLoading.value[id] = false
   }

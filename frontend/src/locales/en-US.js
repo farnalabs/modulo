@@ -1898,6 +1898,7 @@ export default {
       "cost_breakdown_is_not_available_on_your_current_plan": "Cost breakdown is not available on your current plan.",
       "cost_controls": "Cost Controls",
       "failed_to_dismiss_anomaly": "Failed to dismiss anomaly",
+      "failed_to_load_anomalies": "Failed to load anomalies",
       "spend_limits": "Spend Limits",
       "total_spend_this_month": "Total Spend (This Month)",
       "avg_cost_per_run": "Avg Cost per Run",
@@ -1923,7 +1924,7 @@ export default {
       "anomaly_spend_detail": "Spend: {amount} (baseline: {baseline}, {percent} above)",
       "dismissed_anomalies_count": "{count} dismissed anomaly | {count} dismissed anomalies",
       "annotations": "Annotations",
-      "refused_limit_line": "refused (limit) ${amount}",
+      "refused_limit_line": "refused (limit) {amount}",
       "day_ledger_clamped_line": "day ledger clamped at column capacity"
     },
     "CopyPipelineWizard": {
