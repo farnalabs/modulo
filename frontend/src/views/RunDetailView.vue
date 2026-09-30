@@ -2066,16 +2066,36 @@ interface RunLevelWarning {
 
 const costSectionPresent = computed(() => run.value?.total_cost_usd != null)
 
-const hasUnreportedCostEntries = computed(() =>
-  breakdownRaw.value.some((e) => e.missing_self_report === true),
+// FAR-1305: the two missing-self-report states are NOT the same claim, so the
+// strip must not report them with one message. An explicit $0.00 the trust
+// boundary refused (``zero_report_unproven``) DID reach us - saying "not
+// reported by the agent" for it would be false. Split the entries so each
+// state gets its own truthful message.
+const missingCostEntries = computed(() =>
+  breakdownRaw.value.filter(
+    (e) => e.missing_self_report === true && e.missing_self_report_reason !== 'zero_report_unproven',
+  ),
+)
+
+const rejectedZeroCostEntries = computed(() =>
+  breakdownRaw.value.filter(
+    (e) => e.missing_self_report === true && e.missing_self_report_reason === 'zero_report_unproven',
+  ),
 )
 
 const runLevelWarnings = computed<RunLevelWarning[]>(() => {
   const warnings: RunLevelWarning[] = []
-  if (costSectionPresent.value && hasUnreportedCostEntries.value) {
+  if (costSectionPresent.value && missingCostEntries.value.length > 0) {
     warnings.push({
       id: 'unreported-cost',
       labelKey: 'views.RunDetailView.warnings_strip_unreported_cost',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (costSectionPresent.value && rejectedZeroCostEntries.value.length > 0) {
+    warnings.push({
+      id: 'rejected-zero-cost',
+      labelKey: 'views.RunDetailView.warnings_strip_rejected_zero_cost',
       targetId: 'run-detail-cost-section',
     })
   }

@@ -270,3 +270,57 @@ def test_rejected_zero_reason_is_not_emitted_without_eligible_node() -> None:
     breakdown, _total = build_cost_breakdown(tele, [_self_reported_comp()], rejected_zero_nodes={"node1"})
     assert "missing_self_report" not in breakdown[0]
     assert "missing_self_report_reason" not in breakdown[0]
+
+
+def _rejected_zero_breakdown() -> list[dict[str, object]]:
+    """The stored breakdown of a run whose explicit ``$0.00`` was refused."""
+    usage, outputs, telemetry = _free_model_node_shapes()
+    union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
+    breakdown, _total = build_cost_breakdown(
+        tele, [_self_reported_comp()], rejected_zero_nodes=_rejected_zero_nodes(union)
+    )
+    return breakdown
+
+
+def test_run_warning_message_for_rejected_zero_is_truthful() -> None:
+    """FAR-1305 option A, second surface: the API/MCP fallback message.
+
+    ``compute_run_warnings``'s plain-text fallback used to say "The agent did
+    not report a model cost for this run." for BOTH missing states. For a
+    rejected explicit zero the agent DID report $0.00 - the message must say
+    the zero was refused, not that nothing was reported.
+    """
+    warnings = compute_run_warnings(_rejected_zero_breakdown())
+    assert len(warnings) == 1
+    message = warnings[0]["message"]
+    assert message != "The agent did not report a model cost for this run."
+    # The truthful claim: a $0.00 report was made AND rejected as unproven.
+    assert "$0.00" in message
+    assert "rejected" in message
+    assert "did not report" not in message
+
+
+def test_run_warning_message_keeps_old_text_for_absent_cost_key() -> None:
+    """Acceptance criterion 2 at this surface too - a genuinely absent report
+    keeps the original "did not report" message (a deliberate, unchanged
+    string; the spec pins it)."""
+    warnings = compute_run_warnings(_missing_breakdown())
+    assert len(warnings) == 1
+    assert warnings[0]["message"] == "The agent did not report a model cost for this run."
+
+
+def test_run_warning_message_without_reason_stamp_keeps_old_text() -> None:
+    """A pre-FAR-1305 stored breakdown carries no reason stamp at all - it must
+    not be misreported as a rejected zero, so it keeps the original message."""
+    warnings = compute_run_warnings(
+        [
+            {
+                "source": "self_reported",
+                "missing_self_report": True,
+                # no ``missing_self_report_reason`` key, as stored before FAR-1305
+            }
+        ]
+    )
+    assert len(warnings) == 1
+    assert warnings[0]["message"] == "The agent did not report a model cost for this run."

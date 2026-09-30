@@ -623,6 +623,13 @@ def compute_run_warnings(cost_breakdown: Any) -> list[dict[str, Any]]:
     ``{"code", "severity", "message"}``; the message is a plain fallback and the
     frontend renders i18n keys keyed off ``code``.
 
+    FAR-1305: the fallback message is keyed off ``missing_self_report_reason``.
+    An explicit ``$0.00`` that the trust boundary REFUSED as unproven
+    (``zero_report_unproven``) is not "the agent did not report" — the agent
+    did report, so the message says so. Every other case keeps the original
+    "did not report" text (``agent_not_reported``, or a pre-reason breakdown
+    with no stamp at all).
+
     ``cost_breakdown`` is NULL for pre-migration runs and a non-list means no
     warnings. Never raises.
     """
@@ -633,11 +640,17 @@ def compute_run_warnings(cost_breakdown: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         if entry.get("source") == "self_reported" and entry.get("missing_self_report") is True:
+            rejected_zero = entry.get("missing_self_report_reason") == "zero_report_unproven"
             warnings.append(
                 {
                     "code": RUN_WARNING_MISSING_SELF_REPORT,
                     "severity": RUN_WARNING_SEVERITY_WARNING,
-                    "message": "The agent did not report a model cost for this run.",
+                    "message": (
+                        "The agent reported a model cost of $0.00 for this run, but it was rejected "
+                        "as unproven (token usage was not zero)."
+                        if rejected_zero
+                        else "The agent did not report a model cost for this run."
+                    ),
                 }
             )
     return warnings

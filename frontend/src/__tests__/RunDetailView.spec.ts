@@ -1773,6 +1773,89 @@ describe('RunDetailView', () => {
     }
   })
 
+  it('shows a distinct warnings strip entry for a rejected explicit zero (zero_report_unproven)', async () => {
+    // FAR-1305: the strip is driven by the missing_self_report BOOLEAN, so a
+    // rejected explicit $0.00 was still reported as "not reported by the
+    // agent". The strip must not repeat that falsehood - it gets its own
+    // message, and the "not reported" entry must not appear.
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          missing_self_report: true,
+          missing_self_report_reason: 'zero_report_unproven',
+        },
+      ],
+    })
+
+    const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
+    expect(strip.exists()).toBe(true)
+
+    const rejected = wrapper.find('[data-testid="run-detail-warnings-strip-rejected-zero-cost"]')
+    expect(rejected.exists()).toBe(true)
+    expect(rejected.text()).toContain('rejected')
+    expect(rejected.text()).toContain('$0.00')
+
+    // The false claim must not appear anywhere in the strip.
+    expect(strip.text()).not.toContain('were not reported by the agent')
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-unreported-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('still shows the plain "not reported" strip entry when the reason is agent_not_reported', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          missing_self_report: true,
+          missing_self_report_reason: 'agent_not_reported',
+        },
+      ],
+    })
+
+    const entry = wrapper.find('[data-testid="run-detail-warnings-strip-unreported-cost"]')
+    expect(entry.exists()).toBe(true)
+    expect(entry.text()).toContain('were not reported by the agent')
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-rejected-zero-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows both strip cost entries when a breakdown carries both missing states', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          missing_self_report: true,
+          missing_self_report_reason: 'zero_report_unproven',
+        },
+        {
+          component: 'other_cost',
+          display_name: 'Other cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          missing_self_report: true,
+          missing_self_report_reason: 'agent_not_reported',
+        },
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-unreported-cost"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-rejected-zero-cost"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('shows a warnings strip entry for a clamped breakdown total', async () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),
