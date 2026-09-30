@@ -2264,6 +2264,30 @@ describe('RunDetailView HITL gates', () => {
     wrapper.unmount()
   })
 
+  it('does not resurrect a settled run when a decided event arrives after it left the gate states (FAR-612)', async () => {
+    // The shared card emits `decided` after a successful approve/reject. If the
+    // run has already left the HITL states by then (a concurrent poll saw it
+    // resume, or it was cancelled), the handler must not force it back to
+    // `running` — a stale decision would otherwise resurrect a settled run.
+    mockPendingGates = [gate({ claimed_by: 'me@example.com', claimed_by_me: true })]
+    mockClaimResult = { claim_token: 'ct-1' }
+    const wrapper = await mountAwaiting('claimed')
+    const HitlReviewCard = (await import('../components/hitl/HitlReviewCard.vue')).default
+    const card = wrapper.findComponent(HitlReviewCard)
+    expect(card.exists()).toBe(true)
+
+    const run = (wrapper.vm as unknown as { run: { status: string } }).run
+    run.status = 'complete'
+    // Emit before the next render flush so the card is still mounted; the
+    // handler reads the run's already-settled status.
+    card.vm.$emit('decided', { type: 'success', text: 'Gate approved. Pipeline resuming.' })
+    await flushPromises()
+    await nextTick()
+
+    expect(run.status).toBe('complete')
+    wrapper.unmount()
+  })
+
   it('rejects the gate and routes to the reject target', async () => {
     mockPendingGates = [gate()]
     mockClaimResult = { claim_token: 'ct-123' }
