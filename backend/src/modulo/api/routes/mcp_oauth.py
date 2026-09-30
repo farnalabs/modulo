@@ -5,8 +5,16 @@ GET  /api/v1/mcp/oauth/clients          — List OAuth clients
 DELETE /api/v1/mcp/oauth/clients/{id}   — Delete an OAuth client
 POST /api/v1/mcp/oauth/consent/approve  — Approve a pending browser consent
 
+Every route here carries ``require_feature("mcp_server")`` (FAR-1283): the flag
+is the operator kill switch for the whole MCP capability, so the backend has to
+honour it — the settings-page ``FeatureGate`` only hides the UI.
+
 The protocol endpoints (GET /mcp/oauth/authorize, POST /mcp/oauth/token,
-POST /mcp/oauth/refresh) live in the MCP sub-app at ``mcp_server.py``.
+POST /mcp/oauth/refresh) live in the MCP sub-app at ``mcp_server.py``. They are
+reachable WITHOUT a session, so they must NOT use ``require_feature`` (whose
+plan resolution depends on the authenticated ``get_current_user`` chain and
+would 401 the pre-auth caller) — ``mcp_server`` is enforced there against the
+client's resolved org instead.
 """
 
 import asyncio
@@ -24,7 +32,7 @@ from modulo.api.constants import (
     MSG_UNEXPECTED_ERROR_NO_PERIOD,
 )
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
@@ -76,7 +84,7 @@ class DeleteOAuthClientResponse(BaseModel):
 @router.post(
     "/clients",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[Depends(deny_break_glass_mint), require_feature("mcp_server")],
 )
 @handle_db_errors("mcp_oauth.register_oauth_client")
 async def register_oauth_client(
@@ -170,7 +178,7 @@ async def register_oauth_client(
     )
 
 
-@router.get("/clients")
+@router.get("/clients", dependencies=[require_feature("mcp_server")])
 @handle_db_errors("mcp_oauth.list_oauth_clients_endpoint")
 async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
@@ -218,7 +226,7 @@ async def list_oauth_clients_endpoint(
 
 @router.delete(
     "/clients/{client_id}",
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[Depends(deny_break_glass_mint), require_feature("mcp_server")],
 )
 @handle_db_errors("mcp_oauth.remove_oauth_client")
 async def remove_oauth_client(
@@ -291,7 +299,7 @@ class ConsentApproveResponse(BaseModel):
     redirect_url: str
 
 
-@router.post("/consent/approve")
+@router.post("/consent/approve", dependencies=[require_feature("mcp_server")])
 @handle_db_errors("mcp_oauth.approve_consent")
 async def approve_consent(
     req: ConsentApproveRequest,

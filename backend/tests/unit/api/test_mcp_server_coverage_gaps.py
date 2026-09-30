@@ -883,6 +883,9 @@ class TestOauthAuthorizeHandler:
                 "modulo.auth.oauth.validate_client_scopes": {"new": AsyncMock(return_value=["trigger:run"])},
                 "modulo.auth.oauth.create_consent_state": {"new": AsyncMock(return_value=None)},
                 "modulo.api.mcp_server.set_rls_org": {"new": AsyncMock(return_value=None)},
+                # FAR-1283: the authorize leg enforces the kill switch; this test
+                # covers the enabled-path redirect, so the flag is on.
+                "modulo.api.mcp_server._mcp_server_flag_enabled": {"new": AsyncMock(return_value=True)},
             }
         )
         assert response.status_code == 302

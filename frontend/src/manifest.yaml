@@ -1035,6 +1035,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1109,6 +1112,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -1211,6 +1217,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1266,6 +1275,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1318,6 +1330,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1344,6 +1359,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -1378,6 +1396,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1410,6 +1431,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: json-viewer
@@ -1579,6 +1603,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1605,6 +1632,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -1674,6 +1704,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1735,6 +1768,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1765,6 +1801,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -1862,6 +1901,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -1892,6 +1934,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -2107,6 +2152,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -2124,6 +2172,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -2155,6 +2206,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -2239,6 +2293,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -2289,6 +2346,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -2405,6 +2465,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -2548,6 +2611,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -2559,6 +2625,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -3764,6 +3833,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -3923,6 +3995,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -3952,6 +4027,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -3992,6 +4070,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -4198,6 +4279,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -4319,6 +4403,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -4389,6 +4476,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -4442,6 +4532,9 @@ elements:
       - testid: feature-gate-lock
         type: element
         dynamic_testid: false
+      - testid: feature-gate-title
+        type: element
+        dynamic_testid: false
       - testid: lock-icon
         type: element
         dynamic_testid: false
@@ -4465,6 +4558,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -4556,6 +4652,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon
@@ -4677,6 +4776,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: feature-gate-lock
+        type: element
+        dynamic_testid: false
+      - testid: feature-gate-title
         type: element
         dynamic_testid: false
       - testid: lock-icon

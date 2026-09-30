@@ -343,7 +343,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
     Every whole-page view that gates its content behind the plan entitlement
     surface (``components/FeatureGate.vue``, which embeds ``LockIcon.vue``)
     owns the gate's static testids — ``feature-gate`` / ``feature-gate-disabled``
-    / ``feature-gate-lock`` / ``lock-icon`` — just like the FilterBar search
+    / ``feature-gate-lock`` / ``feature-gate-title`` / ``lock-icon`` — just like the FilterBar search
     surface. The gate wraps the page content, so a newly shipped control on the
     entitlement card would otherwise stay invisible to Assistant's docs indexer and
     to ``/api/v1/manifest`` on every gated route.

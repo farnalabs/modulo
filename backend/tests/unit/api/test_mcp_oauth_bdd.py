@@ -156,6 +156,21 @@ def _make_mock_consent_state(
     return s
 
 
+@pytest.fixture(autouse=True)
+def _mcp_server_feature_enabled() -> Generator[None, None, None]:
+    """Force the ``mcp_server`` plan feature ON for these flow tests.
+
+    FAR-1283 added a server-side ``mcp_server`` gate to the pre-auth OAuth
+    protocol endpoints and to the MCP auth middleware. Resolving the real flag
+    needs a DB plan context these strict session doubles do not stub, so the
+    gate failed closed and every flow assertion turned into a 402. This file
+    exercises flow mechanics, not the gate itself — the gate boundary is
+    covered by ``test_mcp_server_feature_gate.py`` — so pin the flag on here.
+    """
+    with patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=True)):
+        yield
+
+
 @pytest.fixture
 def admin_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()

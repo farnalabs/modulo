@@ -3971,7 +3971,9 @@ export default {
     "FeatureGate": {
       "team_feature": "Team Feature",
       "available_on_higher_plan_tier": "Available on higher plan tier",
-      "view_plans": "View Plans"
+      "view_plans": "View Plans",
+      "feature_disabled": "Feature not available",
+      "disabled_for_your_organisation": "This feature is turned off for your organisation. Ask an administrator to enable it."
     },
     "DashboardNotificationsPanel": {
       "failed_to_dismiss_notification": "Failed to dismiss notification",

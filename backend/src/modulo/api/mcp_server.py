@@ -744,6 +744,89 @@ async def _set_user_keys_flag(org_id: uuid.UUID) -> bool:
     return enabled
 
 
+# ---------------------------------------------------------------------------
+# FAR-1283 — the ``mcp_server`` plan feature is the operator kill switch for the
+# whole MCP capability. It CANNOT be enforced with ``require_feature``: the /mcp
+# sub-app is a plain Starlette app (no FastAPI dependencies), and the OAuth
+# protocol endpoints are reachable BEFORE a session exists, where the
+# authenticated ``get_plan_context`` chain would raise 401 "Not authenticated"
+# and make the OAuth flow unreachable. The flag is therefore resolved here
+# against an org the caller has already proved — the authenticated request's
+# ContextVar org, or the OAuth client's own row — never through a dependency.
+# ---------------------------------------------------------------------------
+_FLAG_MCP_SERVER = "mcp_server"
+# Same status as ProblemType.FEATURE_REQUIRED (what ``require_feature`` raises
+# on the REST surface), in this surface's own ``{"error", "detail"}`` envelope.
+_MCP_FEATURE_UNAVAILABLE_STATUS = 402
+
+
+async def _mcp_server_flag_enabled(org_id: uuid.UUID, session: AsyncSession) -> bool:
+    """True when the ``mcp_server`` plan feature is enabled for ``org_id``.
+
+    Pre-auth safe: the org is derived from a credential the caller already
+    presented (an authenticated request's ContextVar org, or the OAuth client's
+    own row), so this never needs an authenticated dependency chain and can
+    never turn a pre-auth caller into a 401. Resolution mirrors
+    ``get_plan_context``'s org leg, so the pre-auth and authenticated surfaces
+    judge the org by the same plan.
+
+    Fails CLOSED: a resolution error is treated as OFF, because a broken flag
+    read must never widen access to a capability an operator switched off.
+    """
+    from modulo.db.crud.organisation import get_organisation
+
+    try:
+        org = await get_organisation(session, org_id)
+        plan_ctx = await resolve_plan_context(get_settings(), session, org)
+        return bool(plan_ctx.feature_enabled(_FLAG_MCP_SERVER))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "feature_flag.mcp_server_read_failed",
+            exc_info=True,
+            extra={"org_id": str(org_id), "feature": _FLAG_MCP_SERVER},
+        )
+        return False
+
+
+def _mcp_feature_unavailable_response() -> JSONResponse:
+    """The MCP surface's structured feature-unavailable response (402)."""
+    return JSONResponse(
+        {"error": "feature_required", "detail": f"{_FLAG_MCP_SERVER} is not available on your plan"},
+        status_code=_MCP_FEATURE_UNAVAILABLE_STATUS,
+    )
+
+
+async def _mcp_server_feature_gate(org_id: uuid.UUID) -> Response | None:
+    """Return the feature-unavailable response when the flag is off, else None."""
+    async with _session(org_id) as s:
+        if await _mcp_server_flag_enabled(org_id, s):
+            return None
+    return _mcp_feature_unavailable_response()
+
+
+async def _call_next_if_feature_enabled(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Continue an AUTHENTICATED MCP request unless ``mcp_server`` is off.
+
+    Single chokepoint for every authenticated credential class (API key, regular
+    JWT, OAuth token): the middleware resolves ``_ctx_org_id`` before continuing
+    in all three, so this is one check rather than three per-credential copies.
+    An unset org is not an enforcement hole — every tool handler resolves its
+    tenant from the same ContextVars and fails closed without one, so such a
+    request can never reach data.
+    """
+    org_id = _ctx_org_id.get(None)
+    if org_id is None:
+        return await call_next(request)
+    denied = await _mcp_server_feature_gate(org_id)
+    if denied is not None:
+        return denied
+    return await call_next(request)
+
+
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
     """Return the process-global session factory, sharing the engine from dependencies.py."""
     settings = get_settings()
@@ -1438,6 +1521,12 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
     Supports two credential types (checked in order):
     1. API key bearer token (``mk_`` prefix)
     2. OAuth 2.0 access token (JWT with purpose=oauth_access)
+
+    Once a credential resolves an org, ``_call_next_if_feature_enabled`` gates
+    the request on the ``mcp_server`` plan feature (FAR-1283) — the health check
+    and the three pre-auth OAuth protocol endpoints are exempt (they are served
+    by ``_dispatch_unauth_paths`` and enforce the flag inside their handlers,
+    against the resolved client's org).
     """
 
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
@@ -1455,6 +1544,14 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         else:
             set_request_allowed_tools(None)
 
+        # FAR-1283: every authenticated continuation below goes through the
+        # mcp_server plan-feature gate. ``gated_next`` keeps the plain
+        # ``Callable[[Request], Awaitable[Response]]`` shape every continuation
+        # expects, so it can be handed to ``_finalize_oauth_principal`` (which
+        # calls ``call_next(request)``) as well as called directly.
+        async def gated_next(req: Request) -> Response:
+            return await _call_next_if_feature_enabled(req, call_next)
+
         token, auth_err = _extract_bearer_token(request)
         if auth_err is not None:
             return auth_err
@@ -1468,7 +1565,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 return api_err
             if handled:
                 await _set_authz_enforce(_ctx_org_id.get())
-                return await call_next(request)
+                return await gated_next(request)
 
         # Try OAuth access token (JWT).
         settings = get_settings()
@@ -1477,14 +1574,14 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             return oauth_err
         if handled2:
             await _set_authz_enforce(_ctx_org_id.get())
-            return await call_next(request)
+            return await gated_next(request)
 
         # Verify token family is not blacklisted.
         family_err = await _verify_oauth_token_family(token, claims)
         if family_err is not None:
             return family_err
 
-        return await _finalize_oauth_principal(request, token, claims, call_next)
+        return await _finalize_oauth_principal(request, token, claims, gated_next)
 
 
 # ---------------------------------------------------------------------------
@@ -9616,6 +9713,13 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
 
             # Set RLS context for the client's org before creating records.
             await set_rls_org(s, client.organisation_id)
+            # FAR-1283: this leg is pre-auth (the browser is not yet signed in),
+            # so it must NOT use require_feature — that would 401 before the
+            # handler ran. The org comes from the client row the caller just
+            # proved, so the kill switch is enforced without an authenticated
+            # dependency chain and before any row is written.
+            if not await _mcp_server_flag_enabled(client.organisation_id, s):
+                return _mcp_feature_unavailable_response()
             await create_consent_state(
                 s,
                 state=state,
@@ -9763,6 +9867,13 @@ async def _exchange_authorization_code(
 
         # Step 2: Set RLS context for the client's org.
         await set_rls_org(s, client.organisation_id)
+
+        # FAR-1283: pre-auth grant — enforce the mcp_server kill switch against
+        # the client's resolved org BEFORE the code is consumed, so a disabled
+        # org cannot exchange a code for tokens. No require_feature here (the
+        # caller has no session; it authenticated with client_id+client_secret).
+        if not await _mcp_server_flag_enabled(client.organisation_id, s):
+            return None, _mcp_feature_unavailable_response()
 
         # Step 3: Consume the authorization code (PKCE verified inside).
         auth_code = await consume_authorization_code(
@@ -9965,6 +10076,12 @@ async def _exchange_refresh_token(
     async with session_factory() as s, s.begin():
         client = await validate_client_secret(s, creds["client_id"], creds["client_secret"])
         await set_rls_org(s, client.organisation_id)
+
+        # FAR-1283: pre-auth grant — the kill switch is enforced against the
+        # client's resolved org before a new pair is minted (see
+        # ``_exchange_authorization_code`` for the identical gate).
+        if not await _mcp_server_flag_enabled(client.organisation_id, s):
+            return None, _mcp_feature_unavailable_response()
 
         claims = decode_oauth_refresh_token(creds["refresh_token"], settings.secret_key)
 
