@@ -2415,6 +2415,19 @@ async def get_pipeline_graph_endpoint(
     # any_credential: declarative apply (FAR-681) fetches current graphs to
     # hash against declared state with mk_ org API keys.
     principal: TenantPrincipal = require_permission_any_credential("pipeline.graph.read"),
+    # FAR-1311: the sibling GET /{pipeline_id} carries this gate; the graph
+    # read did not, so on the layers where RLS does not apply (non-Postgres
+    # backends, break-glass/execution_context sessions, RLS misconfiguration)
+    # any org member with pipeline.graph.read could read a TEAM-PRIVATE
+    # pipeline's full graph - prompts, connector_bindings_json, model pins.
+    # Parity + defence-in-depth, not a live Postgres hole: migration 0124
+    # leaves rls_team_isolation as the sole policy, so a non-member's row read
+    # already 404s (the integration tests observe exactly that). The
+    # any-credential variant pairs with the any_credential permission above -
+    # the credential flavours must match, or declarative apply's mk_ graph
+    # fetch would 401 (see the shared pairing comment above
+    # convert_node_to_agent_endpoint). Read-only: no in-txn re-check needed.
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
     # FAR-900: opt-in schema_translation_report computation (expensive for
     # large graphs).  Defaults to false; set to true to receive per-node
     # schema translation warnings in the response.
@@ -2718,13 +2731,14 @@ async def _require_team_membership(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=denial_detail)
 
 
-#: Bounded wait for the in-txn row lock (the ``SELECT ... FOR UPDATE`` below),
-#: in milliseconds - read from ``Settings.mutation_row_lock_timeout_ms`` (FAR-
-#: 1279) at the call site rather than held as a module constant. Without it a
-#: contended PATCH parks a pooled connection on an UNBOUNDED lock wait; with it
-#: the wait degrades to a clear, mapped response (``api.db_error_handling``
-#: translates SQLSTATE 55P03 ``lock_not_available`` to 409) instead of a
-#: generic 503.
+#: Bounded wait for a mutation transaction's row locks (the in-txn team gate's
+#: ``SELECT ... FOR UPDATE``, and every other lock the transaction takes after
+#: ``_set_mutation_row_lock_timeout`` sets the bound) - read from
+#: ``Settings.mutation_row_lock_timeout_ms`` (FAR-1279) at the call site rather
+#: than held as a module constant. Without it a contended PATCH parks a pooled
+#: connection on an UNBOUNDED lock wait; with it the wait degrades to a clear,
+#: mapped response (``api.db_error_handling`` translates SQLSTATE 55P03
+#: ``lock_not_available`` to 409) instead of a generic 503.
 #:
 #: ``set_config(..., is_local => true)`` is transaction-scoped - the SQL
 #: equivalent of ``SET LOCAL`` - so the bound also covers any row lock this
@@ -2740,6 +2754,46 @@ async def _require_team_membership(
 #: ``runner_marker_sweep_lock_timeout_seconds``) are pinned to their own
 #: subsystems; reusing either would silently couple API PATCH contention to an
 #: operator's runner-capacity tuning.
+
+
+async def _set_mutation_row_lock_timeout(session: AsyncSession) -> None:
+    """Bound every row-lock wait taken for the REST of the current transaction.
+
+    FAR-1313: the bound used to be set only inside
+    ``_reapply_team_gate_inside_mutation_txn``, so a mutation transaction whose
+    FIRST lock came from somewhere else ran that lock unbounded - e.g. the
+    clone endpoint's ``check_pipeline_name_available`` (``SELECT ... FOR
+    UPDATE`` on the target-name row), which fires BEFORE the clone's in-txn
+    team gate (FAR-1276) reaches ``clone_pipeline``'s step-(a) commit hook.
+    Endpoints whose mutation transaction takes a lock of its own call this at
+    the top of the transaction, before any lock; the gate helper calls it too,
+    so every mutation transaction sets the bound before its first lock.
+
+    Transaction-scoped (``set_config(..., is_local => true)`` == ``SET LOCAL``),
+    so the bound applies to every lock the transaction takes after it and
+    reverts on COMMIT/ROLLBACK - never to pooled connections. It takes no lock
+    itself, so calling it up front never conflicts with a later lock ordering
+    (the clone's step-(a) ``FOR SHARE`` runs on a SEPARATE connection and is
+    bounded by its own copy of this statement - see
+    ``db.crud.pipeline._read_clone_source_snapshot``).
+
+    POSTGRES-ONLY (the shared ``db.crud.run.get_dialect_name`` dialect gate -
+    the same helper ``core.hitl_manager.gate_coalescing`` and ``db/rls.py``
+    use, rather than another local bind dance): SQLite has no ``set_config``,
+    and the unit fixtures run on SQLite mocks. A bind that does not positively
+    report ``postgresql`` skips the statement: the lock bound this sets is a
+    safety improvement, never a correctness requirement, so the safe direction
+    to fail is the no-op.
+
+    The bound itself is ``Settings.mutation_row_lock_timeout_ms`` (FAR-1279):
+    read at the call site so an operator can relax it without a code change.
+    """
+    if await get_dialect_name(session) == "postgresql":
+        lock_timeout_ms = get_settings().mutation_row_lock_timeout_ms
+        await session.execute(
+            text("SELECT set_config('lock_timeout', :val, true)"),
+            {"val": f"{lock_timeout_ms}ms"},
+        )
 
 
 async def _reapply_team_gate_inside_mutation_txn(
@@ -2768,23 +2822,9 @@ async def _reapply_team_gate_inside_mutation_txn(
     anyway), 403 when the locked row is team-private and the caller is neither
     a member of its owner team nor an org admin.
     """
-    # POSTGRES-ONLY (the shared ``db.crud.run.get_dialect_name`` dialect gate -
-    # the same helper ``core.hitl_manager.gate_coalescing`` and ``db/rls.py``
-    # use, rather than a fourth local bind dance): SQLite has no ``set_config``,
-    # and the unit fixtures run on SQLite mocks. On Postgres this is
-    # transaction-scoped (is_local => true), i.e. SET LOCAL - it must run BEFORE
-    # the FOR UPDATE below to bound that wait. A bind that does not positively
-    # report ``postgresql`` skips the statement: the lock bound this guards is a
-    # safety improvement, never a correctness requirement, so the safe direction
-    # to fail is the no-op.
-    if await get_dialect_name(session) == "postgresql":
-        # Read at the call site (FAR-1279): an operator can raise the bound via
-        # MUTATION_ROW_LOCK_TIMEOUT_MS without a code change.
-        lock_timeout_ms = get_settings().mutation_row_lock_timeout_ms
-        await session.execute(
-            text("SELECT set_config('lock_timeout', :val, true)"),
-            {"val": f"{lock_timeout_ms}ms"},
-        )
+    # Must run BEFORE the FOR UPDATE below to bound that wait - see
+    # ``_set_mutation_row_lock_timeout`` for the dialect-gate rationale.
+    await _set_mutation_row_lock_timeout(session)
     stmt = select(Pipeline).where(
         Pipeline.id == pipeline_id,
         Pipeline.organisation_id == principal.organisation_id,
@@ -3396,6 +3436,18 @@ async def clone_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            # FAR-1313: bound the transaction's row-lock waits BEFORE the first
+            # lock. ``_clone_pipeline_into_org`` -> ``check_pipeline_name_available``
+            # issues ``SELECT ... FOR UPDATE`` on the target-name row, and that
+            # check runs BEFORE the clone's in-txn team gate (FAR-1276), which
+            # only fires inside ``clone_pipeline``'s step-(a) commit hook - so
+            # without this line a concurrent holder of a row with that exact
+            # target name could park the request unbounded. SET LOCAL only: it
+            # takes no lock, so it cannot disturb the step-(a) FOR SHARE /
+            # gate FOR UPDATE ordering the clone docstring spells out. (The
+            # separate read-session ``FOR SHARE`` of the SOURCE row is bounded
+            # by its own copy of this statement in ``_read_clone_source_snapshot``.)
+            await _set_mutation_row_lock_timeout(session)
             cloned, target_name = await _clone_pipeline_into_org(
                 session,
                 pipeline_id=pipeline_id,
@@ -3826,6 +3878,14 @@ async def save_edit_snapshot_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            # FAR-1312: in-txn team-gate re-check, matching the sibling
+            # mutations (update / replace-graph / convert / revert / rollback /
+            # delete-snapshot). The request-time dependency's transaction
+            # COMMITs before this one opens, so ownership/visibility can change
+            # between the two (TOCTOU); this locks + re-verifies atomically with
+            # the write, and is the FIRST lock of the transaction (so the
+            # bounded ``lock_timeout`` it sets covers every later one).
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -3883,6 +3943,13 @@ async def tag_snapshot_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            # FAR-1312: in-txn team-gate re-check, matching the sibling
+            # mutations. This endpoint never reads the pipeline row itself
+            # (the snapshot CRUD is keyed by snapshot_id), so the gate is also
+            # what makes the {pipeline_id} path parameter MEAN something: a
+            # tag against a pipeline the caller cannot see now 404s here
+            # instead of silently updating a snapshot row.
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
