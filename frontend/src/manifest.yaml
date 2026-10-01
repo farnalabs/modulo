@@ -1421,6 +1421,39 @@ elements:
         type: element
         dynamic_testid: false
     /admin/errors/:id:
+      - testid: admin-error-detail-acknowledge
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-archive
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-assignee
+        type: select
+        dynamic_testid: false
+      - testid: admin-error-detail-back
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-events-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-error-detail-events-next
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-events-prev
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-loading
+        type: element
+        dynamic_testid: false
+      - testid: admin-error-detail-resolve
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-toggle-context
+        type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-toggle-stacktrace
+        type: button
+        dynamic_testid: false
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
