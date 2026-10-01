@@ -5,6 +5,7 @@ import {
   cleanupJourneyEntities,
   createManualNodePipeline,
   pollRunStatus,
+  reissueApproveBestEffort,
   triggerRun,
   uniqueName,
   type JourneyCleanup,
@@ -107,13 +108,16 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await page.getByTestId('hitl-gate-approve').click()
 
       // The run must really resume and complete on the backend. Staging's DB
-      // and backend can transiently 5xx (503) or time out mid-approve, which
-      // leaves the run parked at its still-claimed gate. A single re-issue is
-      // not enough when the blip outlasts it — re-issue the decision in a
-      // bounded loop (the approve control stays rendered while the gate is
-      // claimed, FAR-612/FAR-686) until the run completes. The deadline still
-      // fails a genuinely wedged run, so this tolerates a transient blip
-      // without masking a persistent outage.
+      // and backend can transiently 5xx (503) or hang mid-approve, which
+      // leaves the run parked at its still-claimed gate. Re-issue the decision
+      // in a bounded loop until the run completes. Recovery MUST NOT go
+      // through the UI approve control: while the first approve request is
+      // still in flight that control is disabled ("Approving…"), so clicking
+      // it blocks until the test timeout instead of letting the loop retry.
+      // Re-issue through the real API instead (same-account re-claim re-issues
+      // a fresh token, FAR-686), which works regardless of the UI button's
+      // state. The deadline still fails a genuinely wedged run, so this
+      // tolerates a transient blip without masking a persistent outage.
       let status = ''
       let lastError: unknown
       const approveDeadline = Date.now() + 120_000
@@ -123,8 +127,7 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
           break
         } catch (err) {
           lastError = err
-          const approve = page.getByTestId('hitl-gate-approve')
-          if (await approve.isVisible().catch(() => false)) await approve.click().catch(() => undefined)
+          await reissueApproveBestEffort(apiBase, token, run.run_id, 'E2E journey approval').catch(() => undefined)
         }
       }
       if (status !== 'complete') {
