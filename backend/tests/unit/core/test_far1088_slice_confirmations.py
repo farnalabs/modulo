@@ -8,8 +8,10 @@
    ``dispatch_phase_entered_at`` are not projected by the run API
    (``RunResponse`` schema, detail payload, or list item).
 3. Every claim re-stamps ``dispatch_phase='claimed'`` (+ entry time) in the
-   SAME UPDATE that claims the row, so a re-claim RESETS the phase and a
-   re-dispatched run can never report a previous attempt's phase.
+   SAME UPDATE that claims the row — all FOUR claim sites: the execute claim
+   variants AND the HITL resume claim variants — so a re-claim RESETS the
+   phase and a re-dispatched or resumed run can never report a previous
+   attempt's phase.
 """
 
 from __future__ import annotations
@@ -42,11 +44,13 @@ def _progressing_row(
     *,
     node_token_usage: dict[str, Any] | None,
     outputs_absent: bool,
+    checkpoints_absent: bool,
     started_minutes_ago: float,
     heartbeat_minutes_ago: float,
 ) -> SimpleNamespace:
     """A running SAQ row in the shape the reconcile scan hands to the
-    row-level re-check (``outputs_absent`` is the scan's NOT EXISTS flag)."""
+    row-level re-check (``outputs_absent`` / ``checkpoints_absent`` are the
+    scan's NOT EXISTS flags)."""
     now = datetime.now(UTC)
     return SimpleNamespace(
         id=uuid.uuid4(),
@@ -55,6 +59,7 @@ def _progressing_row(
         dispatcher="saq",
         node_token_usage=node_token_usage,
         outputs_absent=outputs_absent,
+        checkpoints_absent=checkpoints_absent,
         started_at=now - timedelta(minutes=started_minutes_ago),
         heartbeat_at=now - timedelta(minutes=heartbeat_minutes_ago),
         dispatched_at=now - timedelta(minutes=5),
@@ -78,6 +83,7 @@ class TestHealthyRunNeverSelectedByNodelessMachinery:
         row = _progressing_row(
             node_token_usage={},
             outputs_absent=False,
+            checkpoints_absent=False,
             started_minutes_ago=60,
             heartbeat_minutes_ago=30,
         )
@@ -90,6 +96,7 @@ class TestHealthyRunNeverSelectedByNodelessMachinery:
         row = _progressing_row(
             node_token_usage={},
             outputs_absent=False,
+            checkpoints_absent=False,
             started_minutes_ago=60,
             heartbeat_minutes_ago=30,
         )
@@ -216,10 +223,11 @@ class TestDispatchPhaseNotApiProjected:
 
 
 class TestClaimResetsDispatchPhase:
-    """Both claim UPDATE variants stamp ``dispatch_phase='claimed'`` (and its
-    entry time) in the SAME statement that claims the row — so every re-claim
-    (including a re-dispatch's claim) resets the phase, and a re-woken run can
-    never report a previous attempt's phase."""
+    """ALL FOUR claim UPDATE variants — the two execute variants and the two
+    HITL resume variants — stamp ``dispatch_phase='claimed'`` (and its entry
+    time) in the SAME statement that claims the row, so every re-claim
+    (including a re-dispatch's claim and a resume claim) resets the phase, and
+    a re-woken run can never report a previous attempt's phase."""
 
     def test_plain_claim_stamps_the_phase(self) -> None:
         stmt = pe.build_claim_update(_stale_seconds=450)
@@ -237,3 +245,25 @@ class TestClaimResetsDispatchPhase:
 
         assert "dispatch_phase='claimed'" in sql
         assert "dispatch_phase_entered_at=now()" in sql
+
+    def test_resume_plain_claim_stamps_the_phase(self) -> None:
+        """The resume claim (saq_worker.resume_run → claim_resume_run_async)
+        stamps the SAME floor as the execute claim — before FAR-1088 W-slice
+        follow-up it did not, leaving a resumed run's phase floor stale."""
+        stmt = pe.build_resume_claim_update(_stale_seconds=450)
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+
+        assert "dispatch_phase='claimed'" in sql
+        assert "dispatch_phase_entered_at=now()" in sql
+        assert "claim_count=claim_count+1" in sql
+
+    def test_resume_token_claim_stamps_the_phase(self) -> None:
+        """Both resume claim sites stamp: with and without a claim token."""
+        stmt = pe.build_resume_claim_update(_stale_seconds=450, claim_token="tok-abc")
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+
+        assert "dispatch_phase='claimed'" in sql
+        assert "dispatch_phase_entered_at=now()" in sql
+        # The raw (uncompiled) template carries the named bind — the compiled
+        # postgres dialect renders it as a pyformat param.
+        assert "claim_token=:tok" in str(stmt)

@@ -10,10 +10,13 @@ last entered — the durable trace for diagnosing claimed-but-nodeless runs:
 * ``dispatch_phase`` (Text) — the phase label. The guaranteed floor is written
   by the claim itself: ``core/pipeline_execution`` stamps ``'claimed'`` inside
   the SAME atomic ``UPDATE ... RETURNING`` that claims the row, so a run that
-  was claimed can never lack a phase even if no node ever executed, and every
-  re-dispatch/re-claim resets it (a re-woken run never reports a previous
-  attempt's phase). Later workstreams add the loading_setup / setup_complete /
-  streaming writes and the terminaliser read.
+  was claimed can never lack a phase even if no node ever executed. EVERY
+  claim site stamps — the execute claim (``build_claim_update``, with and
+  without a claim token) and the HITL resume claim
+  (``build_resume_claim_update``, likewise both variants) — so every
+  re-dispatch/re-claim AND every resume re-stamps the floor and a re-woken
+  run never reports a previous attempt's phase. Later workstreams add the
+  loading_setup / setup_complete / streaming writes and the terminaliser read.
 * ``dispatch_phase_entered_at`` (timestamptz) — when that phase was entered.
 
 Both are NULL for rows that predate this migration. INTERNAL ONLY — neither
