@@ -1148,6 +1148,20 @@ class TestDegradedCompositeTemplates:
         # The count is reported loudly, not silently swallowed.
         assert any("degraded_composite_templates" in record.getMessage() for record in caplog.records)
 
+    async def test_graph_without_a_node_list_is_skipped(self, session: AsyncSession) -> None:
+        """A stored graph whose ``nodes`` is not a list is skipped, not crashed.
+
+        Pre-fix or hand-written rows may hold an odd shape; the detection-only
+        sweep must simply move on rather than raise on the housekeeping surface.
+        """
+        session.add(self._template(organisation_id=_ORG_A, name="no-nodes", graph={"edges": []}))
+        session.add(self._template(organisation_id=_ORG_A, name="scalar-nodes", graph={"nodes": "not-a-list"}))
+        await session.commit()
+
+        candidates = await _scan_degraded_composite_templates(session, _ORG_A)
+
+        assert not candidates
+
     async def test_clean_templates_produce_no_candidates(self, session: AsyncSession) -> None:
         session.add(
             self._template(

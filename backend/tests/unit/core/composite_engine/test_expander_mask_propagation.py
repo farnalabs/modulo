@@ -22,6 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.middleware.sensitive_mask import resolve_and_reject_mask_sentinels
@@ -163,6 +164,26 @@ async def test_snapshot_hop_carries_real_credential_from_save_as_composite() -> 
     assert sub["_composite_parent_id"] == str(composite_id)
     # The snapshot carries the REAL credential, not the mask sentinel.
     assert sub["env_vars"] == {"GITHUB_TOKEN": _FAKE_CREDENTIAL}
+
+
+def test_resolve_rejects_scalar_field_sentinel_once_even_when_unresolved() -> None:
+    """A sentinel in a non-container credential field is found by BOTH scans.
+
+    ``find_mask_sentinel_values`` sees it survive the merge (the merge skips a
+    non-dict field), and ``find_unresolved_mask_sentinels`` sees no stored
+    counterpart; the de-duplication keeps a single finding and the request
+    still fails closed with 422 - never double-counted, never silently dropped.
+    """
+    nodes = [{"id": "gh-node", "env_vars": f"Bearer {SENSITIVE_VALUE_MASK}"}]
+
+    with pytest.raises(HTTPException) as exc_info:
+        resolve_and_reject_mask_sentinels(list(nodes), [])
+
+    assert exc_info.value.status_code == 422
+    detail = str(exc_info.value.detail)
+    assert MASK_SENTINEL_ISSUE_CODE in detail
+    assert "gh-node" in detail
+    assert "env_vars" in detail
 
 
 async def test_expansion_rejects_stored_sentinel_naming_sub_node_and_key() -> None:

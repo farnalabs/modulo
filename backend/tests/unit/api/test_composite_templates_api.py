@@ -230,6 +230,29 @@ class TestCreateCompositeTemplate:
         assert body["name"] == "Full Composite"
         assert body["description"] == "A full composite template"
 
+    def test_create_with_non_list_nodes_persists_graph_unchanged(self, client: TestClient) -> None:
+        """A sub-graph whose ``nodes`` is not a list skips the sentinel resolve.
+
+        There is nothing to scan, so the graph is persisted byte-for-byte - the
+        write gate must not raise on a shape the resolve cannot walk.
+        """
+        graph = {"nodes": "not-a-list", "edges": []}
+        template = _make_template(name="Odd Shape", sub_pipeline_graph_json=graph)
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.create_composite_template",
+                return_value=template,
+            ) as create,
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            resp = client.post(
+                "/api/v1/composite-templates",
+                json={"name": "Odd Shape", "sub_pipeline_graph_json": graph},
+            )
+        assert resp.status_code == 201
+        create.assert_awaited_once()
+        assert create.call_args.kwargs["sub_pipeline_graph_json"]["nodes"] == "not-a-list"
+
     def test_empty_name_returns_422(self, client: TestClient) -> None:
         resp = client.post(
             "/api/v1/composite-templates",
