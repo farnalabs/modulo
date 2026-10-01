@@ -7,7 +7,7 @@
         <div>
           <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.SettingsNotificationLogView.status') }}</label>
           <Select
-  aria-label="Status"
+  :aria-label="$t('views.SettingsNotificationLogView.status')"
   v-model="filterStatus"
   :placeholder="$t('views.SettingsNotificationLogView.status')"
   data-testid="settings-notification-log-status"
@@ -32,7 +32,7 @@
           />
         </div>
         <div>
-          <label for="settingsnotificationlogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+          <label for="settingsnotificationlogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.to') }}</label>
           <input id="settingsnotificationlogview-field-1"
             v-model="filterDateTo"
             type="date"
@@ -42,19 +42,19 @@
         </div>
         <div class="flex items-end gap-2">
           <Button data-testid="settings-notification-log-apply" @click="applyFilters">
-            Apply
+            {{ $t('views.AdminNotificationDeliveryLogView.apply') }}
           </Button>
           <button type="button"
             data-testid="settings-notification-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetFilters"
           >
-            Reset
+            {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
           </button>
         </div>
       </div>
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
-        {{ total }} delivery{{ total === 1 ? '' : 'ies' }}
+        {{ $t('views.AdminNotificationDeliveryLogView.deliveries_count', { count: total }, total) }}
       </div>
     </div>
 
@@ -65,7 +65,7 @@
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">{{ $t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
-        Try adjusting your filters or wait for notifications to be sent.
+        {{ $t('views.AdminNotificationDeliveryLogView.try_adjusting_filters') }}
       </p>
     </div>
 
@@ -116,10 +116,10 @@
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPreviousPage()"
         >
-          Previous
+          {{ $t('views.AdminNotificationDeliveryLogView.previous') }}
         </button>
         <span class="text-sm text-muted-foreground">
-          {{ items.length }} of {{ total }} deliveries
+          {{ $t('views.AdminNotificationDeliveryLogView.of_deliveries', { count: items.length, total: total }) }}
         </span>
         <button type="button"
           :disabled="!nextCursor"
@@ -127,7 +127,7 @@
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToNextPage()"
         >
-          Next
+          {{ $t('views.AdminNotificationDeliveryLogView.next') }}
         </button>
       </div>
     </template>
