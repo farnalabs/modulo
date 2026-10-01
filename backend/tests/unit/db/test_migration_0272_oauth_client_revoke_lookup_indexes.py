@@ -1,24 +1,21 @@
-"""Unit tests for migration 0271_org_api_keys_revocation_sweep_indexes.
+"""Unit tests for migration 0272_oauth_client_revoke_lookup_indexes.
 
 Structural - load the migration module and assert its contract without a
-database, and pin model/migration parity for the two new ``org_api_keys``
-lookup indexes:
+database, and pin model/migration parity for the two new OAuth
+client-revoke lookup indexes:
 
-* the chain is pinned (0271 -> ``0270_pipeline_snapshots_max_autonomy_ge_default``,
-  with ``0272_oauth_client_revoke_lookup_indexes`` now the single linear head)
-  so the pre-commit check-migration-heads hook and every ``test_single_head_*``
-  pin cannot be ambushed by a renumber;
+* the chain is pinned (0272 -> ``0271_org_api_keys_revocation_sweep_indexes``)
+  and it is the single linear head, so the pre-commit check-migration-heads
+  hook and every ``test_single_head_*`` pin cannot be ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
-  the revocation and stale-sweep read paths rely on (``auth/api_key.py::
-  revoke_run_api_key`` / ``revoke_run_api_key_sweep`` and
-  ``core/housekeeping.py::_scan_stale_api_keys``), each with the exact partial
-  predicate those paths are written against, leading on ``organisation_id``
-  (both tables are RLS org-isolated, so the tenant column must be the index
-  prefix);
+  the client-revoke DELETEs rely on (``auth/oauth.py::delete_oauth_client``
+  against ``oauth_authorization_codes`` and ``oauth_token_families``), each
+  leading on ``organisation_id`` (both tables are RLS org-isolated, so the
+  tenant column must be the index prefix);
 * the downgrade drops exactly those two indexes;
-* the ``OrgApiKey`` model declares the same two partial indexes - same name,
-  same ordered key columns, same ``postgresql_where`` / ``sqlite_where``
-  predicates - so ``create_all``'d schemas and autogenerate stay in sync.
+* the ``OAuthAuthorizationCode`` / ``OAuthTokenFamily`` models declare the
+  same two indexes - same name, same ordered key columns - so
+  ``create_all``'d schemas and autogenerate stay in sync.
 
 They run without a database.
 """
@@ -33,27 +30,31 @@ from unittest.mock import MagicMock, patch
 from alembic.script import ScriptDirectory
 from sqlalchemy import Index
 
-from modulo.db.models.api_key import OrgApiKey
+from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0271_org_api_keys_revocation_sweep_indexes"
+_MIGRATION_NAME = "0272_oauth_client_revoke_lookup_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0272_oauth_client_revoke_lookup_indexes"
-_TABLE = 'public."org_api_keys"'
+_DOWN_REVISION = "0271_org_api_keys_revocation_sweep_indexes"
 
-#: Index name -> (ordered key columns, partial WHERE predicate). This is the
-#: single source of truth asserted against BOTH the migration DDL and the ORM
-#: declaration, so a one-sided edit to either fails here instead of in prod.
-_INDEXES: dict[str, tuple[tuple[str, ...], str]] = {
-    "ix_org_api_keys_live_run_keys": (
-        ("organisation_id", "run_id"),
-        "revoked_at IS NULL AND run_id IS NOT NULL",
+#: Index name -> (table, ordered key columns). This is the single source of
+#: truth asserted against BOTH the migration DDL and the ORM declaration,
+#: so a one-sided edit to either fails here instead of in prod.
+_INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "ix_oauth_auth_codes_org_client": (
+        'public."oauth_authorization_codes"',
+        ("organisation_id", "client_id"),
     ),
-    "ix_org_api_keys_stale_sweep": (
-        ("organisation_id", "last_used_at"),
-        "revoked_at IS NULL",
+    "ix_oauth_token_families_org_client": (
+        'public."oauth_token_families"',
+        ("organisation_id", "client_id"),
     ),
+}
+
+#: Index name -> declaring ORM model, for the model/migration parity checks.
+_MODEL_BY_INDEX: dict[str, type] = {
+    "ix_oauth_auth_codes_org_client": OAuthAuthorizationCode,
+    "ix_oauth_token_families_org_client": OAuthTokenFamily,
 }
 
 
@@ -75,8 +76,8 @@ def _source_code() -> str:
 
 
 def _expected_create_statement(name: str) -> str:
-    columns, predicate = _INDEXES[name]
-    return f"CREATE INDEX IF NOT EXISTS {name} ON {_TABLE} ({', '.join(columns)}) WHERE {predicate};"
+    table, columns = _INDEXES[name]
+    return f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({', '.join(columns)});"
 
 
 def _executed(entry_point: str) -> list[str]:
@@ -99,16 +100,16 @@ def _executed(entry_point: str) -> list[str]:
     return executed
 
 
-def _model_indexes() -> dict[str, Index]:
-    return {idx.name: idx for idx in OrgApiKey.__table__.indexes if idx.name is not None}
+def _model_indexes(model: type) -> dict[str, Index]:
+    return {idx.name: idx for idx in model.__table__.indexes if idx.name is not None}
 
 
 class TestChain:
-    def test_single_head_is_0271(self) -> None:
+    def test_single_head_is_0272(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0270_pipeline_snapshots_max_autonomy_ge_default(self) -> None:
+    def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -129,23 +130,10 @@ class TestUpgrade:
                 f"upgrade missing the exact statement for {name}: {_expected_create_statement(name)}"
             )
 
-    def test_partial_predicates_are_exact(self) -> None:
-        """Each index carries precisely the predicate its read path filters on.
-
-        ``ix_org_api_keys_stale_sweep``'s ``revoked_at IS NULL`` is a prefix of
-        the run-key predicate, so equality against the full statement (not a
-        substring probe) is what keeps the two from being confused.
-        """
-        executed = _executed("upgrade")
-        for name, (_, predicate) in _INDEXES.items():
-            statement = _expected_create_statement(name)
-            assert statement in executed, statement
-            assert statement.endswith(f"WHERE {predicate};"), statement
-
     def test_uses_the_idempotent_create_index_if_not_exists_convention(self) -> None:
         code = _source_code()
-        # The idempotency convention of 0128/0155/0267: raw CREATE INDEX IF NOT
-        # EXISTS, not op.create_index.
+        # The idempotency convention of 0128/0155/0267/0271: raw CREATE INDEX
+        # IF NOT EXISTS, not op.create_index.
         assert "op.create_index" not in code
         assert "op.execute(f" not in code
         assert "text(f" not in code
@@ -157,11 +145,11 @@ class TestUpgrade:
         # prefix. The statement comes from the executed SQL (the source splits
         # each statement across concatenated literals).
         executed = _executed("upgrade")
-        for name, (columns, _) in _INDEXES.items():
+        for name, (table, columns) in _INDEXES.items():
             assert columns[0] == "organisation_id", f"{name} must lead on organisation_id"
             statement = _expected_create_statement(name)
             assert statement in executed, f"upgrade missing {name}"
-            assert f"ON {_TABLE} ({', '.join(columns)})" in statement, statement
+            assert f"ON {table} ({', '.join(columns)})" in statement, statement
 
 
 class TestDowngrade:
@@ -178,25 +166,10 @@ class TestDowngrade:
 
 class TestModelParity:
     def test_model_declares_the_two_indexes_with_the_same_columns(self) -> None:
-        declared = _model_indexes()
-        for name, (columns, _) in _INDEXES.items():
+        for name, (_, columns) in _INDEXES.items():
+            declared = _model_indexes(_MODEL_BY_INDEX[name])
             assert name in declared, f"model/migration drift: {name} missing from the ORM"
             model_columns = tuple(col.name for col in declared[name].columns)
             assert model_columns == columns, (
                 f"model/migration drift: {name} model columns {model_columns} != migration {columns}"
-            )
-
-    def test_model_partial_predicates_match_the_migration(self) -> None:
-        declared = _model_indexes()
-        for name, (_, predicate) in _INDEXES.items():
-            index = declared[name]
-            postgresql_where = index.dialect_options["postgresql"].get("where")
-            sqlite_where = index.dialect_options["sqlite"].get("where")
-            assert postgresql_where is not None, f"{name} model missing postgresql_where"
-            assert sqlite_where is not None, f"{name} model missing sqlite_where"
-            assert str(postgresql_where) == predicate, (
-                f"model/migration drift: {name} postgresql_where {postgresql_where!s} != {predicate}"
-            )
-            assert str(sqlite_where) == predicate, (
-                f"model/migration drift: {name} sqlite_where {sqlite_where!s} != {predicate}"
             )

@@ -18,6 +18,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -37,6 +38,15 @@ class OAuthAuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
     __table_args__ = (
         CheckConstraint("code_challenge_method = 'S256'", name="ck_oauth_auth_codes_challenge_method"),
+        # 0272_oauth_client_revoke_lookup_indexes — client-revoke DELETE
+        # (auth/oauth.py::delete_oauth_client) filters
+        # (organisation_id, client_id); the single-column org/client
+        # indexes forced a bitmap-AND over every live code in the org.
+        Index(
+            "ix_oauth_auth_codes_org_client",
+            "organisation_id",
+            "client_id",
+        ),
         {"comment": "One-time authorization codes for OAuth 2.0 flow"},
     )
 
@@ -116,7 +126,18 @@ class OAuthTokenFamily(Base):
     """
 
     __tablename__ = "oauth_token_families"
-    __table_args__ = ({"comment": "Token families for MCP OAuth access token rotation"},)
+    __table_args__ = (
+        # 0272_oauth_client_revoke_lookup_indexes — client-revoke DELETE
+        # (auth/oauth.py::delete_oauth_client) filters
+        # (organisation_id, client_id); the single-column org/client
+        # indexes forced a bitmap-AND over every live family in the org.
+        Index(
+            "ix_oauth_token_families_org_client",
+            "organisation_id",
+            "client_id",
+        ),
+        {"comment": "Token families for MCP OAuth access token rotation"},
+    )
 
     family_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
