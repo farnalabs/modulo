@@ -384,4 +384,68 @@ describe('SettingsGuardrailsView', () => {
     expect(wrapper.find('[data-testid="settings-guardrails-import-success"]').exists()).toBe(false)
     expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(1)
   })
+
+  it('ignores a close request while an import is in flight', async () => {
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+
+    // A close request while a request is in flight must not dismiss the dialog.
+    ;(wrapper.vm as any).importing = true
+    ;(wrapper.vm as any).closeImportDialog(false)
+    expect((wrapper.vm as any).importOpen).toBe(true)
+
+    // An explicit open request is honoured even while importing.
+    ;(wrapper.vm as any).closeImportDialog(true)
+    expect((wrapper.vm as any).importOpen).toBe(true)
+
+    // Once the import settles, a close request dismisses the dialog.
+    ;(wrapper.vm as any).importing = false
+    ;(wrapper.vm as any).closeImportDialog(false)
+    expect((wrapper.vm as any).importOpen).toBe(false)
+  })
+
+  it('reports a zero-change import when the response omits diff and hash', async () => {
+    ;(api.POST as any).mockResolvedValue({
+      data: { imported: true, status: 'clean' },
+      error: undefined,
+    })
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).importYaml = 'guardrails: []'
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await flush()
+    await flushPromises()
+
+    const success = wrapper.find('[data-testid="settings-guardrails-import-success"]')
+    expect(success.exists()).toBe(true)
+    expect(success.text()).toContain('0 change(s)')
+  })
+
+  it('surfaces a thrown import failure without refreshing the list', async () => {
+    ;(api.POST as any).mockRejectedValue(new Error('network down'))
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+    expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(1)
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).importYaml = 'guardrails:\n  - id: g1'
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await flush()
+    await flushPromises()
+
+    const error = wrapper.find('[data-testid="settings-guardrails-import-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('network down')
+    expect((wrapper.vm as any).importing).toBe(false)
+    expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(1)
+  })
 })
