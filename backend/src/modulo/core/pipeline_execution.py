@@ -69,6 +69,191 @@ PHASE_FIRST_NODE_DISPATCHED = "first_node_dispatched"
 DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
 
 
+# ---------------------------------------------------------------------------
+# FAR-1088 (W2): durable post-claim phase writer.
+# ---------------------------------------------------------------------------
+
+# Phases recorded durably AFTER the claim. The claim's own
+# ``dispatch_phase='claimed'`` stamp (see ``_CLAIM_UPDATE_SQL`` below) is the
+# guaranteed floor and resets on every re-claim; these later entries are
+# best-effort instrumentation layered on top. ``PHASE_CLAIMED`` is
+# deliberately excluded — re-writing it here would duplicate the floor.
+DURABLE_PHASES: frozenset[str] = frozenset(
+    {
+        PHASE_LOADING_SETUP,
+        PHASE_SETUP_COMPLETE,
+        PHASE_STREAMING,
+    }
+)
+
+# Bound on a single durable phase write. The instrumentation is best-effort:
+# a write that exceeds this is abandoned (connection cancelled back to the
+# pool) rather than ever delaying the run.
+PHASE_WRITE_TIMEOUT_SECONDS = 2.0
+
+# FAR-1088 (W2): the single guarded UPDATE for a post-claim phase entry.
+#
+# * ``claim_token=:tok`` fences superseded attempts: a successor re-claim
+#   rotates the token, so a replaced attempt's write matches zero rows.
+# * The monotonic guard
+#   ``dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <= now()``
+#   makes an out-of-order commit a no-op: a statement whose transaction
+#   started BEFORE the stored entry time cannot move the phase backwards.
+# * Both the SET value and the guard use the DB clock (``now()``), the same
+#   clock the claim's floor stamp used — so client/DB clock skew can never
+#   reject a legitimate forward entry.
+_PHASE_UPDATE_SQL = text(
+    "UPDATE runs SET dispatch_phase=:phase, dispatch_phase_entered_at=now() "
+    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok "
+    "AND (dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <= now()) "
+    "RETURNING id"
+)
+
+
+class DispatchPhaseWriter:
+    """Durable, best-effort writer for post-claim dispatch-phase entries.
+
+    FAR-1088 (W2). Four load-bearing properties (a previous design violated
+    the middle two and was rejected):
+
+    1. **Single-flight + coalescing** — at most ONE write is in flight per
+       run. A phase entry arriving while a write is in flight overwrites the
+       pending phase (latest wins) instead of spawning another task, so the
+       shared pool (floor ``concurrency*3+5``, ``max_overflow=0``) is never
+       fanned out per transition.
+    2. **Bounded + fail-soft** — each write is bounded by
+       ``PHASE_WRITE_TIMEOUT_SECONDS`` (2 s) and every failure (timeout, DB
+       error, no event loop) is logged and dropped. A write can NEVER raise
+       into the run: the ``claimed`` floor comes from the claim itself.
+    3. **Monotonic** — the UPDATE carries the entry-time guard and the claim
+       token fence (see ``_PHASE_UPDATE_SQL``).
+    4. **No clearing** — nothing here resets the columns; only a re-claim
+       does (and the columns are internal, not API-projected).
+    """
+
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        run_id: str,
+        org_id: str,
+        claim_token: str,
+        timeout_seconds: float = PHASE_WRITE_TIMEOUT_SECONDS,
+    ) -> None:
+        self._engine = engine
+        self._run_id = run_id
+        self._org_id = org_id
+        self._claim_token = claim_token
+        self._timeout_seconds = timeout_seconds
+        self._pending: str | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def claim_token(self) -> str:
+        """The claim token every write is fenced on."""
+        return self._claim_token
+
+    @property
+    def run_id(self) -> str:
+        """The run this writer is bound to."""
+        return self._run_id
+
+    @property
+    def org_id(self) -> str:
+        """The organisation this writer is bound to."""
+        return self._org_id
+
+    def record(self, phase: str) -> None:
+        """Schedule a durable write of *phase*. Never raises (fail-soft).
+
+        Single-flight: a new drain task starts only when no write is in
+        flight; otherwise the phase is merely swapped into the pending slot
+        (coalescing — the latest phase wins).
+        """
+        self._pending = phase
+        try:
+            # Resolve the loop BEFORE building the coroutine so a no-loop
+            # record never orphans an un-awaited ``_drain()`` coroutine.
+            loop = asyncio.get_running_loop()
+            task = self._task
+            if task is None or task.done():
+                self._task = loop.create_task(self._drain())
+        except RuntimeError:
+            # No running loop (or closed loop): drop it. Best-effort only.
+            _log.debug(
+                "dispatch_phase.record scheduling failed run=%s phase=%s (no running loop)",
+                self._run_id,
+                phase,
+            )
+        except Exception:
+            _log.debug(
+                "dispatch_phase.record scheduling failed run=%s phase=%s",
+                self._run_id,
+                phase,
+                exc_info=True,
+            )
+
+    async def flush(self) -> None:
+        """Await any in-flight/coalesced write (bounded, fail-soft).
+
+        Drains before the job finishes so the last phase lands; a no-op when
+        nothing is pending. Never raises a write failure into the caller.
+        """
+        while True:
+            task = self._task
+            if task is None:
+                return
+            with contextlib.suppress(Exception):
+                await task
+            if self._task is task and self._pending is None:
+                return
+
+    async def _drain(self) -> None:
+        """Write the pending phase, then any phase coalesced in the meanwhile."""
+        while True:
+            phase = self._pending
+            self._pending = None
+            if phase is None:
+                return
+            try:
+                await asyncio.wait_for(self._write(phase), timeout=self._timeout_seconds)
+            except asyncio.CancelledError:
+                # Worker/job shutdown — not ours to swallow.
+                raise
+            except TimeoutError:
+                _log.warning(
+                    "dispatch_phase.write_timeout run=%s phase=%s timeout=%.1fs (dropped)",
+                    self._run_id,
+                    phase,
+                    self._timeout_seconds,
+                )
+            except Exception:
+                _log.warning(
+                    "dispatch_phase.write_failed run=%s phase=%s (dropped)",
+                    self._run_id,
+                    phase,
+                    exc_info=True,
+                )
+
+    async def _write(self, phase: str) -> None:
+        async with self._engine.connect() as c:
+            # RLS org context — the runs policy matches zero rows without it.
+            await c.execute(
+                text(_SQL_SET_ORG_ID),
+                {"val": self._org_id},
+            )
+            await c.execute(
+                _PHASE_UPDATE_SQL,
+                {
+                    "phase": phase,
+                    "rid": self._run_id,
+                    "oid": self._org_id,
+                    "tok": self._claim_token,
+                },
+            )
+            await c.commit()
+
+
 @dataclass
 class DispatchPhaseTracker:
     """Track the executor's progress through the claim→first-node-dispatch path.
@@ -83,11 +268,24 @@ class DispatchPhaseTracker:
     phase_entered_at: float | None = None
     run_id: str = ""
     org_id: str = ""
+    # FAR-1088 (W2): optional durable writer for post-claim phase entries,
+    # attached by ``saq_worker.execute_run`` once the claim token is known.
+    # When present, entering a phase in ``DURABLE_PHASES`` also records it
+    # durably on ``runs.dispatch_phase`` (best-effort, fail-soft).
+    durable_writer: DispatchPhaseWriter | None = None
 
     def enter_phase(self, phase: str) -> None:
-        """Transition to a new phase, recording the monotonic entry time."""
+        """Transition to a new phase, recording the monotonic entry time.
+
+        Also records the phase durably (FAR-1088) when a ``durable_writer``
+        is attached and the phase is in ``DURABLE_PHASES``.
+        """
         self.phase = phase
         self.phase_entered_at = time.monotonic()
+        writer = self.durable_writer
+        if writer is not None and phase in DURABLE_PHASES:
+            # record() never raises (fail-soft) — property 2 of the writer.
+            writer.record(phase)
 
     def elapsed_in_phase(self) -> float:
         """Seconds since the current phase was entered."""
