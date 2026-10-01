@@ -9,6 +9,7 @@ derivable from validated + enforced config).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -25,6 +26,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     derive_sandbox_capabilities,
 )
 from modulo.core.pipeline_engine.sandbox_policy import (
+    _GH_PR_GUARD_CLAIM_RECEIPT,
     _GH_PR_GUARD_CLAIM_SENTINEL,
     _GH_PR_GUARD_FINGERPRINT,
     acquire_run_pr_guard,
@@ -36,6 +38,7 @@ from modulo.core.pipeline_engine.sandbox_policy import (
     build_read_only_script,
     gh_pr_claim_receipt_path,
     gh_pr_guard_marker_path,
+    harvest_gh_pr_claim_bounded,
     harvest_gh_pr_claim_via_exec,
     install_gh_pr_guard_via_exec,
     reset_run_pr_guard_claims,
@@ -1248,15 +1251,97 @@ def test_settle_ignores_a_sentinel_when_the_harvest_confirms_no_receipt() -> Non
     """MAJOR 2 (shim-read fail-closed DoS): the sentinel is a fixed literal
     embedded in a mode-755 shim, so ``cat $(command -v gh)`` (or prompt
     injection that echoes it) puts it in captured output. When the harvest RAN
-    and confirmed no receipt, the sentinel must be IGNORED and the holder's
-    hold RELEASED - never spent, which would pre-plant every later flagged
-    node and deliver zero PRs."""
+    against a LIVE shim and confirmed no receipt, the sentinel must be IGNORED
+    and the holder's hold RELEASED - never spent, which would pre-plant every
+    later flagged node and deliver zero PRs.
+
+    FAR-1315 re-gate: the definitive negative now ALSO requires the install
+    status (``installed``/``pre_planted``) - a receipt probe against a path no
+    shim ever wrote is meaningless (see the absent-install companion below).
+    """
     scope = f"pytest-{uuid.uuid4().hex}"
     assert acquire_run_pr_guard(scope, "node-1") == "acquired"
     shim_read = f"noise {_GH_PR_GUARD_CLAIM_SENTINEL} more noise"  # what reading the shim yields
-    assert settle_run_pr_guard(scope, "node-1", shim_read, claim_receipt=False) == "released"
+    assert (
+        settle_run_pr_guard(scope, "node-1", shim_read, claim_receipt=False, guard_install_status="installed")
+        == "released"
+    )
     # NOT spent: a later flagged node still gets its chance at the one PR.
     assert acquire_run_pr_guard(scope, "node-2") == "acquired"
+
+
+def test_settle_receipt_false_with_an_absent_install_is_meaningless() -> None:
+    """FAR-1315 re-gate MAJOR 2(b) - FALSE RELEASE: on the shipped runner
+    image there is no ``gh``, so no shim is installed and the receipt probe
+    runs against a path NO SHIM EVER WROTE - it answers ABSENT exactly like a
+    real "no receipt" probe. Read as definitive, it would suppress the sentinel
+    arm and release a genuinely unguarded create. With the install status
+    threaded, ``absent``/``failed``/unthreaded all leave the receipt UNKNOWN,
+    so the sentinel fallback still spends the run.
+    """
+    shim_sentinel = f"noise {_GH_PR_GUARD_CLAIM_SENTINEL}"
+    for status in ("absent", "failed", None):
+        scope = f"pytest-{uuid.uuid4().hex}"
+        assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+        assert (
+            settle_run_pr_guard(
+                scope,
+                "node-1",
+                shim_sentinel,
+                claim_receipt=False,
+                guard_install_status=status,  # type: ignore[arg-type]
+            )
+            == "spent"
+        ), f"install status {status!r} must not make a False receipt definitive"
+        assert acquire_run_pr_guard(scope, "node-2") == "spent"
+
+
+def test_settle_receipt_false_outranks_a_url_valid_pr_url() -> None:
+    """FAR-1315 re-gate MAJOR 2(a) - FALSE SPEND: ``pr_url`` comes from the
+    node's own ``output.json`` and is validated for URL SYNTAX only, so a node
+    whose ``gh pr create`` FAILED can still report a URL-shaped ``pr_url``.
+    When the LIVE shim's receipt harvest confirms no create happened, that
+    agent-authored text must NOT outrank the definitive negative: the run is
+    released, never spent (spending would pre-plant every later flagged node
+    and the run would deliver nothing).
+    """
+    url = "https://github.com/org/repo/pull/42"
+    scope = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    # The URL is even present in the captured stream - still not spent: the
+    # definitive receipt=False from a LIVE install outranks every other signal.
+    assert (
+        settle_run_pr_guard(
+            scope,
+            "node-1",
+            f"created {url}",
+            pr_url=url,
+            claim_receipt=False,
+            guard_install_status="installed",
+        )
+        == "released"
+    )
+    assert acquire_run_pr_guard(scope, "node-2") == "acquired"
+
+
+def test_settle_uncorroborated_pr_url_never_spends() -> None:
+    """FAR-1315 re-gate MAJOR 2(a): a URL-valid ``pr_url`` in ``output.json``
+    ALONE is agent-authored text - it spends only when the platform's own
+    capture of the transcript corroborates it (the URL also appears in the
+    streams, i.e. the extraction the FAR-188 marker persists). Without that
+    corroboration and with no receipt/sentinel evidence the hold is released.
+    """
+    url = "https://github.com/org/repo/pull/7"
+    scope = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+    assert settle_run_pr_guard(scope, "node-1", "no PR was created here", pr_url=url, claim_receipt=None) == "released"
+    assert acquire_run_pr_guard(scope, "node-2") == "acquired"
+
+    # Corroborated (same URL seen in the captured stream) -> spends.
+    scope2 = f"pytest-{uuid.uuid4().hex}"
+    assert acquire_run_pr_guard(scope2, "node-1") == "acquired"
+    assert settle_run_pr_guard(scope2, "node-1", f"opened {url}", pr_url=url, claim_receipt=None) == "spent"
+    assert acquire_run_pr_guard(scope2, "node-2") == "spent"
 
 
 def test_settle_falls_back_to_the_sentinel_only_when_the_harvest_is_unavailable() -> None:
@@ -1271,21 +1356,55 @@ def test_settle_falls_back_to_the_sentinel_only_when_the_harvest_is_unavailable(
     assert acquire_run_pr_guard(scope, "node-3") == "spent"
 
 
-def test_settle_spends_on_a_url_valid_delivered_pr_url_and_never_on_junk() -> None:
-    """The pr_url arm: a platform-parsed delivery spends the run even when
-    sentinel AND receipt are both gone (robust to truncation), and also when
+def test_settle_spends_on_a_corroborated_delivered_pr_url_and_never_on_junk() -> None:
+    """The pr_url arm: a platform-parsed delivery, CORROBORATED by the
+    platform's own transcript capture, spends the run even when sentinel AND
+    receipt are both gone (robust to output.json parse noise), and also when
     the guard was ABSENT but a PR was still delivered. Junk under the key
     (``\"N/A\"``, a non-http string) must never spend - a sloppy agent writing
     pr_url: \"N/A\" would otherwise burn the run's attempt."""
+    url = "https://github.com/org/repo/pull/42"
     scope = f"pytest-{uuid.uuid4().hex}"
     assert acquire_run_pr_guard(scope, "node-1") == "acquired"
-    assert settle_run_pr_guard(scope, "node-1", None, pr_url="https://github.com/org/repo/pull/42") == "spent"
+    assert settle_run_pr_guard(scope, "node-1", f"gh: {url}", pr_url=url) == "spent"
     assert acquire_run_pr_guard(scope, "node-2") == "spent"
 
     scope2 = f"pytest-{uuid.uuid4().hex}"
     assert acquire_run_pr_guard(scope2, "node-1") == "acquired"
     assert settle_run_pr_guard(scope2, "node-1", None, pr_url="N/A", claim_receipt=False) == "released"
     assert acquire_run_pr_guard(scope2, "node-2") == "acquired"
+
+
+def test_gh_pr_guard_marker_and_receipt_paths_agree_for_non_canonical_run_ids() -> None:
+    """FAR-1315 latent fix: the marker/receipt PATH used to canonicalise a
+    UUID run scope on the install side (``str(spec.run_id)``) but sanitise the
+    RAW run id on the harvest/settle side. A braced/uppercase/urn run id would
+    make the probe read a path the shim never wrote and report a definitive
+    ``False`` against it (a false release). Both sides now canonicalise
+    identically: every form of the same UUID yields ONE marker path, and the
+    receipt path hangs off it."""
+    canonical = "11111111-2222-3333-4444-555555555555"
+    forms = [
+        canonical,
+        canonical.upper(),
+        f"{{{canonical}}}",
+        f"urn:uuid:{canonical}",
+        canonical.replace("-", ""),
+    ]
+    marker_paths = {gh_pr_guard_marker_path(form) for form in forms}
+    assert len(marker_paths) == 1, f"every run-id form must map to one marker path, got {marker_paths}"
+    receipt_paths = {gh_pr_claim_receipt_path(form) for form in forms}
+    assert receipt_paths == {f"{next(iter(marker_paths))}/{_GH_PR_GUARD_CLAIM_RECEIPT}"}
+
+    # The LEDGER keys identically too, so a non-canonical run id still shares
+    # one claim slot across nodes.
+    scope = forms[2]
+    reset_run_pr_guard_claims()
+    try:
+        assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+        assert acquire_run_pr_guard(canonical.upper(), "node-2") == "held"
+    finally:
+        reset_run_pr_guard_claims()
 
 
 def test_settle_records_spent_even_without_a_prior_ledger_entry() -> None:
@@ -1446,3 +1565,84 @@ def test_run_pr_guard_ledger_is_bounded() -> None:
     # An evicted (oldest) scope is forgotten - it can be claimed again.
     assert acquire_run_pr_guard("pytest-bound-0", "node-2") == "acquired"
     reset_run_pr_guard_claims()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 re-gate MAJOR 1: the BOUNDED, cancellation-safe harvest wrapper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_harvest_bounded_returns_the_probe_result() -> None:
+    """The wrapper is transparent for the normal outcomes: present/absent/
+    unusable pass straight through to the caller's settle."""
+    scope = str(uuid.uuid4())
+
+    async def _present(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_PRESENT", stderr="")
+
+    async def _absent(command: list[str]) -> SimpleNamespace:
+        return SimpleNamespace(exit_code=0, stdout="MODULO_CLAIM_RECEIPT_ABSENT", stderr="")
+
+    async def _boom(command: list[str]) -> SimpleNamespace:
+        raise RuntimeError("exec transport down")
+
+    assert await harvest_gh_pr_claim_bounded(_present, run_scope=scope) is True
+    assert await harvest_gh_pr_claim_bounded(_absent, run_scope=scope) is False
+    assert await harvest_gh_pr_claim_bounded(_boom, run_scope=scope) is None
+
+
+@pytest.mark.asyncio
+async def test_harvest_bounded_timeout_cancels_and_drains_the_probe() -> None:
+    """The re-gate's shield finding: on TIMEOUT the old ``wait_for(shield(...))``
+    returned while the inner probe task kept running against a container the
+    teardown was about to destroy (and never awaited it). The wrapper must
+    return ``None`` (receipt unknown) AND leave no live probe behind."""
+    started = asyncio.Event()
+    probe_cancelled = asyncio.Event()
+
+    async def _hang(command: list[str]) -> SimpleNamespace:
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            probe_cancelled.set()
+            raise
+        return SimpleNamespace(exit_code=0, stdout="", stderr="")  # pragma: no cover
+
+    result = await harvest_gh_pr_claim_bounded(_hang, run_scope=str(uuid.uuid4()), timeout=0.05)
+    assert result is None, "a timed-out harvest must report the receipt as UNKNOWN"
+    # The probe task must be cancelled, not left running against the container
+    # the teardown that follows is about to destroy.
+    await asyncio.wait_for(probe_cancelled.wait(), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_harvest_bounded_cancellation_is_reraised_after_the_probe_is_drained() -> None:
+    """The re-gate's cancellation finding: ``CancelledError`` must PROPAGATE
+    (so the dispatch can re-raise it after teardown) but only AFTER the probe
+    task has been cancelled and drained - never while it still runs."""
+    outer = asyncio.Event()
+    drained = asyncio.Event()
+
+    async def _hang(command: list[str]) -> SimpleNamespace:
+        outer.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            drained.set()
+            raise
+        return SimpleNamespace(exit_code=0, stdout="", stderr="")  # pragma: no cover
+
+    async def _driver() -> None:
+        await harvest_gh_pr_claim_bounded(_hang, run_scope=str(uuid.uuid4()))
+
+    task = asyncio.ensure_future(_driver())
+    await asyncio.wait_for(outer.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # By the time the CancelledError reached the caller, the probe was already
+    # cancelled and drained inside the wrapper.
+    await asyncio.wait_for(drained.wait(), timeout=5)
+    assert task.done()

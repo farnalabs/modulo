@@ -64,21 +64,40 @@ when the agent runs:
     fixed sentinel string - a sentinel alone must therefore NEVER spend a run):
       1. a platform-side HARVEST of the shim's success RECEIPT file
          (``$MARKER/<receipt>``, written only when ``gh pr create`` exited 0 -
-         see ``harvest_gh_pr_claim_via_exec``), taken after the node while the
-         sandbox/container is still alive;
-      2. a platform-parsed, URL-valid delivered ``pr_url`` from the node's
-         ``output.json`` (survives stream truncation; also spends a run whose
-         guard was ABSENT but still delivered a PR);
-      3. ONLY when the harvest is unavailable (sandbox already gone - e.g. a
-         stall/timeout kill) does the stdout claim SENTINEL count, as the
-         best-effort fallback.
-    Receipt confirmed ABSENT -> the sentinel is ignored and the owner's hold is
-    RELEASED, so a node that merely printed the sentinel (by reading the shim)
-    can never burn the run's attempt. The residual (harvest unavailable AND
-    sentinel observed) is documented in
-    ``docs/product-map/core/runtime-provider-core.md``. What is shared across
-    nodes is the LEDGER, never the sandbox filesystem: the marker itself stays
-    inside each sandbox.
+         see ``harvest_gh_pr_claim_via_exec``, driven by the bounded,
+         cancellation-safe ``harvest_gh_pr_claim_bounded``), taken after the
+         node while the sandbox/container is still alive - but ONLY COUNTS AS
+         DEFINITIVE when
+         the install status (threaded into ``settle_run_pr_guard``) says a shim
+         actually landed (``installed`` / ``pre_planted``): a probe against a
+         path no shim ever wrote (install ``absent``/``failed``, e.g. the
+         shipped runner image with no ``gh``) answers ABSENT just the same, so
+         it is treated as UNKNOWN and falls through to the other signals;
+       2. a URL-valid delivered ``pr_url`` that the platform ALSO corroborates
+          in its own capture of the node's transcript (the same URL must appear
+          in the captured streams - see ``_pr_url_seen_in_streams``; raw
+          ``output.json`` text alone NEVER spends, and never overrides a
+          definitive receipt);
+       3. ONLY when the receipt is unknown (harvest unavailable - e.g. a
+          stall/timeout kill - or a non-live install) does the stdout claim
+          SENTINEL count, as the best-effort fallback.
+    Receipt CONFIRMED ABSENT by a LIVE shim -> ``pr_url`` and the sentinel are
+    both ignored and the owner's hold is RELEASED, so a node that merely
+    printed the sentinel (by reading the shim) can never burn the run's
+    attempt. The harvest itself runs through
+    ``harvest_gh_pr_claim_bounded`` (bounded AND cancellation-safe: the probe
+    task is always awaited-or-cancelled, and a cancellation landing in the
+    dispatch ``finally`` is recorded so the teardown still runs before it is
+    re-raised). The marker/receipt PATH and the ledger key both canonicalise a
+    UUID-shaped run scope first, so the install side (``str(spec.run_id)``) and
+    the harvest side (raw run id) can never disagree about which path to probe.
+    SCOPE CALL (see ``build_gh_pr_guard_script``'s TAMPER MODEL):
+    DELIBERATE evasion - pre-creating or deleting the marker/receipt - is OUT
+    OF SCOPE, and deleting the marker/receipt now ALSO neutralises the
+    sentinel arm. The residual (harvest unavailable AND sentinel observed) is
+    documented in ``docs/product-map/core/runtime-provider-core.md``. What is
+    shared across nodes is the LEDGER, never the sandbox filesystem: the
+    marker itself stays inside each sandbox.
   - Non-E2B tiers (FAR-1315): ``apply_sandbox_policy`` runs in the E2B sandbox
     only. ``install_gh_pr_guard_via_exec`` installs the SAME shim (with the same
     ledger plan) through any provider's ``exec_command`` primitive - the Bundled
@@ -212,11 +231,28 @@ _GH_PR_GUARD_CLAIM_SENTINEL = "modulo: one-PR-per-run guard: RUN CLAIM ACQUIRED"
 # platform-observable, agent-reading-proof "this node created the PR".
 _GH_PR_GUARD_CLAIM_RECEIPT = "claimed"
 
+# FAR-1315 (re-gate MAJOR 1): how long the bounded receipt-harvest wrapper
+# waits for an already-cancelled probe to finish winding down before giving up
+# on it (the probe then finishes in the background with its outcome consumed).
+# Short relative to the 20s harvest bound - it only has to let a cancelled
+# exec unwind.
+_HARVEST_DRAIN_TIMEOUT = 5.0
+
 # Harvest probe tokens: what ``harvest_gh_pr_claim_via_exec``'s one-shot shell
 # probe prints for receipt-present / receipt-absent. Kept as constants so the
 # probe script and the parser that reads it back cannot drift apart.
 _GH_PR_CLAIM_RECEIPT_PRESENT = "MODULO_CLAIM_RECEIPT_PRESENT"
 _GH_PR_CLAIM_RECEIPT_ABSENT = "MODULO_CLAIM_RECEIPT_ABSENT"
+
+# FAR-1315 re-gate: install statuses under which a HARVESTED RECEIPT is
+# meaningful. Only these say a shim actually landed in this node's workspace,
+# so its receipt path is a real path. ``absent`` (no ``gh`` on PATH - the
+# shipped runner image) and ``failed`` mean the probe runs against a path no
+# shim ever wrote, answers ABSENT, and must NOT be read as "confirmed no
+# create": the settle treats it as UNKNOWN and falls back to the other signals
+# (see ``settle_run_pr_guard``). ``None`` (status not threaded / isolation
+# never ran) is unknown by the same rule.
+_GH_PR_GUARD_INSTALL_LIVE_STATUSES = frozenset({"installed", "pre_planted"})
 
 # FAR-1315: the run claim LEDGER is process-local and lives for the life of the
 # engine process, so it must be BOUNDED. Beyond this many run scopes the OLDEST
@@ -232,6 +268,13 @@ _MAX_RUN_PR_GUARD_CLAIMS = 512
 # back cannot drift apart).
 _GH_PR_GUARD_NO_GH_NOTE = "no gh on PATH"
 _GH_PR_GUARD_PRE_PLANT_FAILED_NOTE = "could not pre-plant"
+
+# Sentinel returned by ``apply_sandbox_policy``'s best-effort ``_run_step``
+# when a step raised and the failure was swallowed (enforce=False). Distinct
+# from ``None`` so "the step FAILED" is never conflated with "the step ran and
+# returned no result object" when classifying the gh-guard install for the
+# FAR-1315 settle.
+_POLICY_STEP_FAILED = object()
 
 # ---------------------------------------------------------------------------
 # FAR-1315: the platform-side run claim ledger.
@@ -251,6 +294,25 @@ _RUN_PR_GUARD_CLAIMS: dict[str, tuple[str, str]] = {}
 _RUN_PR_GUARD_LOCK = threading.Lock()
 
 
+def _canonical_scope_uuid(run_scope: str | None) -> str | None:
+    """Canonicalise a UUID-shaped run scope, or ``None`` when it is not one.
+
+    FAR-1315 latent fix: the marker/receipt PATH is built from the run scope
+    while the install side threads ``str(spec.run_id)`` (canonical) and the
+    harvest/settle sides thread the RAW run id. Today run ids are canonical so
+    the two agree by accident; a braced / uppercase / ``urn:uuid:`` / hex-less
+    form would make the harvest probe read a path the shim never wrote and
+    report a definitive-looking ``False`` against it. Every path/ledger key
+    therefore canonicalises FIRST, on both the install and the harvest side.
+    """
+    if not run_scope:
+        return None
+    try:
+        return str(uuid.UUID(str(run_scope)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _run_pr_guard_key(run_scope: str | None) -> str | None:
     """Normalise a run scope into a ledger key, or ``None`` when unscoped.
 
@@ -263,12 +325,11 @@ def _run_pr_guard_key(run_scope: str | None) -> str | None:
     """
     if not run_scope:
         return None
-    text = str(run_scope)
-    try:
-        return str(uuid.UUID(text))
-    except (ValueError, AttributeError, TypeError):
-        scope = _GH_PR_GUARD_SCOPE_RE.sub("_", text)[:64].strip("._-")
-        return scope or None
+    canonical = _canonical_scope_uuid(run_scope)
+    if canonical is not None:
+        return canonical
+    scope = _GH_PR_GUARD_SCOPE_RE.sub("_", str(run_scope))[:64].strip("._-")
+    return scope or None
 
 
 def acquire_run_pr_guard(run_scope: str | None, guard_owner: str | None = None) -> str:
@@ -307,6 +368,7 @@ def settle_run_pr_guard(
     *streams: str | None,
     pr_url: str | None = None,
     claim_receipt: bool | None = None,
+    guard_install_status: str | None = None,
 ) -> str:
     """Settle this node's ledger slot from platform-observed spend evidence.
 
@@ -320,35 +382,62 @@ def settle_run_pr_guard(
     runs in a dispatch ``finally``.
 
     SPEND EVIDENCE (FAR-1315 hardening - chosen so a lost/truncated sentinel
-    can never RELEASE a genuinely-spent run, and a READ shim can never SPEND
-    an unspent one):
+    can never RELEASE a genuinely-spent run, a READ shim can never SPEND an
+    unspent one, and agent-authored ``output.json`` text can never OUTRANK a
+    definitive receipt):
 
-    1. ``claim_receipt is True`` (the platform harvested the shim's success
-       receipt from the sandbox after the node) -> SPENT. Unaffected by stream
-       truncation and unforgeable by reading the shim.
-    2. a URL-valid delivered ``pr_url`` (the platform parsed it from this
-       node's ``output.json``) -> SPENT. Also covers a run whose guard was
-       ABSENT but still delivered a PR. Non-URL strings (``"N/A"``, ``""``)
-       never spend.
-    3. ``claim_receipt is False`` (the harvest RAN and confirmed no receipt)
-       -> the sentinel in *streams* is IGNORED: an agent that printed the
-       sentinel by reading the shim must not burn the run's attempt.
-    4. ``claim_receipt is None`` (harvest unavailable - sandbox already
-       destroyed, exec failed) -> fall back to the stdout claim SENTINEL in
-       *streams* (the pre-existing best-effort channel; bounded residual,
-       documented in the product map).
+    1. ``claim_receipt is True`` -> SPENT. The shim wrote its success receipt
+       inside the marker dir; unaffected by stream truncation and unforgeable
+       by reading the shim (a hand-pre-created receipt is deliberate evasion -
+       out of scope, see ``build_gh_pr_guard_script``'s TAMPER MODEL).
+    2. ``claim_receipt is False`` AND the install status says a shim actually
+       LANDED (``guard_install_status`` in ``installed`` / ``pre_planted``) ->
+       NOT spent: ``pr_url`` and the sentinel are BOTH ignored and the hold is
+       released. This is the definitive "the live shim ran, no create
+       succeeded" answer and it outranks every agent-authored signal - in
+       particular ``pr_url``, which comes from the node's own ``output.json``
+       and is validated for URL SYNTAX only (a node whose create FAILED can
+       still report a URL-shaped ``pr_url``; spending there pre-plants every
+       later flagged node and the run then delivers nothing).
+    3. The receipt is UNKNOWN - the harvest could not run (``None``: sandbox
+       already destroyed, exec failed, cancelled), OR the probe ran against a
+       path NO SHIM EVER WROTE (``guard_install_status`` ``absent`` / ``failed``
+       / unthreaded, e.g. the shipped runner image has no ``gh``). A probe
+       against a non-existent path answers ABSENT just like a real "no receipt"
+       probe, so it must NOT be read as "confirmed no create": fall back to the
+       other signals - a URL-valid ``pr_url`` CORROBORATED by the platform's own
+       capture (below) -> SPENT, else the stdout claim SENTINEL in *streams* ->
+       SPENT, else released.
+    4. ``pr_url`` corroboration: ``_is_valid_delivered_pr_url(pr_url)`` alone is
+       NEVER enough - a URL-valid ``pr_url`` must ALSO appear in the captured
+       *streams*, i.e. the platform's own transcription of what the node
+       printed (the same ``_PR_URL_PATTERN`` derivation node_runner persists
+       into the FAR-188 raw-output marker's ``pr_url``). Raw ``output.json``
+       text on its own is agent-authored and never spends. Junk under the key
+       (``"N/A"``, ``""``, non-http) never spends either.
+
+    ``guard_install_status`` is threaded by BOTH dispatch call sites from the
+    install step itself (``apply_sandbox_policy`` / ``install_gh_pr_guard_via_exec``)
+    - see :data:`_GH_PR_GUARD_INSTALL_LIVE_STATUSES`.
     """
     key = _run_pr_guard_key(run_scope)
     if key is None:
         return "noop"
     owner = guard_owner or ""
     observed = any(_GH_PR_GUARD_CLAIM_SENTINEL in stream for stream in streams if stream)
-    if claim_receipt is True or _is_valid_delivered_pr_url(pr_url):
+    if claim_receipt is True:
         spend = True
-    elif claim_receipt is False:
+    elif claim_receipt is False and guard_install_status in _GH_PR_GUARD_INSTALL_LIVE_STATUSES:
+        # Definitive negative: a LIVE shim's receipt path was probed and the
+        # receipt is absent. Agent-authored pr_url and the readable sentinel
+        # must both lose to it.
         spend = False
     else:
-        spend = observed
+        # Receipt unknown (harvest unavailable, or the probe ran against a
+        # path no shim wrote): fall back to a CORROBORATED pr_url, then the
+        # sentinel. The corroboration is what stops a failed create that
+        # merely reports a URL-shaped pr_url in output.json from spending.
+        spend = (_is_valid_delivered_pr_url(pr_url) and _pr_url_seen_in_streams(pr_url, streams)) or observed
     with _RUN_PR_GUARD_LOCK:
         entry = _RUN_PR_GUARD_CLAIMS.get(key)
         if entry is None:
@@ -389,6 +478,42 @@ def _is_valid_delivered_pr_url(pr_url: Any) -> bool:
     return parts.scheme in ("http", "https") and bool(parts.netloc)
 
 
+# FAR-1315 corroboration: the PR-URL shape node_runner extracts from the
+# platform-captured raw output (``node_runner._PR_URL_PATTERN``) - MIRRORED
+# here because sandbox_policy must stay dependency-free (no pipeline_engine
+# import). ``tests/unit/pipeline_engine/test_sandbox_policy.py`` pins the two
+# patterns together so they cannot drift.
+_GH_PR_URL_RE = re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
+
+
+def _pr_url_seen_in_streams(pr_url: str | None, streams: tuple[str | None, ...]) -> bool:
+    """True when the reported ``pr_url`` also appears in the captured *streams*.
+
+    FAR-1315 (MAJOR 2a): ``output.json`` is AGENT-AUTHORED, so a URL-valid
+    ``pr_url`` alone proves nothing - a node whose ``gh pr create`` FAILED can
+    still report a URL-shaped ``pr_url`` (an unrelated or pre-existing PR) and
+    would otherwise mark the run spent, pre-planting every later flagged node
+    so the run delivers nothing. The corroboration is the platform's OWN
+    transcription of what the node printed (the same extraction node_runner
+    persists into the FAR-188 raw-output marker's ``pr_url``): a genuine create
+    echoes the URL through ``gh pr create`` stdout, which the dispatch captures.
+
+    Normalisation is a trailing-slash strip only - the reported and printed
+    forms are the same string gh emitted. Deliberate fabrication (printing a
+    URL the agent never created) is out of scope: see the TAMPER MODEL.
+    """
+    if not isinstance(pr_url, str) or not pr_url.strip():
+        return False
+    target = pr_url.strip().rstrip("/")
+    for stream in streams:
+        if not stream:
+            continue
+        for match in _GH_PR_URL_RE.finditer(stream):
+            if match.group(0).rstrip("/") == target:
+                return True
+    return False
+
+
 def reset_run_pr_guard_claims() -> None:
     """Clear the ledger (test/diagnostic seam - never called in production)."""
     with _RUN_PR_GUARD_LOCK:
@@ -409,13 +534,17 @@ def gh_pr_guard_marker_path(run_scope: str | None = None) -> str:
 
     The marker is created as a DIRECTORY (``mkdir`` is atomic on POSIX: the
     first ``gh pr create`` wins it, every later one sees it and is refused).
-    ``run_scope`` is normally the run id; sanitised to ``[A-Za-z0-9._-]`` and
+    ``run_scope`` is normally the run id; UUID-shaped forms are canonicalised
+    first (FAR-1315 latent fix - the install side threads ``str(spec.run_id)``
+    while the harvest side threads the raw run id, so a braced/uppercase run id
+    must not make the two disagree), then sanitised to ``[A-Za-z0-9._-]`` and
     truncated so it can never escape ``/tmp`` or inject shell metacharacters
     into the installed shim.
     """
     if not run_scope:
         return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.marker"
-    scope = _GH_PR_GUARD_SCOPE_RE.sub("_", str(run_scope))[:64].strip("._-")
+    scope = _canonical_scope_uuid(run_scope) or str(run_scope)
+    scope = _GH_PR_GUARD_SCOPE_RE.sub("_", scope)[:64].strip("._-")
     if not scope:
         return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.marker"
     return f"{_GH_PR_GUARD_MARKER_ROOT}/modulo-gh-pr-create.{scope}.marker"
@@ -427,7 +556,9 @@ def gh_pr_claim_receipt_path(run_scope: str | None = None) -> str:
     Written by the shim ONLY when ``gh pr create`` exited 0 (never by the
     pre-plant, which only ``mkdir -p``s the marker directory), so its
     existence is the platform's unforgeable-by-reading spend signal. Same
-    scope sanitisation as :func:`gh_pr_guard_marker_path`.
+    canonicalised scope handling as :func:`gh_pr_guard_marker_path` - the probe
+    must ask about the EXACT path the shim wrote, whatever string form the run
+    id arrived in.
     """
     return f"{gh_pr_guard_marker_path(run_scope)}/{_GH_PR_GUARD_CLAIM_RECEIPT}"
 
@@ -805,15 +936,33 @@ def build_gh_pr_guard_script(marker_path: str, *, pre_spent: bool = False) -> st
           echoed to stderr (``could not pre-plant``) so the classifier reports
           the run-scope enforcement as ABSENT rather than silently live.
 
-    TAMPER MODEL (explicit — do not overstate what this buys): the claim is an
+    TAMPER MODEL (explicit - do not overstate what this buys): the claim is an
     in-sandbox marker file under ``/tmp``. It is predictable and writable by
     the agent, so it is NOT tamper-proof against a deliberately evasive agent
     (which could ``rmdir`` the marker, delete the shim or the
     ``gh.modulo-real`` copy, or invoke a non-PATH ``gh``). What it guards
-    against is the OBSERVED failure mode — the ACCIDENTAL second
+    against is the OBSERVED failure mode - the ACCIDENTAL second
     ``gh pr create`` within one run, where the agent retries or repeats the
-    create while following its prompt. Deliberate-evasion hardening is out of
-    scope for this ticket and is tracked separately.
+    create while following its prompt.
+
+    SCOPE CALL (FAR-1315 re-gate - stated, not implied):
+    (1) ADVERSARIAL EVASION IS OUT OF SCOPE. The marker lives under ``/tmp``
+    and the shim (mode 755, PATH-resolvable) prints its exact path, so a
+    deliberately malicious agent can PRE-CREATE the marker/receipt (false
+    SPEND: later flagged nodes are refused and the run delivers nothing) or
+    DELETE it (false RELEASE). No heuristic in this module is designed to
+    defeat a hostile agent - hardening against that is deliberately not
+    attempted here. (2) DELETING THE MARKER/RECEIPT NOW ALSO NEUTRALISES THE
+    SENTINEL ARM: the receipt harvest answers ABSENT against the deleted
+    path, and a definitive ABSENT receipt (live shim + probe ran) suppresses
+    the stdout claim sentinel as well as ``pr_url`` - so a hostile deletion
+    both releases this node's hold and silences the fallback channel that
+    would otherwise have spent the run. (3) The ACCIDENTAL model is what must
+    stay correct, and is what the tests pin: a normal create -> receipt True
+    -> spent; a truncated stream -> harvest still reads receipt True -> spent;
+    merely READING the shim -> no create -> receipt False (live install) ->
+    released, never spent. Deliberate-evasion hardening remains tracked
+    separately (as before this ticket).
 
     SCOPE: the guard is armed by the explicit ``single_pr_per_run`` node flag
     (FAR-1273) — nothing else. A non-empty ``delivery_sentinel`` no longer
@@ -984,7 +1133,10 @@ async def install_gh_pr_guard_via_exec(
     raises — it is returned as status ``"failed"``/``"absent"`` for the caller
     to surface loudly. The ledger claim taken here is settled by the caller
     via :func:`settle_run_pr_guard` when the node finishes (spend evidence:
-    harvested receipt → delivered ``pr_url`` → sentinel fallback). Attempted
+    harvested receipt → a corroborated delivered ``pr_url`` → sentinel
+    fallback; the returned ``status`` is threaded in as
+    ``guard_install_status`` so a non-live install leaves the receipt
+    meaningless). Attempted
     is not the same as effective — see :class:`GhPrGuardInstallResult` for the
     shipped runner image's boundary (no ``gh``, read-only rootfs: the install
     reports ``absent`` there and the run is prompt-level-guarded only).
@@ -1049,6 +1201,85 @@ async def harvest_gh_pr_claim_via_exec(
     return None
 
 
+async def _cancel_and_drain_harvest(task: asyncio.Future[bool | None]) -> None:
+    """Cancel the probe task (if still live) and wait for it to finish.
+
+    Always awaited-or-cancelled: the probe must never be left running against a
+    container the teardown that follows is about to destroy (the re-gate
+    finding on the old ``asyncio.shield`` form, which returned on timeout while
+    the shielded inner task kept running, and propagated on cancellation while
+    that task lived on). The wait is itself bounded so a probe that ignores its
+    cancellation cannot wedge the dispatch ``finally``; if it is still alive
+    after the bound, a done-callback consumes its outcome so a late failure is
+    never reported as "never retrieved". Cancellation and probe-side failures
+    are swallowed here - the receipt is simply unknown - so a drain failure can
+    never mask the caller's own cancellation.
+    """
+    if not task.done():
+        task.cancel()
+    try:
+        await asyncio.wait({task}, timeout=_HARVEST_DRAIN_TIMEOUT)
+    except asyncio.CancelledError:
+        # A second cancellation landed while draining: the probe is already
+        # cancelled, so nothing is left to wait for. The caller re-raises its
+        # own recorded cancellation after teardown.
+        return
+    if not task.done():
+        task.add_done_callback(_consume_harvest_probe_outcome)
+
+
+def _consume_harvest_probe_outcome(task: asyncio.Future[bool | None]) -> None:
+    """Done-callback: retrieve a leftover probe's exception (never raises)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.debug("sandbox_policy.gh_harvest_probe_leftover_failed", exc_info=exc)
+
+
+async def harvest_gh_pr_claim_bounded(
+    exec_command: Callable[[list[str]], Awaitable[Any]],
+    *,
+    run_scope: str | None,
+    timeout: float = 20.0,  # noqa: ASYNC109 - the dispatch's own harvest bound, not a client API timeout
+) -> bool | None:
+    """Bounded, cancellation-aware receipt harvest for a dispatch ``finally`` (FAR-1315).
+
+    Wraps :func:`harvest_gh_pr_claim_via_exec` so the dispatch's teardown
+    ordering stays safe:
+
+    - **Bounded.** The probe runs as its own task under ``asyncio.wait``. On
+      timeout the probe is CANCELLED and awaited, never left running against a
+      container that is about to be destroyed (the old
+      ``wait_for(shield(...))`` form did the opposite of its comment: on
+      timeout it returned while the shielded inner task kept running, and on
+      cancellation it propagated while that task lived on).
+    - **Cancellation propagates AFTER the probe is cleaned up.**
+      ``asyncio.CancelledError`` is re-raised here only once the probe task is
+      cancelled and drained, so the CALLER can catch it, treat the receipt as
+      UNKNOWN, run its teardown, and re-raise at the end of its ``finally``.
+    - Any other failure (exec error, non-zero exit, unparseable reply) returns
+      ``None`` - receipt unknown - never raising into the teardown.
+    """
+    task: asyncio.Future[bool | None] = asyncio.create_task(
+        harvest_gh_pr_claim_via_exec(exec_command, run_scope=run_scope)
+    )
+    try:
+        await asyncio.wait({task}, timeout=timeout)
+    except asyncio.CancelledError:
+        await _cancel_and_drain_harvest(task)
+        raise
+    if not task.done():
+        # Bound expired: cancel so the probe can never outlive the teardown.
+        await _cancel_and_drain_harvest(task)
+        return None
+    if task.cancelled():
+        return None
+    if task.exception() is not None:
+        return None
+    return task.result()
+
+
 async def apply_sandbox_policy(
     sandbox: Any,
     *,
@@ -1061,8 +1292,17 @@ async def apply_sandbox_policy(
     single_pr_per_run: bool = False,
     run_scope: str | None = None,
     guard_owner: str | None = None,
-) -> None:
+) -> str | None:
     """Run the enforced sandbox policy in the sandbox (FAR-212 PR B).
+
+    FAR-1315: returns the one-PR guard's INSTALL STATUS
+    (``installed``/``pre_planted``/``absent``/``failed``, classified from the
+    install script's own exit/stderr) when ``single_pr_per_run`` armed the
+    step, else ``None``. The dispatch ``finally`` threads it into
+    :func:`settle_run_pr_guard`: only a LIVE install (``installed``/
+    ``pre_planted``) makes a definitive ``receipt=False`` mean "confirmed no
+    create" - an ``absent``/``failed`` install leaves the receipt meaningless
+    (the probe ran against a path no shim ever wrote).
 
     Executes the git-credential scope, the selected-mode egress allowlist, the
     FAR-1264 one-PR-per-run ``gh`` guard, and the read-only chmod scripts as
@@ -1128,19 +1368,27 @@ async def apply_sandbox_policy(
     the claim status so the denial is observable. The claim is settled by the
     dispatch layer from PLATFORM-OBSERVED spend evidence
     (:func:`settle_run_pr_guard`: the harvested shim claim receipt, a
-    delivered ``pr_url``, and the captured output only as a fallback when the
-    harvest could not run); an unscoped call (no ``run_scope``) keeps
-    the pre-FAR-1315 behaviour exactly (live guard, no ledger entry).
+    corroborated delivered ``pr_url``, and the captured output only as a
+    fallback when the receipt is unknown — with THIS function's returned
+    install status threaded in so a probe against a path no shim ever wrote
+    is never read as "confirmed no create"); an unscoped call (no
+    ``run_scope``) keeps the pre-FAR-1315 behaviour exactly (live guard, no
+    ledger entry).
     """
 
     async def _run_step(script: str, *, user: str, enforce: bool) -> Any:
-        """Run one policy step; return its CommandResult (``None`` on a
-        swallowed best-effort failure).
+        """Run one policy step; return its CommandResult (or
+        :data:`_POLICY_STEP_FAILED` on a swallowed best-effort failure).
 
         The e2b SDK's ``commands.run`` RAISES on a non-zero exit
         (``CommandExitException``), so a returned result is a successful step —
         one whose stderr can still carry a diagnostic the caller must not
-        discard (see the gh-guard reporting below).
+        discard (see the gh-guard reporting below). A swallowed best-effort
+        failure returns the ``_POLICY_STEP_FAILED`` sentinel rather than
+        ``None`` so the gh-guard caller can tell "the install FAILED" from "the
+        install ran and the SDK handed back no result object" — conflating the
+        two would report a live install as failed (or vice versa) to the FAR-1315
+        settle.
         """
         try:
             return await asyncio.wait_for(
@@ -1157,13 +1405,14 @@ async def apply_sandbox_policy(
             # fail-closed (a failure leaves NO egress — never fail-open); the
             # guard install degrades to the prompt-level one-PR-per-run guard.
             _log.warning("sandbox_policy.step_failed", exc_info=True)
-            return None
+            return _POLICY_STEP_FAILED
 
     # Enforcement-critical steps run as root (the read-only seal must override
     # every file's mode bits regardless of ownership; the git helper install
     # writes into /home/user before the seal). The git helper is still
     # registered into the AGENT's config file (see _AGENT_GIT_CONFIG), so the
     # executing (root) user is irrelevant to where the agent reads its config.
+    _guard_install_status: str | None = None
     if git_credentials == "scoped":
         # FAR-798: when allowed_hosts is provided, use the multi-host helper;
         # when None (default), use the single-host scoped helper — BYTE-
@@ -1209,8 +1458,24 @@ async def apply_sandbox_policy(
         _guard_report = str(getattr(_guard_result, "stderr", "") or "").strip()
         if _guard_report:
             _log.warning("sandbox_policy.gh_guard_install_reported: %s", _guard_report[:1000])
+        # FAR-1315: classify the install for the dispatch settle. The step
+        # RAISED and was swallowed (enforce=False) -> "failed", never a live
+        # status: an unverified install must leave the receipt meaningless
+        # rather than "confirmed no create". A RETURNED value is a successful
+        # step by ``_run_step``'s contract (the e2b SDK raises on non-zero
+        # exit), so a result without an ``exit_code`` attribute defaults to 0
+        # rather than faking a failure.
+        if _guard_result is _POLICY_STEP_FAILED:
+            _guard_install_status = "failed"
+        else:
+            _guard_install_status, _ = _classify_gh_pr_guard_outcome(
+                getattr(_guard_result, "exit_code", 0),
+                _guard_report,
+                pre_spent=_pre_spent,
+            )
     if read_only:
         await _run_step(build_read_only_script(), user="root", enforce=True)
+    return _guard_install_status
 
 
 __all__ = [
@@ -1225,6 +1490,7 @@ __all__ = [
     "build_read_only_script",
     "gh_pr_claim_receipt_path",
     "gh_pr_guard_marker_path",
+    "harvest_gh_pr_claim_bounded",
     "harvest_gh_pr_claim_via_exec",
     "install_gh_pr_guard_via_exec",
     "reset_run_pr_guard_claims",

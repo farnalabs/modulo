@@ -1160,3 +1160,131 @@ async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
         assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
     finally:
         reset_run_pr_guard_claims()
+
+
+# --- FAR-1315 re-gate: the findings, proven on the runner tier too ----------
+
+
+async def test_pr_url_never_outranks_a_definitive_receipt_false_on_the_runner_tier(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """RE-GATE MAJOR 2(a) on the runner tier: the agent-authored ``pr_url``
+    (also echoed in the captured stdout, so the corroboration arm is
+    satisfied) must NOT outrank a definitive ``receipt=False`` from a LIVE
+    install — the hold is released, not spent.
+
+    Fail-without-fix: the pre-fix precedence spent here, pre-planting every
+    later flagged node of the run."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    url = "https://github.com/org/repo/pull/42"
+    monkeypatch.setattr(
+        runner_dispatch,
+        "_read_file_via_exec",
+        AsyncMock(return_value=f'{{"summary":"done","pr_url":"{url}"}}'),
+    )
+    run_id, state = _fresh_flagged_state()
+    provider = _HarvestReplyProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        stream_chunks=[("stdout", f"attempted create, reporting {url}\n")],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", (
+            "a definitive receipt=False from a LIVE install must release the hold, "
+            "never be outranked by an agent-authored pr_url"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_absent_install_leaves_the_receipt_meaningless_on_the_runner_tier(
+    patch_node_runner,
+    tmp_path,
+) -> None:
+    """RE-GATE MAJOR 2(b) on the runner tier: the shipped runner image has no
+    ``gh``, so the guard install reports ``absent`` — the receipt probe then
+    runs against a path no shim ever wrote and answers ABSENT. That must be
+    UNKNOWN, not "confirmed no create": the sentinel fallback still spends.
+
+    Fail-without-fix: the pre-fix settle read it as definitive and RELEASED
+    (``acquired``) — a genuinely unguarded create produced no second-PR block."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
+
+    run_id, state = _fresh_flagged_state()
+
+    class _AbsentInstallProvider(_HarvestReplyProvider):
+        """Guard install reports 'no gh on PATH' (the shipped image shape)."""
+
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and ".modulo-real" in cmd[-1]:
+                self.exec_calls.append(list(cmd))
+                return _ExecResult(
+                    exit_code=0,
+                    stdout="",
+                    stderr=(
+                        "modulo: gh guard: WARNING no gh on PATH; nothing to guard\n"
+                        "modulo: gh guard: flagged run is NOT platform-guarded (prompt-level only)"
+                    ),
+                )
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _AbsentInstallProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent", (
+            "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_cancel_during_the_claim_harvest_still_tears_down_on_the_runner_tier(
+    patch_node_runner,
+) -> None:
+    """RE-GATE MAJOR 1 on the runner tier: the harvest is the FIRST await in
+    ``run_bundled_runner_node``'s ``finally``. A cancellation landing there
+    must NOT skip ``_teardown_and_clear`` (workspace destroy, client close,
+    fenced dispatch-marker clear) — the cancellation is recorded, teardown
+    runs, then the cancellation is re-raised.
+
+    Fail-without-fix: with the old ``wait_for(shield(...))`` form the
+    CancelledError escapes the ``except Exception`` handlers and unwinds the
+    ``finally`` before ``_teardown_and_clear`` — the provider is never
+    destroyed/closed and the dispatch marker is never cleared."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    _run_id, state = _fresh_flagged_state()
+    harvest_started = asyncio.Event()
+
+    class _BlockingHarvestProvider(_FakeProvider):
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+                harvest_started.set()
+                await asyncio.Event().wait()  # parks until the probe is cancelled
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _BlockingHarvestProvider()
+    clear_mock = nrm._sandbox_clear_dispatch_marker
+    assert isinstance(clear_mock, AsyncMock), "patch_node_runner must stub the marker clear"
+
+    task = asyncio.ensure_future(runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider)))
+    await asyncio.wait_for(harvest_started.wait(), timeout=10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert provider.destroyed, (
+        f"the workspace must still be destroyed after a cancel during the harvest: {provider.destroyed}"
+    )
+    assert provider.closed, "the provider must still be closed after a cancel during the harvest"
+    assert clear_mock.await_count >= 1, (
+        "the fenced dispatch marker must still be cleared after a cancel during the harvest"
+    )

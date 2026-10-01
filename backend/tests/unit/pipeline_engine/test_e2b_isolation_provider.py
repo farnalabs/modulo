@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from contextlib import nullcontext
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -49,7 +50,7 @@ from modulo.core.runtime_provider import (
     RuntimeProvider,
     WorkspaceSpec,
 )
-from tests.unit.pipeline_engine.conftest import install_fake_dispatch
+from tests.unit.pipeline_engine.conftest import FakeDispatchProvider, install_fake_dispatch
 from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -67,8 +68,12 @@ class _RecordingIsolationProvider(RuntimeProvider):
 
     provider_id = "e2b"
 
-    def __init__(self) -> None:
+    def __init__(self, install_status: str | None = "installed") -> None:
         self.calls: list[tuple[str, WorkspaceSpec, IsolationPolicy]] = []
+        # FAR-1315 (MAJOR 2b): the status apply_sandbox_policy would classify
+        # for a flagged node's guard install. Tests vary it to model a live
+        # install ("installed") vs the shipped runner image (no gh -> "absent").
+        self.install_status = install_status
 
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         return "ws-fake"
@@ -93,8 +98,13 @@ class _RecordingIsolationProvider(RuntimeProvider):
         provider_ref: str,
         spec: WorkspaceSpec,
         policy: IsolationPolicy,
-    ) -> None:
+    ) -> str | None:
         self.calls.append((provider_ref, spec, policy))
+        # FAR-1315: stand in for apply_sandbox_policy's classified install
+        # status — a flagged node's guard DID land here (the fake installs
+        # nothing but models a successful install), so the dispatch settle
+        # may treat a definitive receipt=False as "confirmed no create".
+        return self.install_status if policy.single_pr_per_run else None
 
 
 class _RefusingIsolationProvider(_RecordingIsolationProvider):
@@ -105,7 +115,7 @@ class _RefusingIsolationProvider(_RecordingIsolationProvider):
         provider_ref: str,
         spec: WorkspaceSpec,
         policy: IsolationPolicy,
-    ) -> None:
+    ) -> str | None:
         raise ProviderCapabilityUnsupportedError("Runtime provider 'Refusing' does not implement apply_isolation")
 
 
@@ -892,12 +902,13 @@ class _ClaimingIsolationProvider(_RecordingIsolationProvider):
         provider_ref: str,
         spec: WorkspaceSpec,
         policy: IsolationPolicy,
-    ) -> None:
-        await super().apply_isolation(provider_ref, spec, policy)
+    ) -> str | None:
+        status = await super().apply_isolation(provider_ref, spec, policy)
         if policy.single_pr_per_run and spec.run_id is not None:
             from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard
 
             acquire_run_pr_guard(str(spec.run_id), policy.guard_owner)
+        return status
 
 
 def _override_harvest_reply(dispatch: Any, reply: str) -> None:
@@ -919,35 +930,47 @@ async def _dispatch_flagged_e2b(
     chunks: list[tuple[str, str]],
     harvest_reply: str | None = None,
     ref: str = "sbx-flag-e2e",
+    output_json: str | None = None,
+    install_status: str | None = "installed",
 ) -> str:
     """Run the REAL flagged E2B dispatch and return this run's id.
 
-    The node FAILS (no output.json), exactly like the wiring tests — the
-    assertion surface is the ledger the ``finally`` settles.
+    By default the node FAILS (no output.json), exactly like the wiring tests
+    — the assertion surface is the ledger the ``finally`` settles. Passing
+    ``output_json`` makes the node SUCCEED with that output (an agent-authored
+    ``output.json``), which is the shape the ``pr_url`` spend arm sees.
     ``chunks`` is the agent's captured stdout/stderr; ``harvest_reply``
     overrides the receipt-harvest probe (``None`` = the fake's empty reply,
-    i.e. the harvest ran but yielded no token -> unavailable)."""
+    i.e. the harvest ran but yielded no token -> unavailable);
+    ``install_status`` is what apply_isolation reports for the guard install
+    (``"absent"`` models the shipped runner image with no ``gh``)."""
     from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
     reset_run_pr_guard_claims()
     monkeypatch.setenv("E2B_API_KEY", "test-key")
-    provider = _ClaimingIsolationProvider()
+    provider = _ClaimingIsolationProvider(install_status=install_status)
     _patch_isolation_builder(monkeypatch, provider)
     dispatch = install_fake_dispatch(
         monkeypatch,
         ref=ref,
         chunks=[ExecStreamChunk(stream=stream, data=data) for stream, data in chunks],
+        exit_code=0 if output_json is not None else 1,
     )
     if harvest_reply is not None:
         _override_harvest_reply(dispatch, harvest_reply)
     fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
     sandbox = await _completed_no_output_sandbox(ref)
+    if output_json is not None:
+        # output.json is read through the R2b file-I/O seam (the fake_file_io
+        # fixture), not the legacy SDK handle.
+        fake_file_io.files["/home/user/output.json"] = output_json.encode("utf-8")
     state = _run_state()
     run_id = str(uuid.uuid4())
     state["_run_id"] = run_id
+    expect_failure = nullcontext() if output_json is not None else pytest.raises(SandboxNodeFailedError)
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        pytest.raises(SandboxNodeFailedError),
+        expect_failure,
     ):
         await fn(state)
     return run_id
@@ -1040,3 +1063,151 @@ async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
         assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
     finally:
         reset_run_pr_guard_claims()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 re-gate: the three findings, proven at the REAL dispatch level
+# ---------------------------------------------------------------------------
+
+
+async def test_pr_url_never_outranks_a_definitive_receipt_false(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """RE-GATE MAJOR 2(a) — FALSE SPEND, end to end.
+
+    A node whose ``gh pr create`` FAILED still reports a URL-shaped ``pr_url``
+    in its agent-authored ``output.json``, and the same URL appears in the
+    captured stdout (so the corroboration arm is satisfied too). The LIVE
+    shim's receipt harvest nevertheless confirms NO create succeeded — that
+    definitive negative must WIN and release the hold.
+
+    Fail-without-fix: the pre-fix precedence evaluated ``pr_url`` BEFORE
+    ``claim_receipt is False``, so this exact dispatch marked the run SPENT and
+    every later flagged node was pre-planted — the run then delivers nothing."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    url = "https://github.com/org/repo/pull/42"
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", f"attempted create, reporting {url}\n")],
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        output_json=f'{{"summary":"done","pr_url":"{url}"}}',
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", (
+            "a definitive receipt=False from a LIVE install must release the hold, "
+            "never be outranked by an agent-authored pr_url"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_absent_install_leaves_the_receipt_meaningless_so_the_sentinel_still_spends(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    tmp_path,
+) -> None:
+    """RE-GATE MAJOR 2(b) — FALSE RELEASE, end to end.
+
+    The guard install reports ``absent`` (the shipped runner image's shape:
+    no ``gh`` on PATH), yet a claim sentinel is in the captured transcript.
+    The receipt probe runs against a path NO SHIM EVER WROTE — it answers
+    ABSENT exactly like a real "no receipt" probe, so read as definitive it
+    would suppress the sentinel arm and RELEASE a genuinely unguarded create.
+    With the install status threaded, the receipt is UNKNOWN and the sentinel
+    fallback still spends the run.
+
+    Fail-without-fix: the pre-fix settle read ``claim_receipt is False`` as
+    definitive regardless of install status, so this dispatch released the
+    hold (``acquired``) instead of spending it."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    shim_stdout = shim_created_pr_stdout(tmp_path)
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", shim_stdout)],
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        install_status="absent",
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent", (
+            "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+class _BlockingHarvestDispatch(FakeDispatchProvider):
+    """Dispatch fake whose RECEIPT-HARVEST probe blocks until cancelled.
+
+    Lets a test cancel the dispatch task while it sits inside the harvest —
+    the exact window the re-gate's MAJOR 1 cancellation finding is about."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.harvest_started = asyncio.Event()
+
+    async def exec_command(
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        cmd_timeout: int | None = None,
+    ) -> ExecResult:
+        if command and "MODULO_CLAIM_RECEIPT" in command[-1]:
+            self.harvest_started.set()
+            await asyncio.Event().wait()  # parks until the probe task is cancelled
+        return await super().exec_command(provider_ref, command, cmd_timeout=cmd_timeout)
+
+
+async def test_cancel_during_the_claim_harvest_still_tears_down(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """RE-GATE MAJOR 1 — teardown must be UNCONDITIONAL.
+
+    The harvest is the FIRST await in the dispatch ``finally`` and
+    ``asyncio.CancelledError`` is a BaseException the ``except Exception``
+    handlers do not catch. Before the fix a cancel landing in that window
+    unwound the ``finally`` BEFORE the sandbox destroy, the provider close and
+    the fenced dispatch-marker clear — a leaked sandbox, a stale dispatch
+    marker and a stranded ledger hold. After the fix the cancellation is
+    recorded, teardown runs, and the cancellation is re-raised at the end.
+
+    Fail-without-fix: with the old ``wait_for(shield(...))`` form this test
+    sees the CancelledError but ``dispatch.events`` never contains
+    ``destroy_by_ref``/``close`` and the marker-clear mock is never awaited."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = _BlockingHarvestDispatch(ref="sbx-cancel-harvest")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_dispatch_provider",
+        AsyncMock(return_value=dispatch),
+    )
+    clear_mock = AsyncMock()
+    monkeypatch.setattr(node_runner_module, "_sandbox_clear_dispatch_marker", clear_mock)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-cancel-harvest")
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        task = asyncio.ensure_future(fn(state))
+        await asyncio.wait_for(dispatch.harvest_started.wait(), timeout=10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert "destroy_by_ref" in dispatch.events, (
+        f"the sandbox must still be destroyed after a cancel during the harvest: {dispatch.events}"
+    )
+    assert "close" in dispatch.events, (
+        f"the dispatch provider must still be closed after a cancel during the harvest: {dispatch.events}"
+    )
+    assert clear_mock.await_count >= 1, (
+        "the fenced dispatch marker must still be cleared after a cancel during the harvest"
+    )
