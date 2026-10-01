@@ -52,9 +52,12 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await loginAsAdmin(page, env)
 
       // Run through the editor's real run dialog (saves the graph and
-      // triggers the run through POST /api/v1/runs).
+      // triggers the run through POST /api/v1/runs). The editor gates its
+      // toolbar on a catalog fetch, so wait on the staging readiness budget
+      // rather than the default 5 s expect budget (a staging @regression run
+      // flaked this assertion while the graph/catalog were still in flight).
       await page.goto(`/pipelines/${created.pipeline.id}/editor`)
-      await expect(page.getByTestId('pipeline-editor-run')).toBeEnabled()
+      await expect(page.getByTestId('pipeline-editor-run')).toBeEnabled({ timeout: 30_000 })
       await page.getByTestId('pipeline-editor-run').click()
       await page.getByTestId('pipeline-editor-run-prompt').fill('E2E journey run prompt')
       await page.getByTestId('pipeline-editor-run-submit').click()
