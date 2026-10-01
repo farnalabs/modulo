@@ -7,16 +7,32 @@
         <button
           type="button"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
+          data-testid="admin-error-detail-back"
           @click="goBack"
         >
-          <ArrowLeft class="mr-1 inline-block h-4 w-4" />
+          <ArrowLeft class="mr-1 inline-block h-4 w-4" aria-hidden="true" />
           {{ $t('views.AdminErrorDetailView.back') }}
         </button>
         <PageHeader :title="$t('views.AdminErrorDetailView.error_group_detail')" :subtitle="group ? shortId(group.fingerprint) : undefined" />
       </div>
     </header>
 
-    <LoadingSpinner v-if="loading" />
+    <div v-if="loading" class="space-y-4" role="status" :aria-label="$t('common.loading')" data-testid="admin-error-detail-loading">
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div v-for="n in 3" :key="'summary-' + n" class="card p-4">
+          <div class="h-3 w-20 animate-pulse rounded bg-muted" />
+          <div class="mt-2 h-5 w-16 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+      <div class="card p-4">
+        <div class="h-5 w-32 animate-pulse rounded bg-muted" />
+        <div class="mt-3 h-9 w-64 animate-pulse rounded bg-muted" />
+      </div>
+      <div class="card p-4">
+        <div class="h-5 w-48 animate-pulse rounded bg-muted" />
+        <div class="mt-2 h-16 w-full animate-pulse rounded bg-muted" />
+      </div>
+    </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDetail" />
     <template v-else-if="group">
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -56,6 +72,7 @@
             type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'acknowledged'"
+            data-testid="admin-error-detail-acknowledge"
             @click="updateStatus('acknowledged')"
           >
             {{ $t('views.AdminErrorDetailView.acknowledge') }}
@@ -64,6 +81,7 @@
             type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'resolved'"
+            data-testid="admin-error-detail-resolve"
             @click="updateStatus('resolved')"
           >
             {{ $t('views.AdminErrorDetailView.resolve') }}
@@ -72,6 +90,7 @@
             type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
             :disabled="group.status === 'archived'"
+            data-testid="admin-error-detail-archive"
             @click="updateStatus('archived')"
           >
             {{ $t('views.AdminErrorDetailView.archive') }}
@@ -84,6 +103,7 @@
   @update:model-value="updateAssignee"
   :placeholder="$t('views.AdminErrorDetailView.unassigned')"
   id="assignee-select"
+  data-testid="admin-error-detail-assignee"
   :options="users.map(user => ({ value: user.id, label: user.display_name || user.email }))"
   option-label="label"
   option-value="value"
@@ -103,20 +123,16 @@
         <div v-if="sampleEvent.stacktrace" class="mt-4">
           <button
             type="button"
-            class="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+            class="flex items-center gap-1 rounded text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="admin-error-detail-toggle-stacktrace"
+            :aria-expanded="showStacktrace"
             @click="showStacktrace = !showStacktrace"
           >
-            <svg
+            <ChevronRight
               class="h-4 w-4 transition-transform"
               :class="{ 'rotate-90': showStacktrace }"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="m9 18 6-6-6-6" />
-            </svg>
+              aria-hidden="true"
+            />
             {{ $t('views.AdminErrorDetailView.stacktrace') }}
           </button>
           <pre v-if="showStacktrace" class="mt-2 max-h-96 overflow-auto rounded-lg bg-muted p-3 text-xs leading-relaxed"><code>{{ sampleEvent.stacktrace }}</code></pre>
@@ -125,20 +141,16 @@
         <div v-if="sampleEvent.context_json && Object.keys(sampleEvent.context_json).length > 0" class="mt-4">
           <button
             type="button"
-            class="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+            class="flex items-center gap-1 rounded text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="admin-error-detail-toggle-context"
+            :aria-expanded="showContext"
             @click="showContext = !showContext"
           >
-            <svg
+            <ChevronRight
               class="h-4 w-4 transition-transform"
               :class="{ 'rotate-90': showContext }"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="m9 18 6-6-6-6" />
-            </svg>
+              aria-hidden="true"
+            />
             {{ $t('views.AdminErrorDetailView.context_json') }}
           </button>
           <JsonViewer v-if="showContext" :data="sampleEvent.context_json ?? null" :show-toolbar="true" :max-height="'16rem'" />
@@ -166,10 +178,14 @@
 
       <div class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.raw_events', { count: eventsTotal }) }}</h2>
-        <LoadingSpinner v-if="eventsLoading" />
-        <div v-else-if="events.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-          {{ $t('views.AdminErrorDetailView.no_raw_events_loaded') }}
+        <div v-if="eventsLoading" class="space-y-2 py-2" role="status" :aria-label="$t('common.loading')" data-testid="admin-error-detail-events-loading">
+          <div v-for="n in 3" :key="'event-skeleton-' + n" class="h-12 w-full animate-pulse rounded bg-muted" />
         </div>
+        <EmptyState
+          v-else-if="events.length === 0"
+          :title="$t('views.AdminErrorDetailView.no_raw_events_loaded')"
+          :description="$t('views.AdminErrorDetailView.no_raw_events_description')"
+        />
         <template v-else>
           <div class="divide-y">
             <div
@@ -198,6 +214,7 @@
                 type="button"
                 :disabled="eventsOffset <= 0"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-30"
+                data-testid="admin-error-detail-events-prev"
                 @click="loadEvents(eventsOffset - eventsLimit)"
               >
                 {{ $t('views.AdminErrorDetailView.previous') }}
@@ -206,6 +223,7 @@
                 type="button"
                 :disabled="eventsOffset + eventsLimit >= eventsTotal"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-30"
+                data-testid="admin-error-detail-events-next"
                 @click="loadEvents(eventsOffset + eventsLimit)"
               >
                 {{ $t('views.AdminErrorDetailView.next') }}
@@ -221,15 +239,15 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft } from '@lucide/vue'
+import { ArrowLeft, ChevronRight } from '@lucide/vue'
 import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail } from '../lib/api/errors'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
 import FeatureGate from '../components/FeatureGate.vue'
