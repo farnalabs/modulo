@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
@@ -26,11 +26,13 @@ import { api, getAccessToken } from '../lib/api/client'
 
 const featureGateStub = { template: '<div><slot /></div>' }
 // Pass-through stub so the creation form's slot always renders for testing.
+// The confirm button renders only while the dialog is open, mirroring the real
+// FormDialog, so a test can open one dialog and see exactly one confirm button.
 const formDialogStub = {
   name: 'FormDialog',
-  props: ['open', 'title', 'description', 'confirmText', 'loading'],
+  props: ['open', 'title', 'description', 'confirmText', 'loading', 'confirmDisabled'],
   emits: ['update:open', 'confirm'],
-  template: '<div><slot /></div>',
+  template: '<div><slot /><button v-if="open" class="formdialog-confirm" @click="$emit(\'confirm\')">{{ confirmText }}</button></div>',
 }
 const selectStub = { template: '<div><slot /></div>' }
 
@@ -281,5 +283,169 @@ describe('SettingsGuardrailsView', () => {
     await flush()
 
     expect(wrapper.find('[data-testid="settings-guardrails-form-disclosure"]').exists()).toBe(true)
+  })
+
+  it('shows the Import Config control for admins only', async () => {
+    const admin = mountView(fakeJwt('admin'))
+    await flush()
+    expect(admin.find('[data-testid="settings-guardrails-import"]').exists()).toBe(true)
+
+    const viewer = mountView(fakeJwt('viewer'))
+    await flush()
+    expect(viewer.find('[data-testid="settings-guardrails-import"]').exists()).toBe(false)
+  })
+
+  it('opens the import dialog and clears prior import state', async () => {
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    ;(wrapper.vm as any).importSuccess = 'stale'
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-guardrails-import-dialog"]').exists()).toBe(true)
+    expect((wrapper.vm as any).importOpen).toBe(true)
+    expect((wrapper.vm as any).importYaml).toBe('')
+    expect((wrapper.vm as any).importError).toBe(null)
+    expect((wrapper.vm as any).importSuccess).toBe(null)
+  })
+
+  it('does not POST when the import YAML is empty', async () => {
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).importYaml = '   '
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await flush()
+
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('imports a config YAML as the applied state and refreshes the guardrail list', async () => {
+    ;(api.POST as any).mockResolvedValue({
+      data: {
+        imported: true,
+        hash: 'abc123def',
+        applied_at: '2026-10-01T00:00:00Z',
+        status: 'clean',
+        diff: [{ action: 'add', id: 'g1' }, { action: 'remove', id: 'g2' }],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+    expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(1)
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).importYaml = 'guardrails:\n  - id: g1'
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await flush()
+    await flushPromises()
+
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/guardrails/config/import', {
+      body: { config_yaml: 'guardrails:\n  - id: g1' },
+    })
+    const success = wrapper.find('[data-testid="settings-guardrails-import-success"]')
+    expect(success.exists()).toBe(true)
+    expect(success.text()).toContain('abc123def')
+    // The list refresh after a successful import re-fetches /api/v1/evals.
+    expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(2)
+  })
+
+  it('surfaces an import API error in the dialog without refreshing the list', async () => {
+    ;(api.POST as any).mockResolvedValue({
+      data: undefined,
+      error: {
+        type: 'urn:problem:modulo:conflict',
+        title: 'Conflict',
+        status: 409,
+        detail: 'Cannot import guardrail config: id(s) collide with node-bound guardrails: g1',
+      },
+    })
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).importYaml = 'guardrails:\n  - id: g1'
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await flush()
+    await flushPromises()
+
+    const error = wrapper.find('[data-testid="settings-guardrails-import-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('collide')
+    expect(wrapper.find('[data-testid="settings-guardrails-import-success"]').exists()).toBe(false)
+    expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(1)
+  })
+
+  it('ignores a close request while an import is in flight', async () => {
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+
+    // A close request while a request is in flight must not dismiss the dialog.
+    ;(wrapper.vm as any).importing = true
+    ;(wrapper.vm as any).closeImportDialog(false)
+    expect((wrapper.vm as any).importOpen).toBe(true)
+
+    // An explicit open request is honoured even while importing.
+    ;(wrapper.vm as any).closeImportDialog(true)
+    expect((wrapper.vm as any).importOpen).toBe(true)
+
+    // Once the import settles, a close request dismisses the dialog.
+    ;(wrapper.vm as any).importing = false
+    ;(wrapper.vm as any).closeImportDialog(false)
+    expect((wrapper.vm as any).importOpen).toBe(false)
+  })
+
+  it('reports a zero-change import when the response omits diff and hash', async () => {
+    ;(api.POST as any).mockResolvedValue({
+      data: { imported: true, status: 'clean' },
+      error: undefined,
+    })
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).importYaml = 'guardrails: []'
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await flush()
+    await flushPromises()
+
+    const success = wrapper.find('[data-testid="settings-guardrails-import-success"]')
+    expect(success.exists()).toBe(true)
+    expect(success.text()).toContain('0 change(s)')
+  })
+
+  it('surfaces a thrown import failure without refreshing the list', async () => {
+    ;(api.POST as any).mockRejectedValue(new Error('network down'))
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+    expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(1)
+
+    await wrapper.find('[data-testid="settings-guardrails-import"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).importYaml = 'guardrails:\n  - id: g1'
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await flush()
+    await flushPromises()
+
+    const error = wrapper.find('[data-testid="settings-guardrails-import-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('network down')
+    expect((wrapper.vm as any).importing).toBe(false)
+    expect((api.GET as any).mock.calls.filter(([url]: string[]) => url === '/api/v1/evals').length).toBe(1)
   })
 })
