@@ -6821,6 +6821,11 @@ export interface paths {
          *     product state toggled via API/UI only — NEVER declarative / config-as-code
          *     (CO-3).
          *
+         *     The load-and-mutate runs under the same transaction-scoped advisory lock
+         *     as create-or-replace (FAR-967 F6) so a concurrent replace cannot
+         *     interleave with this read-modify-write.  A lock-acquisition timeout
+         *     (SQLSTATE 57014) → 503.
+         *
          *     An audit-log entry is emitted (best-effort, same path as create/update).
          */
         patch: operations["toggle_policy_gate_api_v1_evals__eval_id__policy_gate_toggle_patch"];
@@ -34957,6 +34962,13 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable — lock timeout */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
