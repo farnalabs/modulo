@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
-from modulo.db.crud.run import _input_hash, get_run
+from modulo.db.crud.run import POLICY_GATE_PIN_MISMATCH_MARKER, _input_hash, get_run
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -403,7 +403,9 @@ async def guardrail_override(
     resume). ``is_replay=True`` makes the re-dispatch detection-only.
 
     Raises:
-        GuardrailOverrideError — run is not a guardrail-blocked terminal run.
+        GuardrailOverrideError — run is not a guardrail-blocked terminal run,
+            or it was blocked by a policy-gate pin fingerprint mismatch
+            (FAR-967 F1: a mechanism failure no input can remediate).
         GuardrailOverrideRejectedError — supplied input still violates a guardrail.
         ConcurrentRecoveryError — another override won the race.
     """
@@ -426,6 +428,20 @@ async def guardrail_override(
     if run.status != "eval_failed" or run.error_code != "eval_blocked":
         raise GuardrailOverrideError(
             run_id, f"status={run.status!r} error_code={run.error_code!r} (expected eval_failed/eval_blocked)"
+        )
+
+    # FAR-967 F1: a pin-fingerprint mismatch is a MECHANISM failure (the
+    # snapshot's pinned gate set and its stored digest disagree), not a
+    # payload violation — no operator-supplied input can remediate it, so
+    # the re-run pass below would be meaningless. Refuse BEFORE touching the
+    # guardrail rows; the run stays terminal and the only remediation is a
+    # new run against a fresh snapshot. Matched by marker so a genuinely
+    # guardrail-blocked run (whose error_detail carries the guardrail block
+    # message) is unaffected.
+    if run.error_detail and POLICY_GATE_PIN_MISMATCH_MARKER in run.error_detail:
+        raise GuardrailOverrideError(
+            run_id,
+            f"{POLICY_GATE_PIN_MISMATCH_MARKER} — not overridable; create a new run",
         )
 
     # Re-run the guardrail pass on the operator-supplied input BEFORE flipping

@@ -2,9 +2,10 @@
 
 These tests exercise the REAL eval-def build the run uses
 (``PipelineExecutor._load_eval_defs_for_pipeline`` +
-``_build_eval_defs_by_node``), not the standalone ``_filter_disabled_policy_gates``
-helper — criterion 8's exclusion must be load-bearing on the run's own
-evaluation path:
+``_build_eval_defs_by_node``) — the ONE authoritative site for the operator
+control (F8 single-sourcing; the former duplicate filter helper at the
+run-start interception seam was removed). Criterion 8's exclusion must be
+load-bearing on the run's own evaluation path:
 
 * **C8** — a live ``PolicyGate`` with ``enabled = false`` is excluded from
   the evaluated set: ``failure_behaviour`` degrades to ``"warn"`` and
@@ -419,21 +420,15 @@ async def test_loader_passes_disabled_gate_rows_through_to_the_build() -> None:
 # ---------------------------------------------------------------------------
 # Threading: BOTH run paths must feed the snapshot's pins into the build
 # ---------------------------------------------------------------------------
-
-
-def test_execute_and_resume_thread_snapshot_pins_into_the_build() -> None:
-    """The pinned universe only governs if the run's own paths pass the
-    snapshot's ``policy_gate_pins_json`` into the build. Both entry points —
-    ``execute`` (fresh run / replay) and ``resume`` (HITL boundary) — must
-    do so; remove the argument at either call site and this fails.  (Spec
-    §5.4 interleaving 3: the operator re-check fires at the resume boundary
-    through the same seam.)"""
-    import inspect
-
-    execute_source = inspect.getsource(PipelineExecutor.execute)
-    resume_source = inspect.getsource(PipelineExecutor.resume)
-
-    assert "_build_eval_defs_by_node" in execute_source
-    assert "snapshot.policy_gate_pins_json" in execute_source
-    assert "_build_eval_defs_by_node" in resume_source
-    assert "snapshot.policy_gate_pins_json" in resume_source
+#
+# Replaced (FAR-967 F9) by the BEHAVIOURAL tests in
+# ``tests/unit/pipeline_engine/test_executor_eval_defs_freshness.py``:
+#   * ``test_execute_threads_snapshot_pins_into_the_build``
+#   * ``test_resume_threads_snapshot_pins_into_the_build``
+# which run execute()/resume() for real and assert the captured
+# ``_build_eval_defs_by_node`` arguments equal ``snapshot.policy_gate_pins_json``
+# (the old version here asserted inspect.getsource() text — a source-string
+# check that never exercised the call sites).
+#
+# The same file carries the FAR-967 F1 pin-integrity backstop tests
+# (execute/resume terminalize on fingerprint mismatch).

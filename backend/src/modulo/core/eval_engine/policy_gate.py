@@ -245,17 +245,25 @@ def validate_binding(
 
 
 def fingerprint_policy_gate_pins(
-    pins: Sequence[Mapping[str, Any]] | None,
+    pins: Sequence[Any] | None,
 ) -> str | None:
     """Deterministic fingerprint of a serialized policy-gate pin set.
 
-    Computed over the canonical JSON of the pin dicts (sorted so
-    re-serialization order never changes the digest).  A snapshot's
+    Computed over the canonical JSON of EVERY entry in the pin list (sorted
+    so re-serialization order never changes the digest).  A snapshot's
     ``policy_gate_pins_json`` is fingerprinted at snapshot creation; the
     run-start replay seam re-computes the fingerprint of the LOADED pins
     and compares — a mismatch means the pins were tampered with (or
     drifted) since creation and the replay fails closed as a mechanism
     error.
+
+    **Every entry is covered verbatim** — dict or not.  Filtering
+    non-dict entries out of the digest (the pre-FAR-967-F5 behaviour)
+    meant appending a junk entry to the pin list left the digest
+    unchanged, so corruption went undetected and the junk later crashed
+    per-entry consumers.  Entries are now digested as-is, so ANY
+    appended/removed/replaced element — including a non-dict — flips the
+    digest and fails closed at run start.
 
     **IMPORTANT — different empty-set semantics from the predecessor:**
 
@@ -263,7 +271,7 @@ def fingerprint_policy_gate_pins(
     - ``[]`` (empty list) → returns a **deterministic digest** (canonical
       ``[]`` JSON).  An empty pin set means "zero gates pinned" — a
       deliberate state, NOT indistinguishable from absent.
-    - Non-empty list → returns SHA-256 hex digest.
+    - Non-empty list → returns SHA-256 hex digest over all entries.
 
     An implementer MUST NOT call ``fingerprint_guardrail_pins()`` for
     Policy Gate pins — the semantics are wrong (the predecessor collapses
@@ -275,12 +283,14 @@ def fingerprint_policy_gate_pins(
     if not pins:
         canonical = "[]"
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    items = sorted(
-        json.dumps(pin, sort_keys=True, separators=(",", ":"), default=str) for pin in pins if isinstance(pin, Mapping)
-    )
-    if not items:
-        # All entries were non-dict — treat as empty set.
-        canonical = "[]"
+    if isinstance(pins, (str, bytes)) or not isinstance(pins, Sequence):
+        # Corrupt non-list top-level value: fail closed with a digest that
+        # can never equal a stored (list-computed) fingerprint, without
+        # raising out of the run-start seam.
+        canonical = "[<corrupt-policy-gate-pin-set>]"
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    # Cover every entry verbatim (dict, str, int, list — anything JSON-ish),
+    # so no element of the pin set is invisible to the integrity check.
+    items = sorted(json.dumps(pin, sort_keys=True, separators=(",", ":"), default=str) for pin in pins)
     canonical = "[" + ",".join(items) + "]"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

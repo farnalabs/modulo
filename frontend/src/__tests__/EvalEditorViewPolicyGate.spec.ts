@@ -16,6 +16,7 @@ vi.mock('../lib/api/client', () => ({
     GET: vi.fn(),
     POST: vi.fn(),
     PUT: vi.fn(),
+    PATCH: vi.fn(),
     DELETE: vi.fn(),
   },
 }))
@@ -28,9 +29,11 @@ import { getNavGroups } from '../config/navigation'
 const apiGET = api.GET as ReturnType<typeof vi.fn>
 const apiPOST = api.POST as ReturnType<typeof vi.fn>
 const apiPUT = api.PUT as ReturnType<typeof vi.fn>
+const apiPATCH = api.PATCH as ReturnType<typeof vi.fn>
 const apiDELETE = api.DELETE as ReturnType<typeof vi.fn>
 
 const GATE_URL = '/api/v1/evals/{eval_id}/policy-gate'
+const GATE_TOGGLE_URL = '/api/v1/evals/{eval_id}/policy-gate/toggle'
 const EVAL_PUT_URL = '/api/v1/evals/{eval_id}'
 const BACKEND_EVALS_ROUTE = join(
   __dirname, '..', '..', '..', 'backend', 'src', 'modulo', 'api', 'routes', 'evals.py',
@@ -100,6 +103,10 @@ function installRouter() {
     if (url === GATE_URL) return responders.gatePut
     return ok({})
   })
+  apiPATCH.mockImplementation(async (url: string) => {
+    if (url === GATE_TOGGLE_URL) return responders.gateToggle
+    return ok({})
+  })
   apiDELETE.mockImplementation(async (url: string) => {
     if (url === GATE_URL) return responders.gateDelete
     if (url === EVAL_PUT_URL) return responders.evalDelete
@@ -156,6 +163,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     responders.evalPut = ok({})
     responders.gatePost = ok({ id: 'gate-1', action: 'warn', version: 1 })
     responders.gatePut = ok({ id: 'gate-1', action: 'block', version: 2 })
+    responders.gateToggle = ok({ enabled: false, enabled_at: null, disabled_at: '2026-02-02T00:00:00Z' })
     responders.gateDelete = ok(null)
     responders.evalDelete = ok(null)
     installRouter()
@@ -1402,5 +1410,143 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
 
     expect(wrapper.text()).toContain('delete exploded')
+  })
+
+  // ---------------------------------------------------------------------------
+  // FAR-967 F9 — operator enable/disable toggle (CO-5)
+  // ---------------------------------------------------------------------------
+
+  async function openWithGate(gate: Record<string, unknown>): Promise<ViewWrapper> {
+    evalsList = [evalItem({ id: 'eval-1' })]
+    gateResponses['eval-1'] = ok(gate)
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-1')
+    expect(wrapper.find('[data-test-id="policy-gate-toggle"]').exists()).toBe(true)
+    return wrapper
+  }
+
+  function togglePatchCalls() {
+    return apiPATCH.mock.calls.filter((c) => c[0] === GATE_TOGGLE_URL)
+  }
+
+  it('disables a warn gate immediately via PATCH toggle (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'warn',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    responders.gateToggle = ok({ enabled: false, enabled_at: null, disabled_at: '2026-02-02T00:00:00Z' })
+
+    await toggle.trigger('click')
+    await flush()
+
+    const calls = togglePatchCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1].body).toEqual({ enabled: false })
+    expect(calls[0][1].params).toEqual({ path: { eval_id: 'eval-1' } })
+    // The switch reflects the SERVER-confirmed state from the response.
+    expect(toggle.attributes('aria-checked')).toBe('false')
+  })
+
+  it('enables a disabled gate immediately via PATCH toggle (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'warn',
+      version: 1,
+      enabled: false,
+      enabled_at: null,
+      disabled_at: '2026-01-01T00:00:00Z',
+    })
+    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    responders.gateToggle = ok({ enabled: true, enabled_at: '2026-02-02T00:00:00Z', disabled_at: null })
+
+    await toggle.trigger('click')
+    await flush()
+
+    const calls = togglePatchCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1].body).toEqual({ enabled: true })
+    expect(toggle.attributes('aria-checked')).toBe('true')
+  })
+
+  it('requires confirmation before disabling a BLOCK gate (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'block',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+
+    await toggle.trigger('click')
+    await nextTick()
+    // Confirmation dialog opens; nothing has been PATCHed yet.
+    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(true)
+    expect(togglePatchCalls()).toHaveLength(0)
+
+    responders.gateToggle = ok({ enabled: false, enabled_at: null, disabled_at: '2026-02-02T00:00:00Z' })
+    await wrapper.find('[data-test-id="policy-gate-confirm-toggle-disable"]').trigger('click')
+    await flush()
+
+    const calls = togglePatchCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1].body).toEqual({ enabled: false })
+    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
+    expect(toggle.attributes('aria-checked')).toBe('false')
+  })
+
+  it('cancelling the block-gate disable confirmation issues no PATCH (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'block',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+
+    await toggle.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test-id="policy-gate-cancel-toggle-disable"]').trigger('click')
+    await flush()
+
+    expect(togglePatchCalls()).toHaveLength(0)
+    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
+    expect(toggle.attributes('aria-checked')).toBe('true')
+  })
+
+  it('keeps the switch on when the toggle PATCH fails (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'warn',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    responders.gateToggle = fail(500, 'toggle exploded')
+
+    await toggle.trigger('click')
+    await flush()
+
+    expect(togglePatchCalls()).toHaveLength(1)
+    // State does NOT flip on failure, and the toggle-error message surfaces.
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.text()).toContain('Failed to toggle the policy gate')
   })
 })

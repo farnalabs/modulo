@@ -24,7 +24,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalType
+from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
 from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.db.crud.run import POLICY_GATE_PIN_MISMATCH_MARKER
 
 
 def _make_run(*, claim_token: str | None = "tok-claim-abc") -> MagicMock:
@@ -180,10 +182,13 @@ def _eval_row_with_gate(
     row = _eval_row(config, eval_id)
     # PolicyGate ORM shape: _build_eval_defs_by_node reads .action for
     # failure_behaviour and .id/.version/.node_id for the decision-record
-    # metadata (FAR-1102 chunk 4).
+    # metadata (FAR-1102 chunk 4).  ``enabled`` is required (FAR-967 F7):
+    # the executor reads it STRICTLY — a stand-in without the field is a
+    # fixture bug that must fail loudly, not silently evaluate as enabled.
     gate = SimpleNamespace(
         id=uuid.uuid4(),
         action="warn",
+        enabled=True,
         deleted_at=None,
         version=1,
         node_id=uuid.uuid4(),
@@ -390,3 +395,279 @@ async def test_load_eval_defs_excludes_soft_deleted():
     stmt = call_args[0][0]
     where_clause = str(stmt.whereclause)
     assert "deleted_at" in where_clause
+
+
+# ---------------------------------------------------------------------------
+# FAR-967 F1 + F9 — pin-integrity backstop and snapshot-pin threading
+# (behavioural; the old source-string assertion in
+# tests/unit/core/pipeline_engine/test_policy_gate_eval_wiring.py was
+# replaced by these)
+# ---------------------------------------------------------------------------
+
+
+def _pin_entry() -> dict[str, str]:
+    return {
+        "policy_gate_id": str(uuid.uuid4()),
+        "eval_id": str(uuid.uuid4()),
+        "action": "block",
+        "node_id": str(uuid.uuid4()),
+    }
+
+
+def _pinned_snapshot(snapshot: MagicMock, run: MagicMock, fingerprint_source: list[dict[str, str]]) -> MagicMock:
+    """Stamp pin columns onto a snapshot mock: content = one fresh pin, the
+    digest computed from *fingerprint_source* (mismatched when it differs)."""
+    pins = [_pin_entry()]
+    snapshot.policy_gate_pins_json = pins
+    snapshot.policy_gate_pins_fingerprint = fingerprint_policy_gate_pins(fingerprint_source)
+    snapshot.id = uuid.uuid4()
+    snapshot.pipeline_id = run.pipeline_id
+    snapshot.snapshot_version = 7
+    return snapshot
+
+
+async def test_execute_threads_snapshot_pins_into_the_build() -> None:
+    """F9 (behavioural): ``execute()`` must feed the SNAPSHOT's
+    ``policy_gate_pins_json`` into the eval-def build — remove the argument
+    at the call site and the build receives the default universe instead of
+    the pinned one. Proven by capturing the build's actual arguments, not by
+    reading the source."""
+    run = _make_run()
+    snapshot = _make_snapshot()
+    pins = [_pin_entry(), _pin_entry()]
+    snapshot.policy_gate_pins_json = pins
+    snapshot.policy_gate_pins_fingerprint = fingerprint_policy_gate_pins(pins)
+    snapshot.pipeline_id = run.pipeline_id
+    snapshot.snapshot_version = 1
+
+    session, _reset = _make_session(snapshot, result_order="execute")
+    factory = _make_session_factory(session)
+    row1 = _eval_row_with_gate({"pattern": "v1"})
+
+    captured_pins: list[Any] = []
+
+    def _capture_build(_rows: Any, _org_id: Any, _pipeline_id: Any, snap_pins: Any = None) -> dict[str, Any]:
+        captured_pins.append(snap_pins)
+        return {}
+
+    org_id = uuid.uuid4()
+    update_mock = AsyncMock()
+    load_defs = AsyncMock(return_value=[row1])
+    capacity = AsyncMock(return_value=MagicMock(status="pending"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
+        patch.object(PipelineExecutor, "_build_eval_defs_by_node", MagicMock(side_effect=_capture_build)),
+        patch.object(PipelineExecutor, "_check_capacity", capacity),
+        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(run_id=run.id, org_id=org_id, input_payload={}, claim_token="tok-claim-abc")
+
+    assert captured_pins == [pins], "execute() must thread snapshot.policy_gate_pins_json into the build"
+    assert load_defs.await_count == 1
+    # Reached the capacity gate (mocked to defer) — i.e. the run got PAST the
+    # pin check (matching fingerprint) and the build, and was never
+    # terminalized.
+    assert result.status == "pending"
+    assert update_mock.await_count == 0
+
+
+async def test_execute_terminalizes_on_pin_fingerprint_mismatch() -> None:
+    """F1 load-bearing: a snapshot whose pin digest disagrees with its pin
+    content fails CLOSED in ``execute()`` — the run terminalizes
+    ``eval_failed`` / ``eval_blocked`` (marker in ``error_detail``) and
+    returns BEFORE the eval-def build or the capacity admission ever run.
+    Remove the executor-side re-verify and this test fails: the run would
+    proceed on tampered pins."""
+    run = _make_run()
+    snapshot = _pinned_snapshot(_make_snapshot(), run, [_pin_entry()])  # stored digest ≠ content digest
+
+    session, _reset = _make_session(snapshot, result_order="execute")
+    factory = _make_session_factory(session)
+    terminal_run = MagicMock()
+    terminal_run.status = "eval_failed"
+
+    org_id = uuid.uuid4()
+    update_mock = AsyncMock()
+    load_defs = AsyncMock()
+    capacity = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", AsyncMock(side_effect=[run, terminal_run])),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
+        patch.object(PipelineExecutor, "_check_capacity", capacity),
+        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(run_id=run.id, org_id=org_id, input_payload={}, claim_token="tok-claim-abc")
+
+    assert result is terminal_run, "a pin mismatch must return the terminalized run"
+    assert update_mock.await_count == 1
+    call = update_mock.await_args
+    assert call.args[2] == "eval_failed"
+    assert call.kwargs["error_code"] == "eval_blocked"
+    assert POLICY_GATE_PIN_MISMATCH_MARKER in call.kwargs["error_detail"]
+    assert call.kwargs["claim_token"] == "tok-claim-abc"
+    assert load_defs.await_count == 0, "the eval-def build must never run on a mismatch"
+    assert capacity.await_count == 0, "the run must terminalize before capacity admission"
+
+
+async def test_execute_proceeds_when_pin_fingerprint_matches() -> None:
+    """Discriminating sibling: a VERIFIED pin set (digest == content) does
+    not terminalize — the run proceeds to the eval-def build and the
+    capacity gate. Together with the mismatch test this proves the check
+    discriminates rather than blanket-refusing pinned snapshots."""
+    run = _make_run()
+    snapshot = _make_snapshot()
+    pins = [_pin_entry(), _pin_entry()]
+    snapshot.policy_gate_pins_json = pins
+    snapshot.policy_gate_pins_fingerprint = fingerprint_policy_gate_pins(pins)
+    snapshot.pipeline_id = run.pipeline_id
+    snapshot.snapshot_version = 2
+
+    session, _reset = _make_session(snapshot, result_order="execute")
+    factory = _make_session_factory(session)
+    row1 = _eval_row_with_gate({"pattern": "v1"})
+
+    org_id = uuid.uuid4()
+    update_mock = AsyncMock()
+    load_defs = AsyncMock(return_value=[row1])
+    capacity = AsyncMock(return_value=MagicMock(status="pending"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
+        patch.object(PipelineExecutor, "_check_capacity", capacity),
+        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(run_id=run.id, org_id=org_id, input_payload={}, claim_token="tok-claim-abc")
+
+    assert load_defs.await_count == 1, "a verified pin set must proceed to the eval-def build"
+    assert result.status == "pending"
+    assert update_mock.await_count == 0
+
+
+async def test_resume_terminalizes_on_pin_fingerprint_mismatch() -> None:
+    """F1 on the RESUME path: a HITL resume re-verifies the snapshot's pin
+    digest inside the resume transaction and terminalizes on mismatch BEFORE
+    the eval-def build — a tampered pin set must never reach the resume's
+    evaluation either."""
+    run = _make_run()
+    snapshot = _pinned_snapshot(_make_snapshot(), run, [_pin_entry()])  # stored digest ≠ content digest
+
+    session, _reset = _make_session(snapshot, result_order="resume")
+    factory = _make_session_factory(session)
+    terminal_run = MagicMock()
+    terminal_run.status = "eval_failed"
+
+    org_id = uuid.uuid4()
+    update_mock = AsyncMock()
+    load_defs = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", AsyncMock(side_effect=[run, terminal_run])),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
+        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+    ):
+        executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="postgresql://fake-checkpointer")
+        result = await executor.resume(
+            run_id=run.id,
+            org_id=org_id,
+            resume_data={"action": "approved"},
+            claim_token="tok",
+            check_sandbox_capacity=False,
+        )
+
+    assert result is terminal_run, "a pin mismatch must return the terminalized run from resume()"
+    eval_failed_calls = [c for c in update_mock.await_args_list if len(c.args) >= 3 and c.args[2] == "eval_failed"]
+    assert len(eval_failed_calls) == 1
+    call = eval_failed_calls[0]
+    assert call.kwargs["error_code"] == "eval_blocked"
+    assert POLICY_GATE_PIN_MISMATCH_MARKER in call.kwargs["error_detail"]
+    assert call.kwargs["claim_token"] == "tok"
+    assert load_defs.await_count == 0, "the eval-def build must never run on a mismatch"
+
+
+async def test_resume_threads_snapshot_pins_into_the_build() -> None:
+    """F9 (behavioural, resume half): ``resume()`` must feed the SNAPSHOT's
+    ``policy_gate_pins_json`` into the eval-def build — the operator re-check
+    at the HITL boundary only fires if the pins actually arrive."""
+    run = _make_run()
+    snapshot = _make_snapshot()
+    pins = [_pin_entry(), _pin_entry()]
+    snapshot.policy_gate_pins_json = pins
+    snapshot.policy_gate_pins_fingerprint = fingerprint_policy_gate_pins(pins)
+    snapshot.pipeline_id = run.pipeline_id
+    snapshot.snapshot_version = 1
+
+    session, _reset = _make_session(snapshot, result_order="resume")
+    factory = _make_session_factory(session)
+    row1 = _eval_row_with_gate({"pattern": "v1"})
+
+    captured_pins: list[Any] = []
+
+    def _capture_build(_rows: Any, _org_id: Any, _pipeline_id: Any, snap_pins: Any = None) -> dict[str, Any]:
+        captured_pins.append(snap_pins)
+        return {}
+
+    def _spy_get_or_compile(pipeline_id, snapshot_id, compile_factory, **kwargs):
+        return compile_factory()
+
+    def _capture_build_graph(graph_json, **kwargs):
+        return _mock_compiled_empty_stream()
+
+    @asynccontextmanager
+    async def _fake_checkpointer_scope(_conn_string: str, **_kwargs: Any):
+        yield MagicMock()
+
+    org_id = uuid.uuid4()
+    update_mock = AsyncMock()
+    load_defs = AsyncMock(return_value=[row1])
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", _fake_checkpointer_scope),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
+        patch("modulo.core.pipeline_engine.executor.build_graph_from_json", side_effect=_capture_build_graph),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_enforce_resume_sandbox_capacity", AsyncMock()),
+        patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
+        patch.object(PipelineExecutor, "_build_eval_defs_by_node", MagicMock(side_effect=_capture_build)),
+        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+    ):
+        executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="postgresql://fake-checkpointer")
+        await executor.resume(run_id=run.id, org_id=org_id, resume_data={"action": "approved"}, claim_token="tok")
+
+    assert captured_pins == [pins], "resume() must thread snapshot.policy_gate_pins_json into the build"
+    assert load_defs.await_count == 1
+    eval_failed_calls = [c for c in update_mock.await_args_list if len(c.args) >= 3 and c.args[2] == "eval_failed"]
+    assert not eval_failed_calls, "a verified pin set must never terminalize on resume"

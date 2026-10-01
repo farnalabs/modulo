@@ -72,7 +72,16 @@ _VALIDATE_ENABLED_CHECK = (
 
 def upgrade() -> None:
     # ── policy_gates: operator safety control (§4.3) ──────────────────────
-    # 1. Add columns (existence-gated for idempotency).
+    # 1. Add columns (existence-gated for idempotency). ``enabled_at`` gets a
+    #    server-side ``DEFAULT now()`` so a ROLLING deploy is safe: OLD
+    #    containers still INSERT policy_gates rows through the pre-0272 model,
+    #    which omits ``enabled_at`` entirely. Without the server default that
+    #    insert lands NULL and ck_policy_gates_enabled_timestamps rejects it
+    #    (gate create/replace 500s until the rollout completes). NOTE: the
+    #    default is attached AFTER the backfill below — ADD COLUMN with an
+    #    inline DEFAULT fills existing rows with the ALTER-time stamp, which
+    #    would defeat the created_at backfill; ALTER COLUMN SET DEFAULT only
+    #    affects future inserts, preserving both guarantees.
     op.execute(sa.text("ALTER TABLE policy_gates ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true"))
     op.execute(sa.text("ALTER TABLE policy_gates ADD COLUMN IF NOT EXISTS enabled_at TIMESTAMPTZ"))
     op.execute(sa.text("ALTER TABLE policy_gates ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ"))
@@ -81,7 +90,12 @@ def upgrade() -> None:
     #    enabled_at = created_at to satisfy the CHECK constraint.
     op.execute(sa.text("UPDATE policy_gates SET enabled_at = created_at WHERE enabled_at IS NULL"))
 
-    # 3. CHECK constraint — Postgres: NOT VALID + VALIDATE; SQLite: batch.
+    # 3. Rolling-deploy safety: future inserts (incl. OLD containers that
+    #    omit enabled_at) default to now(), satisfying the symmetric CHECK.
+    if _is_postgres():
+        op.execute(sa.text("ALTER TABLE policy_gates ALTER COLUMN enabled_at SET DEFAULT now()"))
+
+    # 4. CHECK constraint — Postgres: NOT VALID + VALIDATE; SQLite: batch.
     if _is_postgres():
         op.execute(sa.text(_ADD_ENABLED_CHECK_NOT_VALID))
         op.execute(sa.text(_VALIDATE_ENABLED_CHECK))

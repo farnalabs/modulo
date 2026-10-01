@@ -2,11 +2,14 @@
 
 Covers the acceptance criteria that do not need a live Postgres:
 
-* §3.3 fingerprint determinism (C2, C7, C7a)
+* §3.3 fingerprint determinism (C2, C7, C7a) + corrupt-set coverage (F5)
 * §3.4 run-start verification three-case table (C4 shape, C5, C6, C15)
-* §5 operator-control disabled-gate filtering (C8, C9, C10)
+* §5 operator control — SINGLE-SOURCED at the executor build (F8): the
+  run-start interception seam performs NO disabled-gate filtering; C8/C9
+  behaviour lives in ``test_policy_gate_eval_wiring.py``
+* F1 pin-mismatch override refusal (``guardrail_override``)
 * §3.1/3.2 pin construction + snapshot persistence wiring (C1, C3, C14)
-* schema-contract assertions (C11, C12, model-DDL level)
+* schema-contract assertions (C11, C12, model-DDL level; F4 server default)
 
 Migration round-trip + live-DB CHECK behaviour (C13) live in
 ``backend/tests/integration/test_policy_gate_pin_migration.py``.
@@ -27,7 +30,7 @@ from modulo.db.crud.pipeline_snapshot import (
     _load_policy_gate_rows_for_pipeline,
 )
 from modulo.db.crud.run import (
-    _filter_disabled_policy_gates,
+    POLICY_GATE_PIN_MISMATCH_MARKER,
     _stamp_guardrail_blocked_run,
     _verify_policy_gate_pin_fingerprint,
 )
@@ -189,6 +192,38 @@ def test_fingerprint_changes_when_pin_content_changes() -> None:
     assert fingerprint_policy_gate_pins(drifted) != base
 
 
+def test_fingerprint_covers_non_dict_entries_verbatim() -> None:
+    """F5 load-bearing: EVERY list element enters the digest — dict or not.
+    The pre-F5 behaviour filtered non-dict entries out, so appending a junk
+    element left the digest unchanged (corruption invisible at run start)
+    and the junk later crashed per-entry consumers."""
+    pins = _pins(2)
+    base = fingerprint_policy_gate_pins(pins)
+    assert fingerprint_policy_gate_pins([*pins, "junk-entry"]) != base
+    assert fingerprint_policy_gate_pins([*pins, 42]) != base
+    assert fingerprint_policy_gate_pins([*pins, {"not": "a pin"}]) != base
+    # A pin REPLACED by junk also flips the digest (nothing is invisible).
+    replaced = [*pins[:1], "junk-entry", pins[1]]
+    assert fingerprint_policy_gate_pins(replaced) != base
+
+
+def test_fingerprint_corrupt_top_level_value_fails_closed_deterministically() -> None:
+    """F5: a corrupt top-level pin value (string / dict instead of a list)
+    yields a deterministic sentinel digest that can never equal a
+    list-computed stored fingerprint — fail closed, never raise out of the
+    run-start seam."""
+    sentinel = fingerprint_policy_gate_pins("not-a-list")  # type: ignore[arg-type]
+    assert sentinel is not None
+    # Deterministic: the same corrupt input always digests the same way.
+    assert sentinel == fingerprint_policy_gate_pins("not-a-list")  # type: ignore[arg-type]
+    assert sentinel == fingerprint_policy_gate_pins({"corrupt": True})  # type: ignore[arg-type]
+    # But never equal to any list-computed digest.
+    assert sentinel != fingerprint_policy_gate_pins(_pins(2))
+    assert sentinel != fingerprint_policy_gate_pins([])
+    # None still means "absent" (legacy), never the corrupt sentinel.
+    assert fingerprint_policy_gate_pins(None) is None
+
+
 # ---------------------------------------------------------------------------
 # §3.4 — _verify_policy_gate_pin_fingerprint three-case table
 # (C4 shape, C5, C6, C7a, C15)
@@ -342,107 +377,171 @@ def test_stamp_guardrail_blocked_run_marks_terminal_eval_failed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §5 — operator control: disabled-gate filtering (C8/C9/C10 function level)
+# F1 — guardrail_override refuses pin-mismatch runs (mechanism failure)
 # ---------------------------------------------------------------------------
 
 
-def test_filter_excludes_disabled_live_gates() -> None:
-    """C9: a DISABLED live row overrides the pin — the gate is excluded from
-    the evaluated set even though the pin still names it. The pin set itself
-    is never mutated (immutable membership)."""
-    disabled_pin = _gate_pin()
-    enabled_pin = _gate_pin()
-    pins = [disabled_pin, enabled_pin]
-    enabled_map = {enabled_pin["policy_gate_id"]: True, disabled_pin["policy_gate_id"]: False}
-    filtered = _filter_disabled_policy_gates(pins, enabled_map)
-    assert filtered == [enabled_pin]
-    assert pins == [disabled_pin, enabled_pin]
+def _override_run(*, error_detail: str) -> MagicMock:
+    run = MagicMock()
+    run.id = uuid.uuid4()
+    run.pipeline_id = uuid.uuid4()
+    run.status = "eval_failed"
+    run.error_code = "eval_blocked"
+    run.error_detail = error_detail
+    return run
 
 
-def test_filter_treats_soft_deleted_gate_as_disabled() -> None:
-    """A gate soft-deleted since snapshot creation is absent from the live
-    map → treated as DISABLED (excluded), never silently evaluated."""
-    gone_pin = _gate_pin()
-    live_pin = _gate_pin()
-    filtered = _filter_disabled_policy_gates(
-        [gone_pin, live_pin],
-        {live_pin["policy_gate_id"]: True},
-    )
-    assert filtered == [live_pin]
-
-
-def test_filter_never_adds_gates() -> None:
-    """C8 symmetry: extra ENABLED rows in the live map must not smuggle new
-    gates INTO the pinned evaluation set — the filter can only REMOVE."""
-    pins = _pins(1)
-    filtered = _filter_disabled_policy_gates(
-        pins,
-        {pins[0]["policy_gate_id"]: True, "ghost-gate": True, "ghost-2": True},
-    )
-    assert filtered == pins
-
-
-def test_filter_all_disabled_and_empty_inputs_yield_empty() -> None:
-    pins = _pins(2)
-    all_disabled = {p["policy_gate_id"]: False for p in pins}
-    assert not _filter_disabled_policy_gates(pins, all_disabled)
-    assert not _filter_disabled_policy_gates([], {})
-    assert not _filter_disabled_policy_gates(None, {})
-
-
-def test_filter_treats_unresolvable_pin_as_disabled() -> None:
-    """A pin whose live row cannot be resolved is treated as DISABLED — the
-    operator layer fails closed on missing data."""
-    pin = _gate_pin()
-    assert not _filter_disabled_policy_gates([pin], {})
-
-
-# ---------------------------------------------------------------------------
-# C8 / C4 call-site wiring — _intercept_guardrails
-# ---------------------------------------------------------------------------
+def _override_session(run: MagicMock) -> AsyncMock:
+    """Scripted session for ``guardrail_override``'s reads: get_run, the
+    Pipeline FOR UPDATE lock, get_run again."""
+    session = AsyncMock(spec=AsyncSession)
+    run_result = _scalar_result(run)
+    session.execute = AsyncMock(side_effect=[run_result, MagicMock(), run_result])
+    return session
 
 
 @pytest.mark.asyncio
-async def test_intercept_runs_operator_control_on_pinned_replay(
+async def test_guardrail_override_refuses_pin_mismatch_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F1(b) load-bearing: a run blocked by a pin fingerprint mismatch is a
+    MECHANISM failure — no operator-supplied input can remediate it, so the
+    override refuses (base ``GuardrailOverrideError`` → 409) BEFORE the
+    guardrail re-run pass is even attempted."""
+    from modulo.core.pipeline_engine.recovery import (
+        GuardrailOverrideError,
+        guardrail_override,
+    )
+
+    mismatch_detail = (
+        f"policy gate mechanism error: {POLICY_GATE_PIN_MISMATCH_MARKER} (… remediation: create a new run)"
+    )
+    run = _override_run(error_detail=mismatch_detail)
+    session = _override_session(run)
+    load_rows = AsyncMock(return_value=[])
+    monkeypatch.setattr("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", load_rows)
+
+    with pytest.raises(GuardrailOverrideError) as exc_info:
+        await guardrail_override(
+            session,
+            org_id=uuid.uuid4(),
+            run_id=run.id,
+            input_data={"input": "fixed"},
+        )
+
+    assert type(exc_info.value) is GuardrailOverrideError, "the refusal must be the base error (route maps it to 409)"
+    assert "not overridable" in str(exc_info.value)
+    assert POLICY_GATE_PIN_MISMATCH_MARKER in str(exc_info.value)
+    assert exc_info.value.run_id == run.id
+    # Refused BEFORE the guardrail pass — no rows were even loaded.
+    assert load_rows.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_guardrail_override_still_runs_for_plain_guardrail_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discriminating sibling: a genuinely guardrail-blocked run (error_detail
+    carries the guardrail block message, NOT the pin marker) passes the
+    refusal check and reaches the re-run pass — proven by landing on the
+    re-block error (``GuardrailOverrideRejectedError``) instead of the
+    refusal."""
+    from modulo.core.pipeline_engine.recovery import (
+        GuardrailOverrideError,
+        GuardrailOverrideRejectedError,
+        guardrail_override,
+    )
+
+    run = _override_run(error_detail="Guardrail 'PII pattern' blocked the input")
+    session = _override_session(run)
+    load_rows = AsyncMock(return_value=[])
+    monkeypatch.setattr("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", load_rows)
+    re_run_pass = AsyncMock(
+        return_value=MagicMock(
+            blocked=True,
+            blocking_eval_name="PII pattern",
+            block_message="still matches",
+            payload={},
+        )
+    )
+    monkeypatch.setattr("modulo.core.guardrails.run_interception_pass_async", re_run_pass)
+
+    with pytest.raises(GuardrailOverrideRejectedError) as exc_info:
+        await guardrail_override(
+            session,
+            org_id=uuid.uuid4(),
+            run_id=run.id,
+            input_data={"input": "still bad"},
+        )
+
+    assert "still violates guardrail" in str(exc_info.value)
+    # The refusal did NOT fire: the guardrail rows were loaded and the
+    # re-run pass executed against the supplied input.
+    assert load_rows.await_count == 1
+    assert re_run_pass.await_count == 1
+    # It is the re-block error (subclass), never the plain refusal — the
+    # route maps these to different status codes (422 vs 409).
+    assert type(exc_info.value) is not GuardrailOverrideError
+
+
+# ---------------------------------------------------------------------------
+# §5 — operator control SINGLE-SOURCED at the executor build (F8)
+# ---------------------------------------------------------------------------
+
+
+def test_operator_control_has_one_implementation_in_the_executor_build() -> None:
+    """F8 load-bearing: disabled-gate exclusion exists in exactly ONE place —
+    the executor's per-gate eval-def build (``eval_defs.gate_disabled_excluded``,
+    exercised in ``test_policy_gate_eval_wiring.py`` C8/C9). The former
+    duplicate filter copy at the run-start interception seam was removed;
+    re-adding a second filter here would reintroduce the drift risk this
+    single-sourcing exists to prevent."""
+    import inspect
+
+    import modulo.db.crud.run as run_crud
+
+    source = inspect.getsource(run_crud)
+    assert "_filter_disabled_policy_gates" not in source
+    assert "_load_live_policy_gate_enabled_map" not in source
+    # The seam's docstring/comment points at the authoritative site instead
+    # of implementing its own copy.
+    assert "gate_disabled_excluded" in source
+
+
+@pytest.mark.asyncio
+async def test_intercept_does_not_apply_operator_control_itself(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """C8 load-bearing: on a pinned replay the run-start path loads the live
-    enabled map and applies the disabled filter. Remove the filter (or its
-    call site) and the ``operator_control_filtered`` audit event vanishes —
-    this test fails."""
+    """Behavioural half of F8: a pinned run whose snapshot pins verify
+    cleanly passes through the interception seam with EXACTLY ONE query (the
+    pin read) and NO ``operator_control_filtered`` audit — the seam must not
+    load an enabled map or filter pins. Coverage of the exclusion itself
+    lives at the executor build (wiring C8/C9)."""
     import logging
 
     from modulo.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request()
-    p1, p2 = _pins(2)
-    disabled = _gate_pin()
-    pins = [p1, p2, disabled]
-    second_gate = _gate_pin()
-    enabled_map = [
-        (p1["policy_gate_id"], True),
-        (p2["policy_gate_id"], True),
-        (disabled["policy_gate_id"], False),
-        (second_gate["policy_gate_id"], True),
-    ]
+    pins = _pins(2)
+    matching_fp = fingerprint_policy_gate_pins(pins)
 
     session = AsyncMock(spec=AsyncSession)
-    session.execute = AsyncMock(side_effect=[_row_result((pins, None, None)), _row_result(enabled_map)])
+    session.execute = AsyncMock(side_effect=[_row_result((pins, matching_fp, 3))])
 
     with caplog.at_level(logging.INFO, logger="modulo.db.crud.run"):
         interception = await _intercept_guardrails(session, request)
 
     assert not interception.blocked
-    assert session.execute.await_count == 2
-    filtered_records = [r for r in caplog.records if r.getMessage() == "policy_gates.operator_control_filtered"]
-    assert filtered_records
-    extras = filtered_records[-1].__dict__
-    assert extras["before"] == 3
-    assert extras["after"] == 2
-    assert extras["run_id"] == str(request.run_id)
-    assert extras["org_id"] == str(request.org_id)
+    assert not interception.block_message
+    assert session.execute.await_count == 1, "the seam performs only the pin read — no enabled-map query"
+    assert not [r for r in caplog.records if r.getMessage() == "policy_gates.operator_control_filtered"]
+
+
+# ---------------------------------------------------------------------------
+# C8 / C4 call-site wiring — _intercept_guardrails
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -471,7 +570,7 @@ async def test_intercept_fingerprint_block_short_circuits_operator_control(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """C4 wiring: a fingerprint mismatch blocks IMMEDIATELY at run start —
-    the operator control (the live enabled-map query) must not even run."""
+    nothing else is read past the failed pin verification."""
     from modulo.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
@@ -486,7 +585,7 @@ async def test_intercept_fingerprint_block_short_circuits_operator_control(
 
     assert interception.blocked
     assert "fingerprint mismatch" in interception.block_message
-    assert session.execute.await_count == 1, "enabled-map query must not run past a fingerprint block"
+    assert session.execute.await_count == 1, "no further reads must happen past a fingerprint block"
 
 
 # ---------------------------------------------------------------------------
@@ -551,25 +650,25 @@ async def test_intercept_non_replay_matching_fingerprint_proceeds(
 ) -> None:
     """C5's run-start sibling: verification at run start must NOT be an
     always-block — a non-replay run whose pins MATCH its fingerprint
-    proceeds (and the operator-control audit still runs).  Together with the
-    mismatch test above this proves the check is discriminating, not a
-    blanket refusal (the always-block guard)."""
+    proceeds through the seam (with exactly the pin read — F8: no
+    operator-control query lives here).  Together with the mismatch test
+    above this proves the check is discriminating, not a blanket refusal
+    (the always-block guard)."""
     from modulo.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
     request = _interception_request(is_replay=False)
     pins = _pins(2)
     matching_fp = fingerprint_policy_gate_pins(pins)
-    enabled_map = [(p["policy_gate_id"], True) for p in pins]
 
     session = AsyncMock(spec=AsyncSession)
-    session.execute = AsyncMock(side_effect=[_row_result((pins, matching_fp, 3)), _row_result(enabled_map)])
+    session.execute = AsyncMock(side_effect=[_row_result((pins, matching_fp, 3))])
 
     interception = await _intercept_guardrails(session, request)
 
     assert not interception.blocked
     assert not interception.block_message
-    assert session.execute.await_count == 2
+    assert session.execute.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -577,8 +676,8 @@ async def test_intercept_non_replay_legacy_snapshot_falls_back_to_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """C6 at run start: a legacy snapshot (no pins, no fingerprint) on a
-    NON-replay run falls back to the live gates — no block, no operator
-    audit (nothing to filter), and no spurious case-(ii) verification."""
+    NON-replay run falls back to the live gates — no block, and no spurious
+    case-(ii) verification (exactly one query: the pin read)."""
     from modulo.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
@@ -616,10 +715,14 @@ def test_build_policy_gate_pins_serialises_entry_fields() -> None:
     ]
 
 
-def test_build_policy_gate_pins_none_when_no_rows() -> None:
-    """Zero live gates → pins are ABSENT (``None``), preserving the legacy
-    fallback semantics — this is what keeps the C6 fallback possible."""
-    assert _build_policy_gate_pins([]) is None
+def test_build_policy_gate_pins_empty_list_when_no_rows() -> None:
+    """F3: zero live gates → an EMPTY pin set (``[]``), never ``None``.
+    Empty ≠ absent (§3.3): a snapshot with ``[]`` + its digest pins "zero
+    gates" deliberately, so a gate disabled at snapshot time and re-enabled
+    mid-run stays outside the evaluation universe (§5.4 interleavings 1/3)
+    instead of falling back to live gates."""
+    pins = _build_policy_gate_pins([])
+    assert pins == []
 
 
 @pytest.mark.asyncio
@@ -719,10 +822,11 @@ async def test_creation_writes_policy_gate_pins_and_fingerprint_to_snapshot() ->
 
 
 @pytest.mark.asyncio
-async def test_creation_zero_gates_leave_pins_absent_not_empty() -> None:
-    """C7 creation-side: a pipeline with no live gates snapshots with pins
-    ``None`` AND fingerprint ``None`` — absent (legacy fallback), NOT the
-    empty-set state (empty ≠ absent, §3.3)."""
+async def test_creation_zero_gates_store_empty_pin_set_with_digest() -> None:
+    """F3 creation-side: a pipeline with no live gates snapshots with pins
+    ``[]`` AND a fingerprint (the deterministic empty-set digest) — the
+    deliberate "zero gates pinned" state, NOT ``None`` (which is reserved
+    for genuinely pre-mechanism snapshots)."""
     from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
     pipeline, edge = _simple_pipeline_and_edge()
@@ -732,8 +836,9 @@ async def test_creation_zero_gates_leave_pins_absent_not_empty() -> None:
     )
 
     assert snapshot is not None
-    assert snapshot.policy_gate_pins_json is None
-    assert snapshot.policy_gate_pins_fingerprint is None
+    stored_pins = snapshot.policy_gate_pins_json
+    assert stored_pins == []
+    assert snapshot.policy_gate_pins_fingerprint == fingerprint_policy_gate_pins([])
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +870,59 @@ def test_schema_policy_gate_enabled_columns_contract() -> None:
         for nullable_audit_column in ("enabled_at", "disabled_at"):
             assert nullable_audit_column in columns
             assert columns[nullable_audit_column]["nullable"]
+    finally:
+        engine.dispose()
+
+
+def test_enabled_at_server_default_renders_portably() -> None:
+    """F4: ``enabled_at`` carries a SERVER default so a raw SQL insert that
+    omits the column (an OLD container during a rolling deploy, whose
+    pre-0272 model knows no such column) still satisfies
+    ck_policy_gates_enabled_timestamps. The default must be ``func.now()`` —
+    it renders ``CURRENT_TIMESTAMP`` on SQLite and ``now()`` on Postgres.
+    ``text("now()")`` instead would render ``DEFAULT (now())``, which SQLite
+    parses but rejects at insert time ("unknown function: now()"), breaking
+    every create_all-built table."""
+    from sqlalchemy.dialects import postgresql, sqlite
+
+    table = PolicyGate.__table__
+    assert table.c.enabled_at.server_default is not None
+    sqlite_ddl = str(CreateTable(table).compile(dialect=sqlite.dialect()))
+    assert "enabled_at DATETIME DEFAULT CURRENT_TIMESTAMP" in sqlite_ddl
+    pg_ddl = str(CreateTable(table).compile(dialect=postgresql.dialect()))
+    assert "enabled_at TIMESTAMP WITH TIME ZONE DEFAULT now()" in pg_ddl
+
+
+def test_raw_insert_omitting_enabled_at_takes_the_server_default() -> None:
+    """F4 behavioural half: an insert in the OLD-container shape (enabled
+    set, enabled_at omitted entirely) succeeds against the model-built table
+    because the server default fills the stamp — without it the symmetric
+    CHECK rejects the row and gate create/replace 500s for the whole
+    rollout."""
+    from sqlalchemy import text
+
+    engine = _sqlite_engine_for([PolicyGate])
+    try:
+        ids = {
+            "i": str(uuid.uuid4()),
+            "o": str(uuid.uuid4()),
+            "e": str(uuid.uuid4()),
+            "n": str(uuid.uuid4()),
+        }
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
+                    "action, version, enabled) "
+                    "VALUES (:i, :o, :e, :n, 'warn', 1, 1)"
+                ),
+                ids,
+            )
+            enabled_at = conn.execute(
+                text("SELECT enabled_at FROM policy_gates WHERE id = :i"),
+                ids,
+            ).scalar()
+        assert enabled_at is not None, "the server default must fill enabled_at so the CHECK passes"
     finally:
         engine.dispose()
 

@@ -354,18 +354,21 @@ async def _load_policy_gate_rows_for_pipeline(
     return list((await session.execute(stmt)).scalars().all())
 
 
-def _build_policy_gate_pins(rows: list[PolicyGate]) -> list[dict[str, Any]] | None:
+def _build_policy_gate_pins(rows: list[PolicyGate]) -> list[dict[str, Any]]:
     """Serialize PolicyGate rows into snapshot pin entries (§3.2).
 
     Each entry carries ``policy_gate_id``, ``eval_id``, ``action``, and
     ``node_id`` — enough identity to reconstruct the gate's evaluation
     context and detect accidental corruption of the action field.
 
-    Returns ``None`` when no live, enabled gates exist (pre-migration or
-    zero-gate pipeline), preserving the legacy fallback semantics.
+    A newly created snapshot ALWAYS stores a list: zero live/enabled gates
+    produces ``[]`` (+ its digest), never ``NULL``.  ``NULL`` is reserved
+    for genuinely pre-mechanism snapshots (rows that predate the pin
+    columns) — an empty pin set is a deliberate "no gates pinned" state
+    (§3.3 empty ≠ absent), so a gate disabled at snapshot time and
+    re-enabled mid-run stays outside the evaluation universe (§5.4
+    interleavings 1 and 3) instead of falling back to live gates.
     """
-    if not rows:
-        return None
     return [
         {
             "policy_gate_id": str(row.id),

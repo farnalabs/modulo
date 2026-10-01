@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -875,3 +876,315 @@ def test_get_gate_unexpected_error_returns_500(client: tuple[TestClient, AsyncMo
     resp = http.get(_GATE_URL)
 
     assert resp.status_code == 500, resp.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-967 F6 — create-or-replace INHERITS the operator's enabled state
+# ---------------------------------------------------------------------------
+
+
+async def test_create_or_replace_gate_carries_disabled_state() -> None:
+    """F6 load-bearing: replacing a live gate that the operator DISABLED must
+    carry ``enabled=False`` (+ its timestamp pair) onto the new row — a
+    create-or-replace must never silently re-enable a disabled gate."""
+    session = _make_session()
+    live_gate = _gate_row(action="block")
+    disabled_at = datetime(2026, 1, 1, tzinfo=UTC)
+    live_gate.enabled = False
+    live_gate.enabled_at = None
+    live_gate.disabled_at = disabled_at
+    # SET LOCAL + advisory lock + the in-lock live-gate re-check.
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_or_replace_gate(
+        _EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal
+    )
+
+    assert gate.enabled is False
+    assert gate.enabled_at is None
+    assert gate.disabled_at == disabled_at
+    assert live_gate.deleted_at is not None  # the old row is still replaced
+
+
+async def test_create_or_replace_gate_fresh_create_stamps_enabled() -> None:
+    """Sibling: with NO live gate the fresh create keeps the creation default
+    (enabled + enabled_at stamped, disabled_at NULL — the CHECK-acceptable
+    creation state)."""
+    session = _make_session()
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=None)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_or_replace_gate(
+        _EVAL_ID, {"action": "warn", "node_id": _NODE_ID}, session, principal
+    )
+
+    assert gate.enabled is True
+    assert gate.enabled_at is not None
+    assert gate.disabled_at is None
+
+
+def test_create_gate_audit_payload_carries_enabled(client: tuple[TestClient, AsyncMock]) -> None:
+    """F6: the ``policy_gate.created`` audit payload records whether the gate
+    is actively enforcing — an auditor must see it without re-reading state."""
+    http, session = client
+    _queue_execute(session, [_result(scalar_one_or_none=_eval_row())])
+    gate = _gate_row()
+    gate.enabled = True
+    with (
+        patch.object(evals_routes, "_create_or_replace_gate", new=AsyncMock(return_value=gate)),
+        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
+    ):
+        resp = http.post(_GATE_URL, json={"action": "warn"})
+
+    assert resp.status_code == 201, resp.text
+    payload = audit.await_args.kwargs["payload_json"]
+    assert payload["enabled"] is True
+    assert audit.await_args.kwargs["event_type"] == "policy_gate.created"
+
+
+def test_update_gate_audit_payload_carries_enabled(client: tuple[TestClient, AsyncMock]) -> None:
+    """F6: the ``policy_gate.updated`` audit payload records ``enabled`` too."""
+    http, session = client
+    gate = _gate_row(action="warn", version=1)
+    gate.enabled = True
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=gate),
+        ],
+    )
+    with patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit:
+        resp = http.put(_GATE_URL, json={"action": "block"})
+
+    assert resp.status_code == 200, resp.text
+    payload = audit.await_args.kwargs["payload_json"]
+    assert payload["enabled"] is True
+    assert audit.await_args.kwargs["event_type"] == "policy_gate.updated"
+
+
+# ---------------------------------------------------------------------------
+# PATCH /evals/{eval_id}/policy-gate/toggle (FAR-967 F6/F9 operator control)
+# ---------------------------------------------------------------------------
+
+_TOGGLE_URL = f"{_GATE_URL}/toggle"
+
+
+def _toggle_gate_row(*, enabled: bool, action: str = "warn") -> MagicMock:
+    row = _gate_row(action=action)
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    row.enabled = enabled
+    row.enabled_at = stamp if enabled else None
+    row.disabled_at = None if enabled else stamp
+    return row
+
+
+def test_toggle_gate_non_admin_returns_403() -> None:
+    session = _make_session()
+    _install_overrides(session, org_role="operator")
+    try:
+        resp = TestClient(app).patch(_TOGGLE_URL, json={"enabled": False})
+        assert resp.status_code == 403, resp.text
+        assert "Only admins can toggle policy gates" in resp.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_toggle_gate_disable_success(client: tuple[TestClient, AsyncMock]) -> None:
+    """Disabling stamps ``disabled_at`` and clears ``enabled_at`` so the
+    symmetric CHECK invariant holds (§4.2), and the response reports the new
+    state."""
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=_toggle_gate_row(enabled=True)),
+        ],
+    )
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["enabled"] is False
+    assert body["enabled_at"] is None
+    assert body["disabled_at"] is not None
+
+
+def test_toggle_gate_enable_success(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=_toggle_gate_row(enabled=False)),
+        ],
+    )
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": True})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["enabled"] is True
+    assert body["enabled_at"] is not None
+    assert body["disabled_at"] is None
+
+
+def test_toggle_gate_holds_advisory_lock_around_the_mutation(client: tuple[TestClient, AsyncMock]) -> None:
+    """F6 load-bearing: the toggle's load-and-mutate runs under the SAME
+    transaction-scoped advisory lock as create-or-replace — SET LOCAL
+    statement_timeout and pg_advisory_xact_lock must execute BEFORE the gate
+    read. Remove the lock wrapper and these statements (and their ordering)
+    vanish."""
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=_toggle_gate_row(enabled=True)),
+        ],
+    )
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+    assert resp.status_code == 200, resp.text
+
+    stmts = [str(call.args[0]) for call in session.execute.await_args_list if call.args]
+    timeout_idx = next(i for i, s in enumerate(stmts) if "statement_timeout" in s)
+    lock_idx = next(i for i, s in enumerate(stmts) if "pg_advisory_xact_lock" in s)
+    gate_read_idx = next(i for i, s in enumerate(stmts) if "policy_gates" in s and "deleted_at" in s)
+    eval_idx = next(i for i, s in enumerate(stmts) if "evals" in s and "policy_gates" not in s)
+    # eval load → lock acquisition → gate read (the read happens under lock)
+    assert eval_idx < timeout_idx < lock_idx < gate_read_idx
+
+
+def test_toggle_gate_audit_records_enabled_transition(client: tuple[TestClient, AsyncMock]) -> None:
+    """F6/F9: the ``policy_gate.toggled`` audit event carries the new
+    ``enabled`` value and the pre-toggle state."""
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=_toggle_gate_row(enabled=True)),
+        ],
+    )
+    with patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit:
+        resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 200, resp.text
+    assert audit.await_args.kwargs["event_type"] == "policy_gate.toggled"
+    payload = audit.await_args.kwargs["payload_json"]
+    assert payload["enabled"] is False
+    assert payload["pre_enabled"] is True
+    assert payload["eval_id"] == str(_EVAL_ID)
+
+
+def test_toggle_gate_eval_not_found_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    _queue_execute(session, [_result(scalar_one_or_none=None)])
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Eval definition not found"
+
+
+def test_toggle_gate_gate_not_found_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=None),
+        ],
+    )
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_toggle_gate_lock_timeout_returns_503(client: tuple[TestClient, AsyncMock]) -> None:
+    """A lock-acquisition timeout (SQLSTATE 57014) on the advisory lock maps
+    to 503 with the lock-timeout message — same mapping as create."""
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _lock_timeout_exc(),
+        ],
+    )
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"] == evals_routes._MSG_POLICY_GATE_LOCK_TIMEOUT
+
+
+def test_toggle_gate_check_violation_returns_500(client: tuple[TestClient, AsyncMock]) -> None:
+    """The symmetric CHECK violation (SQLSTATE 23514) is a server-side bug —
+    mapped to the report-it 500, not a generic 503."""
+    http, session = client
+    check_exc = IntegrityError("s", {}, Exception())
+    check_exc.orig = SimpleNamespace(sqlstate="23514")  # type: ignore[attr-defined]
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            check_exc,
+        ],
+    )
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 500, resp.text
+    assert resp.json()["detail"] == evals_routes._MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION
+
+
+def test_toggle_gate_unexpected_error_returns_500(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    _queue_execute(session, [_RUNTIME])
+
+    resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 500, resp.text
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [(_PROG, 501), (_SQL, 503)],
+    ids=["programming-501", "sqlalchemy-503"],
+)
+def test_toggle_gate_error_mapping(exc: Exception, expected: int) -> None:
+    session = _make_session(begin_exc=exc)
+    _install_overrides(session)
+    try:
+        resp = TestClient(app).patch(_TOGGLE_URL, json={"enabled": False})
+        assert resp.status_code == expected, resp.text
+    finally:
+        app.dependency_overrides.clear()

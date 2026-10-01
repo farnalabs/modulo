@@ -529,3 +529,84 @@ class TestSnapshotPinColumnsWriteable:
             assert isinstance(stored_pins, list)
         finally:
             await engine.dispose()
+
+
+class TestF4RollingDeploySafety:
+    """FAR-967 F4: the migration attaches a SERVER default to ``enabled_at``
+    (SET DEFAULT now(), AFTER the created_at backfill) so a ROLLING deploy is
+    safe — OLD containers still insert policy_gates through the pre-0272
+    model, which omits ``enabled_at`` entirely. Without the default that
+    insert lands NULL and the symmetric CHECK rejects it (gate create/replace
+    500s until the rollout completes)."""
+
+    @pytest.mark.asyncio
+    async def test_enabled_at_carries_server_default_after_migration(self, isolated_db_url: str) -> None:
+        engine = await _engine_connect(isolated_db_url)
+        await _migrate_to_target(isolated_db_url)
+        try:
+            column_default = await _scalar(
+                engine,
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = 'policy_gates' AND column_name = 'enabled_at'",
+            )
+            assert column_default is not None, "enabled_at must carry a server-side DEFAULT"
+            assert "now()" in column_default.lower(), f"expected DEFAULT now(), got {column_default!r}"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_enabled_at_default_does_not_replace_created_at_backfill(self, isolated_db_url: str) -> None:
+        """The default is attached with ALTER ... SET DEFAULT (future inserts
+        only) — NOT an inline DEFAULT on ADD COLUMN, which would fill
+        EXISTING rows with the ALTER-time stamp and defeat the
+        ``enabled_at = created_at`` backfill (§4.3). Seeded pre-migration
+        rows must still read back ``enabled_at = created_at``."""
+        engine = await _engine_connect(isolated_db_url)
+        try:
+            await _seed(engine)
+            await _migrate_to_target(isolated_db_url)
+            mismatches = await _scalar(
+                engine,
+                "SELECT COUNT(*) FROM policy_gates WHERE enabled_at <> created_at",
+            )
+            assert mismatches == 0, "backfill must keep enabled_at = created_at for existing rows"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_old_code_shape_insert_without_enabled_at_succeeds(self, isolated_db_url: str) -> None:
+        """F4 behavioural: the exact INSERT a pre-0272 container issues
+        (enabled / enabled_at / disabled_at all omitted) lands CHECK-valid
+        via the server defaults — gate creation keeps working mid-rollout."""
+        engine = await _engine_connect(isolated_db_url)
+        await _migrate_to_target(isolated_db_url)
+        try:
+            seeded = await _seed(engine)
+            old_shape_gate = uuid.uuid4()
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) "
+                        "VALUES (:i, :oid, :eid, :nid, 'warn', 1)"
+                    ),
+                    {
+                        "i": str(old_shape_gate),
+                        "oid": str(seeded["org_id"]),
+                        "eid": str(seeded["eval_ids"][3]),
+                        "nid": str(seeded["node_id"]),
+                    },
+                )
+            enabled = await _scalar(
+                engine, "SELECT enabled FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)}
+            )
+            enabled_at = await _scalar(
+                engine, "SELECT enabled_at FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)}
+            )
+            disabled_at = await _scalar(
+                engine, "SELECT disabled_at FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)}
+            )
+            assert enabled is True
+            assert enabled_at is not None, "server default must stamp enabled_at so the CHECK passes"
+            assert disabled_at is None
+        finally:
+            await engine.dispose()

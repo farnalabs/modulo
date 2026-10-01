@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -79,10 +80,20 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
     # Eval+PolicyGate persistence, which sets no audit columns itself.
     # Toggles write both timestamps explicitly on UPDATE, where defaults do
     # not apply (CO-2).
+    #
+    # ``server_default=func.now()`` (FAR-967 F4) additionally covers RAW SQL
+    # inserts that omit ``enabled_at`` — notably OLD containers during a
+    # rolling deploy, whose pre-0272 model knows no such column and would
+    # otherwise land NULL and trip ck_policy_gates_enabled_timestamps.
+    # ``func.now()`` (not ``text("now()")``) so the DDL stays portable: it
+    # renders ``now()`` on PostgreSQL and ``CURRENT_TIMESTAMP`` on SQLite —
+    # ``text("now()")`` renders ``DEFAULT (now())`` on SQLite, which parses
+    # but fails every insert with "unknown function: now()".
     enabled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         default=lambda: datetime.now(UTC),
+        server_default=func.now(),
     )
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # deleted_by exists but SoftDeleteMixin supplies deleted_at.

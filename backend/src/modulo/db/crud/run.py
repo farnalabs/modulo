@@ -81,6 +81,15 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
 
+# FAR-967 F1: marker embedded in the error_detail of a run blocked by a
+# snapshot policy-gate pin fingerprint mismatch. The override seam
+# (``recovery.guardrail_override``) matches this literal to refuse remediating
+# a pin-integrity failure — an operator-supplied input cannot fix a corrupted
+# snapshot, so the only remediation is a NEW run. Single-sourced here so the
+# stamping site (``_verify_policy_gate_pin_fingerprint``) and the refusal site
+# can never drift apart.
+POLICY_GATE_PIN_MISMATCH_MARKER = "snapshot policy-gate pin fingerprint mismatch"
+
 # Day-key format used for run-usage bucketing and the --older-than parser.
 _DAY_FORMAT = "%Y-%m-%d"
 
@@ -1080,7 +1089,7 @@ async def _verify_policy_gate_pin_fingerprint(
     if snapshot_version is not None:
         identity += f" (version {snapshot_version})"
     block_message = (
-        f"policy gate mechanism error: snapshot policy-gate pin fingerprint mismatch "
+        f"policy gate mechanism error: {POLICY_GATE_PIN_MISMATCH_MARKER} "
         f"({identity}, stored={truncated_stored}…, "
         f"recomputed={truncated_recomputed}… — digest and content disagree; "
         f"remediation: create a new run)"
@@ -1098,57 +1107,6 @@ async def _verify_policy_gate_pin_fingerprint(
         },
     )
     return True, block_message
-
-
-async def _load_live_policy_gate_enabled_map(
-    session: AsyncSession,
-    *,
-    org_id: uuid.UUID,
-    policy_gate_ids: list[str],
-) -> dict[str, bool]:
-    """Load the live ``enabled`` state for a set of PolicyGate rows.
-
-    Returns a dict mapping policy_gate_id (as string) → enabled (bool).
-    Missing rows (soft-deleted since snapshot creation) are treated as
-    disabled (the gate is excluded from evaluation).
-    """
-    from modulo.db.models.policy_gate import PolicyGate
-
-    if not policy_gate_ids:
-        return {}
-    import uuid as _uuid
-
-    uuid_ids = [_uuid.UUID(gid) for gid in policy_gate_ids]
-    stmt = select(PolicyGate.id, PolicyGate.enabled).where(
-        PolicyGate.id.in_(uuid_ids),
-        PolicyGate.organisation_id == org_id,
-        PolicyGate.deleted_at.is_(None),
-    )
-    rows = (await session.execute(stmt)).all()
-    return {str(row[0]): row[1] for row in rows}
-
-
-def _filter_disabled_policy_gates(
-    snap_pins: list[dict[str, Any]] | None,
-    enabled_map: dict[str, bool],
-) -> list[dict[str, Any]]:
-    """Operator control (§5): skip disabled gates from the pinned set.
-
-    A gate whose live ``enabled`` state is ``False`` (or whose row was
-    soft-deleted since snapshot creation and is absent from the map) is
-    excluded.  Pin membership remains immutable — this can only REMOVE
-    gates, never add them.
-    """
-    if not snap_pins:
-        return []
-    filtered = []
-    for entry in snap_pins:
-        gate_id = entry.get("policy_gate_id", "")
-        # If the gate is absent from the map (soft-deleted), treat as disabled.
-        enabled = enabled_map.get(gate_id, False)
-        if enabled:
-            filtered.append(entry)
-    return filtered
 
 
 def _select_guardrail_definitions(
@@ -1592,6 +1550,11 @@ async def _intercept_guardrails(
     # atomically at creation), so this is a cheap integrity read for every
     # run; a genuine mismatch blocks the run before ANY evaluation happens
     # (the run is stamped terminal eval_failed below and never dispatched).
+    #
+    # The operator control (§5, disabled-gate exclusion) is deliberately NOT
+    # re-implemented here: enforcement lives exclusively in the executor's
+    # per-gate eval-def build (``eval_defs.gate_disabled_excluded``), which
+    # is the authoritative record (FAR-967 F8 — no duplicate filter copy).
     policy_gate_blocked = False
     policy_gate_block_message = ""
     if request.snapshot_id is not None:
@@ -1609,27 +1572,6 @@ async def _intercept_guardrails(
             pipeline_id=request.pipeline_id,
             snapshot_version=pg_snapshot_version,
         )
-        # Operator control (§5): run-start AUDIT of the pinned gates the
-        # live ``enabled`` state will remove from this run's evaluated set.
-        # The exclusion itself is enforced where the set is built — the
-        # executor's eval-def build (criteria 8/9, §5.2) — so this event
-        # predicts exactly what that build will drop.
-        if pg_snap_pins and not policy_gate_blocked:
-            pg_ids = [e.get("policy_gate_id", "") for e in pg_snap_pins if e.get("policy_gate_id")]
-            enabled_map = await _load_live_policy_gate_enabled_map(
-                session, org_id=request.org_id, policy_gate_ids=pg_ids
-            )
-            filtered = _filter_disabled_policy_gates(pg_snap_pins, enabled_map)
-            if len(filtered) != len(pg_snap_pins):
-                _log.info(
-                    "policy_gates.operator_control_filtered",
-                    extra={
-                        "org_id": str(request.org_id),
-                        "run_id": str(request.run_id),
-                        "before": len(pg_snap_pins),
-                        "after": len(filtered),
-                    },
-                )
 
     # If the policy-gate fingerprint mismatched, block immediately — do not
     # proceed to the guardrail interception pass.

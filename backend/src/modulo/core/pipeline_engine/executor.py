@@ -129,6 +129,7 @@ from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
     _graph_contains_sandbox_agent,
+    _verify_policy_gate_pin_fingerprint,
     count_active_runs_for_org,
     count_active_runs_for_pipeline,
     count_active_sandbox_runs_for_org,
@@ -2063,6 +2064,71 @@ class PipelineExecutor:
             )
             return None
 
+    async def _check_policy_gate_pin(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        snapshot: PipelineSnapshot,
+        claim_token: str | None,
+    ) -> Run | None:
+        """Re-verify the snapshot's policy-gate pin fingerprint (FAR-967 F1).
+
+        Fail-CLOSED backstop for §3.4 on BOTH the execute() and resume()
+        paths: the run-creation seam blocks a mismatched snapshot before
+        dispatch, but the snapshot's pin columns could be corrupted AFTER
+        creation (direct DB write, partial restore, migration accident).
+        A mismatch terminalizes the run ``eval_failed`` / ``eval_blocked``
+        BEFORE any evaluation happens, and the caller returns the row early
+        — no compensation and no finalize run, because nothing has executed
+        (spend-ceiling-gate early-return precedent).
+
+        Returns ``None`` when there is nothing to verify: an unpinned
+        snapshot (legacy NULL fingerprint) or a non-``str`` fingerprint
+        (a test double / stand-in — gated so one can never trip a block).
+        The terminalizing write happens in the CALLER's transaction
+        (*session* is caller-owned so the execute() and resume() paths can
+        pass a session that already holds the run's row lock).
+        """
+        fingerprint = snapshot.policy_gate_pins_fingerprint
+        if not isinstance(fingerprint, str):
+            # Unpinned (NULL) or a non-string stand-in — pre-pinning
+            # behaviour: fall back to the pipeline's live gates.
+            return None
+        blocked, block_message = await _verify_policy_gate_pin_fingerprint(
+            org_id=org_id,
+            run_id=run_id,
+            snapshot_id=snapshot.id,
+            snap_pins=snapshot.policy_gate_pins_json,
+            saved_fingerprint=fingerprint,
+            pipeline_id=snapshot.pipeline_id,
+            snapshot_version=snapshot.snapshot_version,
+        )
+        if not blocked:
+            return None
+        await update_run_status(
+            session,
+            run_id,
+            "eval_failed",
+            error_code="eval_blocked",
+            error_detail=block_message,
+            claim_token=claim_token,
+        )
+        halted_run = await get_run(session, run_id)
+        if halted_run is None:
+            raise RunNotFoundError(run_id)
+        _log.error(
+            "policy_gates.pin_fingerprint_mismatch_terminalized",
+            extra={
+                "run_id": str(run_id),
+                "org_id": str(org_id),
+                "snapshot_id": str(snapshot.id),
+                "pipeline_id": str(snapshot.pipeline_id),
+            },
+        )
+        return halted_run
+
     async def _claim_run_and_audit(
         self,
         *,
@@ -2420,11 +2486,12 @@ class PipelineExecutor:
             return ("warn", None, None, None)
 
         # Operator control (§5.2): a disabled live row removes the gate from
-        # evaluation — it overrides the pin. Only an explicit False counts as
-        # disabled (an unset attribute on a not-yet-flushed row or a test
-        # stand-in without the field is treated as enabled).
-        enabled_state = getattr(policy_gate, "enabled", None)
-        if enabled_state is not None and not bool(enabled_state):
+        # evaluation — it overrides the pin. STRICT attribute read (FAR-967
+        # F7): ``enabled`` is a NOT NULL column on every live row, so a
+        # stand-in without the field is a fixture bug that must fail loudly
+        # — the old getattr-default silently evaluated such a stand-in as
+        # enabled, hiding incomplete test fixtures from this gate.
+        if not policy_gate.enabled:
             _log.info(
                 "eval_defs.gate_disabled_excluded",
                 extra={
@@ -3473,6 +3540,20 @@ class PipelineExecutor:
             if not validation.is_valid:
                 raise GraphValidationError(validation.issues, run_id)
 
+            # FAR-967 F1 — snapshot policy-gate pin integrity re-verify on the
+            # resume path (same fail-CLOSED backstop as execute(), using THIS
+            # transaction's session so the row lock already taken above is
+            # reused instead of deadlocking against a second session).
+            pin_run = await self._check_policy_gate_pin(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                snapshot=snapshot,
+                claim_token=claim_token,
+            )
+            if pin_run is not None:
+                return pin_run
+
             # Load eval definitions while session is active.
             # FAR-967 chunk 10: the snapshot's policy-gate pins are the run's
             # evaluation universe (criterion 10 / §5.2 operator re-check).
@@ -4054,6 +4135,23 @@ class PipelineExecutor:
             org_id=org_id,
             input_payload=input_payload,
         )
+        # FAR-967 F1 — snapshot policy-gate pin integrity re-verify (§3.4
+        # backstop, mirrored on resume): a mismatch fails CLOSED before ANY
+        # evaluation happens — the run is terminalized eval_failed /
+        # eval_blocked and returned early (no compensation, no finalize;
+        # nothing has executed — spend-ceiling-gate early-return precedent).
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            pin_run = await self._check_policy_gate_pin(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                snapshot=snapshot,
+                claim_token=claim_token,
+            )
+        if pin_run is not None:
+            return pin_run
         variant_config_snapshot = run.variant_config_snapshot
         scalars = self._capture_execution_scalars(pipeline, run)
         pipeline_id = scalars["pipeline_id"]
