@@ -75,7 +75,10 @@ Gate semantics (fail-closed):
   such changed line counts as unmeasured coverage, i.e. 0%.
 - **Threshold breach** → FAIL, exit 1.
 - **Tiny diff (≤10 non-blank lines)** → PASS with a note.  Trivial
-  changes (typo fixes, label tweaks) should not fail the gate.
+  changes (typo fixes, label tweaks) should not fail the gate.  The
+  exemption does NOT apply when the diff also removes executable
+  production lines — such a change scores its added lines against the
+  real threshold (FAR-1317, see below).
 - **Unmeasured changed file** → counts as 0% coverage.  A brand-new
   production file with no coverage in the report is a gate failure: a file
   absent from BOTH the raw report's file list and diff-cover's ``src_stats``
