@@ -34,6 +34,17 @@ class TestExtractNodeIdFromKeyName:
         assert _extract_node_id_from_key_name("") is None
         assert _extract_node_id_from_key_name(None) is None
 
+    def test_last_node_marker_wins(self) -> None:
+        # rfind() semantics: a name with multiple ``:node:`` segments resolves
+        # the LAST one (the outer key namespaces the inner marker).
+        assert _extract_node_id_from_key_name("run:1:node:sbx-1:node:sbx-2") == "sbx-2"
+
+    def test_node_id_is_stripped_of_surrounding_whitespace(self) -> None:
+        assert _extract_node_id_from_key_name("run:1:node:  sbx-1  ") == "sbx-1"
+
+    def test_whitespace_only_node_id_is_treated_as_absent(self) -> None:
+        assert _extract_node_id_from_key_name("run:1:node:   ") is None
+
 
 class TestCheckAgentToolScope:
     """The ``_check_agent_tool_scope`` wrapper threads node allowed_tools."""
@@ -72,6 +83,16 @@ class TestCheckAgentToolScope:
 
     def test_empty_allow_list_denies_all(self) -> None:
         with self._with_scope("admin", []), pytest.raises(MCPAuthorizationError, match="allowed_tools scope"):
+            _check_agent_tool_scope("create_pipeline")
+
+    def test_in_scope_tool_still_denied_when_role_insufficient(self) -> None:
+        # Narrowing is additive, never a grant (FAR-436): the node allow-list
+        # cannot bypass the role leg. ``viewer`` lacks ``pipeline.create``, so
+        # an in-scope tool is still denied through the live ContextVar wrapper.
+        with (
+            self._with_scope("viewer", ["create_pipeline"]),
+            pytest.raises(MCPAuthorizationError, match="Insufficient scope"),
+        ):
             _check_agent_tool_scope("create_pipeline")
 
 
