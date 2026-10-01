@@ -535,11 +535,80 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     const qualifier = wrapper.find('.outcome-confidence')
     expect(qualifier.exists()).toBe(true)
     expect(qualifier.text()).toContain('Self-reported')
-    // Not tooltip-only: the qualifier text is visible in the DOM, and the
-    // full explanation is exposed to assistive tech via aria-label + title.
+    // Not tooltip-only: the qualifier text is visible in the DOM, and the full
+    // explanation is carried by aria-label + title. role="note" is what makes
+    // that aria-label reach assistive tech — a bare span has the implicit
+    // `generic` role, whose author-provided name is ignored.
+    expect(qualifier.attributes('role')).toBe('note')
     const detail = "This delivery verdict is self-reported by the run's own output. It has not been verified against a source of truth."
     expect(qualifier.attributes('aria-label')).toBe(detail)
     expect(qualifier.attributes('title')).toBe(detail)
+  })
+
+  it('FAR-1373: renders NO qualifier for a non-self-reported confidence', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({
+          streak_status: streakStatus({
+            streak: 1,
+            last_outcomes: [
+              {
+                run_id: 'r1',
+                classification: 'delivered',
+                reason: 'pr_merged',
+                completed_at: '2026-08-01T00:00:00Z',
+                delivery_confidence: 'verified',
+              },
+            ],
+          }),
+        }),
+      ],
+    })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]').trigger('click')
+    await flush()
+
+    // A verified verdict needs no qualifier. Guards against regressing to a
+    // truthy check (v-if="o.delivery_confidence"), which would render the chip
+    // for EVERY non-empty confidence value.
+    expect(wrapper.find('[role="note"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Self-reported')
+    expect(wrapper.text()).toContain('pr_merged')
+  })
+
+  it('FAR-1373: renders NO qualifier on a non-positive verdict even when confidence is self_reported', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({
+          streak_status: streakStatus({
+            streak: 1,
+            last_outcomes: [
+              {
+                run_id: 'r1',
+                classification: 'no_delivery',
+                reason: 'no_work',
+                completed_at: '2026-08-01T00:00:00Z',
+                delivery_confidence: 'self_reported',
+              },
+            ],
+          }),
+        }),
+      ],
+    })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]').trigger('click')
+    await flush()
+
+    // The record defaults delivery_confidence to self_reported on every row,
+    // so a "Self-reported" chip beside "No delivery" would be nonsense: a
+    // no-delivery row makes no positive claim about the world.
+    expect(wrapper.text()).toContain('no_work')
+    expect(wrapper.find('[role="note"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Self-reported')
   })
 
   it('FAR-1373: renders NO qualifier for an outcome without delivery_confidence (legacy record)', async () => {

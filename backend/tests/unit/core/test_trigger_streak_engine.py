@@ -1629,9 +1629,22 @@ def _ongoing_trigger(**overrides: Any) -> SimpleNamespace:
 
 
 def _outcome(
-    run_id: uuid.UUID, classification: str, reason: str, completed_at: datetime
+    run_id: uuid.UUID,
+    classification: str,
+    reason: str,
+    completed_at: datetime,
+    delivery_confidence: str | None = None,
 ) -> tuple[uuid.UUID, dict[str, Any], datetime]:
-    return (run_id, {"value": classification, "reason": reason}, completed_at)
+    """Build one ``_StatusSession`` outcome row (record, completed_at).
+
+    ``delivery_confidence`` defaults to ABSENT — the key is omitted from the
+    record entirely, modelling the pre-FAR-1336 six-key shape — rather than
+    being written as ``None``. Pass a value to model an eight-key record.
+    """
+    record: dict[str, Any] = {"value": classification, "reason": reason}
+    if delivery_confidence is not None:
+        record["delivery_confidence"] = delivery_confidence
+    return (run_id, record, completed_at)
 
 
 class TestGetTriggerStreakStatus:
@@ -1697,15 +1710,7 @@ class TestGetTriggerStreakStatus:
         now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
         session = _StatusSession(
             outcome_rows=[
-                (
-                    uuid.uuid4(),
-                    {
-                        "value": "delivered",
-                        "reason": "pr_merged",
-                        "delivery_confidence": "self_reported",
-                    },
-                    now,
-                ),
+                _outcome(uuid.uuid4(), "delivered", "pr_merged", now, delivery_confidence="self_reported"),
             ]
         )
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
@@ -1716,7 +1721,14 @@ class TestGetTriggerStreakStatus:
     async def test_last_outcomes_legacy_record_without_delivery_confidence_is_none(self) -> None:
         """FAR-1373 — a legacy six-key record (written before FAR-1336, no
         ``delivery_confidence`` key) projects ``delivery_confidence: None``
-        without raising: an unknown confidence must never read as verified."""
+        without raising: an unknown confidence must never read as verified.
+
+        This fixture is DELIBERATELY hand-built rather than going through
+        ``_outcome``: it models ``ClassificationResult.to_dict()`` BEFORE
+        FAR-1336 — six keys, the other four included — and the explicit
+        ``assert "delivery_confidence" not in`` below is the point of the test.
+        Leave the construction style as-is.
+        """
         now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
         legacy_record = {
             "value": "delivered",

@@ -164,10 +164,11 @@
                         {{ outcomeLabel(o.classification) }}
                       </span>
                       <span
-                        v-if="o.delivery_confidence === 'self_reported'"
-                        class="outcome-confidence rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-                        :title="$t('views.SettingsTriggersView.outcome_confidence_self_reported_detail')"
-                        :aria-label="$t('views.SettingsTriggersView.outcome_confidence_self_reported_detail')"
+                        v-if="isSelfReportedDeliveryClaim(o)"
+                        role="note"
+                        class="outcome-confidence rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
+                        :title="selfReportedConfidenceDetail"
+                        :aria-label="selfReportedConfidenceDetail"
                       >{{ $t('views.SettingsTriggersView.outcome_confidence_self_reported') }}</span>
                       <span class="text-muted-foreground">{{ o.reason || '—' }}</span>
                       <span class="ml-auto text-muted-foreground">{{ formatTimestamp(o.completed_at ?? null) }}</span>
@@ -551,14 +552,25 @@ async function togglePauseAll() {
   }
 }
 
+// FAR-1373 — the `delivery_confidence` vocabulary. These wire values are
+// FROZEN identifiers owned by the backend's `runs.run_classification` record.
+// The backend constant lives in a different service and is NOT reachable from
+// this bundle, so the union below is the frontend-local mirror of that
+// vocabulary — a documented closed union, not a loose string. Absent/null (the
+// pre-FAR-1336 six-key rows) and any value outside the union are unknown, and
+// an unknown confidence must never read as verified.
+type DeliveryConfidence = 'self_reported' | 'verified'
+
 interface StreakOutcome {
   run_id?: string | null
   classification?: string | null
   reason?: string | null
   completed_at?: string | null
-  // FAR-1373: absent/null on legacy (pre-FAR-1336) records — an unknown
-  // confidence must never read as verified, so no qualifier renders for it.
-  delivery_confidence?: string | null
+  // FAR-1373: a frozen wire identifier owned by the backend record (see the
+  // DeliveryConfidence union). Absent/null on legacy (pre-FAR-1336) records —
+  // an unknown confidence must never read as verified, so no qualifier
+  // renders for it.
+  delivery_confidence?: DeliveryConfidence | null
 }
 
 interface StreakStatus {
@@ -765,20 +777,52 @@ function toggleOutcomes(id: string): void {
   expandedOutcomes.value = next
 }
 
+// FAR-1373 — the positive delivered verdict, a frozen wire identifier owned by
+// the backend classification record (its constant lives in a different service
+// and is not reachable from this bundle). Single-sourced here so the badge
+// class, the label and the qualifier gate can never drift apart.
+const OUTCOME_DELIVERED = 'delivered'
+// FAR-1373 — frozen wire identifier for the self-reported confidence; see the
+// DeliveryConfidence union above.
+const CONFIDENCE_SELF_REPORTED: DeliveryConfidence = 'self_reported'
+
+// FAR-1373 — the qualifier detail, resolved ONCE so `title` and `aria-label`
+// bind the same string and cannot drift apart. The chip's `role="note"` is what
+// makes the aria-label reach assistive tech: a bare span has the implicit
+// `generic` role, whose author-provided name is ignored. The chip is static
+// content behind a user-initiated disclosure, so it deliberately carries no
+// aria-live / role="status".
+const selfReportedConfidenceDetail = computed(() =>
+  t('views.SettingsTriggersView.outcome_confidence_self_reported_detail'),
+)
+
 function outcomeBadgeClass(classification: string | null | undefined): string {
-  if (classification === 'delivered') return 'bg-success/10 text-success'
+  if (classification === OUTCOME_DELIVERED) return 'bg-success/10 text-success'
   if (classification === 'no_delivery') return 'bg-amber-500/10 text-amber-600'
   return 'bg-muted text-muted-foreground'
 }
 
 function outcomeLabel(classification: string | null | undefined): string {
   const labels: Record<string, string> = {
-    delivered: t('views.SettingsTriggersView.outcome_delivered'),
+    [OUTCOME_DELIVERED]: t('views.SettingsTriggersView.outcome_delivered'),
     no_delivery: t('views.SettingsTriggersView.outcome_no_delivery'),
     excluded: t('views.SettingsTriggersView.outcome_excluded'),
     unclassified: t('views.SettingsTriggersView.outcome_unclassified'),
   }
   return classification ? labels[classification] || classification : '\u2014'
+}
+
+// FAR-1373 — the ONE place expressing "is this an unqualified self-reported
+// delivery claim". Both conditions must hold:
+//   1. the classification is the positive delivered verdict (the same frozen
+//      wire value outcomeLabel renders as "Delivered"), and
+//   2. delivery_confidence is self_reported.
+// A no_delivery / excluded / unclassified row makes no positive claim about the
+// world — the record defaults delivery_confidence to self_reported on EVERY
+// row, so a "Self-reported" chip beside "No delivery" would be nonsense. An
+// absent/null/unknown confidence returns false: unknown never reads as verified.
+function isSelfReportedDeliveryClaim(o: StreakOutcome): boolean {
+  return o.classification === OUTCOME_DELIVERED && o.delivery_confidence === CONFIDENCE_SELF_REPORTED
 }
 
 function resetForm() {
