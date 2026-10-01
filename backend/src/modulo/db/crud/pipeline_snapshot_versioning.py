@@ -167,9 +167,22 @@ async def tag_snapshot(
     snapshot_id: uuid.UUID,
     tag: str | None = None,
     notes: str | None = None,
+    *,
+    organisation_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
 ) -> PipelineSnapshot | None:
-    """Set or clear tag and notes on a snapshot."""
-    snapshot = await get_snapshot(session, snapshot_id)
+    """Set or clear tag and notes on a snapshot.
+
+    FAR-1360: optional org/pipeline scoping, same defence-in-depth contract as
+    :func:`get_snapshot_detail` - the ``PATCH /pipelines/{pipeline_id}/
+    snapshots/{snapshot_id}`` route passes BOTH, so a snapshot id belonging to
+    another pipeline can never be tagged through a foreign path (the path
+    segment would otherwise be decorative). Unscoped when the caller omits them
+    (internal/test callers), so the read itself decides the answer: an
+    unmatchable scope returns ``None`` BEFORE any attribute is written, so a
+    404 leaves the row untouched.
+    """
+    snapshot = await get_snapshot_detail(session, snapshot_id, organisation_id=organisation_id, pipeline_id=pipeline_id)
     if snapshot is None:
         return None
     if tag is not None:
@@ -373,11 +386,25 @@ async def diff_snapshots(
     session: AsyncSession,
     snapshot_id_a: uuid.UUID,
     snapshot_id_b: uuid.UUID,
+    *,
+    pipeline_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    """Compare two snapshots and return structural differences with per-field changes."""
+    """Compare two snapshots and return structural differences with per-field changes.
+
+    FAR-1360: ``pipeline_id`` scopes BOTH sides to the ``{pipeline_id}`` path
+    segment of ``POST /pipelines/{pipeline_id}/snapshots/diff``. Without it the
+    path was decorative - either id resolved by primary key alone, so a diff of
+    another pipeline's (or another team's) snapshots was reachable through a
+    foreign path on any layer where RLS does not apply. A mismatch on EITHER
+    side returns ``None``, which the route maps to its existing 404 ("One or
+    both snapshots not found"); omitted (internal/test callers) keeps the
+    unscoped behaviour.
+    """
     a = await get_snapshot(session, snapshot_id_a)
     b = await get_snapshot(session, snapshot_id_b)
     if a is None or b is None:
+        return None
+    if pipeline_id is not None and (a.pipeline_id != pipeline_id or b.pipeline_id != pipeline_id):
         return None
 
     nodes_a = {n["id"]: n for n in a.graph_json.get("nodes", [])}

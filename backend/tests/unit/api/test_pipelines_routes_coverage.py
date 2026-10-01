@@ -984,6 +984,28 @@ def test_lifecycle_actions_refresh_flushed_row(client: tuple[TestClient, AsyncMo
     session.refresh.assert_awaited()
 
 
+@pytest.mark.parametrize("action", ["archive", "unarchive"])
+def test_lifecycle_actions_write_none_maps_404(client: tuple[TestClient, AsyncMock], action: str) -> None:
+    """``archive_pipeline`` / ``unarchive_pipeline`` returning ``None`` -> 404.
+
+    Covers the shared toggle helper's no-row path: the CRUD write is the only
+    thing that can report the row vanished between the gate read and the write.
+    """
+    http, _session = client
+    crud = {"archive": "archive_pipeline", "unarchive": "unarchive_pipeline"}[action]
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}{crud}", new=AsyncMock(return_value=None)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/{action}")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 404
+
+
 def test_restore_pipeline_write_none_maps_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with (
