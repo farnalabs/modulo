@@ -912,6 +912,59 @@ async def test_create_or_replace_gate_carries_disabled_state() -> None:
     assert live_gate.deleted_at is not None  # the old row is still replaced
 
 
+async def test_create_or_replace_gate_normalises_missing_enabled_at() -> None:
+    """Defensive normalisation: a carried live gate that is ``enabled`` but has
+    a NULL ``enabled_at`` is stamped with ``now`` so the symmetric CHECK
+    (``ck_policy_gates_enabled_timestamps``) is satisfied on the replacement
+    insert even for a row that somehow arrived with a missing stamp."""
+    session = _make_session()
+    live_gate = _gate_row(action="block")
+    live_gate.enabled = True
+    live_gate.enabled_at = None
+    live_gate.disabled_at = None
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_or_replace_gate(
+        _EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal
+    )
+
+    assert gate.enabled is True
+    assert gate.enabled_at is not None
+    assert gate.disabled_at is None
+
+
+async def test_create_or_replace_gate_normalises_missing_disabled_at() -> None:
+    """Symmetric defensive branch: a carried live gate that is NOT ``enabled``
+    but has a NULL ``disabled_at`` is stamped with ``now`` so the symmetric
+    CHECK is satisfied on the replacement insert."""
+    session = _make_session()
+    live_gate = _gate_row(action="block")
+    live_gate.enabled = False
+    live_gate.enabled_at = None
+    live_gate.disabled_at = None
+    _queue_execute(session, [_result(), _result(), _result(scalar_one_or_none=live_gate)])
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    gate = await evals_routes._create_or_replace_gate(
+        _EVAL_ID, {"action": "block", "node_id": _NODE_ID}, session, principal
+    )
+
+    assert gate.enabled is False
+    assert gate.disabled_at is not None
+    assert gate.enabled_at is None
+
+
 async def test_create_or_replace_gate_fresh_create_stamps_enabled() -> None:
     """Sibling: with NO live gate the fresh create keeps the creation default
     (enabled + enabled_at stamped, disabled_at NULL — the CHECK-acceptable
@@ -1097,6 +1150,29 @@ def test_toggle_gate_audit_records_enabled_transition(client: tuple[TestClient, 
     assert payload["enabled"] is False
     assert payload["pre_enabled"] is True
     assert payload["eval_id"] == str(_EVAL_ID)
+
+
+def test_toggle_gate_audit_failure_still_succeeds(client: tuple[TestClient, AsyncMock]) -> None:
+    """The toggle's audit write is best-effort: a failing ``append_audit_event``
+    is logged and swallowed — the operator's state change still returns 200."""
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(scalar_one_or_none=_eval_row()),
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=_toggle_gate_row(enabled=True)),
+        ],
+    )
+    with patch(
+        "modulo.api.routes.evals.append_audit_event",
+        new=AsyncMock(side_effect=RuntimeError("audit down")),
+    ):
+        resp = http.patch(_TOGGLE_URL, json={"enabled": False})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enabled"] is False
 
 
 def test_toggle_gate_eval_not_found_returns_404(client: tuple[TestClient, AsyncMock]) -> None:

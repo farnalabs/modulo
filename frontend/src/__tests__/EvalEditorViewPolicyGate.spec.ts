@@ -1549,4 +1549,204 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(toggle.attributes('aria-checked')).toBe('true')
     expect(wrapper.text()).toContain('Failed to toggle the policy gate')
   })
+
+  it('surfaces an error when the toggle PATCH throws (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'warn',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    // A network-level rejection (not an error envelope) must be caught.
+    apiPATCH.mockRejectedValueOnce(new Error('network down'))
+
+    await toggle.trigger('click')
+    await flush()
+
+    expect(togglePatchCalls()).toHaveLength(1)
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.text()).toContain('Failed to toggle the policy gate')
+  })
+
+  it('falls back to the requested state when the toggle response omits enabled (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'warn',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    responders.gateToggle = ok({})
+
+    await toggle.trigger('click')
+    await flush()
+
+    // The requested transition (disable) is applied when the payload is bare.
+    expect(toggle.attributes('aria-checked')).toBe('false')
+  })
+
+  it('ignores a toggle request when no gate exists (F9)', async () => {
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+
+    // Create-mode: no gate row → the guard returns before any PATCH.
+    ;(wrapper.vm as unknown as { requestToggleGate: () => void }).requestToggleGate()
+    await flush()
+
+    expect(togglePatchCalls()).toHaveLength(0)
+  })
+
+  it('ignores a toggle when the editing eval id is absent (F9)', async () => {
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+
+    // No editor open → editingEvalId is null; toggling must be a no-op.
+    await (wrapper.vm as unknown as { doToggleGate: (enabled: boolean) => Promise<void> }).doToggleGate(false)
+    await flush()
+
+    expect(togglePatchCalls()).toHaveLength(0)
+  })
+
+  it('ignores a toggle when the gate row has no id (F9)', async () => {
+    const wrapper = await openWithGate({
+      action: 'warn',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    // action present → exists, but no id → the write guard returns.
+    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await flush()
+
+    expect(togglePatchCalls()).toHaveLength(0)
+    expect(wrapper.find('[data-test-id="policy-gate-toggle"]').attributes('aria-checked')).toBe('true')
+  })
+
+  it('dismisses the toggle-disable dialog on Escape (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'block',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    expect(dialog.exists()).toBe(true)
+
+    dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flush()
+
+    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
+    expect(togglePatchCalls()).toHaveLength(0)
+  })
+
+  it('traps Tab focus within the toggle-disable dialog in both directions (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'block',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const first = buttons[0].element as HTMLElement
+    const last = buttons[buttons.length - 1].element as HTMLElement
+    const firstFocus = vi.spyOn(first, 'focus')
+    const lastFocus = vi.spyOn(last, 'focus')
+
+    withActiveElement(last, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    })
+    expect(firstFocus).toHaveBeenCalled()
+
+    withActiveElement(first, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    })
+    expect(lastFocus).toHaveBeenCalled()
+  })
+
+  it('returns early from the toggle-dialog trap with no focusable children (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'block',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    dialog.element.innerHTML = ''
+    dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+
+    expect(dialog.exists()).toBe(true)
+  })
+
+  it('does not wrap toggle-dialog focus from neither end (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'block',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    const buttons = dialog.findAll('button')
+    const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
+    const last = buttons[buttons.length - 1].element as HTMLElement
+    const lastFocus = vi.spyOn(last, 'focus')
+    const outside = wrapper.find('[data-testid="eval-editor-save"]').element as HTMLElement
+
+    withActiveElement(outside, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    })
+    expect(firstFocus).not.toHaveBeenCalled()
+    expect(lastFocus).not.toHaveBeenCalled()
+
+    // shift+Tab from the LAST control (not the first) must not wrap either.
+    withActiveElement(last, () => {
+      dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    })
+    expect(firstFocus).not.toHaveBeenCalled()
+    expect(lastFocus).not.toHaveBeenCalled()
+  })
+
+  it('ignores other keys in the toggle dialog (F9)', async () => {
+    const wrapper = await openWithGate({
+      id: 'gate-1',
+      action: 'block',
+      version: 1,
+      enabled: true,
+      enabled_at: '2026-01-01T00:00:00Z',
+      disabled_at: null,
+    })
+    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await nextTick()
+    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+
+    dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
+
+    expect(dialog.exists()).toBe(true)
+  })
 })

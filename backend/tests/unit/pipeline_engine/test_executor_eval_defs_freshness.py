@@ -21,11 +21,12 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalType
 from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.core.pipeline_engine.executor import PipelineExecutor, RunNotFoundError
 from modulo.db.crud.run import POLICY_GATE_PIN_MISMATCH_MARKER
 
 
@@ -609,6 +610,38 @@ async def test_resume_terminalizes_on_pin_fingerprint_mismatch() -> None:
     assert POLICY_GATE_PIN_MISMATCH_MARKER in call.kwargs["error_detail"]
     assert call.kwargs["claim_token"] == "tok"
     assert load_defs.await_count == 0, "the eval-def build must never run on a mismatch"
+
+
+async def test_check_policy_gate_pin_raises_when_run_vanishes_after_terminalize() -> None:
+    """Defensive backstop: if the run row disappears between the terminalizing
+    write and the read-back, ``_check_policy_gate_pin`` raises
+    ``RunNotFoundError`` rather than returning a phantom ``None`` run to the
+    caller. A mismatch has already been detected, so failing loudly is correct."""
+    run = _make_run()
+    snapshot = MagicMock()
+    snapshot.policy_gate_pins_fingerprint = "deadbeef" * 8
+    snapshot.policy_gate_pins_json = [_pin_entry()]
+    snapshot.id = uuid.uuid4()
+    snapshot.pipeline_id = run.pipeline_id
+    snapshot.snapshot_version = 1
+
+    executor = PipelineExecutor(MagicMock())
+    with (
+        patch(
+            "modulo.core.pipeline_engine.executor._verify_policy_gate_pin_fingerprint",
+            AsyncMock(return_value=(True, "mismatch")),
+        ),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", AsyncMock(return_value=None)),
+        pytest.raises(RunNotFoundError),
+    ):
+        await executor._check_policy_gate_pin(
+            AsyncMock(),
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            snapshot=snapshot,
+            claim_token="tok-claim-abc",
+        )
 
 
 async def test_resume_threads_snapshot_pins_into_the_build() -> None:

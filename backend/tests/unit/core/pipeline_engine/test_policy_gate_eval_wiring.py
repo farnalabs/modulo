@@ -335,6 +335,57 @@ def test_malformed_pin_action_never_blocks() -> None:
     assert dto.policy_gate_id is None
 
 
+def test_malformed_pin_node_id_falls_back_to_the_live_node(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A pin whose ``node_id`` is not a UUID cannot be used as the decision
+    row's gate node — the build logs and falls back to the live gate's node
+    rather than raising mid-run."""
+    import logging
+
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", enabled=True)
+    pin = _pin(eval_row, gate_row, action="block")
+    pin["node_id"] = "not-a-uuid"
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.executor"):
+        dto = _only([(eval_row, gate_row)], [pin])
+
+    assert dto.failure_behaviour == "block"
+    assert dto.policy_gate_id == gate_row.id
+    assert dto.policy_gate_node_id == gate_row.node_id
+    assert any(r.getMessage() == "eval_defs.pin_node_id_invalid" for r in caplog.records)
+
+
+def test_absent_pin_node_id_uses_the_live_gate_node() -> None:
+    """A pin carrying no ``node_id`` (falsy) keeps the live gate's node as the
+    decision row's node instead of blanking it."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", enabled=True)
+    pin = _pin(eval_row, gate_row, action="block")
+    pin["node_id"] = ""
+
+    dto = _only([(eval_row, gate_row)], [pin])
+
+    assert dto.failure_behaviour == "block"
+    assert dto.policy_gate_id == gate_row.id
+    assert dto.policy_gate_node_id == gate_row.node_id
+
+
+def test_malformed_pin_entries_are_ignored_when_keying_the_universe() -> None:
+    """The pinned universe is keyed defensively: non-dict entries and entries
+    without an ``eval_id`` are skipped, so a malformed pin list degrades to an
+    empty pinned universe (governs nothing) rather than crashing the build."""
+    eval_row = _eval_row()
+    gate_row = _gate_row(eval_row, action="block", enabled=True)
+    pins = ["not-a-dict", {"node_id": "x"}, None]
+
+    dto = _only([(eval_row, gate_row)], pins)  # type: ignore[arg-type]
+
+    assert dto.failure_behaviour == "warn"
+    assert dto.policy_gate_id is None
+
+
 # ---------------------------------------------------------------------------
 # Preserved behaviour
 # ---------------------------------------------------------------------------
