@@ -180,6 +180,7 @@ from modulo.db.models.run import (
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
 
 if TYPE_CHECKING:
@@ -2875,6 +2876,7 @@ async def _update_pipeline_graph_impl(
     from modulo.api.routes.pipelines import (
         PipelineGraphUpdate,
         _is_privileged,
+        _set_mutation_row_lock_timeout,
     )
 
     is_privileged = _is_privileged(_ctx_role_val())
@@ -2944,6 +2946,19 @@ async def _update_pipeline_graph_impl(
         async with _session(org_id) as s:
             from modulo.db.crud.pipeline import get_pipeline
 
+            # FAR-1361: bound every row-lock wait in this transaction BEFORE its
+            # first lock. The MCP graph-update transaction opens its own
+            # ``_session`` and never runs the REST layer's in-txn team gate, so
+            # without this the graph write's ``SELECT ... FOR UPDATE``
+            # (``replace_pipeline_graph``) is an UNBOUNDED wait on a contended
+            # pipeline row - a held lock parks a pooled connection indefinitely.
+            # The helper is transaction-scoped (``set_config(..., is_local =>
+            # true)`` == ``SET LOCAL``) and dialect-gated, so it reverts on
+            # COMMIT/ROLLBACK and is a no-op off Postgres; the bound itself is
+            # ``Settings.mutation_row_lock_timeout_ms`` (the same one the REST
+            # mutation endpoints use).
+            await _set_mutation_row_lock_timeout(s)
+
             pipeline = await get_pipeline(s, pid)
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
@@ -2997,6 +3012,32 @@ async def _update_pipeline_graph_impl(
             "error": "guardrail_strip_forbidden",
             "detail": exc.detail,
         }
+    except SQLAlchemyError as exc:
+        # FAR-1361: the bounded lock above turns a contended graph write into
+        # SQLSTATE 55P03 (``lock_not_available``) instead of an unbounded park.
+        # Map it here, INSIDE the impl, for two reasons: (1) the tool wrapper's
+        # ``except Exception`` would otherwise collapse it into the generic
+        # "Failed to update pipeline graph", losing the "another change is in
+        # progress, re-issue later" answer the REST layer gives as 409; (2)
+        # ``_RETRY_DB`` retries ``OperationalError`` three times with backoff,
+        # so letting it escape would multiply the bounded wait before failing.
+        # Any OTHER SQLAlchemy error re-raises untouched - ProgrammingError
+        # still reaches the wrapper's migration_required arm, everything else
+        # still reaches its generic arm.
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            _log.warning(
+                "mcp.update_pipeline_graph.lock_timeout",
+                extra={"pipeline_id": pipeline_id, "org_id": str(org_id)},
+            )
+            return {
+                "error": "lock_timeout",
+                "detail": (
+                    "Timed out waiting for a lock on this pipeline; another change is in progress. "
+                    "Re-issue the update once the other change completes."
+                ),
+                "pipeline_id": pipeline_id,
+            }
+        raise
 
     return {
         "pipeline_id": pipeline_id,

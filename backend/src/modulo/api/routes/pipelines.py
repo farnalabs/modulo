@@ -15,9 +15,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Literal, NoReturn
+from typing import Annotated, Any, Literal, NoReturn, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import (
     BaseModel,
     Field,
@@ -28,7 +28,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import select, text
+from sqlalchemy import Select, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +48,7 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import (
+    TeamScopedResource,
     resolve_pipeline_team_scope,
     team_membership_exists,
     validate_owner_team_for_create,
@@ -134,6 +135,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
@@ -2830,12 +2832,22 @@ async def _reapply_team_gate_inside_mutation_txn(
     # Must run BEFORE the FOR UPDATE below to bound that wait - see
     # ``_set_mutation_row_lock_timeout`` for the dialect-gate rationale.
     await _set_mutation_row_lock_timeout(session)
-    stmt = select(Pipeline).where(
+    scope = select(Pipeline).where(
         Pipeline.id == pipeline_id,
         Pipeline.organisation_id == principal.organisation_id,
     )
-    if not include_deleted:
-        stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    # FAR-1362: restore is the one caller of this gate whose target row is
+    # soft-deleted, and the ``include_deleted`` flag alone has been INERT since
+    # FAR-1025 (PR #806) introduced the global ``do_orm_execute`` filter that
+    # injects ``deleted_at IS NULL`` into every ORM SELECT on a SoftDeleteMixin
+    # model - so the deleted-inclusive read below returned no row and the gate
+    # 404'd restore before the handler (for admins too: the admin bypass runs
+    # AFTER the row read). ``include_soft_deleted`` marks the statement so that
+    # listener skips its injection - exactly what
+    # ``crud.pipeline.get_pipeline(include_deleted=True)`` does. The other
+    # branch keeps the explicit predicate as defence-in-depth on top of the
+    # listener, as before.
+    stmt = include_soft_deleted(scope) if include_deleted else scope.where(Pipeline.deleted_at.is_(None))
     current = (
         await session.execute(
             stmt.with_for_update()
@@ -3199,12 +3211,66 @@ async def delete_pipeline_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
 
 
+async def _resolve_pipeline_team_scope_including_deleted(
+    request: Request,
+    session: AsyncSession,
+) -> TeamScopedResource | None:
+    """``resolve_pipeline_team_scope`` for a SOFT-DELETED target row.
+
+    FAR-1362: ``POST /{pipeline_id}/restore`` is the one pipeline mutation whose
+    target row is soft-deleted - that is the whole point of the endpoint. The
+    shared ``team_scope_resolver`` cannot see such a row, so reusing it here
+    would resolve ``None`` for a non-admin caller and the dependency would
+    answer 404 "Resource not found" BEFORE the handler: adding the standard
+    dependency would break restore for every non-admin.
+
+    Two things exclude a deleted row, and BOTH are handled here:
+
+    * ``team_scope_resolver`` adds an explicit ``deleted_at IS NULL``
+      predicate, and
+    * a global ``do_orm_execute`` listener (``db.soft_delete``) injects the
+      same predicate into EVERY ORM SELECT on a ``SoftDeleteMixin`` model -
+      which is why the explicit one is redundant everywhere else. The
+      statement is marked with ``include_soft_deleted`` to opt out of it.
+
+    Same path-param read, same ``TeamScopedResource`` shape, so the
+    dependency's membership-or-admin matrix is unchanged; only the visibility
+    predicate matches what the endpoint acts on. Under RLS the row is still
+    subject to ``rls_team_isolation`` (which does NOT filter on deletion), so
+    a non-member's deleted row stays invisible and the dependency still 404s.
+    """
+    raw = request.path_params.get("pipeline_id")
+    if raw is None:
+        return None
+    try:
+        obj_id = uuid.UUID(str(raw))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid pipeline_id path parameter",
+        ) from None
+    # ``Select[Any]`` cast: ``include_soft_deleted``'s ``T: Select[Any]`` bound
+    # rejects the concrete ``Select[UUID | None, str]`` a two-column select
+    # infers (SQLAlchemy's type parameters are invariant).
+    scope_stmt = select(Pipeline.owner_team_id, Pipeline.visibility).where(Pipeline.id == obj_id)
+    result = await session.execute(include_soft_deleted(cast(Select[Any], scope_stmt)))
+    row = result.first()
+    if row is None:
+        return None
+    return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
+
+
 @router.post("/{pipeline_id}/restore")
 @handle_db_errors("pipelines.restore")
 async def restore_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1362: the request-time layer its siblings (delete / archive /
+    # unarchive / update) already pair with the in-txn re-check below. The
+    # deleted-inclusive resolver is REQUIRED here - see its docstring; the
+    # stock resolver would 404 every non-admin restore.
+    _: TenantPrincipal = require_team_membership_or_admin(_resolve_pipeline_team_scope_including_deleted),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -3233,6 +3299,14 @@ async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1362: the request-time membership-or-admin layer, pairing with the
+    # in-txn re-check below exactly as delete / update / replace-graph do.
+    # Parity + defence-in-depth only: rls_team_isolation is the sole policy on
+    # `pipelines`, so on Postgres the resolver 404s a non-member's row before
+    # the handler; this is the team layer for the backends where RLS does not
+    # apply (non-Postgres, break-glass / execution_context sessions, missing or
+    # misconfigured policies).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -3263,6 +3337,10 @@ async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1362: same request-time + in-txn pairing as archive. An ARCHIVED row
+    # is not a deleted row, so the stock resolver is correct here (only
+    # restore's deleted-inclusive resolver deviates).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -3955,7 +4033,22 @@ async def tag_snapshot_endpoint(
             # tag against a pipeline the caller cannot see now 404s here
             # instead of silently updating a snapshot row.
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
+            # FAR-1360: the gate above makes the path MEAN something for
+            # pipeline VISIBILITY; this scopes the snapshot READ to it too. The
+            # snapshot lookup was keyed by snapshot_id alone, so on a layer
+            # where RLS does not apply a snapshot of ANOTHER pipeline could be
+            # tagged through this path. Both scopes are passed to the CRUD (the
+            # same defence-in-depth contract as get_snapshot_detail); a
+            # mismatch returns None -> 404 below, BEFORE any attribute is
+            # written.
+            snapshot = await tag_snapshot(
+                session,
+                snapshot_id,
+                tag=req.tag,
+                notes=req.notes,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -4066,7 +4159,19 @@ async def diff_snapshot_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id)
+            # FAR-1362: the request-time dependency above was this endpoint's
+            # ONLY team layer while every sibling carried both. Read-only, so
+            # this is parity rather than a TOCTOU close for a write - but the
+            # in-txn re-check is also what makes the {pipeline_id} path
+            # authoritative against a row whose visibility/ownership changed
+            # after the dependency's own transaction COMMITed. It takes the
+            # transaction's first lock, so the bounded ``lock_timeout`` it sets
+            # covers the whole (short) diff transaction.
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            # FAR-1360: scope BOTH snapshot ids to the path pipeline - the
+            # lookup used to resolve each by primary key alone, making the
+            # {pipeline_id} path segment decorative.
+            result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id, pipeline_id=pipeline_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -4112,8 +4217,9 @@ async def move_pipeline_to_folder_endpoint(
     # request-time membership-or-admin gate plus the in-txn re-check below,
     # exactly as update / delete / replace-graph / convert-to-agent /
     # revert-to-manual pair them. (``archive`` / ``unarchive`` / ``restore``
-    # carry ONLY the in-txn layer - no request-time dependency - so they are
-    # deliberately not in this list.) Plain
+    # gained the SAME request-time pairing in FAR-1362 - ``restore`` via the
+    # deleted-inclusive ``_resolve_pipeline_team_scope_including_deleted``, so
+    # they are deliberately not in this list.) Plain
     # (JWT) flavour, matching this endpoint's own ``require_permission``.
     # Not a live Postgres hole: ``rls_team_isolation`` (migration 0124, the
     # sole policy on ``pipelines``) already hides a non-member's row, so under

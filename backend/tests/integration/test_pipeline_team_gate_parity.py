@@ -1,28 +1,37 @@
-"""FAR-1311 + FAR-1312: team-gate parity on the graph read and the snapshot writes, on real Postgres.
+"""Team-gate parity on the pipeline READ/WRITE surfaces, on real Postgres.
 
-The three endpoints under test:
+The endpoints under test:
 
 * ``GET /api/v1/pipelines/{id}/graph`` (FAR-1311) carried NO team dependency
   while its sibling ``GET /api/v1/pipelines/{id}`` did - so on the layers
   where RLS does not apply any org member with ``pipeline.graph.read`` could
-  read a team-private pipeline's full graph (prompts,
+  read a TEAM-PRIVATE pipeline's full graph (prompts,
   ``connector_bindings_json``, model pins),
 * ``POST /api/v1/pipelines/{id}/snapshots`` (save-edit, FAR-1312) and
   ``PATCH /api/v1/pipelines/{id}/snapshots/{snapshot_id}`` (tag, FAR-1312)
   carried the request-time dependency but no
   ``_reapply_team_gate_inside_mutation_txn`` re-check inside the mutation
   transaction, unlike update / replace-graph / convert / revert / rollback /
-  delete-snapshot.
+  delete-snapshot,
+* ``POST /{id}/snapshots/diff`` (FAR-1362) carried the request-time
+  dependency but no in-txn re-check, and resolved BOTH snapshot ids by primary
+  key alone - the ``{id}`` path segment was decorative (FAR-1360),
+* ``POST /{id}/archive`` / ``/unarchive`` / ``/restore`` (FAR-1362) carried
+  the in-txn re-check but NO request-time dependency, and ``/restore`` needs a
+  deleted-inclusive resolver because its target row is soft-deleted,
+* ``PATCH /{id}/snapshots/{snapshot_id}`` also scoped its read to the path
+  pipeline (FAR-1360).
 
-None of the three is a live Postgres hole: migration 0124 drops the
+None of these is a live Postgres hole: migration 0124 drops the
 OR-combined ``rls_org_isolation`` policy on ``pipelines`` and leaves
 ``rls_team_isolation`` as the sole policy, so a non-member's read already
 returns no row. These tests PROVE that - they are the evidence for the
 rationale, and the reason the unit tests (which cover the dependency's own 403
 branch against a session double) are not the whole story. The in-txn half of
-FAR-1312 (a denial overriding a passing request-time gate) is covered by
-``tests/unit/api/test_pipeline_graph_snapshot_team_gate.py``: on Postgres a
-non-member never gets that far, because RLS hides the row first.
+FAR-1312 / FAR-1362 (a denial overriding a passing request-time gate) is
+covered by ``tests/unit/api/test_pipeline_graph_snapshot_team_gate.py`` and
+``tests/unit/api/test_snapshot_path_scoping_and_residual_gates.py``: on
+Postgres a non-member never gets that far, because RLS hides the row first.
 
 Runs against the migrated testcontainer with the real auth stack:
 
@@ -151,6 +160,8 @@ async def _insert_snapshot(
     db_engine: AsyncEngine,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
+    *,
+    version: int = 1,
 ) -> uuid.UUID:
     """A committed snapshot row for *pipeline_id* (the tag endpoint's target)."""
     snapshot_id = uuid.uuid4()
@@ -161,10 +172,10 @@ async def _insert_snapshot(
                 "snapshot_version, graph_json, connector_bindings_json, "
                 "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
                 "run_context_defaults, config_json) "
-                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "VALUES (:id, :pid, :oid, :ver, '{}'::json, '[]'::json, "
                 "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
             ),
-            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id), "ver": version},
         )
     return snapshot_id
 
@@ -415,5 +426,306 @@ async def test_tag_snapshot_org_admin_succeeds(
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["tag"] == "canary"
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1360: the {pipeline_id} path segment must scope the snapshot read
+# ---------------------------------------------------------------------------
+
+
+async def _seed_two_pipelines_one_team(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    *,
+    label: str,
+) -> dict[str, object]:
+    """TWO team-private pipelines in ONE team, two snapshots each.
+
+    Both pipelines share the team, so the caller passes both team gates: the
+    thing under test here is the snapshot -> pipeline BINDING, not team
+    visibility. Returns ``pipeline_a`` / ``pipeline_b``, ``snaps_a`` /
+    ``snaps_b`` (two each, so the diff endpoint has a real pair), and the
+    member / outsider accounts.
+    """
+    member = await _seed_operator_account(db_engine, org_id, f"{label}-member")
+    outsider = await _seed_operator_account(db_engine, org_id, f"{label}-outsider")
+    team_id = await _seed_team(db_engine, org_id, owner_id, member_id=member, label=label)
+    pipeline_a = await _insert_team_private_pipeline(db_engine, org_id, owner_id, team_id)
+    pipeline_b = await _insert_team_private_pipeline(db_engine, org_id, owner_id, team_id)
+    snaps_a = [
+        await _insert_snapshot(db_engine, org_id, pipeline_a),
+        await _insert_snapshot(db_engine, org_id, pipeline_a, version=2),
+    ]
+    snaps_b = [
+        await _insert_snapshot(db_engine, org_id, pipeline_b),
+        await _insert_snapshot(db_engine, org_id, pipeline_b, version=2),
+    ]
+    return {
+        "pipeline_a": pipeline_a,
+        "pipeline_b": pipeline_b,
+        "snaps_a": snaps_a,
+        "snaps_b": snaps_b,
+        "member": member,
+        "outsider": outsider,
+    }
+
+
+async def _read_tag(db_engine: AsyncEngine, snapshot_id: uuid.UUID) -> object:
+    async with db_engine.connect() as conn:
+        return (
+            await conn.execute(text("SELECT tag FROM pipeline_snapshots WHERE id = :id"), {"id": str(snapshot_id)})
+        ).scalar_one_or_none()
+
+
+async def test_tag_snapshot_through_a_foreign_pipeline_path_is_404(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1360: a snapshot of pipeline B addressed via pipeline A's path 404s.
+
+    The caller is a MEMBER of both pipelines' team, so both team gates pass -
+    the 404 comes from the snapshot -> pipeline binding alone, and the tag is
+    never written.
+    """
+    seed = await _seed_two_pipelines_one_team(db_engine, test_org, test_user, label="tag-foreign")
+    pipeline_a = seed["pipeline_a"]
+    snap_b = seed["snaps_b"][0]
+    member = seed["member"]
+    try:
+        resp = await integration_client.patch(
+            f"/api/v1/pipelines/{pipeline_a}/snapshots/{snap_b}",
+            json={"tag": "prod"},
+            headers=_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Snapshot not found"
+        assert await _read_tag(db_engine, snap_b) is None, "the denied request wrote a tag"
+    finally:
+        await _cleanup(db_engine, pipeline_a)
+        await _cleanup(db_engine, seed["pipeline_b"])
+
+
+async def test_diff_through_a_foreign_pipeline_path_is_404(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1360: the diff endpoint scoped BOTH ids to the path pipeline."""
+    seed = await _seed_two_pipelines_one_team(db_engine, test_org, test_user, label="diff-foreign")
+    pipeline_a = seed["pipeline_a"]
+    snaps_b = seed["snaps_b"]
+    member = seed["member"]
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_a}/snapshots/diff",
+            json={"snapshot_a_id": str(snaps_b[0]), "snapshot_b_id": str(snaps_b[1])},
+            headers=_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 404, resp.text
+        assert "not found" in resp.json()["detail"].lower()
+    finally:
+        await _cleanup(db_engine, pipeline_a)
+        await _cleanup(db_engine, seed["pipeline_b"])
+
+
+async def test_diff_in_path_snapshots_succeeds_for_a_member(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """The scoping does not break the in-path case (the real diff runs)."""
+    seed = await _seed_two_pipelines_one_team(db_engine, test_org, test_user, label="diff-member")
+    pipeline_a = seed["pipeline_a"]
+    snaps_a = seed["snaps_a"]
+    member = seed["member"]
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_a}/snapshots/diff",
+            json={"snapshot_a_id": str(snaps_a[0]), "snapshot_b_id": str(snaps_a[1])},
+            headers=_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["snapshot_a"]["id"] == str(snaps_a[0])
+    finally:
+        await _cleanup(db_engine, pipeline_a)
+        await _cleanup(db_engine, seed["pipeline_b"])
+
+
+async def test_diff_non_member_never_reaches_the_handler(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1362's request-time layer on diff, observed on real Postgres."""
+    pipeline_id, _snapshot_id, _member, outsider = await _seed_scenario(db_engine, test_org, test_user)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/snapshots/diff",
+            json={"snapshot_a_id": str(uuid.uuid4()), "snapshot_b_id": str(uuid.uuid4())},
+            headers=_auth_headers(test_org, outsider, role="operator"),
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Resource not found"
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1362: archive / unarchive / restore gain the request-time dependency
+# ---------------------------------------------------------------------------
+
+
+async def _read_archived_at(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> object:
+    async with db_engine.connect() as conn:
+        return (
+            await conn.execute(text("SELECT archived_at FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
+        ).scalar_one_or_none()
+
+
+async def _read_deleted_at(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> object:
+    async with db_engine.connect() as conn:
+        return (
+            await conn.execute(text("SELECT deleted_at FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
+        ).scalar_one_or_none()
+
+
+async def _soft_delete(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> None:
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE pipelines SET deleted_at = now() WHERE id = :id"),
+            {"id": str(pipeline_id)},
+        )
+
+
+async def test_archive_non_member_never_reaches_the_handler(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    pipeline_id, _snapshot_id, _member, outsider = await _seed_scenario(db_engine, test_org, test_user)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/archive",
+            headers=_auth_headers(test_org, outsider, role="operator"),
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Resource not found"
+        assert await _read_archived_at(db_engine, pipeline_id) is None, "the denied request archived the row"
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+async def test_archive_member_succeeds(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    pipeline_id, _snapshot_id, member, _outsider = await _seed_scenario(db_engine, test_org, test_user)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/archive",
+            headers=_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["archived_at"] is not None
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+async def test_unarchive_non_member_never_reaches_the_handler(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    pipeline_id, _snapshot_id, _member, outsider = await _seed_scenario(db_engine, test_org, test_user)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/unarchive",
+            headers=_auth_headers(test_org, outsider, role="operator"),
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Resource not found"
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+async def test_unarchive_member_succeeds(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    pipeline_id, _snapshot_id, member, _outsider = await _seed_scenario(db_engine, test_org, test_user)
+    try:
+        archived = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/archive",
+            headers=_auth_headers(test_org, member, role="operator"),
+        )
+        assert archived.status_code == 200, archived.text
+
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/unarchive",
+            headers=_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["archived_at"] is None
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+async def test_restore_non_member_never_reaches_the_handler(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """The deleted-inclusive resolver still 404s a non-member's row (RLS hides it)."""
+    pipeline_id, _snapshot_id, _member, outsider = await _seed_scenario(db_engine, test_org, test_user)
+    try:
+        await _soft_delete(db_engine, pipeline_id)
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/restore",
+            headers=_auth_headers(test_org, outsider, role="operator"),
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Resource not found"
+        assert await _read_deleted_at(db_engine, pipeline_id) is not None, "the denied request restored the row"
+    finally:
+        await _cleanup(db_engine, pipeline_id)
+
+
+async def test_restore_member_succeeds_on_a_deleted_row(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """The whole reason restore cannot reuse the stock resolver.
+
+    ``resolve_pipeline_team_scope`` filters ``deleted_at IS NULL``, so wiring the
+    stock dependency to restore would 404 EVERY non-admin restore before the
+    handler. This member (non-admin) restore must reach the handler and clear
+    ``deleted_at``.
+    """
+    pipeline_id, _snapshot_id, member, _outsider = await _seed_scenario(db_engine, test_org, test_user)
+    try:
+        await _soft_delete(db_engine, pipeline_id)
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{pipeline_id}/restore",
+            headers=_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 200, resp.text
+        assert await _read_deleted_at(db_engine, pipeline_id) is None, "the restore did not clear deleted_at"
     finally:
         await _cleanup(db_engine, pipeline_id)

@@ -5,7 +5,9 @@ two-layer team gate their sibling mutations (update / delete / replace-graph /
 convert-to-agent / revert-to-manual) carry: the request-time
 ``require_team_membership_or_admin(resolve_pipeline_team_scope)`` dependency and
 the in-txn ``_reapply_team_gate_inside_mutation_txn`` re-check. (``archive`` /
-``unarchive`` / ``restore`` still carry only the in-txn layer.)
+``unarchive`` / ``restore`` gained the same request-time pairing in FAR-1362 -
+``restore`` via a deleted-inclusive resolver - so they are no longer
+one-layer endpoints.)
 
 That is a parity gap, not a live Postgres hole: migration 0124 leaves
 ``rls_team_isolation`` as the sole policy on ``pipelines``, so a non-member's
