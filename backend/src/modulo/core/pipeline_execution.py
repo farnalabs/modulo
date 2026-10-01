@@ -254,8 +254,15 @@ def _resolve_claim_cap(claim_cap: int | None) -> int:
     return int(get_settings().saq_run_claim_cap)
 
 
+# FAR-1088: both claim variants stamp ``dispatch_phase='claimed'`` (and its
+# entry timestamp) in the SAME UPDATE that claims the row. Deliberate: the
+# claim is the one write we know succeeds, so the phase lands atomically with
+# it (correctly ordered by construction, no extra connection) — and because it
+# is written on EVERY claim, a re-dispatch/re-claim resets the phase, so a
+# re-woken run can never report a previous attempt's stale phase.
 _CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
     "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
@@ -264,7 +271,8 @@ _CLAIM_UPDATE_SQL = text(
 )
 
 _CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
     "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
@@ -297,6 +305,10 @@ def build_claim_update(
     When *claim_token* is given the claim also rotates ``runs.claim_token`` to a
     FRESH per-claim value (plan F3a) — each re-claim gets a distinct token so a
     superseded original's heartbeat/E2B fence can detect it was replaced.
+
+    Every claim also stamps ``dispatch_phase='claimed'`` + its entry timestamp
+    in this same statement (FAR-1088) — see the note above
+    ``_CLAIM_UPDATE_SQL``.
 
     Callers pass the full parameter dict (rid / oid / stale_seconds / claim_cap)
     at execute time.

@@ -354,6 +354,19 @@ class Run(OrgScoped):
     sandbox_dispatch_state: Mapped[str | None] = mapped_column(Text)
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)
+    # FAR-1088 dispatch-phase instrumentation (migration 0272) — INTERNAL ONLY:
+    # NOT API-projected (absent from RunResponse / _build_list_item / MCP
+    # payloads). Records which phase of the dispatch pipeline the run last
+    # entered, for diagnosing claimed-but-nodeless runs.
+    #   * ``dispatch_phase`` — the phase label ('claimed', later
+    #     loading_setup/setup_complete/streaming/...); NULL for runs claimed
+    #     before this shipped.
+    #   * ``dispatch_phase_entered_at`` — when that phase was entered.
+    # The floor write is the claim itself: ``pipeline_execution`` stamps
+    # 'claimed' inside the atomic claim UPDATE, so a run that was claimed can
+    # never lack a phase even if no node ever ran.
+    dispatch_phase: Mapped[str | None] = mapped_column(Text)
+    dispatch_phase_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # FAR-583 B1: the legacy blob columns (outputs_json / node_telemetry_json /
     # raw_output_markers) are NO LONGER mapped on the ORM — the per-node store
     # `run_node_outputs` is the single blob surface (crud.run_node_outputs).
