@@ -44,8 +44,36 @@ function isTransientTransportError(err: unknown): boolean {
   return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
 }
 
+/**
+ * Is this HTTP status a transient infrastructure failure a bounded retry can
+ * recover from?
+ *
+ * A staging `@regression` sweep intermittently returns 503 ("Database
+ * temporarily unavailable." / "Role verification temporarily unavailable." /
+ * "Schema management is temporarily unavailable.") from a database/connection
+ * blip under load, and the gateway in front of it can return 502/504. These
+ * are NOT deterministic client errors: the request rolled back and re-issuing
+ * it is the documented recovery (the DB error arms in the API map a rolled-back
+ * transaction to 503 precisely so a client may retry). Retrying them keeps a
+ * healthy journey from hard-failing on the first blip, exactly as `apiLogin`
+ * already tolerates a transient transport blip.
+ *
+ * Deterministic client errors (4xx — bad credentials, validation, conflict)
+ * and application errors (500) are deliberately NOT retried so a real defect
+ * still fails fast.
+ */
+function isTransientHttpStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504
+}
+
 const LOGIN_ATTEMPTS = 3
 const LOGIN_BACKOFF_MS = 2_000
+
+// Bounded retry for the API helpers below: attempts include the first try, and
+// the backoff grows linearly (1 s, 2 s, 3 s). Capped so a persistent outage
+// still fails the journey instead of hanging it.
+const API_ATTEMPTS = 4
+const API_BACKOFF_BASE_MS = 1_000
 
 export async function apiLogin(env: TestEnv): Promise<string> {
   // Login is pure ARRANGE: a transient staging blip (the whole point of the
@@ -82,25 +110,36 @@ export async function apiFetch<T>(
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  const res = await fetch(apiBase + path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
-  })
-  const text = await res.text()
-  let parsed: T | null = null
-  if (text) {
-    try {
-      parsed = JSON.parse(text) as T
-    } catch {
-      parsed = null
+  // Bounded retry on an explicit transient 5xx response only. A transport
+  // error (timeout / reset) is NOT retried here: on a non-idempotent request
+  // the server may have committed before the socket dropped, so re-issuing it
+  // could double-apply — and the observed staging failures are all explicit
+  // 5xx responses, which the API guarantees are rolled back.
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(apiBase + path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (isTransientHttpStatus(res.status) && attempt < API_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, API_BACKOFF_BASE_MS * attempt))
+      continue
     }
+    const text = await res.text()
+    let parsed: T | null = null
+    if (text) {
+      try {
+        parsed = JSON.parse(text) as T
+      } catch {
+        parsed = null
+      }
+    }
+    return { status: res.status, body: parsed, text }
   }
-  return { status: res.status, body: parsed, text }
 }
 
 /** Unique, human-readable name so parallel seeding never collides. */
