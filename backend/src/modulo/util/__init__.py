@@ -111,9 +111,11 @@ def validate_workspace_network(value: str | None) -> str | None:
     workspace_network validation — called at profile CRUD, at dispatch,
     and in the Docker provider.
     """
-    if value is None or value.strip() == "":
+    if value is None:
         return None
     stripped = value.strip()
+    if stripped == "":
+        return None
     low = stripped.lower()
     # Reject known Docker network modes that defeat isolation.
     if low in _DANGEROUS_NETWORK_MODES:
