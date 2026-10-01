@@ -130,7 +130,8 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       periodic reconciliation sweep (`reconcile_missing_classifications`, wired into
       `dispatcher_reconcile`) backfills raw-SQL terminalizers within a minute
       (`pipeline_engine/classify.py`, `test_run_classification.py`)
-- [x] The delivery signal is self-reported and honestly labelled (FAR-1336):
+- [x] The delivery signal is agent-reported and honestly labelled (FAR-1336,
+      vocabulary renamed from `self_reported` by FAR-1388):
       `delivered_pr_urls` are harvested in one walk from each node's structured
       return, the node telemetry value, and every FAR-188 raw-output marker's
       `pr_url` (deduplicated, validated) — and nothing cross-checks the URLs
@@ -138,8 +139,12 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       URL how it entered the record (`declared` = the run's output contract
       asserted it; `matched` = it merely appears in emitted output; `declared`
       wins when both routes see the URL) and `delivery_confidence` states plainly
-      that every record written today is `self_reported` (`verified` is reserved
-      for a future SCM-confirmed source). Both keys are ADDITIVE metadata — they
+      that every record written today is `agent_reported` (`verified` is reserved
+      for a future SCM-confirmed source). Rows stored before the FAR-1388 rename
+      carry the deprecated `self_reported` alias, are never backfilled, and
+      readers tolerate either spelling (that old spelling must not be confused
+      with the unrelated cost-provenance `self_reported` component kind).
+      Both keys are ADDITIVE metadata — they
       never change the verdict — and the eight-key shape is forward-only:
       pre-FAR-1336 six-key rows are never backfilled and readers treat an absent
       key as legacy/unknown, never an error (`classify.py`, `test_run_classification.py`)

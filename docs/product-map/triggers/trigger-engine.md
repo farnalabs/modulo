@@ -96,13 +96,18 @@ rate-limited by the `TriggerEngine`.
 - [x] Streak/outcomes readout surfaces delivery health per trigger (`streak_status`:
       enabled / streak / threshold / state / deactivated_reason / last_outcomes)
       derived from the run-outcome classification records (≤5 outcomes, newest
-      first) (`core/trigger_streak.py`); each outcome's self-reported confidence
-      rides the wire (FAR-1373): `last_outcomes` entries carry
-      `delivery_confidence` (`self_reported` on post-FAR-1336 records, `None` —
+      first) (`core/trigger_streak.py`); each outcome's agent-reported confidence
+      rides the wire (FAR-1373, vocabulary renamed from `self_reported` by
+      FAR-1388): `last_outcomes` entries carry
+      `delivery_confidence` (`agent_reported` on post-FAR-1336 records,
+      including the pre-rename `self_reported` alias which stored rows still
+      carry and which is never backfilled — readers treat either spelling as
+      agent-reported; `None` —
       never "verified" — on pre-FAR-1336 six-key rows), and
-      `SettingsTriggersView` renders a "Self-reported" confidence qualifier chip
-      ONLY on a `delivered` outcome whose confidence is `self_reported` — a
-      no_delivery / excluded / unclassified row, a non-self-reported confidence,
+      `SettingsTriggersView` renders an "Agent-reported" confidence qualifier chip
+      ONLY on a `delivered` outcome whose confidence is `agent_reported` or that
+      deprecated alias — a
+      no_delivery / excluded / unclassified row, a non-agent-reported confidence,
       or an unknown/absent key renders no qualifier
       (`test_trigger_streak_engine.py`, `SettingsTriggersView.spec.ts`)
 
@@ -116,7 +121,8 @@ rate-limited by the `TriggerEngine`.
 - 2026-10-01: **Improve Architecture product-map walk** — closed the
   sub-surface gap left by FAR-1373 (merged as the streak-outcome confidence
   qualifier): the streak/outcomes readout's per-outcome `delivery_confidence`
-  wire surface and the `SettingsTriggersView` "Self-reported" qualifier chip
+  wire surface and the `SettingsTriggersView` "Agent-reported" qualifier chip
+  (vocabulary renamed from `self_reported` by FAR-1388)
   shipped with no product-map home — the manifest registry only mentioned the
   streak UI and the tracker not at all. Added the checked behaviour line plus
   the `core/trigger_streak.py` code and `test_trigger_streak_engine.py` /

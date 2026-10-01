@@ -2257,8 +2257,13 @@ async def _write_unclassified_classification(session: AsyncSession, run: Run) ->
                         # ``classify`` import, see the docstring above). The shape
                         # is held in lockstep with ``classify._unclassified_marker_dict``
                         # by an anti-drift test in test_run_classification.py.
+                        # The confidence value is ``agent_reported`` (FAR-1388
+                        # renamed the vocabulary); rows persisted before that
+                        # rename carry the pre-rename spelling, are never
+                        # backfilled, and readers tolerate both spellings, so
+                        # this fresh marker never needs the old one.
                         "pr_url_provenance": {},
-                        "delivery_confidence": "self_reported",
+                        "delivery_confidence": "agent_reported",
                     }
                 )
             )
