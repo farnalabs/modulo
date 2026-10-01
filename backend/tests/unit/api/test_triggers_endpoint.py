@@ -1471,12 +1471,13 @@ def test_list_triggers_includes_full_streak_status_for_ongoing(client: TestClien
 
 
 def test_list_triggers_streak_status_uniform_shape_for_non_ongoing(client: TestClient) -> None:
-    """FIX 5 — non-ongoing triggers get the SAME uniform 6-key streak_status
-    shape as ongoing ones: ``get_trigger_streak_status`` is always called and
-    its base (``{enabled: false, streak: 0, threshold: 0, state:
+    """FIX 5 — trigger types the engine does not cover (FAR-1387 covers
+    ongoing + cron) get the SAME uniform 6-key streak_status shape as covered
+    ones: ``get_trigger_streak_status`` is always called and its base
+    (``{enabled: false, streak: 0, threshold: 0, state:
     'unconfigured', deactivated_reason: null, last_outcomes: []}``) is returned
     with NO streak-engine query (the reader short-circuits before querying)."""
-    trigger = _make_mock_trigger(trigger_type="cron")
+    trigger = _make_mock_trigger(trigger_type="webhook")
     base_status = {
         "enabled": False,
         "streak": 0,

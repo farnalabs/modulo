@@ -6088,14 +6088,16 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         streak = await enforce_no_delivery_streaks(redis_client=redis_client)
         summary["streak_scanned"] = streak.get("scanned", 0)
         summary["streak_deactivated"] = streak.get("deactivated", 0)
+        summary["streak_tripped"] = streak.get("tripped", 0)
         summary["streak_capped"] = streak.get("capped", 0)
         summary["streak_alerts"] = streak.get("alerts", 0)
         summary["streak_notify_failed"] = streak.get("notify_failed", 0)
-        if streak.get("deactivated") or streak.get("alerts"):
+        if streak.get("deactivated") or streak.get("tripped") or streak.get("alerts"):
             _log.info(
                 "dispatcher_reconcile.streak_sweep",
                 extra={
                     "deactivated": streak.get("deactivated", 0),
+                    "tripped": streak.get("tripped", 0),
                     "alerts": streak.get("alerts", 0),
                     "capped": streak.get("capped", 0),
                 },

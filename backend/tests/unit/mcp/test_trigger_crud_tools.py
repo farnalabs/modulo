@@ -294,10 +294,11 @@ class TestGetTriggerStreakStatus(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        """A non-ongoing trigger still gets the uniform 6-key streak_status shape
+        """A trigger type the streak engine does NOT cover (FAR-1387 covers
+        ongoing + cron) still gets the uniform 6-key streak_status base
         ({enabled: false, state: 'unconfigured'}, zero queries) — the reader
         short-circuits before issuing any streak-engine query."""
-        trigger = _make_mock_trigger(trigger_type="cron")
+        trigger = _make_mock_trigger(trigger_type="webhook")
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
