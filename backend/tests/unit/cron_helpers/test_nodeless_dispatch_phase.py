@@ -109,6 +109,18 @@ async def test_elapsed_is_seconds_since_phase_entered() -> None:
     assert abs(recomputed - elapsed) < 0.2
 
 
+async def test_naive_phase_timestamp_is_treated_as_utc() -> None:
+    """A naive ``dispatch_phase_entered_at`` must not raise; it is assumed UTC."""
+    naive = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=30)
+    run = _make_run(dispatch_phase="loading_setup", dispatch_phase_entered_at=naive)
+    summary, _ingest = await _terminal_fail(run)
+
+    detail = run.error_detail
+    assert isinstance(detail, str)
+    assert "dispatch_phase=loading_setup dispatch_phase_elapsed=" in detail
+    assert summary["claimed_but_never_dispatched"] == 1
+
+
 async def test_phase_carried_in_error_log_and_ingested_context(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

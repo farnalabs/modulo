@@ -231,6 +231,47 @@ class TestFailSoft:
             writer.record(PHASE_LOADING_SETUP)
         assert "dispatch_phase.record scheduling failed" in caplog.text
 
+    def test_record_unexpected_error_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A non-RuntimeError scheduling fault is fail-soft too (generic arm)."""
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+
+        def _boom() -> Any:
+            raise ValueError("simulated scheduling fault")
+
+        monkeypatch.setattr("modulo.core.pipeline_execution.asyncio.get_running_loop", _boom)
+        with caplog.at_level(logging.DEBUG, logger=_LOGGER):
+            writer.record(PHASE_LOADING_SETUP)
+        assert "dispatch_phase.record scheduling failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_flush_without_in_flight_task_is_a_noop(self) -> None:
+        """A flush before any record returns immediately (no task, no write)."""
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+        assert writer._task is None
+
+        await writer.flush()
+
+        assert writer._task is None
+        assert not eng.attempts
+
+    @pytest.mark.asyncio
+    async def test_drain_reraises_cancelled_error(self) -> None:
+        """A CancelledError from the write is re-raised, not swallowed."""
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+
+        async def _cancelled(_phase: str) -> None:
+            raise asyncio.CancelledError
+
+        writer._write = _cancelled  # type: ignore[method-assign]
+        writer._pending = PHASE_STREAMING
+        with pytest.raises(asyncio.CancelledError):
+            await writer._drain()
+
     def test_default_timeout_is_two_seconds(self) -> None:
         assert PHASE_WRITE_TIMEOUT_SECONDS == 2.0
 
@@ -278,6 +319,30 @@ class TestSingleFlightCoalescing:
             await writer.flush()
             assert eng.row["dispatch_phase"] == phase
         assert eng.max_in_flight == 1
+
+    @pytest.mark.asyncio
+    async def test_flush_follows_a_writer_replaced_during_the_await(self) -> None:
+        """If ``_task`` is replaced mid-flush, flush re-observes and drains again.
+
+        Covers the loop-continuation arm: after awaiting the captured task a
+        newly-scheduled drain must not be abandoned.
+        """
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+        loop = asyncio.get_running_loop()
+
+        replacement = loop.create_future()
+        replacement.set_result(None)
+
+        async def _drain_replacing() -> None:
+            # A fresh record replaced the in-flight drain while we were waiting.
+            writer._task = replacement
+            writer._pending = None
+
+        writer._task = loop.create_task(_drain_replacing())
+        await writer.flush()
+
+        assert writer._task is replacement
 
 
 class TestTrackerWiring:
@@ -362,3 +427,34 @@ class TestExecuteRunWiresWriter:
         assert writer.claim_token == _TOK
         assert writer.run_id == _RUN_ID
         assert writer.org_id == _ORG_ID
+
+    @pytest.mark.asyncio
+    async def test_execute_run_skips_flush_when_no_writer_attached(self) -> None:
+        """The post-run flush is guarded: a tracker with no writer is skipped."""
+        job = MagicMock()
+        job.update = AsyncMock()
+        ctx: dict[str, Any] = {"job": job}
+
+        async def _clear_writer(aeng: Any, **kwargs: Any) -> dict[str, str]:
+            kwargs["dispatch_tracker"].durable_writer = None
+            return {"status": "failed"}
+
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=_TOK),
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+            patch(
+                "modulo.core.pipeline_execution.run_executor_with_watchdog",
+                side_effect=_clear_writer,
+            ),
+        ):
+            run = MagicMock()
+            run.input_payload = {}
+            executor = MagicMock()
+            executor.execute = AsyncMock()
+            load.return_value = (run, executor)
+            result = await sw.execute_run(ctx, run_id=_RUN_ID, org_id=_ORG_ID)
+
+        assert result == {"status": "failed"}
+        complete.assert_not_awaited()
