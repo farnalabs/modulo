@@ -41,7 +41,39 @@ jobs:
       actions: read
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
+      # Run identity, resolved ONCE below and consumed by every downstream
+      # job via needs.deploy-throttle.outputs.* — so all jobs in one run
+      # report the same RUN_SHA instead of each re-deriving it.
+      run_sha: ${{ steps.run_identity.outputs.run_sha }}
+      run_ref: ${{ steps.run_identity.outputs.run_ref }}
+      run_event: ${{ steps.run_identity.outputs.run_event }}
+      push_before: ${{ steps.run_identity.outputs.push_before }}
+      push_after: ${{ steps.run_identity.outputs.push_after }}
     steps:
+      # Echoed before anything else (this job never checks out code) so the
+      # run's identity is on record even if the throttle below fails or skips
+      # the deploy. For push events the before/after pair shows the pushed
+      # range, which is what makes "was PR #N in this run?" answerable from
+      # the log alone.
+      - name: Resolve run identity
+        id: run_identity
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ github.sha }}"
+          echo "RUN_REF=${{ github.ref }}"
+          echo "RUN_EVENT=${{ github.event_name }}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ github.event.before }}"
+            echo "PUSH_AFTER=${{ github.event.after }}"
+          fi
+          {
+            echo "run_sha=${{ github.sha }}"
+            echo "run_ref=${{ github.ref }}"
+            echo "run_event=${{ github.event_name }}"
+            echo "push_before=${{ github.event.before }}"
+            echo "push_after=${{ github.event.after }}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Check last deploy attempt time
         id: check
         shell: bash
@@ -156,10 +188,34 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     steps:
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
@@ -181,10 +237,34 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
     steps:
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
@@ -208,10 +288,34 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 30
     steps:
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
@@ -257,10 +361,34 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 90
     steps:
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
@@ -338,11 +466,35 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     steps:
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       # Full history required: semgrep diffs against --baseline-commit HEAD^.
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:
@@ -768,7 +920,10 @@ jobs:
 
   deploy-staging:
     name: Deploy to staging
-    needs: [pre-deploy-gate]
+    # deploy-throttle added to needs so this job can consume the run-identity
+    # outputs; it was already a transitive dependency via pre-deploy-gate, so
+    # the graph's behaviour is unchanged.
+    needs: [deploy-throttle, pre-deploy-gate]
     runs-on: ubicloud-standard-2
     # 180 min budget: build (~15m) + rehearsal (~40m) + pre-migrate (~40m) +
     # deploy (~15m) + health gate (~45m) + margin. Without this, the GitHub
@@ -776,10 +931,34 @@ jobs:
     # than routing it to the fix loop.
     timeout-minutes: 180
     steps:
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
 
       - name: Capture git metadata
         id: git
@@ -1828,7 +2007,10 @@ jobs:
 
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
-    needs: [deploy-staging]
+    # deploy-throttle added to needs so this job can consume the run-identity
+    # outputs; it was already a transitive dependency via deploy-staging, so
+    # the graph's behaviour is unchanged.
+    needs: [deploy-throttle, deploy-staging]
     if: github.event.inputs.skip_staging_e2e != 'true'
     timeout-minutes: 90
     runs-on: ubicloud-standard-2
@@ -1836,9 +2018,37 @@ jobs:
       run:
         working-directory: frontend
     steps:
+      # working-directory override: the job default (frontend/) does not exist
+      # until the checkout below runs.
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.28.0
@@ -1894,7 +2104,11 @@ jobs:
 
   deploy-production:
     name: Deploy to app.modulo.run
-    needs: [pre-deploy-gate, staging-e2e]
+    # deploy-throttle added to needs so this job can consume the run-identity
+    # outputs; it was already a transitive dependency via pre-deploy-gate, so
+    # the graph's behaviour is unchanged (the always() condition below is
+    # untouched).
+    needs: [deploy-throttle, pre-deploy-gate, staging-e2e]
     if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     # 180 min budget: same structure as deploy-staging (build + rehearsal +
@@ -1902,10 +2116,34 @@ jobs:
     # of 360 min (6h) silently swallows a hang as 'cancelled'.
     timeout-minutes: 180
     steps:
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
 
       - name: Capture git metadata
         id: git
@@ -2981,7 +3219,10 @@ jobs:
 
   prod-smoke:
     name: Prod smoke tests
-    needs: [deploy-production]
+    # deploy-throttle added to needs so this job can consume the run-identity
+    # outputs; it was already a transitive dependency via deploy-production,
+    # so the graph's behaviour is unchanged.
+    needs: [deploy-throttle, deploy-production]
     if: always() && needs.deploy-production.result == 'success'
     runs-on: ubicloud-standard-2
     # 30 min budget: checkout + pnpm install + playwright install + smoke
@@ -2992,9 +3233,37 @@ jobs:
       run:
         working-directory: frontend
     steps:
+      # working-directory override: the job default (frontend/) does not exist
+      # until the checkout below runs.
+      - name: Echo run identity (pre-checkout)
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "RUN_SHA=${{ needs.deploy-throttle.outputs.run_sha }}"
+          echo "RUN_REF=${{ needs.deploy-throttle.outputs.run_ref }}"
+          echo "RUN_EVENT=${{ needs.deploy-throttle.outputs.run_event }}"
+          if [ "${{ needs.deploy-throttle.outputs.run_event }}" = "push" ]; then
+            echo "PUSH_BEFORE=${{ needs.deploy-throttle.outputs.push_before }}"
+            echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: main
+
+      - name: Echo checked-out tree (post-checkout)
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          RUN_SHA="${{ needs.deploy-throttle.outputs.run_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          CHECKED_REF="$(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --format='%H %ci %s'
+          if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
+          echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
+          if [ "${MATCH}" = "no" ]; then
+            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+          fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.28.0
