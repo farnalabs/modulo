@@ -65,6 +65,12 @@ class _MockSession:
     def get_bind(self) -> Any:
         return self._get_bind()
 
+    async def flush(self) -> None:
+        """Real AsyncSession.flush — the FAR-1329 aged-nodeless router calls it
+        after delegating to _fail_nodeless_run (ORM writes must land before the
+        raw-SQL terminalizers that follow)."""
+        return
+
     async def get(self, model: Any, pk: Any) -> SimpleNamespace:
         return SimpleNamespace(
             max_concurrent_runs=5,
@@ -81,12 +87,26 @@ class _MockSession:
         s = str(stmt)
         if "set_config" in s:
             return MagicMock()
+        if s.startswith("SELECT id FROM runs"):
+            # FAR-1329 aged-nodeless router: collects age-bound ZERO-progress
+            # rows so they can be failed through _fail_nodeless_run. Keyed by
+            # statement shape (its error code is written by the ORM, not here).
+            ids = self.terminalizer_rows.get("aged_nodeless", [])
+            r = MagicMock()
+            r.all.return_value = [(uid,) for uid in ids]
+            r.rowcount = len(ids)
+            return r
         if "UPDATE runs SET" in s:
             # Dedicated org-scoped terminalizer UPDATEs (B4/B5/FAR-648/
             # FAR-721) — zero rows matched by default; individual tests
             # configure terminalizer_rows.
-            ids = self.terminalizer_rows.get("executor_superseded", [])
-            if "claim_cap_exhausted" in s:
+            ids = self.terminalizer_rows.get("dispatch_failed", [])
+            if "node_attempt_count" in s:
+                # FAR-1329 age-bound wedge gate — its error code is a bound
+                # param, so it is keyed by its distinctive node-progress
+                # exclusion rather than by code text.
+                ids = self.terminalizer_rows.get("no_progress", [])
+            elif "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
             elif "created_at < now()" in s:
                 # FAR-721 zero-claim-awaiting_human terminalizer — keyed by
@@ -1691,10 +1711,17 @@ class TestEnqueueFailedRecovery:
 
 
 class TestMidGraphWedgeTerminalizer:
-    """B4: a running SAQ run wedged mid-graph past the age bound is
-    terminal-failed 'executor_superseded' via the dedicated org-scoped UPDATE —
-    independent of the reconcile predicates (a fresh heartbeat does NOT protect
-    it, which is exactly the wedge this closes)."""
+    """B4: a running SAQ run wedged past the age bound is terminal-failed via
+    the dedicated org-scoped UPDATE — independent of the reconcile predicates
+    (a fresh heartbeat does NOT protect it, which is exactly the wedge this
+    closes).
+
+    FAR-1329: the code it writes is the TRUTHFUL age-gate code
+    (``no_progress`` — "no node progress within the age bound"), never the
+    supersede vocabulary: this predicate never compares runs, so
+    ``executor_superseded`` / "Superseded by a newer run." was a lie that cost
+    a full investigation (run 03721c8e). Zero-progress runs are routed to the
+    nodeless chokepoint instead — see ``TestAgedNodelessRouting``."""
 
     @pytest.mark.asyncio
     async def test_aged_running_run_terminalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1702,7 +1729,7 @@ class TestMidGraphWedgeTerminalizer:
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
             [],
-            terminalizer_ids={"executor_superseded": [row.id]},
+            terminalizer_ids={"no_progress": [row.id]},
         )
         assert summary["mid_graph_wedge_terminalized"] == 1
         assert summary["age_terminalized"] == 1
@@ -1725,6 +1752,73 @@ class TestMidGraphWedgeTerminalizer:
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
         session.record_facts.assert_awaited_once_with(row.id, ORG)
+
+
+class TestAgedNodelessRouting:
+    """FAR-1329: a run at the age bound with ZERO node progress takes the
+    purpose-built nodeless path, not the mid-graph-wedge path.
+
+    The batch terminalizers run BEFORE the reconcile row select, so pre-fix the
+    age gate collected every ``running`` + ``dispatcher='saq'`` row older than
+    135 min — including runs that had never dispatched a node — and labelled
+    them ``executor_superseded`` / "Superseded by a newer run.". The router
+    below selects exactly the ``_nodeless_zombie_predicate``-shaped rows
+    (zero attempts, no token usage, no ``__final__`` row, no checkpoints) and
+    fails them through ``_fail_nodeless_run``, the FAR-714 chokepoint: the
+    ``agent.stall`` / "Claimed by SAQ but dispatched no node" class with its
+    counter, alert-grade log and error event."""
+
+    @pytest.mark.asyncio
+    async def test_aged_zero_progress_run_failed_by_nodeless_chokepoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run_id = uuid.uuid4()
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_ids={"aged_nodeless": [run_id], "no_progress": []},
+        )
+        # The nodeless counters, NOT the mid-graph-wedge counters.
+        assert summary["nodeless_failed"] == 1
+        assert summary["claimed_but_never_dispatched"] == 1
+        assert summary["mid_graph_wedge_terminalized"] == 0
+        assert summary["age_terminalized"] == 0
+        # No re-dispatch (the age bound outranks the retry budget) and the
+        # stable-message error event fires with the run id in context.
+        reenqueue.assert_not_awaited()
+        ingest.assert_awaited_once()
+        assert "claimed-but-never-dispatched" in ingest.await_args.kwargs["message"]
+        assert ingest.await_args.kwargs["context"]["run_id"] == str(run_id)
+        # FAR-162 (P6'): routed runs get their compensating daily fact too.
+        session.record_facts.assert_awaited_once_with(run_id, ORG)
+
+    def test_router_runs_before_the_age_gate_in_the_batch(self) -> None:
+        """Ordering: the nodeless router is the FIRST batch terminalizer, so
+        a zero-progress row is already ``failed`` when the age gate's UPDATE
+        runs — it can never be double-terminalised or mislabelled."""
+        from modulo.core.cron_helpers import _BATCH_TERMINALIZER_SPECS
+
+        assert _BATCH_TERMINALIZER_SPECS[0].key == "nodeless"
+        assert _BATCH_TERMINALIZER_SPECS[0].coroutine_name == "_terminalize_aged_nodeless_zombies"
+        assert _BATCH_TERMINALIZER_SPECS[0].stats_key == "nodeless_failed"
+
+    @pytest.mark.asyncio
+    async def test_router_returns_nothing_when_no_zero_progress_run_matches(
+        self,
+    ) -> None:
+        """A quiet tick collects nothing (and therefore bumps no counters)."""
+        session = _MockSession([])
+        summary = ch._dispatcher_summary()
+        routed = await ch._terminalize_aged_nodeless_zombies(
+            session, ORG, max_age_minutes=135, summary=summary, max_rows=None
+        )
+        assert routed == []
+        assert summary["claimed_but_never_dispatched"] == 0
+        stmt, params = session.executed[-1]
+        assert str(stmt).startswith("SELECT id FROM runs")
+        assert params["max_rows"] == ch._TERMINALIZE_UNLIMITED_ROWS
+        # The router's row predicate is the age bound PLUS the zero-progress
+        # shape — never a bare age bound.
+        assert "node_attempt_count" in str(stmt)
+        assert params["max_age_minutes"] == 135
 
 
 class TestCapacityMarkerExclusion:
@@ -1927,7 +2021,45 @@ class TestTerminalizerSyntheticErrorDetail:
         await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
         stmt, params = session.executed[-1]
         assert "error_detail" in str(stmt)
-        assert params["detail"] == ch._EXECUTOR_SUPERSEDED_ERROR_DETAIL
+        # FAR-1329: the age gate's detail states the TRUTHFUL cause (no node
+        # progress within the bound) and the per-row node/attempt counts ride
+        # the same UPDATE — never the supersede wording.
+        assert params["detail"].startswith("No node progress within the 135m age bound")
+        assert "node_attempts=" in str(stmt)
+        assert "claims=" in str(stmt)
+        assert params["detail"] != "Superseded by a newer run."
+
+    @pytest.mark.asyncio
+    async def test_mid_graph_wedge_writes_truthful_error_code(self) -> None:
+        """FAR-1329: the age-bound terminalizer stamps its OWN code.
+
+        Its predicate (``status='running' AND dispatcher='saq' AND started_at
+        < now() - 135min``) never compares runs, so stamping the supersede
+        code made a zero-node run read as "Superseded by a newer run." and
+        cost a full investigation (FAR-1318 / run 03721c8e).
+        """
+        session = _MockSession([])
+        await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
+        _stmt, params = session.executed[-1]
+        assert params["code"] == "no_progress"
+        assert params["code"] != "executor_superseded"
+
+    @pytest.mark.asyncio
+    async def test_mid_graph_wedge_excludes_zero_progress_runs(self) -> None:
+        """FAR-1329: a run with zero nodes AND zero attempts is NOT collected
+        by the age gate — it belongs to the purpose-built nodeless path. The
+        exclusion legs mirror ``_nodeless_zombie_predicate`` exactly so the
+        reconcile row select picks the excluded rows up in the same tick."""
+        session = _MockSession([])
+        await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
+        sql = str(session.executed[-1][0])
+        assert "node_attempt_count" in sql
+        assert "node_token_usage IS NULL" in sql
+        assert "run_node_outputs" in sql
+        assert "checkpoints" in sql
+        # The exclusion is an AND-arm of the row predicate, not a filter on
+        # the code/detail: a progress-bearing row still matches the gate.
+        assert "AND NOT (" in sql
 
     @pytest.mark.asyncio
     async def test_claim_cap_exhausted_writes_synthetic_detail(self) -> None:
@@ -3126,7 +3258,7 @@ class TestTerminalizeBatchCap:
         summary, _, _, _, _, _ = await _run_reconcile(
             monkeypatch,
             [],
-            terminalizer_ids={"executor_superseded": [uuid.uuid4() for _ in range(2)]},
+            terminalizer_ids={"no_progress": [uuid.uuid4() for _ in range(2)]},
             settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 2},
         )
         assert summary["mid_graph_wedge_terminalized"] == 2
@@ -3139,7 +3271,7 @@ class TestTerminalizeBatchCap:
         summary, _, _, _, _, _ = await _run_reconcile(
             monkeypatch,
             [],
-            terminalizer_ids={"executor_superseded": [uuid.uuid4()]},
+            terminalizer_ids={"no_progress": [uuid.uuid4()]},
             settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 25},
         )
         assert summary["mid_graph_wedge_terminalized"] == 1

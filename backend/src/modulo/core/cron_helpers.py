@@ -267,8 +267,10 @@ _DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
 # Synthetic error_detail for the genuinely detail-less failure writers (P7'):
 # applied ONLY where detail is currently NULL — never overwrites real detail.
 # Derived from the ERROR_CODE_REGISTRY guidance in
-# ``modulo.core.pipeline_engine.error_codes``.
-_EXECUTOR_SUPERSEDED_ERROR_DETAIL = "Superseded by a newer run."
+# ``modulo.core.pipeline_engine.error_codes``. (The age gate's supersede
+# detail retired with FAR-1329 — it never described that gate's predicate;
+# genuinely superseded runs carry the executor's own scrubbed detail, and a
+# NULL one presents through the registry guidance.)
 _CLAIM_CAP_EXHAUSTED_ERROR_DETAIL = "Claim capacity exhausted."
 _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure)."
 
@@ -277,9 +279,74 @@ _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure
 # than the max plausible run duration is wedged (heartbeat may still be fresh —
 # the mid-graph stall can outlive the SAQ timeout window). Default is the max
 # SAQ run timeout in minutes, floored at 2h, plus a 15-minute skew (~135 min).
+#
+# FAR-1329 — this is an AGE gate and says so. Its predicate
+# (``status='running' AND dispatcher='saq' AND started_at < now() - age``)
+# never compares runs, so stamping the legacy ``executor_superseded`` code made
+# every collected run render as ``run.superseded`` / "Superseded by a newer
+# run." — a false cause that cost a full investigation (FAR-1318 / run
+# 03721c8e: three zero-node runs, all falsely "superseded"). It now writes its
+# OWN registered code + a detail that states the run made no node progress
+# within the bound, with the row's node/attempt counts appended by the UPDATE.
 # ---------------------------------------------------------------------------
 _MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
-_EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
+# Raw spelling written into ``runs.error_code``; registered (and aliased) in
+# ``pipeline_engine.error_codes`` as ``run.no_progress`` in the same change.
+_NO_PROGRESS_ERROR_CODE = "no_progress"
+# Constant prefix; the per-row ``node_attempts=`` / ``claims=`` counts are
+# concatenated onto it by the UPDATE itself (one bind param, N row shapes).
+_NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT = "No node progress within the {age}m age bound (dispatcher_reconcile age gate; "
+
+# The ZERO-progress row shape: no node ever attempted, no finalised node
+# output, no token usage, no LangGraph checkpoint. It mirrors the
+# ``_nodeless_zombie_predicate`` legs PLUS the zero-attempts leg (that
+# predicate tolerates attempts that never finalised — this one demands a run
+# that never even started one), and it is the ONE definition shared by the
+# nodeless router's selection and the age gate's EXCLUSION (single
+# definition, so the two cannot drift):
+#
+#   * the ROUTER (``_terminalize_aged_nodeless_zombies``, first batch
+#     terminalizer) collects these rows at the age bound and fails them
+#     through ``_fail_nodeless_run`` — the FAR-714 purpose-built chokepoint
+#     (``executor_stalled`` -> ``agent.stall``, "Claimed by SAQ but dispatched
+#     no node", its counter, alert-grade log and error event);
+#   * the age gate's UPDATE excludes them, so the mid-graph-wedge code can
+#     never claim one — including on a tick where the router's per-tick cap
+#     defers the row to a later tick.
+_ZERO_PROGRESS_SHAPE_SQL = (
+    "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM run_node_outputs rno "
+    "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key) "
+    "AND NOT EXISTS (SELECT 1 FROM checkpoints cp "
+    "WHERE cp.organisation_id = runs.organisation_id AND cp.thread_id = runs.langgraph_thread_id)"
+)
+_ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
+
+# The two FAR-1329 statements. Assembled from static templates + str.replace
+# (bandit/ruff S608 flag f-string/format SQL construction — trigger_streak's
+# ``__STATUSES__`` precedent): the ONLY thing substituted is the module
+# constant above, never caller data. Both carry the same shape — the router
+# positively, the age gate as a NOT-arm — so they cannot diverge.
+_NODELESS_ROUTER_SQL = (
+    "SELECT id FROM runs "
+    "WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
+    "AND started_at < now() - (:max_age_minutes * interval '1 minute') "
+    "AND __ZERO_PROGRESS_SHAPE__ "
+    "LIMIT :max_rows"
+)
+_MID_GRAPH_WEDGE_SQL = (
+    "UPDATE runs SET status='failed', error_code=:code, "
+    "error_detail=:detail || 'node_attempts=' || COALESCE(node_attempt_count,0)::text "
+    "|| ', claims=' || COALESCE(claim_count,0)::text || ')', "
+    "completed_at=now() "
+    "WHERE ctid IN ("
+    "  SELECT ctid FROM runs "
+    "  WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
+    "  AND started_at < now() - (:max_age_minutes * interval '1 minute') "
+    "  AND NOT (__ZERO_PROGRESS_SHAPE__) "
+    "  LIMIT :max_rows) "
+    "RETURNING id"
+)
 
 # ---------------------------------------------------------------------------
 # FAR-648 HITL-gate-expiry terminalizer. An ``awaiting_human`` run whose open
@@ -4915,6 +4982,69 @@ def _summarize_reconcile_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"[:200]
 
 
+async def _terminalize_aged_nodeless_zombies(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    max_age_minutes: int,
+    summary: dict[str, Any],
+    max_rows: int | None = None,
+) -> list[uuid.UUID]:
+    """FAR-1329: fail age-bound ZERO-progress runs through the nodeless chokepoint.
+
+    Runs FIRST in ``_BATCH_TERMINALIZER_SPECS`` — before the age-bound
+    mid-graph gate — because a run that never dispatched a node is not a
+    mid-graph wedge. Pre-fix, the age gate's predicate had no node-progress
+    condition at all, so a claimed-but-nodeless run that outlived the bound was
+    terminalised ``executor_superseded`` / "Superseded by a newer run." — a
+    false cause that sent the FAR-1318 investigation of run ``03721c8e`` down
+    the wrong path (three runs, all ``nodes: []``, all "superseded").
+
+    Selection = the age bound PLUS :data:`_ZERO_PROGRESS_SHAPE_SQL` (the
+    ``_nodeless_zombie_predicate`` legs), so exactly the rows the
+    mid-graph gate must never claim are collected here. Each one is failed via
+    :func:`_fail_nodeless_run`, the FAR-714 single chokepoint for this class:
+    ``executor_stalled`` -> ``agent.stall``, detail "Claimed by SAQ but
+    dispatched no node ...", the ``claimed_but_never_dispatched`` counter, the
+    alert-grade ERROR log with the wasted age, and the stable-message error
+    event for the Error Dashboard. The batch loop bumps ``nodeless_failed`` over
+    the returned ids (same shape as every other batch terminalizer) and records
+    the compensating daily facts (P6', FAR-162).
+
+    The age bound OUTRANKS the nodeless re-dispatch budget here: a run this old
+    must stop burning its org's concurrency slot, so no further re-dispatch is
+    attempted — the budget normally decides this at the nodeless window, this
+    gate only closes the tail (runs whose repair the row loop never reached).
+    Returns the routed ids (empty when the tick found nothing).
+    """
+    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+    result = await session.execute(
+        text(_NODELESS_ROUTER_SQL.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL)),
+        {
+            "oid": str(org_id),
+            "final_key": FINAL_ATTEMPT_KEY,
+            "max_age_minutes": max_age_minutes,
+            "max_rows": _terminalize_max_rows(max_rows),
+        },
+    )
+    routed: list[uuid.UUID] = [run_id for (run_id,) in result.all()]
+    for run_id in routed:
+        # The chokepoint re-checks status='running' itself; inside this
+        # transaction the rows were selected running moments ago.
+        await _fail_nodeless_run(session, run_id, org_id, summary)
+    if routed:
+        # Make the ORM terminal writes visible to the raw-SQL terminalizers
+        # that follow in this transaction instead of relying on autoflush.
+        await session.flush()
+        _log.warning(
+            "dispatcher_reconcile: %d aged zero-progress run(s) routed to the nodeless path (age bound %d min)",
+            len(routed),
+            max_age_minutes,
+        )
+    return routed
+
+
 async def _terminalize_mid_graph_wedges(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -4922,15 +5052,30 @@ async def _terminalize_mid_graph_wedges(
     max_age_minutes: int,
     max_rows: int | None = None,
 ) -> list[uuid.UUID]:
-    """Terminal-fail SAQ runs wedged mid-graph for longer than *max_age_minutes*.
+    """Terminal-fail SAQ runs wedged past the age bound — with a truthful code.
 
     DB-only, org-scoped (B4): a run stuck ``running`` with ``dispatcher='saq'``
     whose ``started_at`` is older than the max plausible run duration is wedged
     — a mid-graph stall can keep a fresh heartbeat alive (the in-process
     executor may be gone while the job hash lingers), so the stale-heartbeat
-    branch never matches it. The age gate bounds the damage: ``executor_superseded``.
-    Runs ``UPDATE ... RETURNING id`` so each failure is logged and the returned
-    run ids drive the post-commit compensating analytics fact (P6', FAR-162).
+    branch never matches it. The age gate bounds the damage.
+
+    FAR-1329 — the gate says what it actually observed. Its predicate never
+    compares runs, so it used to stamp ``executor_superseded``
+    (``run.superseded`` / "Superseded by a newer run."), which is false for
+    every row it collects; it now stamps ``no_progress`` (``run.no_progress``)
+    with a detail stating the run made NO node progress within the bound,
+    appended with that row's ``node_attempts``/``claims`` counts (SQL concat —
+    one bind param, per-row numbers). A genuinely superseded run (an actual
+    successor claim) keeps ``executor_superseded`` — that code is written only
+    by the executor's ``SupersededNodeError`` path, where a newer run exists.
+
+    Zero-progress rows are EXCLUDED (see :data:`_ZERO_PROGRESS_SHAPE_SQL`) —
+    they are routed by :func:`_terminalize_aged_nodeless_zombies`, which runs
+    first, so the wedge code can never claim one (including on a tick where the
+    router's cap defers it). Runs ``UPDATE ... RETURNING id`` so each failure is
+    logged and the returned run ids drive the post-commit compensating
+    analytics fact (P6', FAR-162).
 
     FAR-746 batch cap: *max_rows* bounds the UPDATE to that many rows per tick
     (``WHERE ctid IN (SELECT ctid ... LIMIT n)``) so a huge wedge backlog
@@ -4938,21 +5083,16 @@ async def _terminalize_mid_graph_wedges(
     competing with the tick budget; the predicate re-selects the remaining
     rows next tick. ``None`` (or a non-int stand-in) means uncapped.
     """
+    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+    detail_prefix = _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT.format(age=max_age_minutes)
     result = await session.execute(
-        text(
-            "UPDATE runs SET status='failed', error_code=:code, "
-            "error_detail=:detail, completed_at=now() "
-            "WHERE ctid IN ("
-            "  SELECT ctid FROM runs "
-            "  WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
-            "  AND started_at < now() - (:max_age_minutes * interval '1 minute') "
-            "  LIMIT :max_rows) "
-            "RETURNING id"
-        ),
+        text(_MID_GRAPH_WEDGE_SQL.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL)),
         {
             "oid": str(org_id),
-            "code": _EXECUTOR_SUPERSEDED_ERROR_CODE,
-            "detail": _EXECUTOR_SUPERSEDED_ERROR_DETAIL,
+            "code": _NO_PROGRESS_ERROR_CODE,
+            "detail": detail_prefix,
+            "final_key": FINAL_ATTEMPT_KEY,
             "max_age_minutes": max_age_minutes,
             "max_rows": _terminalize_max_rows(max_rows),
         },
@@ -4960,7 +5100,7 @@ async def _terminalize_mid_graph_wedges(
     rows = result.all()
     for (run_id,) in rows:
         _log.warning(
-            "dispatcher_reconcile: mid-graph wedge terminalized %s (started > %d min ago)",
+            "dispatcher_reconcile: age-bound wedge terminalized %s with no_progress (started > %d min ago)",
             run_id,
             max_age_minutes,
         )
@@ -5243,6 +5383,13 @@ class ReconcileTerminalizer:
     primary counter (the mid-graph wedge's ``age_terminalized``), while
     ``tuning_kwargs`` maps each coroutine keyword to the ``ReconcileTuning``
     attribute that feeds it.
+
+    ``passes_summary`` (FAR-1329) hands the live tick ``summary`` to the
+    coroutine as well: the nodeless router delegates each row to
+    ``_fail_nodeless_run``, which mutates the summary (the
+    ``claimed_but_never_dispatched`` counter) exactly like the row loop does.
+    It is opt-in so a plain ``UPDATE ... RETURNING`` terminalizer keeps its
+    narrow signature.
     """
 
     key: str
@@ -5252,6 +5399,7 @@ class ReconcileTerminalizer:
     coroutine_name: str | None = None
     alias_key: str | None = None
     tuning_kwargs: dict[str, str] = field(default_factory=dict)
+    passes_summary: bool = False
 
 
 def _resolve_terminalizer(spec: ReconcileTerminalizer) -> Callable[..., Awaitable[list[uuid.UUID]]]:
@@ -5279,6 +5427,13 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         stats_key="nodeless_failed",
         blob_keys=("nodeless_failed", "claimed_but_never_dispatched"),
         stall_reason="executor_stalled",
+        # FAR-1329: the age-bound ZERO-progress rows route through this same
+        # chokepoint (``_fail_nodeless_run``), so the router is a batch
+        # terminalizer FIRST in execution order — it must run before the
+        # mid-graph wedge gate so those rows are never collected by it.
+        coroutine_name="_terminalize_aged_nodeless_zombies",
+        tuning_kwargs={"max_age_minutes": "max_age_minutes"},
+        passes_summary=True,
     ),
     ReconcileTerminalizer(
         key="claim_cap",
@@ -5292,7 +5447,9 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         key="mid_graph",
         stats_key="mid_graph_wedge_terminalized",
         blob_keys=("mid_graph_wedge_terminalized", "age_terminalized"),
-        stall_reason="executor_superseded",
+        # FAR-1329: the stall reason tracks the truthful code this gate writes
+        # (``no_progress``), never the supersede vocabulary.
+        stall_reason=_NO_PROGRESS_ERROR_CODE,
         coroutine_name="_terminalize_mid_graph_wedges",
         alias_key="age_terminalized",
         tuning_kwargs={"max_age_minutes": "max_age_minutes"},
@@ -5329,10 +5486,14 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
 _TERMINALIZERS_BY_KEY: dict[str, ReconcileTerminalizer] = {spec.key: spec for spec in _TERMINALIZERS}
 
 # The per-org SQL terminalizers in EXECUTION order inside each org transaction
-# (the mid-graph wedge runs first so wedged rows leave the row select before
-# the claim-cap / HITL scans; the FAR-721 zero-claim sweep runs after its
-# FAR-648 complement; see _reconcile_org).
+# (FAR-1329: the nodeless router runs FIRST so age-bound zero-progress rows are
+# failed through ``_fail_nodeless_run`` before the age-bound mid-graph wedge
+# gate scans — that gate's UPDATE excludes them regardless, so a capped router
+# defers rather than mislabels; then the mid-graph wedge runs so wedged rows
+# leave the row select before the claim-cap / HITL scans; the FAR-721
+# zero-claim sweep runs after its FAR-648 complement; see _reconcile_org).
 _BATCH_TERMINALIZER_SPECS: tuple[ReconcileTerminalizer, ...] = (
+    _TERMINALIZERS_BY_KEY["nodeless"],
     _TERMINALIZERS_BY_KEY["mid_graph"],
     _TERMINALIZERS_BY_KEY["claim_cap"],
     _TERMINALIZERS_BY_KEY["hitl_review"],
@@ -5504,9 +5665,18 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         rejection resumes as rejected, never as an empty ``{}``.
 
     Per-org DB-only terminalizers (before the row select):
-      * B4 age-bound: any ``running`` + ``dispatcher='saq'`` row whose
-        ``started_at`` is older than ``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES``
-        (~135m) is terminal-failed ``executor_superseded``.
+      * FAR-1329 nodeless router: any ``running`` + ``dispatcher='saq'`` row
+        older than ``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES`` (~135m) with ZERO node
+        progress (no attempts, no token usage, no ``__final__`` row, no
+        checkpoints) is failed through ``_fail_nodeless_run``
+        (``executor_stalled`` -> ``agent.stall``, "Claimed by SAQ but
+        dispatched no node") — NOT the mid-graph gate below.
+      * B4 age-bound: any ``running`` + ``dispatcher='saq'`` row with node
+        progress whose ``started_at`` is older than
+        ``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES`` (~135m) is terminal-failed
+        ``no_progress`` (FAR-1329: the truthful age-gate code — this
+        predicate never compares runs, so it must never write the supersede
+        vocabulary).
       * B5 claim-cap: any ``running`` row at ``claim_count >= cap`` whose
         heartbeat is STALE is terminal-failed ``claim_cap_exhausted`` —
         selected INDEPENDENTLY of the reconcile predicates so a capped
@@ -5531,7 +5701,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     ``resume_run``; pending/running -> ``execute_run``. Capacity-deferred runs
     are re-dispatched only when their pipeline has free capacity.
 
-    Every run terminalised this tick (``executor_superseded`` /
+    Every run terminalised this tick (``executor_stalled`` / ``no_progress`` /
     ``claim_cap_exhausted`` / ``dispatch_failed`` / ``hitl_review_expired``) gets
     a compensating ``run_daily_facts`` row (FAR-162, P6') written after the
     per-org transactions commit — the terminalizers never run
@@ -5764,8 +5934,8 @@ async def _dispatcher_reconcile_body(
         )
         rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
-    # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
-    # hitl_review_expired): the terminalizers write raw UPDATEs and never
+    # tick (executor_stalled / no_progress / claim_cap_exhausted /
+    # dispatch_failed / hitl_review_expired): the terminalizers write raw UPDATEs and never
     # run finalize_cost, so without this the terminalised runs would be
     # invisible to the analytics failure/stall dimensions. All per-org
     # terminalizer transactions have committed by now; each facts write
@@ -5879,12 +6049,13 @@ async def _reconcile_org(
             # here.
             for spec in _BATCH_TERMINALIZER_SPECS:
                 coroutine = _resolve_terminalizer(spec)
-                terminalized = await coroutine(
-                    session,
-                    org_id,
-                    **{kwarg: getattr(tuning, attr) for kwarg, attr in spec.tuning_kwargs.items()},
-                    max_rows=terminalize_max,
-                )
+                kwargs: dict[str, Any] = {kwarg: getattr(tuning, attr) for kwarg, attr in spec.tuning_kwargs.items()}
+                if spec.passes_summary:
+                    # FAR-1329: the nodeless router delegates to
+                    # ``_fail_nodeless_run``, which bumps counters on the live
+                    # tick summary (same contract as the row loop).
+                    kwargs["summary"] = summary
+                terminalized = await coroutine(session, org_id, **kwargs, max_rows=terminalize_max)
                 summary[spec.stats_key] += len(terminalized)
                 if spec.alias_key:
                     summary[spec.alias_key] = summary[spec.stats_key]

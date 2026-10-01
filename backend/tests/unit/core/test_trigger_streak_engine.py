@@ -1421,6 +1421,11 @@ class _MockSession:
         s = str(stmt)
         if "set_config" in s:
             return MagicMock()
+        if s.startswith("SELECT id FROM runs"):
+            # FAR-1329 aged-nodeless router (zero rows by default here).
+            r = MagicMock()
+            r.all.return_value = [(uid,) for uid in self.terminalizer_rows.get("aged_nodeless", [])]
+            return r
         if "UPDATE runs SET" in s:
             r = MagicMock()
             r.all.return_value = []
