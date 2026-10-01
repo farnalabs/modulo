@@ -1074,7 +1074,16 @@ class TestCompositeTemplateMasking:
         response_node = resp.json()["nodes"][0]
         assert response_node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
 
-    def test_editor_put_drops_mask_echo_without_stored_counterpart(self, client: TestClient) -> None:
+    def test_editor_put_rejects_fresh_mask_sentinel_with_422(self, client: TestClient) -> None:
+        """A sentinel with NO stored counterpart is a fresh submission (FAR-1374).
+
+        The old contract silently dropped the key (mask echo with no stored
+        counterpart); fail-closed now refuses the whole write with 422 naming
+        the offending sub-node and key, because a silently dropped credential
+        key is exactly the governance violation the rejection prevents. The
+        resolvable GITHUB_TOKEN echo in the same payload is not the problem -
+        NEW_VAR and the context file 'p' are, so the write never persists.
+        """
         from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         graph = self._graph()
@@ -1098,6 +1107,7 @@ class TestCompositeTemplateMasking:
                             "id": "n1",
                             "node_type": "agent",
                             "agent_id": "00000000-0000-0000-0000-000000000005",
+                            "label": "Secret Node",
                             "env_vars": {
                                 "GITHUB_TOKEN": SENSITIVE_VALUE_MASK,
                                 "NEW_VAR": SENSITIVE_VALUE_MASK,
@@ -1108,10 +1118,132 @@ class TestCompositeTemplateMasking:
                     "edges": [],
                 },
             )
-        assert resp.status_code == 200
-        node = upd.await_args.args[2]["sub_pipeline_graph_json"]["nodes"][0]
-        # NEW_VAR has no stored counterpart — mask echo dropped, not persisted.
-        assert "NEW_VAR" not in node["env_vars"]
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL" in detail
+        # The FRESH sentinel keys are named; nothing was persisted.
+        assert "NEW_VAR" in detail
+        assert "sub-node 'n1'" in detail
+        upd.assert_not_called()
+
+    def test_create_rejects_mask_sentinel_with_422(self, client: TestClient) -> None:
+        """POST /composite-templates refuses a freshly submitted sentinel.
+
+        There is no stored graph to resolve against on create, so a sentinel
+        in the submitted sub-graph is always fresh - rejected 422, never
+        silently dropped, never persisted.
+        """
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        with patch("modulo.api.routes.composite_templates.set_rls_org"):
+            resp = client.post(
+                "/api/v1/composite-templates",
+                json={
+                    "name": "Degraded",
+                    "sub_pipeline_graph_json": {
+                        "nodes": [
+                            {
+                                "id": "n1",
+                                "node_type": "sandbox_agent",
+                                "env_vars": {"GITHUB_TOKEN": SENSITIVE_VALUE_MASK},
+                            }
+                        ],
+                        "edges": [],
+                    },
+                },
+            )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL" in detail
+        assert "GITHUB_TOKEN" in detail
+
+    def test_patch_rejects_fresh_mask_sentinel_with_422(self, client: TestClient) -> None:
+        """PATCH refuses a sentinel for a key with no stored counterpart.
+
+        A round-tripped echo of a stored key still resolves (covered by
+        ``test_patch_resolves_mask_echoes_before_storing_graph``); a FRESH
+        sentinel - one the stored graph cannot answer - is refused 422.
+        """
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        template_before = _make_template(sub_pipeline_graph_json=self._graph())
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.get_composite_template",
+                return_value=template_before,
+            ),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("modulo.api.routes.composite_templates.update_composite_template") as upd,
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}",
+                json={
+                    "sub_pipeline_graph_json": {
+                        "nodes": [
+                            {
+                                "id": "n1",
+                                "node_type": "agent",
+                                "agent_id": "00000000-0000-0000-0000-000000000005",
+                                "env_vars": {"FRESH_TOKEN": SENSITIVE_VALUE_MASK},
+                            }
+                        ],
+                        "edges": [],
+                    }
+                },
+            )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL" in detail
+        assert "FRESH_TOKEN" in detail
+        upd.assert_not_called()
+
+    def test_patch_rejects_sentinel_restored_from_degraded_stored_row(self, client: TestClient) -> None:
+        """A degraded stored row (sentinel at rest) is refused too.
+
+        The merge resolves the echo back to the STORED sentinel, so the
+        resolved graph still carries it - the request fails 422 instead of
+        re-persisting the degraded value or silently dropping the key. This is
+        the editor-re-entry repair loop: submit the real value to clear it.
+        """
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        degraded_graph = {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "node_type": "agent",
+                    "env_vars": {"GITHUB_TOKEN": SENSITIVE_VALUE_MASK},
+                }
+            ],
+            "edges": [],
+        }
+        template_before = _make_template(sub_pipeline_graph_json=degraded_graph)
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.get_composite_template",
+                return_value=template_before,
+            ),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("modulo.api.routes.composite_templates.update_composite_template") as upd,
+        ):
+            resp = client.patch(
+                f"/api/v1/composite-templates/{_TEMPLATE_ID}",
+                json={
+                    "sub_pipeline_graph_json": {
+                        "nodes": [
+                            {
+                                "id": "n1",
+                                "node_type": "agent",
+                                "env_vars": {"GITHUB_TOKEN": SENSITIVE_VALUE_MASK},
+                            }
+                        ],
+                        "edges": [],
+                    }
+                },
+            )
+        assert resp.status_code == 422
+        assert "GITHUB_TOKEN" in resp.json()["detail"]
+        upd.assert_not_called()
 
     def test_patch_resolves_mask_echoes_before_storing_graph(self, client: TestClient) -> None:
         from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK

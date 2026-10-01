@@ -10,6 +10,7 @@ that gap by asserting the exact candidate set each scanner returns for a
 controlled org-scoped dataset.
 """
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.housekeeping import (
+    NON_DELETABLE_ENTITY_TYPES,
+    _scan_degraded_composite_templates,
     _scan_duplicate_triggers,
     _scan_empty_lifecycle_maps,
     _scan_empty_teams,
@@ -35,10 +38,12 @@ from modulo.core.housekeeping import (
     _scan_unused_schemas,
     _scan_unused_sso_providers,
 )
+from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.base import Base
+from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.lifecycle_map import LifecycleMap
@@ -62,6 +67,7 @@ from modulo.db.models.webhook import WebhookDedupHash
 _TABLE_NAMES = {
     "accounts",
     "agents",
+    "composite_templates",
     "connector_instances",
     "environment_profiles",
     "lifecycle_maps",
@@ -1078,3 +1084,86 @@ class TestUnusedSchemasNullHandling:
         # Only the truly-unused schema is flagged; "used" stays shielded by the
         # non-null agent reference despite the NULL-input agent in the same org.
         assert _candidate_names(candidates) == ["unused"]
+
+
+class TestDegradedCompositeTemplates:
+    """FAR-1374: detection-only sweep for templates still at rest with the
+    mask sentinel (written before the write-side mask was removed, or straight
+    into the DB). Reports - never mutates, never auto-repairs, never touches
+    run history."""
+
+    def _template(self, *, organisation_id: uuid.UUID, name: str, graph: dict) -> CompositeTemplate:
+        return CompositeTemplate(
+            id=uuid.uuid4(),
+            organisation_id=organisation_id,
+            account_id=_ACCOUNT,
+            name=name,
+            sub_pipeline_graph_json=graph,
+        )
+
+    def _degraded_graph(self) -> dict:
+        return {
+            "nodes": [
+                {
+                    "id": "gh-node",
+                    "node_type": "sandbox_agent",
+                    "env_vars": {"GITHUB_TOKEN": SENSITIVE_VALUE_MASK},
+                }
+            ],
+            "edges": [],
+        }
+
+    async def test_reports_only_sentinel_bearing_templates_in_org(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        degraded = self._template(organisation_id=_ORG_A, name="degraded", graph=self._degraded_graph())
+        clean = self._template(
+            organisation_id=_ORG_A,
+            name="clean",
+            graph={
+                "nodes": [
+                    {
+                        "id": "gh-node",
+                        "node_type": "sandbox_agent",
+                        "env_vars": {"GITHUB_TOKEN": "FAKE_CREDENTIAL_FOR_TEST"},
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        other_org = self._template(organisation_id=_ORG_B, name="other-org-degraded", graph=self._degraded_graph())
+        session.add_all([degraded, clean, other_org])
+        await session.commit()
+
+        with caplog.at_level(logging.WARNING, logger="modulo.core.housekeeping"):
+            candidates = await _scan_degraded_composite_templates(session, _ORG_A)
+
+        # Only the degraded template in THIS org is reported; a real (fake)
+        # credential value is not a finding - detection is sentinel-based.
+        assert _candidate_names(candidates) == ["degraded"]
+        assert candidates[0].entity_type == "degraded_composite_template"
+        assert "repair by re-entering" in candidates[0].detail
+        # The count is reported loudly, not silently swallowed.
+        assert any("degraded_composite_templates" in record.getMessage() for record in caplog.records)
+
+    async def test_clean_templates_produce_no_candidates(self, session: AsyncSession) -> None:
+        session.add(
+            self._template(
+                organisation_id=_ORG_A,
+                name="clean",
+                graph={
+                    "nodes": [{"id": "n1", "node_type": "agent", "env_vars": {"APP_URL": "https://example.com"}}],
+                    "edges": [],
+                },
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_degraded_composite_templates(session, _ORG_A)
+
+        assert not candidates
+
+    def test_entity_type_is_never_a_cleanup_target(self) -> None:
+        assert "degraded_composite_template" in NON_DELETABLE_ENTITY_TYPES

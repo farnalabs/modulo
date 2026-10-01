@@ -454,29 +454,30 @@ class TestCompositeDetectParams:
         assert resp.status_code in (401, 403)
 
 
-class TestSaveAsCompositeMasking:
-    """FAR-1181: save-as-composite must not persist raw secrets.
+class TestSaveAsCompositeCredentialStorage:
+    """FAR-1374: save-as-composite persists the REAL credential values.
 
-    Composite templates are readable by every org member, so the node
-    credentials copied from the source pipeline are masked at save time
-    (mask_pipeline_graph_node) — template storage never receives them in the
-    clear.
+    The write-side mask was removed: the template stores the pipeline's
+    declared environment as-is (parity with top-level pipeline graphs, which
+    apply zero write-side masking and mask on read). Storing the mask sentinel
+    would propagate it into run snapshots where it executes as a literal
+    credential and clobbers the host-injected value upstream. Every READ
+    surface keeps masking (FAR-1181), and a mask sentinel arriving on the
+    write itself is refused 422 before anything persists.
     """
 
-    _SECRET = "ghp_" + "0123456789abcdef" * 2 + "fedcba98"
+    _FAKE_CREDENTIAL = "FAKE_CREDENTIAL_FOR_TEST"
 
-    def test_save_as_composite_masks_secret_fields_before_persisting(self, client: TestClient) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-
-        pipeline = _make_pipeline_mock(
+    def _credential_pipeline(self, *, env_token: str) -> MagicMock:
+        return _make_pipeline_mock(
             graph_nodes_json=[
                 {
                     "id": "00000000-0000-0000-0000-000000000010",
                     "node_type": "agent",
                     "agent_id": str(_AGENT_ID),
                     "label": "Agent 1",
-                    "env_vars": {"GITHUB_TOKEN": self._SECRET, "APP_URL": "https://example.com"},
-                    "context_files": {"/tmp/creds.txt": f"token={self._SECRET}"},
+                    "env_vars": {"GITHUB_TOKEN": env_token, "APP_URL": "https://example.com"},
+                    "context_files": {"/tmp/creds.txt": f"token={env_token}"},
                 },
                 {
                     "id": "00000000-0000-0000-0000-000000000011",
@@ -486,6 +487,9 @@ class TestSaveAsCompositeMasking:
                 },
             ],
         )
+
+    def test_save_as_composite_persists_real_credential_values(self, client: TestClient) -> None:
+        pipeline = self._credential_pipeline(env_token=self._FAKE_CREDENTIAL)
         template = _make_template(name="Secret Composite", version="0.1.0")
         create_mock = AsyncMock(return_value=template)
         empty_execute = MagicMock()
@@ -513,12 +517,109 @@ class TestSaveAsCompositeMasking:
         graph = create_mock.call_args.kwargs["sub_pipeline_graph_json"]
         assert set(graph.keys()) == {"nodes", "edges"}
         persisted_first = graph["nodes"][0]
+        # The REAL value is stored - no write-side masking (FAR-1374).
         assert persisted_first["env_vars"] == {
-            "GITHUB_TOKEN": SENSITIVE_VALUE_MASK,
+            "GITHUB_TOKEN": self._FAKE_CREDENTIAL,
             "APP_URL": "https://example.com",
         }
-        assert persisted_first["context_files"] == {"/tmp/creds.txt": "token=" + SENSITIVE_VALUE_MASK}
+        assert persisted_first["context_files"] == {"/tmp/creds.txt": f"token={self._FAKE_CREDENTIAL}"}
         # Non-sensitive env keys pass through untouched (no over-masking).
         assert graph["nodes"][1]["env_vars"] == {"PLAIN": "not-sensitive"}
         # The source pipeline node dict is not mutated by the save.
-        assert pipeline.graph_nodes_json[0]["env_vars"]["GITHUB_TOKEN"] == self._SECRET
+        assert pipeline.graph_nodes_json[0]["env_vars"]["GITHUB_TOKEN"] == self._FAKE_CREDENTIAL
+
+    def test_save_as_composite_response_and_read_surface_carry_no_raw_secret(self, client: TestClient) -> None:
+        """The read invariant survives: neither the 201 body nor a follow-up
+        GET exposes the stored credential - the template read masks it."""
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        pipeline = self._credential_pipeline(env_token=self._FAKE_CREDENTIAL)
+        # The GET masks on the sensitive-KEY tier (GITHUB_TOKEN), the tier that
+        # applies to any value regardless of its shape.
+        template = _make_template(
+            name="Secret Composite",
+            version="0.1.0",
+            sub_pipeline_graph_json={
+                "nodes": [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000010",
+                        "node_type": "agent",
+                        "agent_id": str(_AGENT_ID),
+                        "label": "Agent 1",
+                        "env_vars": {
+                            "GITHUB_TOKEN": self._FAKE_CREDENTIAL,
+                            "APP_URL": "https://example.com",
+                        },
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        # The shared helper leaves unset columns as auto-MagicMocks; the GET
+        # response model coerces them, so pin the nullable one explicitly.
+        template.parameter_schema_id = None
+        create_mock = AsyncMock(return_value=template)
+        empty_execute = MagicMock()
+        empty_execute.scalars.return_value.all.return_value = []
+
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("modulo.api.routes.pipelines.create_composite_template", new=create_mock),
+        ):
+            assert _mock_session is not None
+            _mock_session.execute = AsyncMock(return_value=empty_execute)
+            resp = client.post(
+                f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
+                json={
+                    "name": "Secret Composite",
+                    "selected_node_ids": ["00000000-0000-0000-0000-000000000010"],
+                },
+            )
+        assert resp.status_code == 201
+        # The save-as-composite response never carries the graph at all.
+        assert self._FAKE_CREDENTIAL not in resp.text
+
+        with (
+            patch(
+                "modulo.api.routes.composite_templates.get_composite_template",
+                return_value=template,
+            ),
+            patch("modulo.api.routes.composite_templates.set_rls_org"),
+        ):
+            read_resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert read_resp.status_code == 200
+        assert self._FAKE_CREDENTIAL not in read_resp.text
+        node = read_resp.json()["sub_pipeline_graph_json"]["nodes"][0]
+        assert node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+    def test_save_as_composite_rejects_mask_sentinel_with_422(self, client: TestClient) -> None:
+        """A mask sentinel in the pipeline's nodes is refused before persisting."""
+        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+
+        pipeline = self._credential_pipeline(env_token=SENSITIVE_VALUE_MASK)
+        create_mock = AsyncMock()
+        empty_execute = MagicMock()
+        empty_execute.scalars.return_value.all.return_value = []
+
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("modulo.api.routes.pipelines.create_composite_template", new=create_mock),
+        ):
+            assert _mock_session is not None
+            _mock_session.execute = AsyncMock(return_value=empty_execute)
+            resp = client.post(
+                f"/api/v1/pipelines/{_PIPELINE_ID}/save-as-composite",
+                json={
+                    "name": "Degraded Composite",
+                    "selected_node_ids": ["00000000-0000-0000-0000-000000000010"],
+                },
+            )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL" in detail
+        assert "GITHUB_TOKEN" in detail
+        create_mock.assert_not_called()

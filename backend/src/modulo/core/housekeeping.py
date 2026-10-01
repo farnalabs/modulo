@@ -11,11 +11,13 @@ from typing import Any, cast
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.graph_validator.mask_sentinel import find_mask_sentinel_values
 from modulo.db.bundled_runner_template import BUNDLED_RUNNER_PROVIDER_TYPE
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, _checkpoint_detail
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.api_key import OrgApiKey
+from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.lifecycle_map import LifecycleMap
@@ -90,7 +92,7 @@ ENTITY_MODEL_MAP: dict[str, type] = {
 # Categories that are detection-only (surfaced for triage, never auto-deleted).
 # Submitting a candidate from one of these to the cleanup endpoint returns a
 # clear triage message instead of a misleading "Unknown entity type" error.
-NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk"})
+NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk", "degraded_composite_template"})
 
 
 @dataclass(frozen=True)
@@ -815,6 +817,65 @@ async def _scan_checkpoint_retention(session: AsyncSession, org_id: uuid.UUID) -
     return candidates
 
 
+async def _scan_degraded_composite_templates(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """DETECTION-ONLY: composite templates whose stored sub-graph still holds
+    the read-mask sentinel (FAR-1374).
+
+    The write-side mask was removed from ``save-as-composite`` and every
+    template write entry now rejects the sentinel with 422, but a template
+    written BEFORE the fix (or straight into the DB) can still carry it - such
+    a row would expand into a run snapshot with ``GITHUB_TOKEN=......`` and
+    execute the mask literal instead of the credential. This sweep REPORTS
+    those rows on the existing housekeeping surface (REST + MCP
+    ``list_housekeeping``) and logs the count loudly; it never mutates the
+    template, never auto-repairs (repair is manual editor re-entry of the real
+    value), and never touches run history.
+    """
+    templates = (
+        (
+            await session.execute(
+                select(CompositeTemplate).where(
+                    CompositeTemplate.organisation_id == org_id,
+                    CompositeTemplate.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    candidates: list[Candidate] = []
+    for template in templates:
+        graph = template.sub_pipeline_graph_json
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        if not isinstance(nodes, list):
+            continue
+        findings = find_mask_sentinel_values(nodes)
+        if not findings:
+            continue
+        candidates.append(
+            Candidate(
+                id=str(template.id),
+                name=template.name,
+                detail=(
+                    f"Composite template holds {len(findings)} credential mask sentinel value(s) "
+                    f"(e.g. {findings[0].describe()}) - a run would execute the mask literal instead "
+                    "of the credential; repair by re-entering the real values in the composite "
+                    "editor (detection only, never auto-repaired or auto-deleted)"
+                ),
+                created_at=template.created_at.isoformat() if template.created_at else None,
+                entity_type="degraded_composite_template",
+            )
+        )
+    if candidates:
+        _log.warning(
+            "housekeeping.degraded_composite_templates: org %s has %d composite template(s) still "
+            "carrying credential mask sentinels - repair via editor re-entry (FAR-1374)",
+            org_id,
+            len(candidates),
+        )
+    return candidates
+
+
 _SCANNERS: list[Scanner] = [
     Scanner(
         category="orphan_secrets",
@@ -944,8 +1005,22 @@ _SCANNERS: list[Scanner] = [
         label="Checkpoint Retention",
         description=(
             "Terminal runs with LangGraph graph-state checkpoints beyond the retention "
-            "window — surfaced for purge via the Checkpoint Retention panel (bulk, age-based)."
+            "window - surfaced for purge via the Checkpoint Retention panel (bulk, age-based)."
         ),
+        entity_type=None,
+    ),
+    Scanner(
+        category="degraded_composite_templates",
+        scan_func=_scan_degraded_composite_templates,
+        label="Degraded Composite Templates",
+        description=(
+            "Composite templates whose stored sub-graph still carries a credential mask "
+            "sentinel (pre-fix rows) - surfaced for manual editor re-entry, never "
+            "auto-repaired or auto-deleted (FAR-1374)."
+        ),
+        # DETECTION-ONLY (entity_type=None, set directly on the candidates) so
+        # the registry never treats these rows as cleanup targets - the
+        # non-deletable entity type gives cleanup callers the triage message.
         entity_type=None,
     ),
 ]

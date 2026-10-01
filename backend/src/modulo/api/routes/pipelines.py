@@ -45,6 +45,7 @@ from modulo.api.dependencies import (
 from modulo.api.middleware.sensitive_mask import (
     mask_pipeline_graph_node,
     merge_masked_graph_nodes,
+    resolve_and_reject_mask_sentinels,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import (
@@ -3651,7 +3652,15 @@ async def save_as_composite_endpoint(
                 if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str
             ]
 
-            # Create the composite template
+            # Create the composite template.
+            # FAR-1374: persist the pipeline's declared credential env values
+            # AS-IS (no write-side masking) — parity with top-level pipeline
+            # graphs, which have never masked on write and mask on every read
+            # surface instead; the template read surfaces mask via
+            # _mask_template_response. A mask sentinel in the selected nodes is
+            # refused 422 (resolve-then-reject: a clean graph passes through
+            # unchanged, a fresh sentinel never lands in storage).
+            sub_graph_nodes = resolve_and_reject_mask_sentinels([dict(n) for n in sub_nodes], [])
             template = await create_composite_template(
                 session,
                 org_id=principal.organisation_id,
@@ -3659,7 +3668,7 @@ async def save_as_composite_endpoint(
                 name=req.name,
                 description=req.description,
                 sub_pipeline_graph_json={
-                    "nodes": [mask_pipeline_graph_node(dict(n)) for n in sub_nodes],
+                    "nodes": sub_graph_nodes,
                     "edges": sub_edges,
                 },
                 parameter_ports_json=detected_ports,

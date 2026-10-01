@@ -159,6 +159,16 @@ is missing or not bcrypt (does not start with `$2`) is re-hashed from this entry
 
 See `docs/security/secret-management.md` for detailed configuration of each.
 
+### 2.6 Stored Graph Credentials (Composite Templates and Pipeline Graphs)
+
+Control statement for graph-borne environment values:
+
+Composite template sub-graphs (`composite_templates.sub_pipeline_graph_json`) and top-level pipeline graphs (`pipelines.graph_nodes_json`) store configured environment values **in plaintext at rest** - they are not encrypted-credential documents like connector configs. Credential-valued env vars are masked on **every read surface** (REST pipeline/template CRUD and editor, MCP, run snapshots, quality/lineage outputs, workflow export - which strips rather than masks) before serialization, reusing FAR-1181's shipped maskers; raw values are exposed only via DB access (self-hosted operator privilege, by design) or the admin reveal endpoint (30-second authenticated expiry, `admin.sensitive.manage`). There is no write-side masking: stored graphs are the caller's declared environment as-is.
+
+**Excluded surface:** the **library-primitive** surface (community/local composite and pipeline primitives) is excluded from this statement pending FAR-1380 - do not assume its stored content carries the same read-masking guarantees.
+
+Enforcement added with FAR-1374: a value containing the read-mask sentinel (the six `U+2022` bullets, `SENSITIVE_VALUE_MASK`) is refused with HTTP 422 (`COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL`) at every composite-template write entry (`POST /composite-templates`, `PATCH`, the editor `PUT`, and `save-as-composite`); composite expansion fails closed with the same code, naming the sub-node and env key, for any pre-fix or direct-DB-written sentinel so a mask literal can never reach a run snapshot; and the housekeeping surface reports pre-existing degraded templates (detection only - repair is manual credential re-entry in the composite editor, never an automatic rewrite).
+
 ---
 
 ## 3. Database Security

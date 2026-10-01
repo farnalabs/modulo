@@ -16,6 +16,11 @@ from modulo.core.composite_engine.composite_binding import (
     ValidationResult,
 )
 from modulo.core.composite_engine.schema_mapping import apply_field_mapping
+from modulo.core.graph_validator.mask_sentinel import (
+    MASK_SENTINEL_ISSUE_CODE,
+    find_mask_sentinel_values,
+    format_mask_sentinel_detail,
+)
 from modulo.db.models.composite_template import CompositeTemplate
 
 logger = logging.getLogger(__name__)
@@ -27,6 +32,40 @@ _MAX_COMPOSITE_DEPTH = 5
 # Fields that may carry a renderable prompt on a pipeline node. Parameter
 # placeholders are injected into whichever of these is present.
 _PROMPT_FIELDS = ("prompt", "prompt_template", "agent_prompt")
+
+
+class MaskedCredentialExpansionError(ValueError):
+    """A composite template sub-node carries the read-mask sentinel (FAR-1374).
+
+    Raised at EXPANSION time so a pre-fix row (written before the write-side
+    mask was removed) or a direct-DB write fails closed with a diagnosable
+    Modulo-side error code naming the sub-node and env key, instead of the node
+    silently running with ``GITHUB_TOKEN=......`` and clobbering the working
+    host-injected credential upstream (misleading 401/403).
+
+    Subclass of :class:`ValueError` so every existing ``except ValueError``
+    composite-expansion handler keeps catching it.
+    """
+
+    error_code = MASK_SENTINEL_ISSUE_CODE
+
+
+def _reject_mask_sentinel_sub_nodes(sub_nodes: list[Any], context: str) -> None:
+    """Fail closed when any template sub-node carries a mask sentinel.
+
+    *context* names the composite (template id or parent composite node id);
+    the failure message additionally names the offending sub-node, field, and
+    env key plus :data:`MASK_SENTINEL_ISSUE_CODE`. Never drops the key and
+    never substitutes a host credential the author did not declare.
+    """
+    findings = find_mask_sentinel_values(sub_nodes)
+    if not findings:
+        return
+    raise MaskedCredentialExpansionError(
+        f"{MASK_SENTINEL_ISSUE_CODE}: {context} has a credential mask sentinel at "
+        f"{format_mask_sentinel_detail(findings)}; re-enter the real credential value in the "
+        "composite editor before this pipeline can run."
+    )
 
 
 def _is_composite_node(node: dict[str, Any]) -> bool:
@@ -320,6 +359,8 @@ def expand_composite_node(
     if node_id is None:
         raise ValueError("Composite node definition missing required 'id' field")
     parent_node_id = str(node_id)
+    # FAR-1374: same fail-closed sentinel gate as the runtime snapshot path.
+    _reject_mask_sentinel_sub_nodes(sub_nodes, f"Composite node '{parent_node_id}'")
     expanded: list[dict[str, Any]] = []
 
     for i, sub_node in enumerate(sub_nodes):
@@ -589,6 +630,11 @@ class _CompositeExpander:
             raise ValueError(f"Composite template '{template.id}' has no sub-pipeline nodes to expand")
         if not isinstance(sub_edges, list):
             sub_edges = []
+        # FAR-1374: fail closed on a stored mask sentinel (pre-fix row or a
+        # direct-DB write) before any sub-node reaches the run snapshot — the
+        # sentinel would otherwise be executed as a literal credential and
+        # clobber the host-injected value upstream.
+        _reject_mask_sentinel_sub_nodes(sub_nodes, f"Composite template '{template.id}'")
         return sub_nodes, sub_edges
 
     @staticmethod
