@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -3293,21 +3293,21 @@ async def restore_pipeline_endpoint(
     return _pipeline_response(pipeline)
 
 
-@router.post("/{pipeline_id}/archive")
-@handle_db_errors("pipelines.archive")
-async def archive_pipeline_endpoint(
+async def _toggle_pipeline_archive_state(
+    session: AsyncSession,
+    principal: TenantPrincipal,
     pipeline_id: uuid.UUID,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
-    # FAR-1362: the request-time membership-or-admin layer, pairing with the
-    # in-txn re-check below exactly as delete / update / replace-graph do.
-    # Parity + defence-in-depth only: rls_team_isolation is the sole policy on
-    # `pipelines`, so on Postgres the resolver 404s a non-member's row before
-    # the handler; this is the team layer for the backends where RLS does not
-    # apply (non-Postgres, break-glass / execution_context sessions, missing or
-    # misconfigured policies).
-    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+    *,
+    toggle: Callable[[AsyncSession, uuid.UUID], Awaitable[Pipeline | None]],
 ) -> PipelineResponse:
+    """Archive or unarchive a pipeline inside the shared team-gated transaction.
+
+    ``archive_pipeline_endpoint`` and ``unarchive_pipeline_endpoint`` differ only
+    in the CRUD function they apply, so the in-txn team re-check, the
+    404-on-missing guard and the post-flush ``session.refresh`` live here once
+    instead of being copy-pasted into both endpoints.
+    """
+    pipeline: Pipeline | None = None
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
@@ -3315,13 +3315,12 @@ async def archive_pipeline_endpoint(
             existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-            pipeline = await archive_pipeline(session, pipeline_id)
+            pipeline = await toggle(session, pipeline_id)
             # Refresh the ORM row inside the transaction so the DB-computed
             # `updated_at` (onupdate=func.current_timestamp()) is loaded while
             # the transaction is active. The UPDATE flush expires it, and after
             # commit Pydantic's attribute extraction raises trying to lazy-load
-            # it outside the async greenlet -> 422 silent-success. Mirrors
-            # update_pipeline_endpoint.
+            # it outside the async greenlet -> 422 silent-success.
             if pipeline is not None:
                 await session.refresh(pipeline)
     except ProgrammingError as exc:
@@ -3329,6 +3328,19 @@ async def archive_pipeline_endpoint(
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     return _pipeline_response(pipeline)
+
+
+@router.post("/{pipeline_id}/archive")
+@handle_db_errors("pipelines.archive")
+async def archive_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1362: request-time membership-or-admin layer, paired with the in-txn
+    # re-check above (parity + defence-in-depth), as delete / update do.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=archive_pipeline)
 
 
 @router.post("/{pipeline_id}/unarchive")
@@ -3337,29 +3349,12 @@ async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
-    # FAR-1362: same request-time + in-txn pairing as archive. An ARCHIVED row
-    # is not a deleted row, so the stock resolver is correct here (only
-    # restore's deleted-inclusive resolver deviates).
+    # FAR-1362: same request-time + in-txn pairing as archive. An ARCHIVED row is
+    # not a deleted row, so the stock resolver (not restore's deleted-inclusive
+    # one) is correct here.
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
-    try:
-        async with session.begin():
-            await _set_rls_context(session, principal)
-            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
-            if existing is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-            pipeline = await unarchive_pipeline(session, pipeline_id)
-            # See archive_pipeline_endpoint: refresh the flushed row inside the
-            # transaction so the DB-computed `updated_at` is loaded before the
-            # response is built (avoids the 422 silent-success).
-            if pipeline is not None:
-                await session.refresh(pipeline)
-    except ProgrammingError as exc:
-        _raise_db_migration_error(exc)
-    if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-    return _pipeline_response(pipeline)
+    return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=unarchive_pipeline)
 
 
 # ---------------------------------------------------------------------------
