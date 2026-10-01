@@ -139,7 +139,7 @@ _MIGRATION_PATH = (
 # 0272_oauth_client_revoke_lookup_indexes chained onto 0271 as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0272_oauth_client_revoke_lookup_indexes"
+_CHAIN_HEAD_MIGRATION_NAME = "0273_policy_gate_pin_fingerprint_operator_control"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

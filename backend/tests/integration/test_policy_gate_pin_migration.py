@@ -1,4 +1,4 @@
-"""Integration tests for FAR-967 chunk 10: migration 0272 round-trip + live CHECK.
+"""Integration tests for FAR-967 chunk 10: migration 0273 round-trip + live CHECK.
 
 Runs against a real Postgres (testcontainers) with real Alembic migrations,
 using a private database cloned from the shared container's database (an
@@ -6,7 +6,7 @@ isolated DB name) so the shared session schema is never touched (mirrors
 ``test_migration_0191_bundled_runner_seed_backfill.py``).
 
 Covers criterion 13 (upgrade/downgrade round-trip of migration
-``0272_policy_gate_pin_fingerprint_operator_control``, including the
+``0273_policy_gate_pin_fingerprint_operator_control``, including the
 symmetric CHECK behaviour and the nullable legacy-compat snapshot columns)
 and the live-DB half of criteria 11/12 (column types/nullability as the
 migration actually ships them).
@@ -30,8 +30,8 @@ from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0272_policy_gate_pin_fingerprint_operator_control"
-PREV_REV = "0271_org_api_keys_revocation_sweep_indexes"
+MIGRATION_REV = "0273_policy_gate_pin_fingerprint_operator_control"
+PREV_REV = "0272_oauth_client_revoke_lookup_indexes"
 
 
 def _alembic_config(db_url: str) -> Config:
@@ -226,7 +226,7 @@ async def _engine_connect(iso_url: str) -> AsyncEngine:
 class TestC13MigrationRoundTrip:
     @pytest.mark.asyncio
     async def test_upgrade_adds_columns_backfills_and_check(self, isolated_db_url: str) -> None:
-        """Upgrade 0271 → 0272 adds the operator-control + pin columns and
+        """Upgrade 0272 → 0273 adds the operator-control + pin columns and
         creates a VALIDATED symmetric CHECK (C11)."""
         engine = await _engine_connect(isolated_db_url)
         try:
@@ -295,7 +295,7 @@ class TestC13MigrationRoundTrip:
 
     @pytest.mark.asyncio
     async def test_downgrade_removes_columns_and_check_keeps_rows(self, isolated_db_url: str) -> None:
-        """Downgrade 0272 → 0271 drops the columns AND the CHECK while
+        """Downgrade 0273 → 0272 drops the columns AND the CHECK while
         pre-existing rows survive (data never shaped by the dropped cols)."""
         engine = await _engine_connect(isolated_db_url)
         try:
@@ -328,7 +328,7 @@ class TestC13MigrationRoundTrip:
     @pytest.mark.asyncio
     async def test_full_round_trip_restores_revision_with_columns(self, isolated_db_url: str) -> None:
         """upgrade → downgrade → upgrade: the second upgrade re-adds the
-        columns and the CHECK, and alembic_version returns to 0272."""
+        columns and the CHECK, and alembic_version returns to 0272 (the pre-FAR-967 head)."""
         engine = await _engine_connect(isolated_db_url)
         try:
             await _seed(engine)
