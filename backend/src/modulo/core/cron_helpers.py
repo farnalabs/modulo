@@ -4216,10 +4216,31 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         (what it covers), never on dict non-emptiness — a no-op panel save
         must not silently convert budget-default repair into terminal-fail.
       * ``retry_policy`` whose ``on`` is non-empty but does NOT cover
-        ``"stall"``: terminal-fail — never re-dispatch a nodeless zombie for a
-        trigger it does not cover.
+        ``"stall"`` and does NOT cover ``"failure"``: terminal-fail — never
+        re-dispatch a nodeless zombie for a trigger it does not cover.
+      * FAR-1088 zero-node failure-coverage carve-out: a non-empty ``on``
+        covering ``"failure"`` (with a valid ``max_retries`` > 0) re-dispatches
+        under THAT policy's budget, same ``max(0, claim_count - 1)`` attempt
+        count as the stall branch.
+
+    FAR-1088 — why the failure carve-out is safe HERE and nowhere else:
+    this function only ever sees nodeless zombies, which executed ZERO nodes
+    (no checkpoint, no node output), so nothing can double-execute. The
+    shared ``_failure_event_matches`` matcher deliberately excludes
+    stall-class codes (``executor_stalled`` included) because a MID-RUN stall
+    under a ``failure``-only policy could re-execute nodes that already ran —
+    that hazard is void for the zero-node population, which is exactly why
+    the carve-out lives at THIS call site and the shared matcher's semantics
+    are left untouched.
+
+    The equivalent carve-out for the in-process watchdog paths is
+    DELIBERATELY DEFERRED: ``pipeline_engine/watchdog_retry.py`` and the
+    executor's ``_maybe_retry_after_policy`` are shared with paths where
+    nodes MAY have executed, so they need the zero-node criterion plumbed
+    explicitly before a failure/stall carve-out is safe there — and the
+    in-process zombie watchdog does not currently fire on this population.
     """
-    from modulo.core.pipeline_engine.executor import _retry_after_policy
+    from modulo.core.pipeline_engine.executor import _RETRY_POLICY_MAX_RETRIES, _retry_after_policy
 
     retry_policy = getattr(row, "retry_policy", None)
     if isinstance(retry_policy, dict):
@@ -4244,7 +4265,22 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         # must terminal-fail (never re-dispatch for an uncovered trigger).
         on = retry_policy.get("on")
         if isinstance(on, list) and on:
-            # Non-empty `on` without "stall" — terminal-fail.
+            # FAR-1088 zero-node failure-coverage carve-out: a failure-covered
+            # policy re-dispatches this zero-node death under ITS OWN
+            # max_retries budget (same attempt count as the stall branch).
+            # Safe here because zero nodes ever executed (see docstring); the
+            # shared matcher is NOT modified.
+            if "failure" in on:
+                failure_budget = retry_policy.get("max_retries", 0)
+                if (
+                    isinstance(failure_budget, int)
+                    and not isinstance(failure_budget, bool)
+                    and 0 < failure_budget <= _RETRY_POLICY_MAX_RETRIES
+                ):
+                    attempt_count = max(0, row.claim_count - 1)
+                    return bool(attempt_count <= failure_budget)
+            # Non-empty `on` without "stall"/"failure" coverage (or a
+            # failure-covered policy with a 0/malformed budget) — terminal-fail.
             return False
         # Empty / missing `on` / zero-budget / malformed policy: fall through
         # to the budget-default repair (SAQ_NODELESS_REDISPATCH_BUDGET).
