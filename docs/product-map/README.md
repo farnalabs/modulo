@@ -899,7 +899,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 >
 > **Closed this walk (2026-10-01):** closed the sub-surface gap left by
 > FAR-1336 (delivery-signal provenance/confidence, `#1154`) and FAR-1373
-> (self-reported streak-outcome qualifier, `#1158`) — shipped behaviour neither
+> (agent-reported streak-outcome qualifier, `#1158`; vocabulary renamed from
+> `self_reported` by FAR-1388) — shipped behaviour neither
 > product-map layer described. The run-outcome delivery signal had no home at
 > all: the terminal `run_classification` record (value/reason/`delivered_pr_urls`
 > + FAR-1336 `pr_url_provenance` + `delivery_confidence`), the fail-closed
@@ -909,9 +910,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `pipeline_engine/classify.py` / `test_run_classification.py` /
 > `test_runs_endpoint.py`. `feat-triggers` (`triggers/trigger-engine.md` +
 > manifest registry) gained the streak/outcomes `delivery_confidence` wire
-> surface and the `SettingsTriggersView` "Self-reported" qualifier chip (only on
-> a delivered self-reported outcome; unknown/legacy/absent never reads as
-> verified) citing `core/trigger_streak.py` / `test_trigger_streak_engine.py` /
+> surface and the `SettingsTriggersView` "Agent-reported" qualifier chip (only on
+> a delivered agent-reported outcome, including the pre-rename `self_reported`
+> alias that stored rows still carry and never get backfilled; unknown/legacy/
+> absent never reads as verified) citing `core/trigger_streak.py` /
+> `test_trigger_streak_engine.py` /
 > `SettingsTriggersView.spec.ts`. `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-10-01):** closed `feat-guardrails`'s last tracked

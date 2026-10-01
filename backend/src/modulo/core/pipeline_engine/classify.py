@@ -56,7 +56,7 @@ what keeps the walk alive.
 
 Record shape: ``{value, reason, delivered_pr_urls, computed_at, work_intact,
 declared_success_nodes, pr_url_provenance, delivery_confidence}``. The URLs in
-``delivered_pr_urls`` are **self-reported and unverified** (FAR-1336): they are
+``delivered_pr_urls`` are **agent-reported and unverified** (FAR-1336): they are
 harvested from the run's own output (the node's structured return, the node
 telemetry value, the FAR-188 raw-output markers) and NOTHING cross-checks that
 the run actually created the PR it names — the platform deliberately does not
@@ -66,11 +66,14 @@ per URL, how it was harvested (``declared`` = the run's own output contract
 asserted it; ``matched`` = it was found in a REAL telemetry entry or a
 FAR-188 raw-output marker, emitted output the run never asserted as a
 delivery), and ``delivery_confidence`` states plainly that every record
-written today is ``self_reported``. Neither key changes the verdict: a
-``matched``-only URL still classifies ``delivered`` (the delivery rule is
-unchanged). The eight-key shape is forward-only: rows written before this
-change are six-key, are never
-backfilled, and readers must treat an absent ``pr_url_provenance`` /
+written today is ``agent_reported`` (FAR-1388 renamed the value from the
+ambiguous ``self_reported``, which separately names the cost-provenance
+vocabulary; rows persisted before the rename keep the old spelling and are
+never backfilled — see the deprecated alias below). Neither key changes the
+verdict: a ``matched``-only URL still classifies ``delivered`` (the delivery
+rule is unchanged). The eight-key shape is forward-only: rows written before
+this change are six-key, are never backfilled, and readers must treat an
+absent ``pr_url_provenance`` /
 ``delivery_confidence`` key on an older row as legacy/unknown, not an error.
 The LABEL semantics of an existing key also changed at FAR-1376 — a
 pre-FAR-1376 row may label the same evidence ``matched`` that a post-change
@@ -133,7 +136,7 @@ REASON_UNCLASSIFIED = "classifier_error"
 #
 # ``runs.run_classification`` is the platform's authoritative "did this run
 # deliver?" record, but its ``delivered_pr_urls`` are harvested from
-# self-reported sources and nothing cross-checks them against the SCM. These
+# agent-reported sources and nothing cross-checks them against the SCM. These
 # vocabularies stop the record from overstating what it knows (FAR-1336) —
 # they are ADDITIVE metadata only: they never change the verdict.
 
@@ -155,19 +158,42 @@ PR_URL_PROVENANCE_VALUES: frozenset[str] = frozenset({PR_URL_PROVENANCE_DECLARED
 #: ``delivery_confidence`` vocabulary — how much of the record has been
 #: confirmed against a source of truth (FAR-1336).
 #:
-#: * ``self_reported`` — the entire record is self-reported by the run's own
-#:   output; NOTHING in it has been verified against a source of truth. Every
-#:   record written today carries this value: the platform deliberately does
-#:   NOT verify deliveries against GitHub/GitLab/etc. (that would require
+#: * ``agent_reported`` — the entire record is AGENT-reported: the report is
+#:   the run's own output, so it is the agent's account of what happened, and
+#:   NOTHING in it has been verified against a source of truth. Every record
+#:   written today carries this value: the platform deliberately does NOT
+#:   verify deliveries against GitHub/GitLab/etc. (that would require
 #:   platform-side SCM integration for a signal only the agent knows).
 #: * ``verified`` — reserved for a future value whose URLs have been confirmed
 #:   against the source of truth. Declared here so the vocabulary has a home
 #:   for it; no code path emits it yet.
-DELIVERY_CONFIDENCE_SELF_REPORTED = "self_reported"
+#:
+#: FAR-1388 renamed the value ``self_reported`` -> ``agent_reported``: the old
+#: word was ambiguous because it ALSO names the unrelated cost-provenance
+#: vocabulary (``CostComponentKind.SELF_REPORTED``), and for this record the
+#: report comes from the AGENT. Rows persisted before the rename carry the old
+#: spelling and are NOT backfilled, so :data:`DELIVERY_CONFIDENCE_AGENT_REPORTED_LEGACY`
+#: keeps it in the closed set below — readers must treat EITHER spelling as
+#: the agent-reported case (the frontend qualifier chip does; see
+#: ``SettingsTriggersView.isAgentReportedDeliveryClaim``), because dropping
+#: the chip on pre-rename rows is exactly the silent-loss failure this
+#: vocabulary exists to prevent.
+DELIVERY_CONFIDENCE_AGENT_REPORTED = "agent_reported"
+#: DEPRECATED (FAR-1388) — the pre-rename spelling of
+#: :data:`DELIVERY_CONFIDENCE_AGENT_REPORTED`. Emitted by NO current writer;
+#: it survives only because rows written before the rename still carry it and
+#: nothing backfills them. Kept in ``DELIVERY_CONFIDENCE_VALUES`` so the closed
+#: set describes what is actually persisted.
+DELIVERY_CONFIDENCE_AGENT_REPORTED_LEGACY = "self_reported"
 DELIVERY_CONFIDENCE_VERIFIED = "verified"
-#: The closed set of delivery-confidence values.
+#: The closed set of delivery-confidence values (including the deprecated
+#: pre-rename spelling, which stored rows still carry).
 DELIVERY_CONFIDENCE_VALUES: frozenset[str] = frozenset(
-    {DELIVERY_CONFIDENCE_SELF_REPORTED, DELIVERY_CONFIDENCE_VERIFIED}
+    {
+        DELIVERY_CONFIDENCE_AGENT_REPORTED,
+        DELIVERY_CONFIDENCE_AGENT_REPORTED_LEGACY,
+        DELIVERY_CONFIDENCE_VERIFIED,
+    }
 )
 
 #: Bounded scan depth when unwrapping a node return looking for ``pr_url``
@@ -268,10 +294,11 @@ class ClassificationResult:
     != lexicographic URL order, and the column is generic JSON, so that order
     survives persistence.
 
-    ``delivery_confidence`` is ``"self_reported"`` on every record written
+    ``delivery_confidence`` is ``"agent_reported"`` on every record written
     today: the URLs above are harvested from the run's own output and nothing
     cross-checks that the run actually created the PR it names — see
-    ``DELIVERY_CONFIDENCE_VALUES`` for the vocabulary.
+    ``DELIVERY_CONFIDENCE_VALUES`` for the vocabulary (and its deprecated
+    pre-rename alias, carried by rows stored before FAR-1388).
     """
 
     value: RunClassificationValue
@@ -281,14 +308,14 @@ class ClassificationResult:
     work_intact: bool | None = None
     declared_success_nodes: int = 0
     pr_url_provenance: tuple[tuple[str, str], ...] = ()
-    delivery_confidence: str = DELIVERY_CONFIDENCE_SELF_REPORTED
+    delivery_confidence: str = DELIVERY_CONFIDENCE_AGENT_REPORTED
 
     def to_dict(self) -> dict[str, Any]:
         """The persisted record shape ``{value, reason, delivered_pr_urls,
         computed_at, work_intact, declared_success_nodes, pr_url_provenance,
         delivery_confidence}``.
 
-        ``delivered_pr_urls`` and ``pr_url_provenance`` are self-reported and
+        ``delivered_pr_urls`` and ``pr_url_provenance`` are agent-reported and
         UNVERIFIED (FAR-1336) — ``delivery_confidence`` states that plainly.
         """
         return {
@@ -795,7 +822,7 @@ def _unclassified_marker_dict(reason: str = REASON_UNCLASSIFIED) -> dict[str, An
         "work_intact": None,
         "declared_success_nodes": 0,
         "pr_url_provenance": {},
-        "delivery_confidence": DELIVERY_CONFIDENCE_SELF_REPORTED,
+        "delivery_confidence": DELIVERY_CONFIDENCE_AGENT_REPORTED,
     }
 
 

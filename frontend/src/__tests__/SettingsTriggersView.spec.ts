@@ -507,7 +507,50 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(wrapper.text()).toContain('pr_merged')
   })
 
-  it('FAR-1373: renders a visible qualifier for a self-reported outcome', async () => {
+  it('FAR-1373/FAR-1388: renders a visible qualifier for an agent-reported outcome', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({
+          streak_status: streakStatus({
+            streak: 1,
+            last_outcomes: [
+              {
+                run_id: 'r1',
+                classification: 'delivered',
+                reason: 'pr_merged',
+                completed_at: '2026-08-01T00:00:00Z',
+                delivery_confidence: 'agent_reported',
+              },
+            ],
+          }),
+        }),
+      ],
+    })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]').trigger('click')
+    await flush()
+
+    const qualifier = wrapper.find('.outcome-confidence')
+    expect(qualifier.exists()).toBe(true)
+    expect(qualifier.text()).toContain('Agent-reported')
+    // Not tooltip-only: the qualifier text is visible in the DOM, and the full
+    // explanation is carried by aria-label + title. role="note" is what makes
+    // that aria-label reach assistive tech — a bare span has the implicit
+    // `generic` role, whose author-provided name is ignored.
+    expect(qualifier.attributes('role')).toBe('note')
+    const detail = "This delivery verdict is agent-reported from the run's own output. It has not been verified against a source of truth."
+    expect(qualifier.attributes('aria-label')).toBe(detail)
+    expect(qualifier.attributes('title')).toBe(detail)
+  })
+
+  it('FAR-1388: renders the qualifier for the pre-rename legacy alias value', async () => {
+    // Records persisted BEFORE FAR-1388's `self_reported` -> `agent_reported`
+    // rename carry the old value and nothing backfills them. The chip must
+    // still render for those rows — the alias exists precisely so a stored
+    // pre-rename value never silently loses its qualifier (the silent-loss
+    // failure this feature exists to prevent).
     const wrapper = mountView(fakeJwt('admin'), {
       ...baseListData,
       items: [
@@ -534,18 +577,12 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
 
     const qualifier = wrapper.find('.outcome-confidence')
     expect(qualifier.exists()).toBe(true)
-    expect(qualifier.text()).toContain('Self-reported')
-    // Not tooltip-only: the qualifier text is visible in the DOM, and the full
-    // explanation is carried by aria-label + title. role="note" is what makes
-    // that aria-label reach assistive tech — a bare span has the implicit
-    // `generic` role, whose author-provided name is ignored.
-    expect(qualifier.attributes('role')).toBe('note')
-    const detail = "This delivery verdict is self-reported by the run's own output. It has not been verified against a source of truth."
-    expect(qualifier.attributes('aria-label')).toBe(detail)
-    expect(qualifier.attributes('title')).toBe(detail)
+    expect(qualifier.text()).toContain('Agent-reported')
+    // The alias renders the CURRENT copy, not the pre-rename wording.
+    expect(wrapper.text()).not.toContain('Self-reported')
   })
 
-  it('FAR-1373: renders NO qualifier for a non-self-reported confidence', async () => {
+  it('FAR-1373: renders NO qualifier for a non-agent-reported confidence', async () => {
     const wrapper = mountView(fakeJwt('admin'), {
       ...baseListData,
       items: [
@@ -574,11 +611,11 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     // truthy check (v-if="o.delivery_confidence"), which would render the chip
     // for EVERY non-empty confidence value.
     expect(wrapper.find('[role="note"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Self-reported')
+    expect(wrapper.text()).not.toContain('Agent-reported')
     expect(wrapper.text()).toContain('pr_merged')
   })
 
-  it('FAR-1373: renders NO qualifier on a non-positive verdict even when confidence is self_reported', async () => {
+  it('FAR-1373: renders NO qualifier on a non-positive verdict even when confidence is agent_reported', async () => {
     const wrapper = mountView(fakeJwt('admin'), {
       ...baseListData,
       items: [
@@ -591,7 +628,7 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
                 classification: 'no_delivery',
                 reason: 'no_work',
                 completed_at: '2026-08-01T00:00:00Z',
-                delivery_confidence: 'self_reported',
+                delivery_confidence: 'agent_reported',
               },
             ],
           }),
@@ -603,12 +640,12 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     await wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]').trigger('click')
     await flush()
 
-    // The record defaults delivery_confidence to self_reported on every row,
-    // so a "Self-reported" chip beside "No delivery" would be nonsense: a
+    // The record defaults delivery_confidence to agent_reported on every row,
+    // so an "Agent-reported" chip beside "No delivery" would be nonsense: a
     // no-delivery row makes no positive claim about the world.
     expect(wrapper.text()).toContain('no_work')
     expect(wrapper.find('[role="note"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Self-reported')
+    expect(wrapper.text()).not.toContain('Agent-reported')
   })
 
   it('FAR-1373: renders NO qualifier for an outcome without delivery_confidence (legacy record)', async () => {
