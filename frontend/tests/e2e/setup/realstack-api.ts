@@ -34,21 +34,45 @@ interface LoginResponse {
   access_token: string
 }
 
+/**
+ * Is this error a transient transport failure (timeout / network blip) that a
+ * bounded retry can recover from? An HTTP error response (e.g. 401 bad
+ * credentials, 429) is deterministic and must fail fast instead.
+ */
+function isTransientTransportError(err: unknown): boolean {
+  if (err instanceof TypeError) return true
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+}
+
+const LOGIN_ATTEMPTS = 3
+const LOGIN_BACKOFF_MS = 2_000
+
 export async function apiLogin(env: TestEnv): Promise<string> {
-  const res = await fetch(apiBaseFor(env) + '/api/v1/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: env.credentials.admin.email,
-      password: env.credentials.admin.password,
-    }),
-    signal: AbortSignal.timeout(20_000),
-  })
-  if (!res.ok) {
-    throw new Error(`[realstack] login failed: ${res.status} ${res.statusText}`)
+  // Login is pure ARRANGE: a transient staging blip (the whole point of the
+  // real-stack journeys) must not fail an otherwise-healthy journey before it
+  // reaches the behaviour under test. Retry transport failures only; an HTTP
+  // error response is deterministic and is rethrown immediately.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(apiBaseFor(env) + '/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: env.credentials.admin.email,
+          password: env.credentials.admin.password,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (!res.ok) {
+        throw new Error(`[realstack] login failed: ${res.status} ${res.statusText}`)
+      }
+      const data = (await res.json()) as LoginResponse
+      return data.access_token
+    } catch (err) {
+      if (!isTransientTransportError(err) || attempt >= LOGIN_ATTEMPTS) throw err
+      await new Promise((resolve) => setTimeout(resolve, LOGIN_BACKOFF_MS))
+    }
   }
-  const data = (await res.json()) as LoginResponse
-  return data.access_token
 }
 
 export async function apiFetch<T>(
@@ -380,6 +404,50 @@ export async function claimReview(apiBase: string, token: string, runId: string,
     throw new Error(`[realstack] review claim failed: ${res.status} ${res.text.slice(0, 300)}`)
   }
   return res.body.claim_token
+}
+
+/** Approve a claimed HITL review through the real API. */
+export async function approveReview(
+  apiBase: string,
+  token: string,
+  runId: string,
+  reviewId: string,
+  claimToken: string,
+  notes?: string,
+): Promise<void> {
+  const res = await apiFetch(apiBase, token, 'POST', `/api/v1/runs/${runId}/hitl/${reviewId}/approve`, {
+    claim_token: claimToken,
+    notes: notes ?? null,
+  })
+  if (res.status !== 200) {
+    throw new Error(`[realstack] review approve failed: ${res.status} ${res.text.slice(0, 300)}`)
+  }
+}
+
+/**
+ * Best-effort re-issue of an approve decision through the real API.
+ *
+ * Used to recover when the UI approve control is stuck disabled ("Approving…")
+ * because its in-flight request never resolved: clicking it again would block
+ * on the disabled button, so recovery must bypass the UI. Resolves the run's
+ * still-undecided gate, re-claims it as the same account (FAR-686 re-issues a
+ * fresh token), and approves — a no-op when the gate is already decided.
+ */
+export async function reissueApproveBestEffort(
+  apiBase: string,
+  token: string,
+  runId: string,
+  notes?: string,
+): Promise<void> {
+  try {
+    const reviews = await getRunPendingReviews(apiBase, token, runId)
+    const review = reviews.find((r) => r.decision === null)
+    if (!review) return
+    const claimToken = await claimReview(apiBase, token, runId, review.review_id)
+    await approveReview(apiBase, token, runId, review.review_id, claimToken, notes)
+  } catch (err) {
+    console.warn('[realstack] HITL recovery: approve re-issue failed:', err instanceof Error ? err.message : String(err))
+  }
 }
 
 export interface RunIoResponse {
