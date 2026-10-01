@@ -54,6 +54,22 @@ best-effort and NEVER raises: a classifier or persist failure writes an
 FAR-190 walk (fail-closed against deactivation), so the marker (never a skip) is
 what keeps the walk alive.
 
+Record shape: ``{value, reason, delivered_pr_urls, computed_at, work_intact,
+declared_success_nodes, pr_url_provenance, delivery_confidence}``. The URLs in
+``delivered_pr_urls`` are **self-reported and unverified** (FAR-1336): they are
+harvested from the run's own output (the node's structured return, the node
+telemetry value, the FAR-188 raw-output markers) and NOTHING cross-checks that
+the run actually created the PR it names — the platform deliberately does not
+verify deliveries against an SCM of record. ``pr_url_provenance`` records,
+per URL, how it was harvested (``declared`` = the run's own output contract
+asserted it; ``matched`` = it merely appears in emitted output), and
+``delivery_confidence`` states plainly that every record written today is
+``self_reported``. Neither key changes the verdict: a ``matched``-only URL
+still classifies ``delivered`` (the delivery rule is unchanged). The eight-key
+shape is forward-only: rows written before this change are six-key, are never
+backfilled, and readers must treat an absent ``pr_url_provenance`` /
+``delivery_confidence`` key on an older row as legacy/unknown, not an error.
+
 Terminalizers that write ``status='failed'`` via RAW SQL (never touching the
 crud/run.py hook) leave ``run_classification = NULL`` forever — those runs are
 covered by the reconciliation sweep (:func:`reconcile_missing_classifications`),
@@ -104,6 +120,45 @@ REASON_ROUTER_NO_MATCH = "router_no_match"
 REASON_DELIVERED = "pr_delivered"
 REASON_DELIVERED_EMAIL = "email_delivered"
 REASON_UNCLASSIFIED = "classifier_error"
+
+# --- delivery-signal provenance vocabulary (FAR-1336) -----------------------
+#
+# ``runs.run_classification`` is the platform's authoritative "did this run
+# deliver?" record, but its ``delivered_pr_urls`` are harvested from
+# self-reported sources and nothing cross-checks them against the SCM. These
+# vocabularies stop the record from overstating what it knows (FAR-1336) —
+# they are ADDITIVE metadata only: they never change the verdict.
+
+#: ``pr_url_provenance`` vocabulary — HOW each URL in ``delivered_pr_urls``
+#: entered the record (one value per URL; see ``ClassificationResult``).
+#:
+#: * ``declared`` — the URL came from the node's structured RETURN
+#:   (``outputs_json``): the run's own output contract asserting delivery.
+#: * ``matched`` — the URL was found in the node telemetry VALUE or in a
+#:   FAR-188 raw-output marker: it appears in emitted output, but the run
+#:   never asserted it as a delivery.
+PR_URL_PROVENANCE_DECLARED = "declared"
+PR_URL_PROVENANCE_MATCHED = "matched"
+#: The closed set of provenance values — a future route adds its value here.
+PR_URL_PROVENANCE_VALUES: frozenset[str] = frozenset({PR_URL_PROVENANCE_DECLARED, PR_URL_PROVENANCE_MATCHED})
+
+#: ``delivery_confidence`` vocabulary — how much of the record has been
+#: confirmed against a source of truth (FAR-1336).
+#:
+#: * ``self_reported`` — the entire record is self-reported by the run's own
+#:   output; NOTHING in it has been verified against a source of truth. Every
+#:   record written today carries this value: the platform deliberately does
+#:   NOT verify deliveries against GitHub/GitLab/etc. (that would require
+#:   platform-side SCM integration for a signal only the agent knows).
+#: * ``verified`` — reserved for a future value whose URLs have been confirmed
+#:   against the source of truth. Declared here so the vocabulary has a home
+#:   for it; no code path emits it yet.
+DELIVERY_CONFIDENCE_SELF_REPORTED = "self_reported"
+DELIVERY_CONFIDENCE_VERIFIED = "verified"
+#: The closed set of delivery-confidence values.
+DELIVERY_CONFIDENCE_VALUES: frozenset[str] = frozenset(
+    {DELIVERY_CONFIDENCE_SELF_REPORTED, DELIVERY_CONFIDENCE_VERIFIED}
+)
 
 #: Bounded scan depth when unwrapping a node return looking for ``pr_url``
 #: (direct output_json, nested ``output``/``output_json``/``artifacts``).
@@ -178,6 +233,21 @@ class ClassificationResult:
     in node returns and/or raw-output markers. ``work_intact`` and
     ``declared_success_nodes`` are recorded as metadata so the record surfaces
     the terminalization facts the verdict derives from (FAR-189 spec §1).
+
+    FAR-1336 provenance metadata (additive; the verdict is unaffected):
+
+    ``pr_url_provenance`` maps every URL in ``delivered_pr_urls`` to
+    ``PR_URL_PROVENANCE_DECLARED`` (it came from the node's structured RETURN
+    — the run's own output contract asserting delivery) or
+    ``PR_URL_PROVENANCE_MATCHED`` (it was found in the telemetry value or a
+    FAR-188 raw-output marker — it appears in emitted output but was never
+    asserted as a delivery). A URL reachable by both routes is ``declared``
+    (the stronger provenance wins). Empty when ``delivered_pr_urls`` is empty.
+
+    ``delivery_confidence`` is ``"self_reported"`` on every record written
+    today: the URLs above are harvested from the run's own output and nothing
+    cross-checks that the run actually created the PR it names — see
+    ``DELIVERY_CONFIDENCE_VALUES`` for the vocabulary.
     """
 
     value: RunClassificationValue
@@ -186,10 +256,17 @@ class ClassificationResult:
     computed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     work_intact: bool | None = None
     declared_success_nodes: int = 0
+    pr_url_provenance: dict[str, str] = field(default_factory=dict)
+    delivery_confidence: str = DELIVERY_CONFIDENCE_SELF_REPORTED
 
     def to_dict(self) -> dict[str, Any]:
         """The persisted record shape ``{value, reason, delivered_pr_urls,
-        computed_at, work_intact, declared_success_nodes}``."""
+        computed_at, work_intact, declared_success_nodes, pr_url_provenance,
+        delivery_confidence}``.
+
+        ``delivered_pr_urls`` and ``pr_url_provenance`` are self-reported and
+        UNVERIFIED (FAR-1336) — ``delivery_confidence`` states that plainly.
+        """
         return {
             "value": self.value.value,
             "reason": self.reason,
@@ -197,6 +274,8 @@ class ClassificationResult:
             "computed_at": self.computed_at.isoformat(),
             "work_intact": self.work_intact,
             "declared_success_nodes": self.declared_success_nodes,
+            "pr_url_provenance": dict(self.pr_url_provenance),
+            "delivery_confidence": self.delivery_confidence,
         }
 
 
@@ -267,28 +346,64 @@ def _node_id_union(outputs_json: Any, telemetry_json: Any) -> set[str]:
     return node_ids
 
 
+def _note_provenance(provenance: dict[str, str], url: str, route: str) -> None:
+    """Record how *url* entered the record — the STRONGER provenance wins.
+
+    ``declared`` (the run's structured return asserted the URL) outranks
+    ``matched`` (the URL merely appears in emitted output), so a URL found by
+    BOTH routes keeps ``declared`` regardless of which route is seen first.
+    Never raises; has no effect on URL collection or ordering.
+    """
+    if route == PR_URL_PROVENANCE_DECLARED or url not in provenance:
+        provenance[url] = route
+
+
 def _collect_node_run_pr_urls(
     outputs_json: Any,
     telemetry_json: Any,
     seen: set[str],
     urls: list[str],
+    provenance: dict[str, str],
 ) -> None:
-    """Collect valid pr_urls from each node's stored return + telemetry value."""
+    """Collect valid pr_urls from each node's stored return + telemetry value.
+
+    The node RETURN (``outputs_json``) is the run's own output contract, so a
+    URL found there is ``declared``; the telemetry VALUE only carries the URL
+    as emitted output, so it is ``matched``. Collection order (and therefore
+    ``delivered_pr_urls`` ordering) is unchanged from the pre-FAR-1336 code.
+    """
     for node_id in sorted(_node_id_union(outputs_json, telemetry_json)):
         url = _extract_pr_url_from_node(node_return(outputs_json, telemetry_json, node_id))
-        if url and url not in seen:
-            seen.add(url)
-            urls.append(url)
+        if url:
+            _note_provenance(provenance, url, PR_URL_PROVENANCE_DECLARED)
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+        # KNOWN LIMITATION (FAR-1336, conservative): the accessor falls back to
+        # the legacy INNER OUTPUT of ``outputs_json`` when the node has no
+        # telemetry entry, so a URL only reachable down this leg gets labelled
+        # ``matched`` even though its source is the node's return (the field
+        # defines ``declared`` = came from the structured return). Attributing
+        # by source would need the accessor's dispatch rule re-derived here (a
+        # second source of truth that can drift) or a source tag from
+        # ``node_output_split`` — the direction understates provenance, never
+        # overstates it, so it is left as-is.
         telemetry_value = node_telemetry(telemetry_json, outputs_json, node_id)
         if telemetry_value is not None:
             telemetry_url = _extract_pr_url_from_node(telemetry_value)
-            if telemetry_url and telemetry_url not in seen:
-                seen.add(telemetry_url)
-                urls.append(telemetry_url)
+            if telemetry_url:
+                _note_provenance(provenance, telemetry_url, PR_URL_PROVENANCE_MATCHED)
+                if telemetry_url not in seen:
+                    seen.add(telemetry_url)
+                    urls.append(telemetry_url)
 
 
-def _collect_marker_pr_url(marker: Any, seen: set[str], urls: list[str]) -> None:
-    """Collect a single FAR-188 raw-output marker's ``pr_url`` if valid + unseen."""
+def _collect_marker_pr_url(marker: Any, seen: set[str], urls: list[str], provenance: dict[str, str]) -> None:
+    """Collect a single FAR-188 raw-output marker's ``pr_url`` if valid + unseen.
+
+    A marker is emitted output the run never asserted as a delivery, so the
+    URL it carries is ``matched`` (FAR-1336 provenance; ordering unchanged).
+    """
     if not isinstance(marker, dict):
         return
     marker_url = marker.get("pr_url")
@@ -297,23 +412,27 @@ def _collect_marker_pr_url(marker: Any, seen: set[str], urls: list[str]) -> None
     stripped = marker_url.strip()
     if not _is_valid_pr_url(stripped):
         return
+    _note_provenance(provenance, stripped, PR_URL_PROVENANCE_MATCHED)
     if stripped not in seen:
         seen.add(stripped)
         urls.append(stripped)
 
 
-def _collect_marker_pr_urls(raw_output_markers: Any, seen: set[str], urls: list[str]) -> None:
+def _collect_marker_pr_urls(
+    raw_output_markers: Any, seen: set[str], urls: list[str], provenance: dict[str, str]
+) -> None:
     """Collect valid pr_urls keyed by ANY attempt-key in the run's markers."""
     if not isinstance(raw_output_markers, dict):
         return
     for marker in raw_output_markers.values():
-        _collect_marker_pr_url(marker, seen, urls)
+        _collect_marker_pr_url(marker, seen, urls, provenance)
 
 
 def collect_pr_urls(
     outputs_json: Any,
     telemetry_json: Any,
     raw_output_markers: Any,
+    provenance: dict[str, str] | None = None,
 ) -> list[str]:
     """Every valid pr_url across the run's delivery evidence, deduplicated.
 
@@ -324,12 +443,24 @@ def collect_pr_urls(
     raw-output marker's ``pr_url`` field, keyed by ANY attempt_key (a
     first-attempt PR created before a sandbox stall/retry is a real delivery —
     FAR-189 addendum).
+
+    FAR-1336: pass a *provenance* dict to have it filled, in the SAME single
+    walk, with one entry per collected URL — ``declared`` (the node's
+    structured RETURN asserted it) or ``matched`` (telemetry/marker output
+    only). The map's keys are exactly the returned URL set — a caller-supplied
+    dict is CLEARED first, so stale pre-seeded entries cannot survive — and
+    collection order is identical whether or not *provenance* is given.
     """
     seen: set[str] = set()
     urls: list[str] = []
+    prov: dict[str, str] = provenance if provenance is not None else {}
+    # Make the documented invariant true: the map ends up keyed by EXACTLY the
+    # returned URL set, so any pre-seeded entries a caller hands in are dropped
+    # before the walk fills it (the sole production caller passes a fresh {}).
+    prov.clear()
 
-    _collect_node_run_pr_urls(outputs_json, telemetry_json, seen, urls)
-    _collect_marker_pr_urls(raw_output_markers, seen, urls)
+    _collect_node_run_pr_urls(outputs_json, telemetry_json, seen, urls, prov)
+    _collect_marker_pr_urls(raw_output_markers, seen, urls, prov)
     return urls
 
 
@@ -529,12 +660,18 @@ def classify_run(
     # (empty-backlog, PO). Explicit branch — the deliverable must never be
     # reached via set-arithmetic fall-through.
     if status in _DELIVERABLE_STATUSES:
-        pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers)
+        # FAR-1336: the SAME collection walk fills the per-URL provenance map —
+        # a URL found ONLY in telemetry/markers is ``matched`` — and the
+        # verdict is UNCHANGED: matched-only still classifies ``delivered``
+        # (deliberate; the delivery rule is not tightened by provenance).
+        pr_url_provenance: dict[str, str] = {}
+        pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers, pr_url_provenance)
         if pr_urls:
             return ClassificationResult(
                 RunClassificationValue.delivered,
                 REASON_DELIVERED,
                 delivered_pr_urls=tuple(pr_urls),
+                pr_url_provenance=pr_url_provenance,
                 computed_at=computed_at,
                 work_intact=work_intact,
                 declared_success_nodes=declared_success_nodes,
@@ -606,7 +743,12 @@ def _record_classification_failure(failure: str) -> None:
 
 
 def _unclassified_marker_dict(reason: str = REASON_UNCLASSIFIED) -> dict[str, Any]:
-    """The persisted ``unclassified`` record shape — the fail-closed marker."""
+    """The persisted ``unclassified`` record shape — the fail-closed marker.
+
+    Carries the same keys as :meth:`ClassificationResult.to_dict` (including
+    the FAR-1336 provenance/confidence keys) so every terminal run's record
+    has one shape regardless of which writer produced it.
+    """
     return {
         "value": RunClassificationValue.unclassified.value,
         "reason": reason,
@@ -614,6 +756,8 @@ def _unclassified_marker_dict(reason: str = REASON_UNCLASSIFIED) -> dict[str, An
         "computed_at": datetime.now(UTC).isoformat(),
         "work_intact": None,
         "declared_success_nodes": 0,
+        "pr_url_provenance": {},
+        "delivery_confidence": DELIVERY_CONFIDENCE_SELF_REPORTED,
     }
 
 
