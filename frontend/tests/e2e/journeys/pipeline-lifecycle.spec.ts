@@ -11,6 +11,16 @@ import {
 } from '../setup/realstack-api'
 
 /**
+ * Staging readiness budget for first paint on these real-stack journeys. A
+ * staging @regression trace showed the pipelines list taking ~4 s (52 rows)
+ * and the editor gating its toolbar on a catalog fetch taking >5 s under load,
+ * so the default 5 s expect budget flaked the row/toolbar readiness assertions
+ * below even though the API had returned the data. 30 s matches the sibling
+ * real-stack journey budget.
+ */
+const READY_TIMEOUT = 30_000
+
+/**
  * Invoke a row's action-menu command and confirm it landed. See
  * `setup/row-menu.ts` for how the popup item is activated.
  *
@@ -99,7 +109,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
 
       // The created pipeline is listed (persisted data rendering, not client state).
       const row = page.getByTestId(`pipeline-tree-row-${pipeline.id}`)
-      await expect(row).toBeVisible()
+      await expect(row).toBeVisible({ timeout: READY_TIMEOUT })
       await expect(row).toContainText(name)
 
       // Rename via the row's action menu. Retry until the rename dialog
@@ -133,7 +143,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       await page.goto('/pipelines')
 
       const row = page.getByTestId(`pipeline-tree-row-${pipeline.id}`)
-      await expect(row).toBeVisible()
+      await expect(row).toBeVisible({ timeout: READY_TIMEOUT })
 
       // Archive via the row's action menu. Observable effect: the default list
       // excludes archived pipelines, so the row disappears for the user. Retry
@@ -151,7 +161,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       expect(un.status).toBe(200)
       expect(un.body?.archived_at).toBeNull()
       await page.goto('/pipelines')
-      await expect(page.getByTestId(`pipeline-tree-row-${pipeline.id}`)).toBeVisible()
+      await expect(page.getByTestId(`pipeline-tree-row-${pipeline.id}`)).toBeVisible({ timeout: READY_TIMEOUT })
     } finally {
       await deletePipeline(apiBase, token, pipeline.id)
     }
@@ -165,7 +175,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
     try {
       await loginAsAdmin(page, env)
       await page.goto(`/pipelines/${pipeline.id}/editor`)
-      await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible()
+      await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: READY_TIMEOUT })
 
       // UI guard: Run is disabled while the graph has no nodes.
       await expect(page.getByTestId('pipeline-editor-run')).toBeDisabled()
@@ -196,7 +206,7 @@ test.describe('Real-stack journeys: pipeline lifecycle', { tag: '@regression' },
       await page.goto('/pipelines')
 
       const row = page.getByTestId(`pipeline-tree-row-${pipeline.id}`)
-      await expect(row).toBeVisible()
+      await expect(row).toBeVisible({ timeout: READY_TIMEOUT })
 
       // Delete via the row's action menu. pipeline_delete is a team-tier
       // feature flag; when the plan store cannot resolve flags for this
