@@ -46,6 +46,8 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.sql import Select
 
@@ -538,4 +540,20 @@ async def test_restore_resolver_missing_path_param_returns_none() -> None:
     session = AsyncMock()
 
     assert await _resolve_pipeline_team_scope_including_deleted(request, session) is None
+    session.execute.assert_not_awaited()
+
+
+async def test_restore_resolver_rejects_a_non_uuid_path_param() -> None:
+    """A malformed path param is a 400, never an unscoped read."""
+    from modulo.api.routes.pipelines import _resolve_pipeline_team_scope_including_deleted
+
+    request = MagicMock()
+    request.path_params = {"pipeline_id": "not-a-uuid"}
+    session = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_pipeline_team_scope_including_deleted(request, session)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid pipeline_id path parameter"
     session.execute.assert_not_awaited()
