@@ -22,6 +22,7 @@ from modulo.core.node_output_split import (
     NODE_TYPE_GATE,
     TELEMETRY_FIELDS,
     extend_node_type_map_from_edges,
+    has_telemetry_entry,
     node_return,
     node_stderr_artifact,
     node_stdout_artifact,
@@ -547,6 +548,34 @@ def test_node_telemetry_legacy_extracts_wallclock() -> None:
     telemetry = node_telemetry(None, outputs, "n1")
     assert telemetry is not None
     assert telemetry["wall_clock_time_ms"] == 3_600_000
+
+
+# ---------------------------------------------------------------------------
+# has_telemetry_entry -- the single dispatch predicate behind node_telemetry
+# ---------------------------------------------------------------------------
+
+
+def test_has_telemetry_entry_true_when_entry_present() -> None:
+    """A P1+ row keyed by the node -> True (the accessor returns it verbatim)."""
+    assert has_telemetry_entry({"n1": {"status": "completed"}}, "n1")
+    # Presence only, never the value's content: an entry of ANY shape counts.
+    assert has_telemetry_entry({"n1": None}, "n1")
+    assert has_telemetry_entry({"other": {"status": "completed"}, "n1": {}}, "n1")
+
+
+def test_has_telemetry_entry_false_when_entry_absent() -> None:
+    """A legacy row (or a node absent from telemetry) -> False: the accessor
+    falls back to the legacy inner output of ``outputs_json``."""
+    assert not has_telemetry_entry({"n1": {"status": "completed"}}, "nope")
+    assert not has_telemetry_entry({}, "n1")
+
+
+def test_has_telemetry_entry_false_for_non_dict_telemetry() -> None:
+    """Non-dict telemetry columns can never carry an entry."""
+    assert not has_telemetry_entry(None, "n1")
+    assert not has_telemetry_entry("not a dict", "n1")
+    assert not has_telemetry_entry([{"n1": 1}], "n1")
+    assert not has_telemetry_entry(42, "n1")
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,8 @@ idempotency (UNIQUE(run_id)), and re-terminalization refresh (upsert).
 import builtins
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import UTC
+from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -336,8 +337,8 @@ class TestDeliveryProvenance:
         outputs = {"n1": _node_return_with_pr(_PR)}
         result = classify_run("complete", None, outputs_json=outputs, telemetry_json={"n1": {}})
         assert result.value == RunClassificationValue.delivered
-        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_DECLARED}
-        assert set(result.pr_url_provenance.values()) <= PR_URL_PROVENANCE_VALUES
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
+        assert {route for _url, route in result.pr_url_provenance} <= PR_URL_PROVENANCE_VALUES
 
     def test_marker_only_pr_url_is_matched_and_still_delivered(self) -> None:
         """A URL present ONLY in a FAR-188 raw-output marker is emitted output
@@ -351,17 +352,39 @@ class TestDeliveryProvenance:
             raw_output_markers=_markers(_PR),
         )
         assert result.value == RunClassificationValue.delivered
-        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_MATCHED}
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_MATCHED}
 
     def test_telemetry_only_pr_url_is_matched(self) -> None:
-        """A URL present ONLY in the node telemetry value (not the node
+        """A URL present ONLY in a real node telemetry entry (not the node
         return) -> ``matched``: it appears in emitted output but the run never
         asserted it via its output contract."""
         outputs = {"n1": {"summary": "no pr_url here"}}
         telemetry = {"n1": {"agent_status": "completed", "agent_outcome": "success", "pr_url": _PR}}
         result = classify_run("complete", None, outputs_json=outputs, telemetry_json=telemetry)
         assert result.value == RunClassificationValue.delivered
-        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_MATCHED}
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_MATCHED}
+
+    def test_nested_legacy_envelope_url_only_reachable_via_telemetry_leg_is_declared(self) -> None:
+        """FAR-1376: provenance is decided by SOURCE, not by accessor leg.
+
+        With NO telemetry entry, ``node_telemetry`` returns the legacy INNER
+        OUTPUT of ``outputs_json`` — the node's structured return — so a URL
+        harvested on that leg is ``declared``. Here the URL sits one dict level
+        deeper than the declared scan reaches (``_MAX_PR_URL_SCAN_DEPTH``), so
+        the ONLY leg that finds it is the telemetry leg; it must still be
+        labelled ``declared``, not ``matched``. Verdict and URL membership are
+        unchanged.
+        """
+        outputs = {
+            "n1": {
+                "output": {"artifacts": [{"output": {"output_json": {"pr_url": _PR}}}]},
+                "summary": "done",
+            }
+        }
+        result = classify_run("complete", None, outputs_json=outputs, telemetry_json=None)
+        assert result.value == RunClassificationValue.delivered
+        assert result.delivered_pr_urls == (_PR,)
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
 
     def test_per_url_provenance_across_routes(self) -> None:
         """Several URLs harvested via different routes each carry their own
@@ -376,7 +399,7 @@ class TestDeliveryProvenance:
             raw_output_markers=_markers(_PR_3),
         )
         assert result.delivered_pr_urls == (_PR, _PR_2, _PR_3)
-        assert result.pr_url_provenance == {
+        assert dict(result.pr_url_provenance) == {
             _PR: PR_URL_PROVENANCE_DECLARED,
             _PR_2: PR_URL_PROVENANCE_MATCHED,
             _PR_3: PR_URL_PROVENANCE_MATCHED,
@@ -394,7 +417,7 @@ class TestDeliveryProvenance:
             raw_output_markers=_markers(_PR),
         )
         assert result.delivered_pr_urls == (_PR,)
-        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_DECLARED}
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
 
     def test_declared_wins_even_when_matched_is_observed_first(self) -> None:
         """Route order must not downgrade a URL: node ids are walked in sorted
@@ -404,7 +427,7 @@ class TestDeliveryProvenance:
         telemetry = {"a1": {"agent_status": "completed", "pr_url": _PR}}
         result = classify_run("complete", None, outputs_json=outputs, telemetry_json=telemetry)
         assert result.delivered_pr_urls == (_PR,)
-        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_DECLARED}
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
 
     def test_delivery_confidence_is_self_reported_on_delivered_record(self) -> None:
         """A delivered record states plainly that it is self_reported, and the
@@ -524,7 +547,7 @@ class TestDeliveryProvenance:
         )
         assert result.value == RunClassificationValue.delivered
         assert result.reason == REASON_DELIVERED
-        assert result.pr_url_provenance == {_PR: PR_URL_PROVENANCE_MATCHED}
+        assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_MATCHED}
 
     def test_existing_record_keys_are_unchanged_by_the_provenance_keys(self) -> None:
         """The six pre-FAR-1336 keys keep their exact names, types and values;
@@ -573,6 +596,73 @@ class TestDeliveryProvenance:
         urls = collect_pr_urls({"n1": _node_return_with_pr(_PR)}, {"n1": {}}, None, preseeded)
         assert urls == [_PR]
         assert preseeded == {_PR: PR_URL_PROVENANCE_DECLARED}
+
+    @staticmethod
+    def _delivered_result() -> ClassificationResult:
+        """A fully-populated delivered result (fixed ``computed_at`` so two
+        instances built from the same inputs are equal AND hash equally)."""
+        return ClassificationResult(
+            RunClassificationValue.delivered,
+            REASON_DELIVERED,
+            delivered_pr_urls=(_PR, _PR_2),
+            computed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            work_intact=True,
+            declared_success_nodes=2,
+            pr_url_provenance=(
+                (_PR, PR_URL_PROVENANCE_DECLARED),
+                (_PR_2, PR_URL_PROVENANCE_MATCHED),
+            ),
+            delivery_confidence=DELIVERY_CONFIDENCE_SELF_REPORTED,
+        )
+
+    def test_result_is_hashable_and_equal_inputs_hash_equally(self) -> None:
+        """FAR-1377: the frozen result hashed fine before FAR-1336 added the
+        ``dict`` provenance field — it must hash again, and equal inputs must
+        hash equally."""
+        first = self._delivered_result()
+        second = self._delivered_result()
+        assert first == second
+        assert hash(first) == hash(second)
+        # The PRODUCTION construction path (classify_run -> to_dict) hashes too.
+        produced = classify_run(
+            "complete",
+            None,
+            outputs_json={"n1": _node_return_with_pr(_PR)},
+            telemetry_json={"n1": {}},
+        )
+        assert isinstance(hash(produced), int)
+        # A fully-defaulted result (empty provenance tuple) hashes too.
+        stamp = datetime(2026, 1, 1, tzinfo=UTC)
+        bare = ClassificationResult(RunClassificationValue.no_delivery, REASON_NO_WORK, computed_at=stamp)
+        assert isinstance(hash(bare), int)
+
+    def test_result_provenance_field_is_immutable(self) -> None:
+        """FAR-1377: ``frozen=True`` must mean what it says — no rebinding the
+        field, and no mutating the value object through it either."""
+        result = self._delivered_result()
+        with pytest.raises(FrozenInstanceError):
+            result.pr_url_provenance = ((_PR, PR_URL_PROVENANCE_MATCHED),)
+        with pytest.raises(TypeError):
+            result.pr_url_provenance[0] = (_PR, PR_URL_PROVENANCE_MATCHED)
+
+    def test_serialised_record_keeps_eight_keys_and_dict_provenance(self) -> None:
+        """The persisted record still carries the exact eight keys, and
+        ``pr_url_provenance`` serialises as a JSON OBJECT (not a list of
+        pairs) — the FAR-1336 shape is unchanged by the immutable storage."""
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        record = classify_run("complete", None, outputs_json=outputs, telemetry_json={"n1": {}}).to_dict()
+        assert set(record) == {
+            "value",
+            "reason",
+            "delivered_pr_urls",
+            "computed_at",
+            "work_intact",
+            "declared_success_nodes",
+            "pr_url_provenance",
+            "delivery_confidence",
+        }
+        assert isinstance(record["pr_url_provenance"], dict)
+        assert record["pr_url_provenance"] == {_PR: PR_URL_PROVENANCE_DECLARED}
 
 
 def _email_markers(*attempt_keys: str) -> dict[str, dict[str, Any]]:

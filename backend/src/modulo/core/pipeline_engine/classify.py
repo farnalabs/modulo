@@ -94,7 +94,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from modulo.core.node_output_split import node_return, node_telemetry
+from modulo.core.node_output_split import has_telemetry_entry, node_return, node_telemetry
 from modulo.core.pipeline_engine.evidence import _declared_success_nodes
 
 _log = logging.getLogger(__name__)
@@ -239,10 +239,15 @@ class ClassificationResult:
     ``pr_url_provenance`` maps every URL in ``delivered_pr_urls`` to
     ``PR_URL_PROVENANCE_DECLARED`` (it came from the node's structured RETURN
     — the run's own output contract asserting delivery) or
-    ``PR_URL_PROVENANCE_MATCHED`` (it was found in the telemetry value or a
+    ``PR_URL_PROVENANCE_MATCHED`` (it was found in a real telemetry entry or a
     FAR-188 raw-output marker — it appears in emitted output but was never
     asserted as a delivery). A URL reachable by both routes is ``declared``
     (the stronger provenance wins). Empty when ``delivered_pr_urls`` is empty.
+
+    FAR-1377: the map is held IMMUTABLY as a ``tuple[tuple[url, route], ...]``
+    sorted by URL, so the ``frozen`` result stays hashable and cannot be
+    mutated through its fields; ``to_dict()`` still serialises it as a JSON
+    OBJECT (``dict(...)``), byte-identical for the same inputs.
 
     ``delivery_confidence`` is ``"self_reported"`` on every record written
     today: the URLs above are harvested from the run's own output and nothing
@@ -256,7 +261,7 @@ class ClassificationResult:
     computed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     work_intact: bool | None = None
     declared_success_nodes: int = 0
-    pr_url_provenance: dict[str, str] = field(default_factory=dict)
+    pr_url_provenance: tuple[tuple[str, str], ...] = ()
     delivery_confidence: str = DELIVERY_CONFIDENCE_SELF_REPORTED
 
     def to_dict(self) -> dict[str, Any]:
@@ -368,9 +373,14 @@ def _collect_node_run_pr_urls(
     """Collect valid pr_urls from each node's stored return + telemetry value.
 
     The node RETURN (``outputs_json``) is the run's own output contract, so a
-    URL found there is ``declared``; the telemetry VALUE only carries the URL
-    as emitted output, so it is ``matched``. Collection order (and therefore
-    ``delivered_pr_urls`` ordering) is unchanged from the pre-FAR-1336 code.
+    URL found there is ``declared``; a URL found in a REAL telemetry entry or
+    a FAR-188 marker is emitted output the run never asserted, so it is
+    ``matched``. Provenance is decided by SOURCE, not by which accessor
+    returned the value (FAR-1376): with no telemetry entry
+    ``node_telemetry`` falls back to the legacy inner output of
+    ``outputs_json``, so a URL harvested on that leg is ``declared`` too.
+    Collection order (and therefore ``delivered_pr_urls`` ordering) is
+    unchanged from the pre-FAR-1336 code.
     """
     for node_id in sorted(_node_id_union(outputs_json, telemetry_json)):
         url = _extract_pr_url_from_node(node_return(outputs_json, telemetry_json, node_id))
@@ -379,20 +389,23 @@ def _collect_node_run_pr_urls(
             if url not in seen:
                 seen.add(url)
                 urls.append(url)
-        # KNOWN LIMITATION (FAR-1336, conservative): the accessor falls back to
-        # the legacy INNER OUTPUT of ``outputs_json`` when the node has no
-        # telemetry entry, so a URL only reachable down this leg gets labelled
-        # ``matched`` even though its source is the node's return (the field
-        # defines ``declared`` = came from the structured return). Attributing
-        # by source would need the accessor's dispatch rule re-derived here (a
-        # second source of truth that can drift) or a source tag from
-        # ``node_output_split`` — the direction understates provenance, never
-        # overstates it, so it is left as-is.
+        # Provenance by SOURCE (FAR-1376): ``matched`` only for a GENUINE
+        # telemetry entry. With no entry the accessor returns the legacy inner
+        # output of ``outputs_json`` — the node's structured return — so the
+        # URL is ``declared`` like the leg above, even though the declared scan
+        # (one dict level shallower) may not have reached it.
+        # ``has_telemetry_entry`` is node_output_split's own dispatch
+        # predicate — never re-derived here (the FAR-1336 lockstep hazard).
         telemetry_value = node_telemetry(telemetry_json, outputs_json, node_id)
         if telemetry_value is not None:
             telemetry_url = _extract_pr_url_from_node(telemetry_value)
             if telemetry_url:
-                _note_provenance(provenance, telemetry_url, PR_URL_PROVENANCE_MATCHED)
+                route = (
+                    PR_URL_PROVENANCE_MATCHED
+                    if has_telemetry_entry(telemetry_json, node_id)
+                    else PR_URL_PROVENANCE_DECLARED
+                )
+                _note_provenance(provenance, telemetry_url, route)
                 if telemetry_url not in seen:
                     seen.add(telemetry_url)
                     urls.append(telemetry_url)
@@ -671,7 +684,10 @@ def classify_run(
                 RunClassificationValue.delivered,
                 REASON_DELIVERED,
                 delivered_pr_urls=tuple(pr_urls),
-                pr_url_provenance=pr_url_provenance,
+                # FAR-1377: hold the provenance IMMUTABLY (sorted by URL) so
+                # the frozen result stays hashable; ``to_dict`` re-materialises
+                # the JSON object.
+                pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
                 computed_at=computed_at,
                 work_intact=work_intact,
                 declared_success_nodes=declared_success_nodes,
