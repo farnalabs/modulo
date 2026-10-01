@@ -22,6 +22,14 @@ const PIPELINE = {
 
 const EMPTY_GRAPH = { nodes: [], edges: [] }
 
+// Staging readiness budget for the editor's first paint. The page gates its
+// toolbar (and the save button) on a catalog fetch (schemas/connectors/agents/
+// parameter-schemas) that a staging @regression trace showed taking >5 s under
+// load — the pipeline + graph GETs had already returned, but the default 5 s
+// expect budget flaked the readiness assertion below. 30 s matches the sibling
+// real-stack journey budget.
+const EDITOR_READY_TIMEOUT = 30_000
+
 test.describe('Pipeline Editor', { tag: '@regression' }, () => {
   // Local runs need a generous timeout: the first SPA bundle compile on the
   // dev server (plus Vue Flow) can exceed the 30s default before any
@@ -53,7 +61,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
 
     await expect(page).toHaveURL(new RegExp(`/pipelines/${PIPELINE_ID}/editor`))
-    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible()
+    await expect(page.getByTestId('pipeline-editor-toolbar')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
     await expect(page.getByTestId('pipeline-editor-toolbar').locator('h2')).toContainText('E2E Editor Pipeline')
 
     // File group: save + save-as-template
@@ -88,7 +96,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     })
 
     await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
-    await expect(page.getByTestId('pipeline-editor-save')).toBeVisible()
+    await expect(page.getByTestId('pipeline-editor-save')).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
 
     await page.getByTestId('pipeline-editor-save').click()
 
@@ -120,7 +128,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
 
     await page.goto(`/pipelines/${PIPELINE_ID}/editor`)
 
-    await expect(page.locator('.vue-flow').first()).toBeVisible()
+    await expect(page.locator('.vue-flow').first()).toBeVisible({ timeout: EDITOR_READY_TIMEOUT })
     await expect(page.locator('.vue-flow__node').first()).toBeVisible()
     // With a node present the Run button is enabled (disabled only when the graph is empty)
     await expect(page.getByTestId('pipeline-editor-run')).toBeEnabled()
