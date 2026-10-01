@@ -4298,10 +4298,12 @@ async def _fail_nodeless_run(
     never break the repair.
 
     FAR-1088: the error_detail now includes ``pipeline_id``, ``trigger_id``,
-    and ``claim_count`` so the terminal-failed run is diagnosable from the
+    ``claim_count``, and the run's last recorded ``dispatch_phase`` (+ the
+    seconds spent in it) so the terminal-failed run is diagnosable from the
     error alone — no cross-referencing TriggerEvent or pipeline config
     needed. The context_json sent to the Error Dashboard also carries these
-    fields for the same reason.
+    fields for the same reason. A NULL phase is rendered as
+    ``dispatch_phase=unknown`` rather than omitted.
     """
     from modulo.db.models.run import Run
 
@@ -4325,22 +4327,41 @@ async def _fail_nodeless_run(
     claim_count = getattr(run, "claim_count", None)
     pipeline_id = getattr(run, "pipeline_id", None)
     trigger_id = getattr(run, "trigger_id", None)
+    # FAR-1088: the run's LAST recorded dispatch phase — read straight off the
+    # already-loaded row's columns (no cross-module string protocol) — says
+    # WHERE the claim stalled. A NULL phase renders as ``unknown`` so "no
+    # phase was ever recorded" is unmistakable, never silently omitted.
+    dispatch_phase = getattr(run, "dispatch_phase", None)
+    dispatch_phase_text = dispatch_phase if dispatch_phase is not None else "unknown"
+    phase_entered_at = getattr(run, "dispatch_phase_entered_at", None)
+    if phase_entered_at is not None and phase_entered_at.tzinfo is None:
+        # Defensive: a naive timestamp must never raise inside the repair.
+        phase_entered_at = phase_entered_at.replace(tzinfo=UTC)
+    completed_at = datetime.now(UTC)
+    dispatch_phase_elapsed: float | None = None
+    if phase_entered_at is not None:
+        dispatch_phase_elapsed = max((completed_at - phase_entered_at).total_seconds(), 0.0)
+    phase_text = f"dispatch_phase={dispatch_phase_text}"
+    if dispatch_phase_elapsed is not None:
+        phase_text += f" dispatch_phase_elapsed={dispatch_phase_elapsed:.1f}s"
+    phase_log_text = f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown"
     run.status = "failed"
     run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
-    # FAR-1088: include pipeline_id, trigger_id, and claim_count in the
-    # error_detail so the terminal-failed run is diagnosable from the error
-    # alone — a future regression on a specific pipeline/trigger is
+    # FAR-1088: include pipeline_id, trigger_id, claim_count, and the dispatch
+    # phase in the error_detail so the terminal-failed run is diagnosable from
+    # the error alone — a future regression on a specific pipeline/trigger is
     # attributable in seconds instead of requiring TriggerEvent forensics.
     run.error_detail = (
         "Claimed by SAQ but dispatched no node within the nodeless window "
         "(dispatcher_reconcile zombie repair; pipeline={pipeline}, trigger={trigger}, "
-        "claim_count={claims})".format(
+        "claim_count={claims}, {phase})".format(
             pipeline=str(pipeline_id) if pipeline_id is not None else "unknown",
             trigger=str(trigger_id) if trigger_id is not None else "unknown",
             claims=claim_count if claim_count is not None else "unknown",
+            phase=phase_text,
         )
     )
-    run.completed_at = datetime.now(UTC)
+    run.completed_at = completed_at
     summary["claimed_but_never_dispatched"] += 1
     # Alert-grade: these runs burned their full retry budget without ever
     # executing a node — the environment (worker or sandbox) that claimed them
@@ -4349,7 +4370,8 @@ async def _fail_nodeless_run(
     queue_wait_text = f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown"
     _log.error(
         "dispatcher_reconcile.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
-        "pipeline=%s trigger=%s zombie_age_minutes=%s saq_queue_wait_seconds=%s "
+        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
+        "zombie_age_minutes=%s saq_queue_wait_seconds=%s "
         "dispatched_at=%s started_at=%s — "
         "terminal-failed; SAQ claimed this run but no node was ever dispatched",
         run_id,
@@ -4357,6 +4379,8 @@ async def _fail_nodeless_run(
         claim_count,
         pipeline_id,
         trigger_id,
+        dispatch_phase_text,
+        phase_log_text,
         age_text,
         queue_wait_text,
         dispatched_at.isoformat() if dispatched_at is not None else "None",
@@ -4377,6 +4401,9 @@ async def _fail_nodeless_run(
             "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
             "trigger_id": str(trigger_id) if trigger_id is not None else None,
             "claim_count": claim_count,
+            # FAR-1088: where the claim stalled, per the run row's own columns.
+            "dispatch_phase": dispatch_phase,
+            "dispatch_phase_elapsed": dispatch_phase_elapsed,
             "zombie_age_minutes": zombie_age_minutes,
             "saq_queue_wait_seconds": saq_queue_wait_seconds,
             "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
