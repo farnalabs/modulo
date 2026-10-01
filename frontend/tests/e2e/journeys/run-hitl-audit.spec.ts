@@ -127,7 +127,7 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
           break
         } catch (err) {
           lastError = err
-          await reissueApproveBestEffort(apiBase, token, run.run_id, 'E2E journey approval').catch(() => undefined)
+          await reissueApproveBestEffort(apiBase, token, run.run_id, 'E2E journey approval')
         }
       }
       if (status !== 'complete') {

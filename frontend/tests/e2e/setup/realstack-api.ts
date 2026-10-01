@@ -52,8 +52,7 @@ export async function apiLogin(env: TestEnv): Promise<string> {
   // real-stack journeys) must not fail an otherwise-healthy journey before it
   // reaches the behaviour under test. Retry transport failures only; an HTTP
   // error response is deterministic and is rethrown immediately.
-  let lastError: unknown
-  for (let attempt = 1; attempt <= LOGIN_ATTEMPTS; attempt++) {
+  for (let attempt = 1; ; attempt++) {
     try {
       const res = await fetch(apiBaseFor(env) + '/api/v1/auth/login', {
         method: 'POST',
@@ -70,12 +69,10 @@ export async function apiLogin(env: TestEnv): Promise<string> {
       const data = (await res.json()) as LoginResponse
       return data.access_token
     } catch (err) {
-      if (!isTransientTransportError(err) || attempt === LOGIN_ATTEMPTS) throw err
-      lastError = err
+      if (!isTransientTransportError(err) || attempt >= LOGIN_ATTEMPTS) throw err
       await new Promise((resolve) => setTimeout(resolve, LOGIN_BACKOFF_MS))
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
 export async function apiFetch<T>(
@@ -442,11 +439,15 @@ export async function reissueApproveBestEffort(
   runId: string,
   notes?: string,
 ): Promise<void> {
-  const reviews = await getRunPendingReviews(apiBase, token, runId)
-  const review = reviews.find((r) => r.decision === null)
-  if (!review) return
-  const claimToken = await claimReview(apiBase, token, runId, review.review_id)
-  await approveReview(apiBase, token, runId, review.review_id, claimToken, notes)
+  try {
+    const reviews = await getRunPendingReviews(apiBase, token, runId)
+    const review = reviews.find((r) => r.decision === null)
+    if (!review) return
+    const claimToken = await claimReview(apiBase, token, runId, review.review_id)
+    await approveReview(apiBase, token, runId, review.review_id, claimToken, notes)
+  } catch (err) {
+    console.warn('[realstack] HITL recovery: approve re-issue failed:', err instanceof Error ? err.message : String(err))
+  }
 }
 
 export interface RunIoResponse {
