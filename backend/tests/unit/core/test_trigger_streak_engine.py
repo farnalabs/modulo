@@ -1706,16 +1706,18 @@ class TestGetTriggerStreakStatus:
     async def test_last_outcomes_surface_delivery_confidence(self) -> None:
         """FAR-1373 — the projection carries ``delivery_confidence`` when the
         stored record has it (FAR-1336 eight-key shape), so the readout can
-        qualify a self-reported verdict instead of presenting it as confirmed."""
+        qualify an agent-reported verdict instead of presenting it as
+        confirmed. The value is projected VERBATIM (no vocabulary check), so a
+        stored pre-rename alias value is passed through untouched too."""
         now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
         session = _StatusSession(
             outcome_rows=[
-                _outcome(uuid.uuid4(), "delivered", "pr_merged", now, delivery_confidence="self_reported"),
+                _outcome(uuid.uuid4(), "delivered", "pr_merged", now, delivery_confidence="agent_reported"),
             ]
         )
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
         assert len(status["last_outcomes"]) == 1, "seeded outcome must surface"
-        assert status["last_outcomes"][0]["delivery_confidence"] == "self_reported"
+        assert status["last_outcomes"][0]["delivery_confidence"] == "agent_reported"
 
     @pytest.mark.asyncio
     async def test_last_outcomes_legacy_record_without_delivery_confidence_is_none(self) -> None:

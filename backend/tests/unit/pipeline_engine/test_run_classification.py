@@ -28,7 +28,8 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session as SASession
 
 from modulo.core.pipeline_engine.classify import (
-    DELIVERY_CONFIDENCE_SELF_REPORTED,
+    DELIVERY_CONFIDENCE_AGENT_REPORTED,
+    DELIVERY_CONFIDENCE_AGENT_REPORTED_LEGACY,
     DELIVERY_CONFIDENCE_VALUES,
     DELIVERY_CONFIDENCE_VERIFIED,
     PR_URL_PROVENANCE_DECLARED,
@@ -324,7 +325,7 @@ class TestDeliveryProvenance:
     the legacy inner-output fallback derived from that same return;
     ``matched`` = it was found only in a REAL telemetry entry or a FAR-188
     marker — emitted output the run never asserted as a delivery), and
-    ``delivery_confidence`` states that the record is ``self_reported`` —
+    ``delivery_confidence`` states that the record is ``agent_reported`` —
     nothing in it is confirmed against an SCM.
 
     These keys are ADDITIVE metadata: ``value``, ``reason``,
@@ -432,22 +433,26 @@ class TestDeliveryProvenance:
         assert result.delivered_pr_urls == (_PR,)
         assert dict(result.pr_url_provenance) == {_PR: PR_URL_PROVENANCE_DECLARED}
 
-    def test_delivery_confidence_is_self_reported_on_delivered_record(self) -> None:
-        """A delivered record states plainly that it is self_reported, and the
+    def test_delivery_confidence_is_agent_reported_on_delivered_record(self) -> None:
+        """A delivered record states plainly that it is agent_reported, and the
         vocabulary declares a home for a future ``verified`` value."""
         outputs = {"n1": _node_return_with_pr(_PR)}
         record = classify_run("complete", None, outputs_json=outputs, telemetry_json={"n1": {}}).to_dict()
         assert record["value"] == "delivered"
-        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_SELF_REPORTED
-        assert DELIVERY_CONFIDENCE_SELF_REPORTED in DELIVERY_CONFIDENCE_VALUES
+        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_AGENT_REPORTED
+        assert DELIVERY_CONFIDENCE_AGENT_REPORTED in DELIVERY_CONFIDENCE_VALUES
         assert DELIVERY_CONFIDENCE_VERIFIED in DELIVERY_CONFIDENCE_VALUES
+        # FAR-1388: the pre-rename spelling stays in the closed set because
+        # stored rows still carry it (and are never backfilled) — readers must
+        # tolerate either spelling as the agent-reported case.
+        assert DELIVERY_CONFIDENCE_AGENT_REPORTED_LEGACY in DELIVERY_CONFIDENCE_VALUES
 
-    def test_delivery_confidence_is_self_reported_on_no_delivery_record(self) -> None:
+    def test_delivery_confidence_is_agent_reported_on_no_delivery_record(self) -> None:
         """The no_delivery shape carries the confidence key too (with no
         provenance entries — there are no delivered URLs to explain)."""
         record = classify_run("complete", None).to_dict()
         assert record["value"] == "no_delivery"
-        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_SELF_REPORTED
+        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_AGENT_REPORTED
         assert not record["pr_url_provenance"]
 
     async def test_unclassified_marker_record_carries_provenance_keys(
@@ -456,7 +461,7 @@ class TestDeliveryProvenance:
         session: AsyncSession,
     ) -> None:
         """The fail-closed ``unclassified`` marker written on a classifier
-        failure carries the same two keys (empty provenance, self_reported)."""
+        failure carries the same two keys (empty provenance, agent_reported)."""
         run_id = uuid.uuid4()
         async with session.begin():
             await _seed_run(session, run_id)
@@ -465,7 +470,7 @@ class TestDeliveryProvenance:
         record = await _read_classification(engine, run_id)
         assert record is not None
         assert record["value"] == "unclassified"
-        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_SELF_REPORTED
+        assert record["delivery_confidence"] == DELIVERY_CONFIDENCE_AGENT_REPORTED
         assert not record["pr_url_provenance"]
 
     async def test_crud_fallback_marker_key_set_matches_classify_marker(
@@ -512,11 +517,11 @@ class TestDeliveryProvenance:
         assert observed == expected
         # The serialised WIRE literals, pinned as explicit strings (never the
         # module constants), so renaming ``REASON_UNCLASSIFIED`` or
-        # ``DELIVERY_CONFIDENCE_SELF_REPORTED`` cannot silently change the
+        # ``DELIVERY_CONFIDENCE_AGENT_REPORTED`` cannot silently change the
         # persisted format.
         assert record["value"] == "unclassified"
         assert record["reason"] == "classifier_error"
-        assert record["delivery_confidence"] == "self_reported"
+        assert record["delivery_confidence"] == "agent_reported"
         assert not record["delivered_pr_urls"]
         assert not record["pr_url_provenance"]
         # ...and against the canonical eight-key shape, so a SIMULTANEOUS drift
@@ -616,7 +621,7 @@ class TestDeliveryProvenance:
                 (_PR, PR_URL_PROVENANCE_DECLARED),
                 (_PR_2, PR_URL_PROVENANCE_MATCHED),
             ),
-            delivery_confidence=DELIVERY_CONFIDENCE_SELF_REPORTED,
+            delivery_confidence=DELIVERY_CONFIDENCE_AGENT_REPORTED,
         )
 
     def test_result_is_hashable_and_equal_inputs_hash_equally(self) -> None:
