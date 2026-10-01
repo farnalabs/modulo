@@ -17,7 +17,7 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node, merge_masked_graph_nodes
+from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node, resolve_and_reject_mask_sentinels
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.composite_engine.expander import (
@@ -200,13 +200,21 @@ async def create_composite_template_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # FAR-1374: resolve masked echoes first (a graph copied from a
+            # masked read has nothing to resolve against on create), then fail
+            # closed with 422 on any sentinel the resolve could not map — the
+            # template stores the caller's declared credential values as-is.
+            graph = dict(req.sub_pipeline_graph_json)
+            raw_nodes = graph.get("nodes")
+            if isinstance(raw_nodes, list):
+                graph["nodes"] = resolve_and_reject_mask_sentinels(list(raw_nodes), [])
             template = await create_composite_template(
                 session,
                 org_id=principal.organisation_id,
                 account_id=principal.account_id,
                 name=req.name,
                 description=req.description,
-                sub_pipeline_graph_json=req.sub_pipeline_graph_json,
+                sub_pipeline_graph_json=graph,
                 parameter_ports_json=[p.model_dump() for p in req.parameter_ports_json],
                 input_schema_id=req.input_schema_id,
                 output_schema_id=req.output_schema_id,
@@ -289,9 +297,11 @@ async def update_composite_template_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            # FAR-1181: a PATCH round-tripping the masked GET would otherwise
-            # persist mask literals over the template's stored node values.
-            # Resolve echoes against the current template before the write.
+            # FAR-1181 + FAR-1374: a PATCH round-tripping the masked GET must
+            # not persist mask literals over the template's stored node values
+            # (resolve echoes against the current template first), and a
+            # sentinel the resolve cannot map to a stored value is refused 422
+            # rather than silently dropping the key.
             incoming_graph = updates.get("sub_pipeline_graph_json")
             if isinstance(incoming_graph, dict) and isinstance(incoming_graph.get("nodes"), list):
                 current = await get_composite_template(session, template_id)
@@ -301,7 +311,10 @@ async def update_composite_template_endpoint(
                 stored_nodes: list[dict[str, Any]] = []
                 if isinstance(current_graph, dict) and isinstance(current_graph.get("nodes"), list):
                     stored_nodes = [n for n in current_graph["nodes"] if isinstance(n, dict)]
-                incoming_graph["nodes"] = merge_masked_graph_nodes(list(incoming_graph["nodes"]), stored_nodes)
+                incoming_graph["nodes"] = resolve_and_reject_mask_sentinels(
+                    list(incoming_graph["nodes"]),
+                    stored_nodes,
+                )
             template = await update_composite_template(session, template_id, updates)
     except ProgrammingError:
         logger.exception("composite_templates.update_composite_template_endpoint")
@@ -469,15 +482,16 @@ async def save_composite_editor_endpoint(
             if template is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
             graph = dict(template.sub_pipeline_graph_json) if template.sub_pipeline_graph_json else {}
-            # FAR-1181: an editor PUT round-tripping the masked GET resolves
-            # mask echoes against the stored template nodes so the mask
+            # FAR-1181 + FAR-1374: an editor PUT round-tripping the masked GET
+            # resolves mask echoes against the stored template nodes so the mask
             # literals are never persisted over the stored values (parity with
-            # the pipeline graph write paths).
+            # the pipeline graph write paths); a sentinel the resolve cannot map
+            # to a stored value is refused 422 instead of silently dropped.
             raw_nodes = graph.get("nodes")
             stored_nodes: list[dict[str, Any]] = (
                 [n for n in raw_nodes if isinstance(n, dict)] if isinstance(raw_nodes, list) else []
             )
-            resolved_nodes = merge_masked_graph_nodes(list(req.nodes), stored_nodes)
+            resolved_nodes = resolve_and_reject_mask_sentinels(list(req.nodes), stored_nodes)
             graph["nodes"] = resolved_nodes
             graph["edges"] = req.edges
             template = await update_composite_template(
