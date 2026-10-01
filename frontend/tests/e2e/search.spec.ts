@@ -16,6 +16,16 @@ test.describe('Search', { tag: "@regression" }, () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(samplePipelines) })
     })
 
+    // The list is gated on `foldersReady`, which waits on the REAL
+    // GET /api/v1/pipeline-folders (only the pipelines list is mocked above).
+    // On a staging DB blip that call hangs or 503s, so the mocked pipelines
+    // never leave the skeleton and "CI Pipeline" never mounts - the observed
+    // @regression failure in deploy run 36849854890. Mock the folder surface
+    // too so this spec depends only on the data it declares.
+    await page.route('**/api/v1/pipeline-folders*', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    )
+
     await page.goto('/pipelines')
 
     // The search input may not be present on every page variant — wait for it
@@ -25,7 +35,9 @@ test.describe('Search', { tag: "@regression" }, () => {
       await expect(searchInput.first()).toBeVisible()
     }
 
-    await expect(page.locator('text=CI Pipeline')).toBeVisible()
+    // Staging first paint can exceed the default 5 s expect budget under load
+    // (the sibling real-stack journeys use the same readiness budget).
+    await expect(page.locator('text=CI Pipeline')).toBeVisible({ timeout: 30_000 })
   })
 
   test('library page search filters results', { tag: "@regression" }, async ({ page, env }) => {
