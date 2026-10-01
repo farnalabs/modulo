@@ -135,11 +135,12 @@ _MIGRATION_PATH = (
 # 0268_webhook_lookup_expiry_indexes chained onto 0267,
 # 0269_webhook_dedup_check_constraints chained onto 0268,
 # 0270_pipeline_snapshots_max_autonomy_ge_default chained onto 0269,
-# 0271_org_api_keys_revocation_sweep_indexes chained onto 0270, and
-# 0272_oauth_client_revoke_lookup_indexes chained onto 0271 as the chain head.
+# 0271_org_api_keys_revocation_sweep_indexes chained onto 0270,
+# 0272_oauth_client_revoke_lookup_indexes chained onto 0271, and
+# 0273_runs_dispatch_phase chained onto 0272 as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0272_oauth_client_revoke_lookup_indexes"
+_CHAIN_HEAD_MIGRATION_NAME = "0273_runs_dispatch_phase"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

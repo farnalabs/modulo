@@ -15,9 +15,10 @@ Lenses:
   0268_webhook_lookup_expiry_indexes chains onto 0267,
   0269_webhook_dedup_check_constraints chains onto 0268,
   0270_pipeline_snapshots_max_autonomy_ge_default chains onto 0269,
-  0271_org_api_keys_revocation_sweep_indexes chains onto 0270, and
-  0272_oauth_client_revoke_lookup_indexes chains onto 0271 as the
-  single linear head (0259's test documents the run-up through 0272).
+  0271_org_api_keys_revocation_sweep_indexes chains onto 0270,
+  0272_oauth_client_revoke_lookup_indexes chains onto 0271, and
+  0273_runs_dispatch_phase chains onto 0272 as the
+  single linear head (0259's test documents the run-up through 0273).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -52,7 +53,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0272_oauth_client_revoke_lookup_indexes"
+_HEAD_MIGRATION = "0273_runs_dispatch_phase"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

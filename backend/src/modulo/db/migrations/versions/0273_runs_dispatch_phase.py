@@ -1,7 +1,7 @@
 """FAR-1088: runs.dispatch_phase / dispatch_phase_entered_at instrumentation columns.
 
-Revision ID: 0272_runs_dispatch_phase
-Revises: 0271_org_api_keys_revocation_sweep_indexes
+Revision ID: 0273_runs_dispatch_phase
+Revises: 0272_oauth_client_revoke_lookup_indexes
 Create Date: 2026-10-01
 
 Two additive, nullable columns on ``runs`` recording which dispatch phase a run
@@ -26,8 +26,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0272_runs_dispatch_phase"
-down_revision: str | None = "0271_org_api_keys_revocation_sweep_indexes"
+revision: str = "0273_runs_dispatch_phase"
+down_revision: str | None = "0272_oauth_client_revoke_lookup_indexes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

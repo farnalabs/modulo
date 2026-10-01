@@ -354,7 +354,7 @@ class Run(OrgScoped):
     sandbox_dispatch_state: Mapped[str | None] = mapped_column(Text)
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)
-    # FAR-1088 dispatch-phase instrumentation (migration 0272) — INTERNAL ONLY:
+    # FAR-1088 dispatch-phase instrumentation (migration 0273) — INTERNAL ONLY:
     # NOT API-projected (absent from RunResponse / _build_list_item / MCP
     # payloads). Records which phase of the dispatch pipeline the run last
     # entered, for diagnosing claimed-but-nodeless runs.
