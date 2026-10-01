@@ -1629,9 +1629,22 @@ def _ongoing_trigger(**overrides: Any) -> SimpleNamespace:
 
 
 def _outcome(
-    run_id: uuid.UUID, classification: str, reason: str, completed_at: datetime
+    run_id: uuid.UUID,
+    classification: str,
+    reason: str,
+    completed_at: datetime,
+    delivery_confidence: str | None = None,
 ) -> tuple[uuid.UUID, dict[str, Any], datetime]:
-    return (run_id, {"value": classification, "reason": reason}, completed_at)
+    """Build one ``_StatusSession`` outcome row (record, completed_at).
+
+    ``delivery_confidence`` defaults to ABSENT — the key is omitted from the
+    record entirely, modelling the pre-FAR-1336 six-key shape — rather than
+    being written as ``None``. Pass a value to model an eight-key record.
+    """
+    record: dict[str, Any] = {"value": classification, "reason": reason}
+    if delivery_confidence is not None:
+        record["delivery_confidence"] = delivery_confidence
+    return (run_id, record, completed_at)
 
 
 class TestGetTriggerStreakStatus:
@@ -1686,6 +1699,53 @@ class TestGetTriggerStreakStatus:
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
         assert [o["classification"] for o in status["last_outcomes"]] == ["no_delivery", "delivered"]
         assert status["last_outcomes"][0]["reason"] == "no_work"
+        assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
+        assert status["last_outcomes"][0]["run_id"]
+
+    @pytest.mark.asyncio
+    async def test_last_outcomes_surface_delivery_confidence(self) -> None:
+        """FAR-1373 — the projection carries ``delivery_confidence`` when the
+        stored record has it (FAR-1336 eight-key shape), so the readout can
+        qualify a self-reported verdict instead of presenting it as confirmed."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            outcome_rows=[
+                _outcome(uuid.uuid4(), "delivered", "pr_merged", now, delivery_confidence="self_reported"),
+            ]
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "seeded outcome must surface"
+        assert status["last_outcomes"][0]["delivery_confidence"] == "self_reported"
+
+    @pytest.mark.asyncio
+    async def test_last_outcomes_legacy_record_without_delivery_confidence_is_none(self) -> None:
+        """FAR-1373 — a legacy six-key record (written before FAR-1336, no
+        ``delivery_confidence`` key) projects ``delivery_confidence: None``
+        without raising: an unknown confidence must never read as verified.
+
+        This fixture is DELIBERATELY hand-built rather than going through
+        ``_outcome``: it models ``ClassificationResult.to_dict()`` BEFORE
+        FAR-1336 — six keys, the other four included — and the explicit
+        ``assert "delivery_confidence" not in`` below is the point of the test.
+        Leave the construction style as-is.
+        """
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        legacy_record = {
+            "value": "delivered",
+            "reason": "pr_merged",
+            "delivered_pr_urls": [],
+            "computed_at": now.isoformat(),
+            "work_intact": True,
+            "declared_success_nodes": 1,
+        }
+        assert "delivery_confidence" not in legacy_record, "fixture must model the pre-FAR-1336 shape"
+        session = _StatusSession(outcome_rows=[(uuid.uuid4(), legacy_record, now)])
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "legacy outcome must surface"
+        assert status["last_outcomes"][0]["delivery_confidence"] is None
+        # The four pre-existing keys are untouched by the additive projection.
+        assert status["last_outcomes"][0]["classification"] == "delivered"
+        assert status["last_outcomes"][0]["reason"] == "pr_merged"
         assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
         assert status["last_outcomes"][0]["run_id"]
 

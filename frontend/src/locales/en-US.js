@@ -3127,7 +3127,9 @@ export default {
       "outcome_delivered": "Delivered",
       "outcome_no_delivery": "No delivery",
       "outcome_excluded": "Excluded",
-      "outcome_unclassified": "Unclassified"
+      "outcome_unclassified": "Unclassified",
+      "outcome_confidence_self_reported": "Self-reported",
+      "outcome_confidence_self_reported_detail": "This delivery verdict is self-reported by the run's own output. It has not been verified against a source of truth."
     },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",
