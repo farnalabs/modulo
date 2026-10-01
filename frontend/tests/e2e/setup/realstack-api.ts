@@ -67,14 +67,41 @@ function isTransientHttpStatus(status: number): boolean {
   return status === 502 || status === 503 || status === 504
 }
 
+// apiLogin is a single idempotent-safe ARRANGE call, so a short bounded retry
+// with a fixed backoff is enough to ride out a staging blip.
 const LOGIN_ATTEMPTS = 3
 const LOGIN_BACKOFF_MS = 2_000
 
-// Bounded retry for the API helpers below: attempts include the first try, and
+// Bounded retry for apiFetch / fireWebhook: attempts include the first try, and
 // the backoff grows linearly (1 s, 2 s, 3 s). Capped so a persistent outage
 // still fails the journey instead of hanging it.
 const API_ATTEMPTS = 4
 const API_BACKOFF_BASE_MS = 1_000
+
+/**
+ * Re-issue `fetch` while it returns an explicit transient 5xx status, with the
+ * bounded linear backoff shared by `apiFetch` and `fireWebhook` (the
+ * attempt/backoff policy lives in one place). A transport error (timeout /
+ * reset) is deliberately NOT caught here: on a non-idempotent request the
+ * server may have committed before the socket dropped, so re-issuing it could
+ * double-apply — and the observed staging failures are all explicit 5xx
+ * responses, which the API guarantees are rolled back. The body is read once,
+ * after the final attempt, so a retried request never consumes it twice.
+ */
+async function fetchWithTransientRetry(
+  url: string,
+  init: RequestInit,
+  attempts = API_ATTEMPTS,
+): Promise<{ status: number; text: string }> {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(url, init)
+    if (isTransientHttpStatus(res.status) && attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, API_BACKOFF_BASE_MS * attempt))
+      continue
+    }
+    return { status: res.status, text: await res.text() }
+  }
+}
 
 export async function apiLogin(env: TestEnv): Promise<string> {
   // Login is pure ARRANGE: a transient staging blip (the whole point of the
@@ -117,36 +144,26 @@ export async function apiFetch<T>(
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  // Bounded retry on an explicit transient 5xx response only. A transport
-  // error (timeout / reset) is NOT retried here: on a non-idempotent request
-  // the server may have committed before the socket dropped, so re-issuing it
-  // could double-apply — and the observed staging failures are all explicit
-  // 5xx responses, which the API guarantees are rolled back.
-  for (let attempt = 1; ; attempt++) {
-    const res = await fetch(apiBase + path, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(20_000),
-    })
-    if (isTransientHttpStatus(res.status) && attempt < API_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, API_BACKOFF_BASE_MS * attempt))
-      continue
+  // Bounded retry on an explicit transient 5xx response only (see
+  // fetchWithTransientRetry); a transport error is deliberately not retried.
+  const { status, text } = await fetchWithTransientRetry(apiBase + path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  })
+  let parsed: T | null = null
+  if (text) {
+    try {
+      parsed = JSON.parse(text) as T
+    } catch {
+      parsed = null
     }
-    const text = await res.text()
-    let parsed: T | null = null
-    if (text) {
-      try {
-        parsed = JSON.parse(text) as T
-      } catch {
-        parsed = null
-      }
-    }
-    return { status: res.status, body: parsed, text }
   }
+  return { status, body: parsed, text }
 }
 
 /** Unique, human-readable name so parallel seeding never collides. */
@@ -684,26 +701,19 @@ export async function fireWebhook(apiBase: string, triggerId: string, payload: R
   // Same bounded transient-5xx tolerance as apiFetch: the route rolls back on
   // a DB blip (and the snapshot-lock 503 explicitly asks the sender to retry),
   // so re-issuing an explicit 5xx delivery cannot double-create a run.
-  for (let attempt = 1; ; attempt++) {
-    const res = await fetch(`${apiBase}/api/v1/triggers/${triggerId}/webhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(20_000),
-    })
-    if (isTransientHttpStatus(res.status) && attempt < API_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, API_BACKOFF_BASE_MS * attempt))
-      continue
-    }
-    const text = await res.text()
-    let parsed: { run_id: string | null; status: string } | null = null
-    try {
-      parsed = JSON.parse(text) as { run_id: string | null; status: string }
-    } catch {
-      parsed = null
-    }
-    return { status: res.status, body: parsed, text }
+  const { status, text } = await fetchWithTransientRetry(`${apiBase}/api/v1/triggers/${triggerId}/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20_000),
+  })
+  let parsed: { run_id: string | null; status: string } | null = null
+  try {
+    parsed = JSON.parse(text) as { run_id: string | null; status: string }
+  } catch {
+    parsed = null
   }
+  return { status, body: parsed, text }
 }
 
 /** Request cancellation through the real API (202 — terminalised async). */
