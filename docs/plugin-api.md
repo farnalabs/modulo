@@ -41,7 +41,7 @@ Metadata for an installed plugin, populated from the distribution package metada
 | `display_name` | `str` | Package metadata `Name` |
 | `description` | `str` | Package metadata `Summary` |
 | `version` | `str` | Package metadata `Version` |
-| `capabilities` | `set[str]` | `"connector_type"` or `"model_backend"` |
+| `capabilities` | `set[str]` | `"connector_type"`, `"model_backend"`, `"eval"`, or `"schema_type"` (one per entry-point group the plugin provides) |
 
 ### `PluginHealth`
 

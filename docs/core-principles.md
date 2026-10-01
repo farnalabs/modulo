@@ -5,7 +5,7 @@
 **Related:** `architecture.md`, ADRs (migrated out of this repo 2026-09-02, FAR-434). This is the source of truth for Modulo's engineering principles; public blog content at modulo.run/blog derives from it.
 
 ## 1. Schema seams
-Every boundary in a pipeline is a typed contract. Inputs validate against `input_schema`, outputs against `output_schema` (JSON Schema draft-07), before anything moves. Schemas are org-scoped, versioned (semver), reusable, composable; abstract schemas enable type-constraint matching during workflow import; schema inference generates drafts from connector data.
+Every boundary in a pipeline is a typed contract. Inputs validate against `input_schema`, outputs against `output_schema` (JSON Schema Draft 2020-12), before anything moves. Schemas are org-scoped, versioned (semver), reusable, composable; abstract schemas enable type-constraint matching during workflow import; schema inference generates drafts from connector data.
 **Why:** an agent cannot pass garbage downstream without a record of it. Typed seams make automation auditable and failures loud.
 **Where:** Schema Registry (`modulo/core/schema_registry/`), run lifecycle validation steps.
 **Benefit:** what you see is what runs; mismatches fail loudly at the seam.
@@ -59,7 +59,7 @@ A failed output produces a new run with feedback attached; the original stays as
 **Benefit:** you can trust the history while still improving the system.
 
 ## 9. Self-hosted, no telemetry by default
-Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no telemetry by default. Operators can opt in via Settings > Runtime Configuration (`MODULO_TELEMETRY_ENABLED`); when enabled, only aggregate counters and error categories are exported — no personal data, pipeline content, or API keys.
+Your infra, your data, no cloud dependency. Runs on Docker Compose or Fly; no telemetry by default. Operators can opt in via Settings > Runtime Configuration (`MODULO_TELEMETRY_ENABLED`); when enabled, only aggregate counters and error categories are exported: no personal data, pipeline content, or API keys.
 **Why:** governance without data ownership is theatre for regulated and IP-sensitive teams.
 **Where:** deployment docs, `docs/architecture.md`.
 **Benefit:** adoption is not blocked by data-residency concerns.
