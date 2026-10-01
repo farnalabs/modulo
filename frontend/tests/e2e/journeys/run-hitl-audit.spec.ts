@@ -107,26 +107,31 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await page.getByTestId('hitl-gate-approve').click()
 
       // The run must really resume and complete on the backend. Staging's DB
-      // can transiently 5xx (503) or time out mid-approve, which leaves the run
-      // parked at its still-claimed gate; re-issue the decision once before
-      // failing (the approve control stays rendered while the gate is claimed).
-      let status: string
-      try {
-        status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 60_000 })
-      } catch (firstError) {
-        const approve = page.getByTestId('hitl-gate-approve')
-        if (await approve.isVisible().catch(() => false)) await approve.click()
+      // and backend can transiently 5xx (503) or time out mid-approve, which
+      // leaves the run parked at its still-claimed gate. A single re-issue is
+      // not enough when the blip outlasts it — re-issue the decision in a
+      // bounded loop (the approve control stays rendered while the gate is
+      // claimed, FAR-612/FAR-686) until the run completes. The deadline still
+      // fails a genuinely wedged run, so this tolerates a transient blip
+      // without masking a persistent outage.
+      let status = ''
+      let lastError: unknown
+      const approveDeadline = Date.now() + 120_000
+      while (Date.now() < approveDeadline) {
         try {
-          status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 60_000 })
-        } catch (retryError) {
-          // Keep the original failure in the final message so triage is not
-          // left guessing whether the first poll or the re-issue was the cause.
-          throw new Error(
-            `run ${run.run_id} did not complete after re-issuing the approve decision; ` +
-              `first poll: ${firstError instanceof Error ? firstError.message : String(firstError)}; ` +
-              `retry poll: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
-          )
+          status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 20_000 })
+          break
+        } catch (err) {
+          lastError = err
+          const approve = page.getByTestId('hitl-gate-approve')
+          if (await approve.isVisible().catch(() => false)) await approve.click().catch(() => undefined)
         }
+      }
+      if (status !== 'complete') {
+        throw new Error(
+          `run ${run.run_id} did not complete after re-issuing the approve decision; ` +
+            `last poll: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+        )
       }
       expect(status).toBe('complete')
 
