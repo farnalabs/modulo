@@ -4,7 +4,7 @@ Net-new table.  Absorbs EvalDefinition.failure_behaviour.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -33,9 +33,9 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
             name="ck_policy_gates_action",
         ),
         # FAR-967 chunk 10 (§4.3) — symmetric operator-control CHECK, shipped
-        # by migration 0270. The predicate and name match that migration's
+        # by migration 0272. The predicate and name match that migration's
         # SQLite batch definition EXACTLY so metadata.create_all() / SQLite-
-        # mirror CTAS parity holds against the shipped post-0270 contract:
+        # mirror CTAS parity holds against the shipped post-0272 contract:
         # enabled ⟹ enabled_at NOT NULL AND disabled_at NULL;
         # NOT enabled ⟹ disabled_at NOT NULL AND enabled_at NULL.
         CheckConstraint(
@@ -72,7 +72,18 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
     # AND disabled_at NULL; NOT enabled => disabled_at NOT NULL AND
     # enabled_at NULL (ck_policy_gates_enabled_timestamps).
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", default=True)
-    enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # FAR-967 §4.3 creation semantics: a freshly-inserted gate is ENABLED with
+    # ``enabled_at`` stamped at creation, so the symmetric CHECK
+    # (ck_policy_gates_enabled_timestamps) is satisfied by construction on
+    # EVERY ORM insert path — including ``eval_definition_write``'s
+    # Eval+PolicyGate persistence, which sets no audit columns itself.
+    # Toggles write both timestamps explicitly on UPDATE, where defaults do
+    # not apply (CO-2).
+    enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=lambda: datetime.now(UTC),
+    )
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # deleted_by exists but SoftDeleteMixin supplies deleted_at.
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)

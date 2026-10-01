@@ -75,20 +75,30 @@ def _pins(count: int = 2) -> list[dict[str, str]]:
     return [_gate_pin() for _ in range(count)]
 
 
+_AUTO_SNAPSHOT = object()
+
+
 def _interception_request(
     *,
     is_replay: bool = True,
-    snapshot_id: uuid.UUID | None = None,
+    snapshot_id: Any = _AUTO_SNAPSHOT,
 ) -> Any:
+    """Build an ``_InterceptionRequest``.
+
+    ``snapshot_id`` defaults to a freshly minted UUID (a run normally carries
+    one).  Passing ``None`` EXPLICITLY builds a snapshot-less request — the
+    sentinel keeps ``None`` from being mistaken for "unspecified".
+    """
     from modulo.db.crud.run import _InterceptionRequest
 
+    resolved = uuid.uuid4() if snapshot_id is _AUTO_SNAPSHOT else snapshot_id
     return _InterceptionRequest(
         org_id=uuid.uuid4(),
         pipeline_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
         payload={"input": "x"},
         is_replay=is_replay,
-        snapshot_id=snapshot_id if snapshot_id is not None else uuid.uuid4(),
+        snapshot_id=resolved,
         guardrails_kill_switch=False,
     )
 
@@ -419,7 +429,7 @@ async def test_intercept_runs_operator_control_on_pinned_replay(
     ]
 
     session = AsyncMock(spec=AsyncSession)
-    session.execute = AsyncMock(side_effect=[_row_result((pins, None)), _row_result(enabled_map)])
+    session.execute = AsyncMock(side_effect=[_row_result((pins, None, None)), _row_result(enabled_map)])
 
     with caplog.at_level(logging.INFO, logger="modulo.db.crud.run"):
         interception = await _intercept_guardrails(session, request)
@@ -436,11 +446,14 @@ async def test_intercept_runs_operator_control_on_pinned_replay(
 
 
 @pytest.mark.asyncio
-async def test_intercept_non_replay_never_touches_the_policy_gate_seam(
+async def test_intercept_no_snapshot_never_touches_the_policy_gate_seam(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A NON-replay run carries no snapshot → the policy-gate seam must not
-    read or emit anything: zero session queries, no block."""
+    """A run carrying NO snapshot (``snapshot_id=None`` — e.g. a seed/fixture
+    path) has nothing to verify: the policy-gate seam must not read or emit
+    anything — zero session queries, no block.  (Runs WITH a snapshot always
+    verify — see the non-replay run-start tests below; ``is_replay`` no
+    longer gates the seam, spec §3.4 / criteria 4 + 16.)"""
     from modulo.db.crud.run import _intercept_guardrails
 
     _stubbed_guardrail_env(monkeypatch)
@@ -467,13 +480,117 @@ async def test_intercept_fingerprint_block_short_circuits_operator_control(
     wrong_fp = fingerprint_policy_gate_pins(_pins(5))
 
     session = AsyncMock(spec=AsyncSession)
-    session.execute = AsyncMock(side_effect=[_row_result((pins, wrong_fp))])
+    session.execute = AsyncMock(side_effect=[_row_result((pins, wrong_fp, None))])
 
     interception = await _intercept_guardrails(session, request)
 
     assert interception.blocked
     assert "fingerprint mismatch" in interception.block_message
     assert session.execute.await_count == 1, "enabled-map query must not run past a fingerprint block"
+
+
+# ---------------------------------------------------------------------------
+# C4/C16 run-start (not replay-only) — GAP 3 wiring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_intercept_non_replay_mismatch_blocks_at_run_start(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """C4 + C16 load-bearing at RUN START: a NON-replay run whose stored
+    pin content disagrees with its saved fingerprint is blocked at the
+    ingestion edge — before any evaluation.  Remove the verification (or
+    re-gate it on ``is_replay``) and this test fails: the run would proceed.
+    The user-facing message names the pipeline + snapshot (+ version), the
+    TRUNCATED digests, and the remediation; the FULL digests go to the log."""
+    import logging
+
+    from modulo.db.crud.run import _intercept_guardrails
+
+    _stubbed_guardrail_env(monkeypatch)
+    request = _interception_request(is_replay=False)  # snapshot_id set, NOT a replay
+    assert request.is_replay is False
+    pins = _pins(2)
+    tampered = [*pins, _gate_pin()]
+    stored = fingerprint_policy_gate_pins(pins)
+    recomputed = fingerprint_policy_gate_pins(tampered)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=[_row_result((tampered, stored, 7))])
+
+    with caplog.at_level(logging.ERROR, logger="modulo.db.crud.run"):
+        interception = await _intercept_guardrails(session, request)
+
+    assert interception.blocked, "a mismatch must block a non-replay run at run start"
+    message = interception.block_message
+    assert f"pipeline {request.pipeline_id}" in message, message
+    assert f"snapshot {request.snapshot_id}" in message, message
+    assert "(version 7)" in message, message
+    assert "digest and content disagree" in message
+    assert stored[:12] in message
+    assert recomputed[:12] in message
+    assert stored not in message, "user-facing message must carry TRUNCATED digests only"
+    assert recomputed not in message, "user-facing message must carry TRUNCATED digests only"
+    assert message.endswith("create a new run)")
+    mismatch_records = [r for r in caplog.records if r.getMessage() == "policy_gates.pin_fingerprint_mismatch"]
+    assert mismatch_records
+    record = mismatch_records[-1]
+    assert record.__dict__["stored_fingerprint"] == stored
+    assert record.__dict__["recomputed_fingerprint"] == recomputed
+    assert record.__dict__["pipeline_id"] == str(request.pipeline_id)
+    # Terminal/non-retryable (C15): the block never reaches the guardrail
+    # pass and the run-side stamp makes it eval_failed / never dispatched.
+    assert session.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_intercept_non_replay_matching_fingerprint_proceeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C5's run-start sibling: verification at run start must NOT be an
+    always-block — a non-replay run whose pins MATCH its fingerprint
+    proceeds (and the operator-control audit still runs).  Together with the
+    mismatch test above this proves the check is discriminating, not a
+    blanket refusal (the always-block guard)."""
+    from modulo.db.crud.run import _intercept_guardrails
+
+    _stubbed_guardrail_env(monkeypatch)
+    request = _interception_request(is_replay=False)
+    pins = _pins(2)
+    matching_fp = fingerprint_policy_gate_pins(pins)
+    enabled_map = [(p["policy_gate_id"], True) for p in pins]
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=[_row_result((pins, matching_fp, 3)), _row_result(enabled_map)])
+
+    interception = await _intercept_guardrails(session, request)
+
+    assert not interception.blocked
+    assert not interception.block_message
+    assert session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_intercept_non_replay_legacy_snapshot_falls_back_to_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C6 at run start: a legacy snapshot (no pins, no fingerprint) on a
+    NON-replay run falls back to the live gates — no block, no operator
+    audit (nothing to filter), and no spurious case-(ii) verification."""
+    from modulo.db.crud.run import _intercept_guardrails
+
+    _stubbed_guardrail_env(monkeypatch)
+    request = _interception_request(is_replay=False)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=[_row_result((None, None, None))])
+
+    interception = await _intercept_guardrails(session, request)
+
+    assert not interception.blocked
+    assert session.execute.await_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -654,8 +771,8 @@ def test_schema_policy_gate_enabled_columns_contract() -> None:
 
 def test_schema_policy_gate_enabled_timestamps_check_on_model() -> None:
     """C11 parity: the symmetric CHECK ships on the MODEL, not only in
-    migration 0270 — ``metadata.create_all()`` / SQLite-mirror CTAS must
-    match the shipped post-0270 contract (FAR-967 F1)."""
+    migration 0272 — ``metadata.create_all()`` / SQLite-mirror CTAS must
+    match the shipped post-0272 contract (FAR-967 F1)."""
     from sqlalchemy import CheckConstraint
 
     checks = [
@@ -674,7 +791,7 @@ def test_schema_policy_gate_enabled_timestamps_check_on_model() -> None:
 def test_sqlite_create_all_enforces_enabled_timestamps_check() -> None:
     """The model-level CHECK is LIVE on a create_all-built SQLite table:
     an enabled row without enabled_at is rejected (mirror of migration
-    0270), while the creation state (enabled + enabled_at set, disabled_at
+    0272), while the creation state (enabled + enabled_at set, disabled_at
     NULL) is accepted."""
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError
@@ -711,6 +828,38 @@ def test_sqlite_create_all_enforces_enabled_timestamps_check() -> None:
                 ),
                 valid,
             )
+    finally:
+        engine.dispose()
+
+
+def test_orm_insert_stamps_enabled_at_by_default() -> None:
+    """§4.3 / CO-2 creation semantics, enforced at the MODEL: every ORM
+    insert path stamps ``enabled_at`` so the symmetric CHECK is satisfied by
+    construction.  ``eval_definition_write`` persists an Eval+PolicyGate
+    WITHOUT touching the audit columns — before the model default, that
+    insert violated ``ck_policy_gates_enabled_timestamps`` on Postgres
+    (IntegrationError) for every eval created with a failure behaviour."""
+    from sqlalchemy.orm import Session
+
+    engine = _sqlite_engine_for([PolicyGate])
+    try:
+        with Session(engine) as session:
+            gate = PolicyGate(
+                id=uuid.uuid4(),
+                organisation_id=uuid.uuid4(),
+                eval_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
+                action="warn",
+                version=1,
+                # enabled / enabled_at deliberately omitted — the defaults
+                # must produce the CHECK-acceptable creation state.
+            )
+            session.add(gate)
+            session.flush()  # INSERT — raises IntegrityError without the default
+
+            assert gate.enabled is True
+            assert gate.enabled_at is not None
+            assert gate.disabled_at is None
     finally:
         engine.dispose()
 

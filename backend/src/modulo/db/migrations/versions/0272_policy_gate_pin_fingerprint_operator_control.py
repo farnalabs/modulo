@@ -1,7 +1,7 @@
 """FAR-967 chunk 10: policy-gate pin fingerprint + operator enabled/disabled control.
 
-Revision ID: 0270_policy_gate_pin_fingerprint_operator_control
-Revises: 0269_webhook_dedup_check_constraints
+Revision ID: 0272_policy_gate_pin_fingerprint_operator_control
+Revises: 0271_org_api_keys_revocation_sweep_indexes
 Create Date: 2026-09-30
 
 Two additive schema changes shipped in one migration (§6.2):
@@ -32,8 +32,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0270_policy_gate_pin_fingerprint_operator_control"
-down_revision: str | None = "0269_webhook_dedup_check_constraints"
+revision: str = "0272_policy_gate_pin_fingerprint_operator_control"
+down_revision: str | None = "0271_org_api_keys_revocation_sweep_indexes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

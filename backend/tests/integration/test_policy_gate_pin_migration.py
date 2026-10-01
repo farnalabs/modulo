@@ -1,4 +1,4 @@
-"""Integration tests for FAR-967 chunk 10: migration 0270 round-trip + live CHECK.
+"""Integration tests for FAR-967 chunk 10: migration 0272 round-trip + live CHECK.
 
 Runs against a real Postgres (testcontainers) with real Alembic migrations,
 using a private database cloned from the shared container's database (an
@@ -6,7 +6,7 @@ isolated DB name) so the shared session schema is never touched (mirrors
 ``test_migration_0191_bundled_runner_seed_backfill.py``).
 
 Covers criterion 13 (upgrade/downgrade round-trip of migration
-``0270_policy_gate_pin_fingerprint_operator_control``, including the
+``0272_policy_gate_pin_fingerprint_operator_control``, including the
 symmetric CHECK behaviour and the nullable legacy-compat snapshot columns)
 and the live-DB half of criteria 11/12 (column types/nullability as the
 migration actually ships them).
@@ -30,8 +30,8 @@ from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0270_policy_gate_pin_fingerprint_operator_control"
-PREV_REV = "0269_webhook_dedup_check_constraints"
+MIGRATION_REV = "0272_policy_gate_pin_fingerprint_operator_control"
+PREV_REV = "0271_org_api_keys_revocation_sweep_indexes"
 
 
 def _alembic_config(db_url: str) -> Config:
@@ -71,7 +71,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
     ``env.py`` resolves the target DB from ``DATABASE_URL`` /
     ``DATABASE_ADMIN_URL``, so both are pinned for every alembic call."""
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
-    db_name = f"m0270_iso_{uuid.uuid4().hex[:10]}"
+    db_name = f"m0272_iso_{uuid.uuid4().hex[:10]}"
     async with admin_engine.connect() as conn:
         await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE template0'))
     await admin_engine.dispose()
@@ -99,7 +99,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
     await admin_engine.dispose()
 
 
-async def _migrate_to_0270(iso_url: str) -> None:
+async def _migrate_to_target(iso_url: str) -> None:
     with pytest.MonkeyPatch().context() as mp:
         mp.setenv("DATABASE_URL", iso_url)
         mp.setenv("DATABASE_ADMIN_URL", iso_url)
@@ -109,11 +109,11 @@ async def _migrate_to_0270(iso_url: str) -> None:
 async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     """Minimal org/account/pipeline/eval/policy_gate rows.
 
-    At ``PREV_REV`` (pre-0270) the ``enabled`` operator-control columns do
-    not exist; after 0270 they do and the symmetric CHECK requires
+    At ``PREV_REV`` (pre-0272) the ``enabled`` operator-control columns do
+    not exist; after 0272 they do and the symmetric CHECK requires
     ``enabled=true ⟹ enabled_at`` set. Detects which world it is in."""
     org_id = uuid.uuid4()
-    slug = f"m0270-{org_id.hex[:8]}"
+    slug = f"m0272-{org_id.hex[:8]}"
     account_id = uuid.uuid4()
     pipe_id = uuid.uuid4()
     node_id = uuid.uuid4()
@@ -226,12 +226,12 @@ async def _engine_connect(iso_url: str) -> AsyncEngine:
 class TestC13MigrationRoundTrip:
     @pytest.mark.asyncio
     async def test_upgrade_adds_columns_backfills_and_check(self, isolated_db_url: str) -> None:
-        """Upgrade 0269 → 0270 adds the operator-control + pin columns and
+        """Upgrade 0271 → 0272 adds the operator-control + pin columns and
         creates a VALIDATED symmetric CHECK (C11)."""
         engine = await _engine_connect(isolated_db_url)
         try:
             await _seed(engine)
-            await _migrate_to_0270(isolated_db_url)
+            await _migrate_to_target(isolated_db_url)
 
             async with engine.connect() as conn:
                 rows = (await conn.execute(text(_GATE_COLUMNS_SQL))).fetchall()
@@ -269,7 +269,7 @@ class TestC13MigrationRoundTrip:
         engine = await _engine_connect(isolated_db_url)
         try:
             await _seed(engine)
-            await _migrate_to_0270(isolated_db_url)
+            await _migrate_to_target(isolated_db_url)
             bad = await _scalar(
                 engine,
                 "SELECT COUNT(*) FROM policy_gates WHERE NOT enabled OR enabled_at IS NULL OR disabled_at IS NOT NULL",
@@ -282,7 +282,7 @@ class TestC13MigrationRoundTrip:
     async def test_check_constraint_created_and_validated(self, isolated_db_url: str) -> None:
         engine = await _engine_connect(isolated_db_url)
         try:
-            await _migrate_to_0270(isolated_db_url)
+            await _migrate_to_target(isolated_db_url)
             convalidated = await _scalar(
                 engine,
                 "SELECT convalidated FROM pg_constraint "
@@ -295,12 +295,12 @@ class TestC13MigrationRoundTrip:
 
     @pytest.mark.asyncio
     async def test_downgrade_removes_columns_and_check_keeps_rows(self, isolated_db_url: str) -> None:
-        """Downgrade 0270 → 0269 drops the columns AND the CHECK while
+        """Downgrade 0272 → 0271 drops the columns AND the CHECK while
         pre-existing rows survive (data never shaped by the dropped cols)."""
         engine = await _engine_connect(isolated_db_url)
         try:
             await _seed(engine)
-            await _migrate_to_0270(isolated_db_url)
+            await _migrate_to_target(isolated_db_url)
             with pytest.MonkeyPatch().context() as mp:
                 mp.setenv("DATABASE_URL", isolated_db_url)
                 mp.setenv("DATABASE_ADMIN_URL", isolated_db_url)
@@ -328,11 +328,11 @@ class TestC13MigrationRoundTrip:
     @pytest.mark.asyncio
     async def test_full_round_trip_restores_revision_with_columns(self, isolated_db_url: str) -> None:
         """upgrade → downgrade → upgrade: the second upgrade re-adds the
-        columns and the CHECK, and alembic_version returns to 0270."""
+        columns and the CHECK, and alembic_version returns to 0272."""
         engine = await _engine_connect(isolated_db_url)
         try:
             await _seed(engine)
-            await _migrate_to_0270(isolated_db_url)
+            await _migrate_to_target(isolated_db_url)
             with pytest.MonkeyPatch().context() as mp:
                 mp.setenv("DATABASE_URL", isolated_db_url)
                 mp.setenv("DATABASE_ADMIN_URL", isolated_db_url)
@@ -356,12 +356,12 @@ class TestC13MigrationRoundTrip:
 class TestC12LegacyCompat:
     @pytest.mark.asyncio
     async def test_pre_upgrade_snapshot_rows_read_back_null_pins(self, isolated_db_url: str) -> None:
-        """C12 legacy-compat: a snapshot inserted at 0269 (no pin columns)
+        """C12 legacy-compat: a snapshot inserted at PREV_REV (no pin columns)
         reads back with NULL pins + NULL fingerprint after the upgrade."""
         engine = await _engine_connect(isolated_db_url)
         try:
             seeded = await _seed(engine)
-            await _migrate_to_0270(isolated_db_url)
+            await _migrate_to_target(isolated_db_url)
             async with engine.connect() as conn:
                 rows = (
                     await conn.execute(
@@ -389,7 +389,7 @@ class TestC11CheckBehaviour:
     @pytest.mark.asyncio
     async def test_valid_disabled_state_accepted(self, isolated_db_url: str) -> None:
         engine = await _engine_connect(isolated_db_url)
-        await _migrate_to_0270(isolated_db_url)
+        await _migrate_to_target(isolated_db_url)
         try:
             seeded = await _seed(engine)
             gate_id = str(seeded["gate_ids"][0])
@@ -412,7 +412,7 @@ class TestC11CheckBehaviour:
     @pytest.mark.asyncio
     async def test_enabled_false_without_disabled_at_rejected(self, isolated_db_url: str) -> None:
         engine = await _engine_connect(isolated_db_url)
-        await _migrate_to_0270(isolated_db_url)
+        await _migrate_to_target(isolated_db_url)
         try:
             seeded = await _seed(engine)
             gate_id = str(seeded["gate_ids"][0])
@@ -433,7 +433,7 @@ class TestC11CheckBehaviour:
     @pytest.mark.asyncio
     async def test_enabled_true_with_disabled_at_rejected(self, isolated_db_url: str) -> None:
         engine = await _engine_connect(isolated_db_url)
-        await _migrate_to_0270(isolated_db_url)
+        await _migrate_to_target(isolated_db_url)
         try:
             seeded = await _seed(engine)
             gate_id = str(seeded["gate_ids"][0])
@@ -458,7 +458,7 @@ class TestC11CheckBehaviour:
         """The creation state accepted by the CHECK: a brand-new row with
         enabled=true, enabled_at set, disabled_at NULL."""
         engine = await _engine_connect(isolated_db_url)
-        await _migrate_to_0270(isolated_db_url)
+        await _migrate_to_target(isolated_db_url)
         try:
             seeded = await _seed(engine)
             new_gate = uuid.uuid4()
@@ -492,7 +492,7 @@ class TestSnapshotPinColumnsWriteable:
         """After the migration a snapshot row can carry pins + fingerprint —
         the JSON round-trips through Postgres unchanged."""
         engine = await _engine_connect(isolated_db_url)
-        await _migrate_to_0270(isolated_db_url)
+        await _migrate_to_target(isolated_db_url)
         try:
             seeded = await _seed(engine)
             pins = [

@@ -996,12 +996,13 @@ async def _load_snapshot_policy_gate_pins(
     session: AsyncSession,
     org_id: uuid.UUID,
     snapshot_id: uuid.UUID,
-) -> tuple[list[dict[str, Any]] | None, str | None]:
-    """Read a snapshot's pinned policy-gate set + fingerprint (fail-open).
+) -> tuple[list[dict[str, Any]] | None, str | None, int | None]:
+    """Read a snapshot's pinned policy-gate set + fingerprint + version (fail-open).
 
-    Column/table absent on an unmigrated DB during bluegreen (or a backend
-    that cannot resolve the column) → ``(None, None)`` so the replay falls
-    back to the live gates (pre-pinning behaviour).
+    Returns ``(pins, fingerprint, snapshot_version)``.  Column/table absent
+    on an unmigrated DB during bluegreen (or a backend that cannot resolve
+    the column) → ``(None, None, None)`` so the run falls back to the live
+    gates (pre-pinning behaviour).
     """
     try:
         row = (
@@ -1009,17 +1010,18 @@ async def _load_snapshot_policy_gate_pins(
                 select(
                     PipelineSnapshot.policy_gate_pins_json,
                     PipelineSnapshot.policy_gate_pins_fingerprint,
+                    PipelineSnapshot.snapshot_version,
                 ).where(PipelineSnapshot.id == snapshot_id)
             )
         ).one_or_none()
         if row is not None:
-            return row[0], row[1]
+            return row[0], row[1], row[2]
     except SQLAlchemyError:
         _log.warning(
             "policy_gates.pins_read_unavailable",
             extra={"org_id": str(org_id)},
         )
-    return None, None
+    return None, None, None
 
 
 async def _verify_policy_gate_pin_fingerprint(
@@ -1029,6 +1031,8 @@ async def _verify_policy_gate_pin_fingerprint(
     snapshot_id: uuid.UUID,
     snap_pins: list[dict[str, Any]] | None,
     saved_fingerprint: str | None,
+    pipeline_id: uuid.UUID | None = None,
+    snapshot_version: int | None = None,
 ) -> tuple[bool, str]:
     """Verify the policy-gate pin fingerprint at run start (§3.4, §6.1).
 
@@ -1044,6 +1048,12 @@ async def _verify_policy_gate_pin_fingerprint(
 
     A match (pins + fingerprint, recomputed == stored) also returns
     ``(False, "")`` — the pins are verified and trusted.
+
+    The mismatch is TERMINAL (§3.4): the same snapshot deterministically
+    mismatches again, so the block is per-run and the only remediation is a
+    NEW run.  The user-facing message carries TRUNCATED digests (and names
+    the pipeline + snapshot version when known); the FULL digests go to the
+    log only.
     """
     from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
 
@@ -1063,9 +1073,15 @@ async def _verify_policy_gate_pin_fingerprint(
     # Mismatch — fail closed (§3.4).
     truncated_stored = saved_fingerprint[:12] if saved_fingerprint else ""
     truncated_recomputed = recomputed[:12] if recomputed else ""
+    identity = ""
+    if pipeline_id is not None:
+        identity += f"pipeline {pipeline_id}, "
+    identity += f"pipeline snapshot {snapshot_id}"
+    if snapshot_version is not None:
+        identity += f" (version {snapshot_version})"
     block_message = (
         f"policy gate mechanism error: snapshot policy-gate pin fingerprint mismatch "
-        f"(pipeline snapshot {snapshot_id}, stored={truncated_stored}…, "
+        f"({identity}, stored={truncated_stored}…, "
         f"recomputed={truncated_recomputed}… — digest and content disagree; "
         f"remediation: create a new run)"
     )
@@ -1075,6 +1091,8 @@ async def _verify_policy_gate_pin_fingerprint(
             "org_id": str(org_id),
             "run_id": str(run_id),
             "snapshot_id": str(snapshot_id),
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "snapshot_version": snapshot_version,
             "stored_fingerprint": saved_fingerprint,
             "recomputed_fingerprint": recomputed,
         },
@@ -1568,18 +1586,34 @@ async def _intercept_guardrails(
     pinned = await _resolve_pinned_guardrail_state(session, request, guardrail_rows)
 
     # ── FAR-967 chunk 10: policy-gate pin fingerprint verification ────────
+    # Spec §3.4 / criteria 4 + 16: verified at RUN START — whenever the run
+    # carries a snapshot_id, not only on replay.  A fresh snapshot's
+    # fingerprint matches trivially (the pins + digest are written
+    # atomically at creation), so this is a cheap integrity read for every
+    # run; a genuine mismatch blocks the run before ANY evaluation happens
+    # (the run is stamped terminal eval_failed below and never dispatched).
     policy_gate_blocked = False
     policy_gate_block_message = ""
-    if request.is_replay and request.snapshot_id is not None:
-        pg_snap_pins, pg_saved_fp = await _load_snapshot_policy_gate_pins(session, request.org_id, request.snapshot_id)
+    if request.snapshot_id is not None:
+        (
+            pg_snap_pins,
+            pg_saved_fp,
+            pg_snapshot_version,
+        ) = await _load_snapshot_policy_gate_pins(session, request.org_id, request.snapshot_id)
         policy_gate_blocked, policy_gate_block_message = await _verify_policy_gate_pin_fingerprint(
             org_id=request.org_id,
             run_id=request.run_id,
             snapshot_id=request.snapshot_id,
             snap_pins=pg_snap_pins,
             saved_fingerprint=pg_saved_fp,
+            pipeline_id=request.pipeline_id,
+            snapshot_version=pg_snapshot_version,
         )
-        # Operator control (§5): filter disabled gates from the pinned set.
+        # Operator control (§5): run-start AUDIT of the pinned gates the
+        # live ``enabled`` state will remove from this run's evaluated set.
+        # The exclusion itself is enforced where the set is built — the
+        # executor's eval-def build (criteria 8/9, §5.2) — so this event
+        # predicts exactly what that build will drop.
         if pg_snap_pins and not policy_gate_blocked:
             pg_ids = [e.get("policy_gate_id", "") for e in pg_snap_pins if e.get("policy_gate_id")]
             enabled_map = await _load_live_policy_gate_enabled_map(

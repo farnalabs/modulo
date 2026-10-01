@@ -2320,6 +2320,14 @@ class PipelineExecutor:
         ``(Eval, PolicyGate | None)`` tuples — the PolicyGate is ``None``
         for guardrail-typed Evals and any eval whose binding was rejected
         during backfill.
+
+        FAR-967 chunk 10: the gate row is returned EVEN WHEN ``enabled`` is
+        ``false`` — the operator-control re-check happens in
+        :meth:`_build_eval_defs_by_node`, where a deliberately-disabled gate
+        remains distinguishable from a gate that never existed (the
+        node-scoped-without-a-gate anomaly warning must not fire for an
+        operator-disabled gate).  Filtering ``enabled`` out of this JOIN
+        would make the two cases indistinguishable.
         """
         eval_stmt = (
             select(Eval, PolicyGate)
@@ -2338,44 +2346,197 @@ class PipelineExecutor:
         return list((await session.execute(eval_stmt)).all())  # Row[tuple[Eval, PolicyGate | None]] (LEFT OUTER JOIN)
 
     @staticmethod
+    def _resolve_governed_gate(
+        eval_row: Eval,
+        policy_gate: PolicyGate | None,
+        pin: dict[str, Any] | None,
+        *,
+        pinned_universe: bool,
+        pipeline_id: uuid.UUID,
+    ) -> tuple[str, uuid.UUID | None, int | None, uuid.UUID | None]:
+        """Resolve the gate that governs THIS run for one node-scoped eval.
+
+        FAR-967 chunk 10 (§3.1, §5.2, §6.1):
+
+        * **Live fallback** (``pinned_universe=False`` — a snapshot with no
+          ``policy_gate_pins_json``, §6.1 case (i)): the live, enabled
+          ``PolicyGate.action`` governs.
+        * **Pinned universe** (case ii/iii): pin MEMBERSHIP is the run's
+          evaluation universe — an eval with no pin is never gate-governed
+          regardless of live state (§3.1) — and the pin's ``action``
+          governs (criterion 10): a live edit of ``action`` cannot re-score
+          this run.
+        * **Operator control overrides the pin** (§5.2): a live row with
+          ``enabled`` false removes the gate from evaluation (criteria 8/9),
+          whether or not it is pinned.  The re-check can only REMOVE gates
+          from the evaluated set, never add them (§5.4 interleaving 2).
+
+        Returns ``(failure_behaviour, policy_gate_id, policy_gate_version,
+        policy_gate_node_id)``.  When no gate governs the eval the return is
+        ``("warn", None, None, None)``: no ``PolicyGateDecision`` row can be
+        written for it (``policy_gate_id is None`` downstream), the eval
+        still runs, and it can never block.  A node-scoped non-guardrail
+        eval with no gate row AND no pin keeps its pre-existing
+        ``eval_defs.node_without_gate`` anomaly warning.
+        """
+        eval_id = str(eval_row.id)
+        eval_type = eval_row.eval_type
+        pipeline_key = str(pipeline_id)
+
+        # No live gate row at all.
+        if policy_gate is None:
+            if pinned_universe and pin is not None:
+                # Pinned, but the live row is gone (soft-deleted since
+                # snapshot creation) — skip, mirroring the guardrail-pin
+                # soft-delete skip precedent.
+                _log.info(
+                    "eval_defs.pinned_gate_unavailable",
+                    extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
+                )
+                return ("warn", None, None, None)
+            if eval_type == "guardrail":
+                # Guardrail-typed Evals keep warn semantics by design.
+                return ("warn", None, None, None)
+            # Anomaly: node-scoped non-guardrail Eval without a gate. This
+            # means its PolicyGate binding was rejected during backfill —
+            # log a warning but do not crash.
+            _log.warning(
+                "eval_defs.node_without_gate",
+                extra={
+                    "eval_id": eval_id,
+                    "eval_type": eval_type,
+                    "pipeline_id": pipeline_key,
+                },
+            )
+            return ("warn", None, None, None)
+
+        # Pin membership first: a gate absent from the pin set is never
+        # evaluated for this run, whatever the live state (§3.1).
+        if pinned_universe and pin is None:
+            _log.info(
+                "eval_defs.gate_not_pinned",
+                extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
+            )
+            return ("warn", None, None, None)
+
+        # Operator control (§5.2): a disabled live row removes the gate from
+        # evaluation — it overrides the pin. Only an explicit False counts as
+        # disabled (an unset attribute on a not-yet-flushed row or a test
+        # stand-in without the field is treated as enabled).
+        enabled_state = getattr(policy_gate, "enabled", None)
+        if enabled_state is not None and not bool(enabled_state):
+            _log.info(
+                "eval_defs.gate_disabled_excluded",
+                extra={
+                    "eval_id": eval_id,
+                    "pipeline_id": pipeline_key,
+                    "policy_gate_id": str(policy_gate.id),
+                },
+            )
+            return ("warn", None, None, None)
+
+        # Live fallback (§6.1 case (i)): the live action governs.
+        if not pinned_universe:
+            return (policy_gate.action, policy_gate.id, policy_gate.version, policy_gate.node_id)
+
+        # Pinned universe, live row present and enabled: the PIN governs
+        # (criterion 10) — not the live ``action``. ``pin`` is non-None here
+        # by construction: the no-pin case returned above (pinned universe)
+        # and the live fallback returned just above.
+        assert pin is not None
+        if str(pin.get("policy_gate_id")) != str(policy_gate.id):
+            # The pinned gate was replaced since snapshot creation (the live
+            # row belongs to a different gate) — the pinned row is gone.
+            _log.info(
+                "eval_defs.pinned_gate_replaced",
+                extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
+            )
+            return ("warn", None, None, None)
+
+        pin_action = pin.get("action")
+        if pin_action not in ("warn", "block"):
+            # A malformed pin action can never drive a decision row. The
+            # fingerprint (§3.3) makes this unreachable for verified pins;
+            # case (ii) pins are trusted as-is, so fail open to warn here.
+            _log.warning(
+                "eval_defs.pin_action_invalid",
+                extra={"eval_id": eval_id, "pipeline_id": pipeline_key, "action": str(pin_action)},
+            )
+            return ("warn", None, None, None)
+
+        gate_node_id = policy_gate.node_id
+        pin_node_id = pin.get("node_id")
+        if pin_node_id:
+            try:
+                gate_node_id = uuid.UUID(str(pin_node_id))
+            except (ValueError, AttributeError, TypeError):
+                _log.warning(
+                    "eval_defs.pin_node_id_invalid",
+                    extra={"eval_id": eval_id, "pipeline_id": pipeline_key},
+                )
+        return (str(pin_action), policy_gate.id, policy_gate.version, gate_node_id)
+
+    @staticmethod
     def _build_eval_defs_by_node(
         eval_rows: list[tuple[Eval, PolicyGate | None]],
         org_id: uuid.UUID,
-        _pipeline_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        policy_gate_pins: list[dict[str, Any]] | None = None,
     ) -> dict[str, list[EvalDefDTO]]:
         """Convert (Eval, PolicyGate) rows to a dict keyed by node id.
 
-        ``failure_behaviour`` is populated from ``PolicyGate.action`` when
-        a gate exists; defaulting to ``"warn"`` when no gate is present
-        (guardrail-typed Evals keep warn semantics, and any eval whose
-        binding was rejected during backfill also defaults to warn).
+        ``failure_behaviour`` and the PolicyGate metadata are resolved per
+        eval by :meth:`_resolve_governed_gate` (FAR-967 chunk 10):
+
+        * ``policy_gate_pins is None`` — legacy live fallback (§6.1 case
+          (i)): the live, enabled ``PolicyGate.action`` populates
+          ``failure_behaviour``; defaulting to ``"warn"`` when no gate is
+          present (guardrail-typed Evals keep warn semantics, and any eval
+          whose binding was rejected during backfill also defaults to warn).
+        * ``policy_gate_pins`` is a list (including empty) — the PINNED set
+          is the run's evaluation universe: the pin's ``action`` governs
+          (a live edit cannot re-score this run), gates missing from the pin
+          set are never evaluated, and a disabled live row removes a pinned
+          gate from evaluation (operator control overrides the pin).
 
         Anomaly guard: if a node-scoped Eval has NO gate AND is NOT
         guardrail-typed, log a WARNING naming the eval id — this would be
         a silent block→warn downgrade from a rejected backfill binding.
         """
+        # The column is typed ``list[dict] | None``. Anything else is a
+        # corrupt/foreign JSON value; a snapshot that carries a fingerprint
+        # already failed closed on it at run start (db.crud.run), so reaching
+        # here with a non-list means an UNFINGERPRINTED (§6.1 case ii) value
+        # — degrade to the legacy live fallback rather than silently
+        # evaluating a zero-gate universe.
+        if policy_gate_pins is not None and not isinstance(policy_gate_pins, list):
+            _log.warning(
+                "eval_defs.policy_gate_pins_malformed",
+                extra={"pipeline_id": str(pipeline_id), "value_type": type(policy_gate_pins).__name__},
+            )
+            policy_gate_pins = None
+        pinned_universe = policy_gate_pins is not None
+        pinned_by_eval: dict[str, dict[str, Any]] = {}
+        if pinned_universe:
+            for entry in policy_gate_pins or []:
+                if isinstance(entry, dict):
+                    entry_eval = entry.get("eval_id")
+                    if entry_eval and str(entry_eval) not in pinned_by_eval:
+                        pinned_by_eval[str(entry_eval)] = entry
+
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         for eval_row, policy_gate in eval_rows:
             node_key = str(eval_row.node_id) if eval_row.node_id else ""
             if not node_key:
                 continue
-            if policy_gate is not None:
-                failure_behaviour = policy_gate.action
-            elif eval_row.eval_type == "guardrail":
-                failure_behaviour = "warn"
-            else:
-                # Anomaly: node-scoped non-guardrail Eval without a gate.
-                # This means its PolicyGate binding was rejected during
-                # backfill — log a warning but do not crash.
-                _log.warning(
-                    "eval_defs.node_without_gate",
-                    extra={
-                        "eval_id": str(eval_row.id),
-                        "eval_type": eval_row.eval_type,
-                        "pipeline_id": str(eval_row.pipeline_id),
-                    },
-                )
-                failure_behaviour = "warn"
+            pin = pinned_by_eval.get(str(eval_row.id)) if pinned_universe else None
+            failure_behaviour, gate_id, gate_version, gate_node_id = PipelineExecutor._resolve_governed_gate(
+                eval_row,
+                policy_gate,
+                pin,
+                pinned_universe=pinned_universe,
+                pipeline_id=pipeline_id,
+            )
             eval_defs_by_node.setdefault(node_key, []).append(
                 EvalDefDTO(
                     id=eval_row.id,
@@ -2390,11 +2551,13 @@ class PipelineExecutor:
                     suite_id=eval_row.suite_id,
                     version=eval_row.version,
                     # FAR-1102 chunk 4: PolicyGate metadata for decision-record
-                    # construction.  None when no gate exists (guardrail-typed
-                    # Evals or backfill-rejected bindings).
-                    policy_gate_id=policy_gate.id if policy_gate is not None else None,
-                    policy_gate_version=policy_gate.version if policy_gate is not None else None,
-                    policy_gate_node_id=policy_gate.node_id if policy_gate is not None else None,
+                    # construction.  None when no gate governs this run (no
+                    # pin / disabled / soft-deleted / guardrail-typed Evals /
+                    # backfill-rejected bindings) — no PolicyGateDecision row
+                    # is written then (FAR-967 chunk 10, criteria 8/9).
+                    policy_gate_id=gate_id,
+                    policy_gate_version=gate_version,
+                    policy_gate_node_id=gate_node_id,
                 )
             )
         return eval_defs_by_node
@@ -3311,8 +3474,15 @@ class PipelineExecutor:
                 raise GraphValidationError(validation.issues, run_id)
 
             # Load eval definitions while session is active.
+            # FAR-967 chunk 10: the snapshot's policy-gate pins are the run's
+            # evaluation universe (criterion 10 / §5.2 operator re-check).
             eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
-            eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
+            eval_defs_by_node = self._build_eval_defs_by_node(
+                eval_rows,
+                org_id,
+                run.pipeline_id,
+                snapshot.policy_gate_pins_json,
+            )
 
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
@@ -3906,12 +4076,20 @@ class PipelineExecutor:
             return rc.node_idempotency_key(run_ref=run_ref, node_ref=node_id)
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
+        # FAR-967 chunk 10: thread the snapshot's policy-gate pins so the
+        # pinned ``action`` governs and the operator control re-check runs
+        # (criteria 8/9/10) on the execute path as well as on resume.
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
-        eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
+        eval_defs_by_node = self._build_eval_defs_by_node(
+            eval_rows,
+            org_id,
+            pipeline_id,
+            snapshot.policy_gate_pins_json,
+        )
 
         # Non-blocking capacity check — if at limit the run is demoted back to
         # pending (with a reason marker) and recovered by dispatcher_reconcile /
