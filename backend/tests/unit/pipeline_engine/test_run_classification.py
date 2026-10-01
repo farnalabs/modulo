@@ -320,9 +320,12 @@ class TestDeliveryProvenance:
     """FAR-1336: the record must stop overstating what we know about delivery.
 
     ``pr_url_provenance`` records, per URL, HOW it was harvested (``declared``
-    = the node's structured RETURN asserted it; ``matched`` = it only appears
-    in telemetry/marker output), and ``delivery_confidence`` states that the
-    record is ``self_reported`` — nothing in it is confirmed against an SCM.
+    = the node's structured RETURN (``outputs_json``) asserted it — including
+    the legacy inner-output fallback derived from that same return;
+    ``matched`` = it was found only in a REAL telemetry entry or a FAR-188
+    marker — emitted output the run never asserted as a delivery), and
+    ``delivery_confidence`` states that the record is ``self_reported`` —
+    nothing in it is confirmed against an SCM.
 
     These keys are ADDITIVE metadata: ``value``, ``reason``,
     ``delivered_pr_urls``, ``computed_at``, ``work_intact`` and
@@ -532,9 +535,10 @@ class TestDeliveryProvenance:
     def test_matched_only_url_still_classifies_delivered(self) -> None:
         """DELIBERATE (FAR-1336): provenance is RECORD-ONLY metadata.
 
-        A URL harvested ONLY from telemetry/markers (``matched``) still yields
-        ``value == delivered``. The delivery rule must NOT be tightened to
-        require a ``declared`` URL — a sandbox that echoes the PR URL into
+        A URL harvested ONLY from a real telemetry entry or a marker
+        (``matched``) still yields ``value == delivered``. The delivery rule
+        must NOT be tightened to require a ``declared`` URL — a sandbox that
+        echoes the PR URL into
         marker/stdout output rather than the structured return is a real
         delivery. This test exists so a future reader cannot silently change
         it."""
@@ -636,6 +640,51 @@ class TestDeliveryProvenance:
         bare = ClassificationResult(RunClassificationValue.no_delivery, REASON_NO_WORK, computed_at=stamp)
         assert isinstance(hash(bare), int)
 
+    def test_provenance_sort_makes_content_equality_order_insensitive(self) -> None:
+        """FAR-1377: ``classify_run`` stores the provenance SORTED BY URL, so
+        two runs harvesting the SAME pairs in DIFFERENT discovery orders hold
+        EQUAL, equally-hashing provenance tuples.
+
+        The ``sorted()`` is load-bearing: without it the stored tuple keeps
+        discovery order, these two tuples would differ (order vs its reverse),
+        and the first assertion fails.
+
+        Full ``ClassificationResult`` equality is deliberately NOT asserted:
+        discovery order also orders ``delivered_pr_urls`` (collection order is
+        intentionally preserved) and each call stamps a fresh ``computed_at``,
+        so two runs never compare equal as whole results — the sort's only
+        observable effect is on the provenance tuple's own order.
+        """
+        # Discovery order A: the node walk finds _PR first (declared, via the
+        # structured return), then the same node's REAL telemetry entry
+        # carries _PR_2 (matched).
+        forward = classify_run(
+            "complete",
+            None,
+            outputs_json={"n1": _node_return_with_pr(_PR)},
+            telemetry_json={"n1": {"agent_status": "completed", "pr_url": _PR_2}},
+        )
+        # Discovery order B: the SAME pairs discovered in the REVERSE order —
+        # _PR_2 (matched) on the first node's telemetry entry, then _PR
+        # (declared) on a later node's structured return.
+        reverse = classify_run(
+            "complete",
+            None,
+            outputs_json={"a1": {"summary": "no pr_url"}, "b2": _node_return_with_pr(_PR)},
+            telemetry_json={"a1": {"agent_status": "completed", "pr_url": _PR_2}},
+        )
+        # Same provenance content, different discovery order -> equal and
+        # hashing equally (order-insensitive content equality).
+        assert forward.pr_url_provenance == reverse.pr_url_provenance
+        assert hash(forward.pr_url_provenance) == hash(reverse.pr_url_provenance)
+        # ...held in sorted-by-URL order, NOT discovery/collection order:
+        # delivered_pr_urls keeps collection order and genuinely differs.
+        assert forward.pr_url_provenance == (
+            (_PR, PR_URL_PROVENANCE_DECLARED),
+            (_PR_2, PR_URL_PROVENANCE_MATCHED),
+        )
+        assert reverse.delivered_pr_urls == (_PR_2, _PR)
+
     def test_result_provenance_field_is_immutable(self) -> None:
         """FAR-1377: ``frozen=True`` must mean what it says — no rebinding the
         field, and no mutating the value object through it either."""
@@ -645,22 +694,15 @@ class TestDeliveryProvenance:
         with pytest.raises(TypeError):
             result.pr_url_provenance[0] = (_PR, PR_URL_PROVENANCE_MATCHED)
 
-    def test_serialised_record_keeps_eight_keys_and_dict_provenance(self) -> None:
-        """The persisted record still carries the exact eight keys, and
-        ``pr_url_provenance`` serialises as a JSON OBJECT (not a list of
-        pairs) — the FAR-1336 shape is unchanged by the immutable storage."""
+    def test_serialised_record_provenance_is_a_json_object(self) -> None:
+        """``pr_url_provenance`` serialises as a JSON OBJECT (not a list of
+        pairs) — the FAR-1336 shape is unchanged by the immutable storage.
+        The canonical eight-key record shape is asserted once each in
+        ``test_crud_fallback_marker_key_set_matches_classify_marker`` and
+        ``test_existing_record_keys_are_unchanged_by_the_provenance_keys``
+        (a third copy of the key-set literal would only drift)."""
         outputs = {"n1": _node_return_with_pr(_PR)}
         record = classify_run("complete", None, outputs_json=outputs, telemetry_json={"n1": {}}).to_dict()
-        assert set(record) == {
-            "value",
-            "reason",
-            "delivered_pr_urls",
-            "computed_at",
-            "work_intact",
-            "declared_success_nodes",
-            "pr_url_provenance",
-            "delivery_confidence",
-        }
         assert isinstance(record["pr_url_provenance"], dict)
         assert record["pr_url_provenance"] == {_PR: PR_URL_PROVENANCE_DECLARED}
 

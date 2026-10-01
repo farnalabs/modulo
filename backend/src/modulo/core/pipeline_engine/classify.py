@@ -62,13 +62,21 @@ telemetry value, the FAR-188 raw-output markers) and NOTHING cross-checks that
 the run actually created the PR it names — the platform deliberately does not
 verify deliveries against an SCM of record. ``pr_url_provenance`` records,
 per URL, how it was harvested (``declared`` = the run's own output contract
-asserted it; ``matched`` = it merely appears in emitted output), and
-``delivery_confidence`` states plainly that every record written today is
-``self_reported``. Neither key changes the verdict: a ``matched``-only URL
-still classifies ``delivered`` (the delivery rule is unchanged). The eight-key
-shape is forward-only: rows written before this change are six-key, are never
+— the node's structured return, including its legacy inner-output fallback —
+asserted it; ``matched`` = it was found in a REAL telemetry entry or a
+FAR-188 raw-output marker, emitted output the run never asserted as a
+delivery), and ``delivery_confidence`` states plainly that every record
+written today is ``self_reported``. Neither key changes the verdict: a
+``matched``-only URL still classifies ``delivered`` (the delivery rule is
+unchanged). The eight-key shape is forward-only: rows written before this
+change are six-key, are never
 backfilled, and readers must treat an absent ``pr_url_provenance`` /
 ``delivery_confidence`` key on an older row as legacy/unknown, not an error.
+The LABEL semantics of an existing key also changed at FAR-1376 — a
+pre-FAR-1376 row may label the same evidence ``matched`` that a post-change
+row labels ``declared`` (the legacy inner-output fallback leg's source was
+misattributed) — and no backfill runs either, so provenance labels are not
+directly comparable across that boundary.
 
 Terminalizers that write ``status='failed'`` via RAW SQL (never touching the
 crud/run.py hook) leave ``run_classification = NULL`` forever — those runs are
@@ -133,10 +141,12 @@ REASON_UNCLASSIFIED = "classifier_error"
 #: entered the record (one value per URL; see ``ClassificationResult``).
 #:
 #: * ``declared`` — the URL came from the node's structured RETURN
-#:   (``outputs_json``): the run's own output contract asserting delivery.
-#: * ``matched`` — the URL was found in the node telemetry VALUE or in a
-#:   FAR-188 raw-output marker: it appears in emitted output, but the run
-#:   never asserted it as a delivery.
+#:   (``outputs_json``): the run's own output contract asserting delivery —
+#:   including the legacy inner-output fallback, which is derived from that
+#:   same return.
+#: * ``matched`` — the URL was found in a REAL telemetry entry or a
+#:   FAR-188 raw-output marker: emitted output the run never asserted as a
+#:   delivery.
 PR_URL_PROVENANCE_DECLARED = "declared"
 PR_URL_PROVENANCE_MATCHED = "matched"
 #: The closed set of provenance values — a future route adds its value here.
@@ -238,16 +248,25 @@ class ClassificationResult:
 
     ``pr_url_provenance`` maps every URL in ``delivered_pr_urls`` to
     ``PR_URL_PROVENANCE_DECLARED`` (it came from the node's structured RETURN
-    — the run's own output contract asserting delivery) or
+    — the run's own output contract asserting delivery, including the legacy
+    inner-output fallback derived from that same return) or
     ``PR_URL_PROVENANCE_MATCHED`` (it was found in a real telemetry entry or a
     FAR-188 raw-output marker — it appears in emitted output but was never
     asserted as a delivery). A URL reachable by both routes is ``declared``
     (the stronger provenance wins). Empty when ``delivered_pr_urls`` is empty.
 
-    FAR-1377: the map is held IMMUTABLY as a ``tuple[tuple[url, route], ...]``
-    sorted by URL, so the ``frozen`` result stays hashable and cannot be
-    mutated through its fields; ``to_dict()`` still serialises it as a JSON
-    OBJECT (``dict(...)``), byte-identical for the same inputs.
+    FAR-1377: the map is held as a ``tuple[tuple[url, route], ...]``. The
+    TUPLE (not the sort) is what makes the field immutable and keeps the
+    ``frozen`` result hashable; the sort makes content equality
+    order-insensitive (the tuple behaves like the dict it replaced) and
+    canonicalises the serialised provenance key order to sorted-by-URL —
+    deliberately NOT ``delivered_pr_urls`` order. ``to_dict()`` still
+    serialises the field as a JSON OBJECT (``dict(...)``): for the same
+    inputs the record is semantically identical (same key set, same types,
+    same values, provenance still a JSON object); only the JSON object's key
+    ORDER can differ from the old collection-order dict when discovery order
+    != lexicographic URL order, and the column is generic JSON, so that order
+    survives persistence.
 
     ``delivery_confidence`` is ``"self_reported"`` on every record written
     today: the URLs above are harvested from the run's own output and nothing
@@ -355,9 +374,9 @@ def _note_provenance(provenance: dict[str, str], url: str, route: str) -> None:
     """Record how *url* entered the record — the STRONGER provenance wins.
 
     ``declared`` (the run's structured return asserted the URL) outranks
-    ``matched`` (the URL merely appears in emitted output), so a URL found by
-    BOTH routes keeps ``declared`` regardless of which route is seen first.
-    Never raises; has no effect on URL collection or ordering.
+    ``matched`` (only a REAL telemetry entry or a FAR-188 marker carried it),
+    so a URL found by BOTH routes keeps ``declared`` regardless of which route
+    is seen first. Never raises; has no effect on URL collection or ordering.
     """
     if route == PR_URL_PROVENANCE_DECLARED or url not in provenance:
         provenance[url] = route
@@ -459,8 +478,9 @@ def collect_pr_urls(
 
     FAR-1336: pass a *provenance* dict to have it filled, in the SAME single
     walk, with one entry per collected URL — ``declared`` (the node's
-    structured RETURN asserted it) or ``matched`` (telemetry/marker output
-    only). The map's keys are exactly the returned URL set — a caller-supplied
+    structured RETURN asserted it, including its legacy inner-output
+    fallback) or ``matched`` (a REAL telemetry entry or a marker only). The
+    map's keys are exactly the returned URL set — a caller-supplied
     dict is CLEARED first, so stale pre-seeded entries cannot survive — and
     collection order is identical whether or not *provenance* is given.
     """
@@ -674,9 +694,10 @@ def classify_run(
     # reached via set-arithmetic fall-through.
     if status in _DELIVERABLE_STATUSES:
         # FAR-1336: the SAME collection walk fills the per-URL provenance map —
-        # a URL found ONLY in telemetry/markers is ``matched`` — and the
-        # verdict is UNCHANGED: matched-only still classifies ``delivered``
-        # (deliberate; the delivery rule is not tightened by provenance).
+        # a URL found ONLY in a real telemetry entry or a marker is
+        # ``matched`` — and the verdict is UNCHANGED: matched-only still
+        # classifies ``delivered`` (deliberate; the delivery rule is not
+        # tightened by provenance).
         pr_url_provenance: dict[str, str] = {}
         pr_urls = collect_pr_urls(outputs_json, telemetry_json, raw_output_markers, pr_url_provenance)
         if pr_urls:
@@ -684,9 +705,10 @@ def classify_run(
                 RunClassificationValue.delivered,
                 REASON_DELIVERED,
                 delivered_pr_urls=tuple(pr_urls),
-                # FAR-1377: hold the provenance IMMUTABLY (sorted by URL) so
-                # the frozen result stays hashable; ``to_dict`` re-materialises
-                # the JSON object.
+                # FAR-1377: hold the provenance as an immutable, hashable
+                # TUPLE (the tuple is what confers both); sort by URL so
+                # content equality is order-insensitive and ``to_dict``
+                # re-materialises the JSON object in canonical order.
                 pr_url_provenance=tuple(sorted(pr_url_provenance.items())),
                 computed_at=computed_at,
                 work_intact=work_intact,
