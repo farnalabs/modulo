@@ -15,7 +15,6 @@ migration actually ships them).
 import json
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -51,15 +50,17 @@ def _swap_db_name(db_url: str, new_db: str) -> str:
 
 
 def _alembic_cmd(iso_url: str, cmd: str, target: str) -> None:
-    """Run an alembic command against the isolated DB.
+    """Run an alembic command against the isolated DB via the Python API.
 
-    env.py classifies PROGRAMMATIC invocations (no ``cmd_opts``) as upgrades
-    and fast-path-skips at-head runs — which silently swallows our
-    ``command.downgrade`` calls on an at-head DB. Inject ``cmd_opts.command``
-    with the documented test shape (SimpleNamespace) so the direction is
-    unambiguous."""
+    Deliberately does NOT inject ``cmd_opts``: env.py's
+    ``_invocation_is_upgrade`` now infers direction from the active Alembic
+    EnvironmentContext (``context._proxy.context_opts["fn"].__name__``) when
+    ``cmd_opts`` is absent, so a real ``command.downgrade`` on an at-head DB
+    runs instead of being fast-path-skipped (FAR-967 F2).  These round-trip
+    tests double as the regression proof — the old
+    ``cfg.cmd_opts = SimpleNamespace(command=...)`` workaround is gone."""
     cfg = _alembic_config(iso_url)
-    cfg.cmd_opts = SimpleNamespace(command=cmd)
+    assert getattr(cfg, "cmd_opts", None) is None, "Python-API invocation must carry no cmd_opts"
     getattr(command, cmd)(cfg, target)
 
 

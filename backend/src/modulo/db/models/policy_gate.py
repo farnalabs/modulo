@@ -32,6 +32,18 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
             "action IN ('warn', 'block')",
             name="ck_policy_gates_action",
         ),
+        # FAR-967 chunk 10 (§4.3) — symmetric operator-control CHECK, shipped
+        # by migration 0270. The predicate and name match that migration's
+        # SQLite batch definition EXACTLY so metadata.create_all() / SQLite-
+        # mirror CTAS parity holds against the shipped post-0270 contract:
+        # enabled ⟹ enabled_at NOT NULL AND disabled_at NULL;
+        # NOT enabled ⟹ disabled_at NOT NULL AND enabled_at NULL.
+        CheckConstraint(
+            "(enabled AND enabled_at IS NOT NULL AND disabled_at IS NULL) "
+            "OR "
+            "(NOT enabled AND disabled_at IS NOT NULL AND enabled_at IS NULL)",
+            name="ck_policy_gates_enabled_timestamps",
+        ),
         ForeignKeyConstraint(
             ["eval_id", "organisation_id"],
             ["evals.id", "evals.organisation_id"],

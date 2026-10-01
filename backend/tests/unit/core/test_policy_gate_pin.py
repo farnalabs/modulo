@@ -652,6 +652,69 @@ def test_schema_policy_gate_enabled_columns_contract() -> None:
         engine.dispose()
 
 
+def test_schema_policy_gate_enabled_timestamps_check_on_model() -> None:
+    """C11 parity: the symmetric CHECK ships on the MODEL, not only in
+    migration 0270 — ``metadata.create_all()`` / SQLite-mirror CTAS must
+    match the shipped post-0270 contract (FAR-967 F1)."""
+    from sqlalchemy import CheckConstraint
+
+    checks = [
+        c
+        for c in PolicyGate.__table_args__
+        if isinstance(c, CheckConstraint) and c.name == "ck_policy_gates_enabled_timestamps"
+    ]
+    assert len(checks) == 1, "PolicyGate model must declare ck_policy_gates_enabled_timestamps"
+    predicate = str(checks[0].sqltext)
+    assert "enabled AND enabled_at IS NOT NULL AND disabled_at IS NULL" in predicate
+    assert "NOT enabled AND disabled_at IS NOT NULL AND enabled_at IS NULL" in predicate
+    ddl = str(CreateTable(PolicyGate.__table__))
+    assert "ck_policy_gates_enabled_timestamps" in ddl
+
+
+def test_sqlite_create_all_enforces_enabled_timestamps_check() -> None:
+    """The model-level CHECK is LIVE on a create_all-built SQLite table:
+    an enabled row without enabled_at is rejected (mirror of migration
+    0270), while the creation state (enabled + enabled_at set, disabled_at
+    NULL) is accepted."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _sqlite_engine_for([PolicyGate])
+    try:
+        invalid = {
+            "i": str(uuid.uuid4()),
+            "o": str(uuid.uuid4()),
+            "e": str(uuid.uuid4()),
+            "n": str(uuid.uuid4()),
+        }
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
+                    "action, version, enabled, enabled_at, disabled_at) "
+                    "VALUES (:i, :o, :e, :n, 'warn', 1, 1, NULL, NULL)"
+                ),
+                invalid,
+            )
+        valid = {
+            "i": str(uuid.uuid4()),
+            "o": str(uuid.uuid4()),
+            "e": str(uuid.uuid4()),
+            "n": str(uuid.uuid4()),
+        }
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
+                    "action, version, enabled, enabled_at, disabled_at) "
+                    "VALUES (:i, :o, :e, :n, 'warn', 1, 1, '2026-01-01 00:00:00', NULL)"
+                ),
+                valid,
+            )
+    finally:
+        engine.dispose()
+
+
 def test_schema_snapshot_policy_gate_pin_columns_contract() -> None:
     """C12: ``policy_gate_pins_fingerprint`` is a nullable VARCHAR(64) and
     ``policy_gate_pins_json`` is nullable JSON — legacy snapshots (no pins,
