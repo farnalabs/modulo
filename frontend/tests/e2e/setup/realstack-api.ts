@@ -55,8 +55,9 @@ function isTransientTransportError(err: unknown): boolean {
  * are NOT deterministic client errors: the request rolled back and re-issuing
  * it is the documented recovery (the DB error arms in the API map a rolled-back
  * transaction to 503 precisely so a client may retry). Retrying them keeps a
- * healthy journey from hard-failing on the first blip, exactly as `apiLogin`
- * already tolerates a transient transport blip.
+ * healthy journey from hard-failing on the first blip. Every real-stack API
+ * helper tolerates them: `apiFetch`, `apiLogin` (a POST /login 503 is the same
+ * rolled-back DB blip) and `fireWebhook`.
  *
  * Deterministic client errors (4xx — bad credentials, validation, conflict)
  * and application errors (500) are deliberately NOT retried so a real defect
@@ -78,8 +79,10 @@ const API_BACKOFF_BASE_MS = 1_000
 export async function apiLogin(env: TestEnv): Promise<string> {
   // Login is pure ARRANGE: a transient staging blip (the whole point of the
   // real-stack journeys) must not fail an otherwise-healthy journey before it
-  // reaches the behaviour under test. Retry transport failures only; an HTTP
-  // error response is deterministic and is rethrown immediately.
+  // reaches the behaviour under test. Retry transport failures and explicit
+  // transient 5xx responses (a POST /login 503 is a rolled-back DB blip and
+  // login is safe to re-issue); a deterministic HTTP error response is
+  // rethrown immediately.
   for (let attempt = 1; ; attempt++) {
     try {
       const res = await fetch(apiBaseFor(env) + '/api/v1/auth/login', {
@@ -91,6 +94,10 @@ export async function apiLogin(env: TestEnv): Promise<string> {
         }),
         signal: AbortSignal.timeout(20_000),
       })
+      if (isTransientHttpStatus(res.status) && attempt < LOGIN_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, LOGIN_BACKOFF_MS))
+        continue
+      }
       if (!res.ok) {
         throw new Error(`[realstack] login failed: ${res.status} ${res.statusText}`)
       }
@@ -674,20 +681,29 @@ export async function deleteLifecycleMapBestEffort(apiBase: string, token: strin
  * headers: HMAC-less triggers accept unauthenticated deliveries by design.
  */
 export async function fireWebhook(apiBase: string, triggerId: string, payload: Record<string, unknown>): Promise<ApiResult<{ run_id: string | null; status: string }>> {
-  const res = await fetch(`${apiBase}/api/v1/triggers/${triggerId}/webhook`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(20_000),
-  })
-  const text = await res.text()
-  let parsed: { run_id: string | null; status: string } | null = null
-  try {
-    parsed = JSON.parse(text) as { run_id: string | null; status: string }
-  } catch {
-    parsed = null
+  // Same bounded transient-5xx tolerance as apiFetch: the route rolls back on
+  // a DB blip (and the snapshot-lock 503 explicitly asks the sender to retry),
+  // so re-issuing an explicit 5xx delivery cannot double-create a run.
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(`${apiBase}/api/v1/triggers/${triggerId}/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (isTransientHttpStatus(res.status) && attempt < API_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, API_BACKOFF_BASE_MS * attempt))
+      continue
+    }
+    const text = await res.text()
+    let parsed: { run_id: string | null; status: string } | null = null
+    try {
+      parsed = JSON.parse(text) as { run_id: string | null; status: string }
+    } catch {
+      parsed = null
+    }
+    return { status: res.status, body: parsed, text }
   }
-  return { status: res.status, body: parsed, text }
 }
 
 /** Request cancellation through the real API (202 — terminalised async). */
