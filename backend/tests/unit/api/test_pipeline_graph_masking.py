@@ -369,6 +369,144 @@ def test_patch_graph_persists_echoless_deletion(client: TestClient) -> None:
     assert "GITHUB_TOKEN" not in written_nodes[0]["env_vars"]
 
 
+# ---------------------------------------------------------------------------
+# FAR-1366: chained masked-read -> write round-trips (regression guard)
+#
+# The helper-level tests above hand-build the masked payload they feed the
+# writer, so nothing chains a REAL graph read into a REAL graph write. These
+# two feed the read response back VERBATIM — one through the REST PATCH, one
+# through the MCP update_pipeline_graph tool — so a regression on either side
+# (masking lost on read, or the mask echo persisted over the stored secret on
+# write) fails them where hand-built-fixture tests would stay green.
+# ---------------------------------------------------------------------------
+
+
+def test_masked_read_to_rest_patch_round_trip_preserves_stored_secret(client: TestClient) -> None:
+    """GET graph -> PATCH the exact response back: the stored secret survives.
+
+    Chains the real read path (route-level masking in ``_graph_response``) into
+    the real REST write path: the PATCH body is the GET response verbatim, mask
+    echo included. The read must mask, and the write must resolve the echo
+    against the stored graph BEFORE persisting — the REAL secret, never the
+    mask literal, must reach ``replace_pipeline_graph``.
+    """
+    with (
+        patch(
+            "modulo.api.routes.pipelines.get_pipeline_graph",
+            return_value=([dict(_NODE_WITH_SECRET)], []),
+        ),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        read_resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+
+    assert read_resp.status_code == 200
+    read_body = read_resp.json()
+    # The real read path masked the credential (this is what the write must
+    # resolve, so the assert documents the echo actually flowing in).
+    assert read_body["nodes"][0]["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+    assert read_body["nodes"][0]["env_vars"]["APP_URL"] == "https://example.com"
+
+    # Write the masked read back VERBATIM through the real PATCH surface.
+    pipeline = _make_pipeline([dict(_NODE_WITH_SECRET)])
+    validation = MagicMock()
+    validation.issues = []
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=([dict(_NODE_WITH_SECRET)], []),
+        ) as replace_mock,
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=validation,
+        ),
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            return_value=([], []),
+        ),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        write_resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": read_body["nodes"], "edges": read_body["edges"]},
+        )
+
+    assert write_resp.status_code == 200
+    written_nodes = replace_mock.await_args.kwargs["nodes"]
+    # The mask echo was resolved to the REAL stored secret before the write —
+    # the sentinel never reached the persistence boundary, and the non-secret
+    # env value round-trips unchanged.
+    assert written_nodes[0]["env_vars"]["GITHUB_TOKEN"] == _GHP_SECRET
+    assert written_nodes[0]["env_vars"]["APP_URL"] == "https://example.com"
+    # Belt-and-braces: no mask literal anywhere in the persisted payload
+    # (ensure_ascii=False keeps the bullet chars literal for the match).
+    assert SENSITIVE_VALUE_MASK not in json.dumps(written_nodes, ensure_ascii=False)
+
+
+async def test_masked_read_to_mcp_graph_write_round_trip_preserves_stored_secret(client: TestClient) -> None:
+    """GET graph -> MCP update_pipeline_graph with the exact response nodes.
+
+    The MCP write surface must resolve the masked-read echo exactly like the
+    REST PATCH: the stored secret (not the sentinel) reaches
+    ``replace_pipeline_graph``, and the tool's response re-masks so the caller
+    never sees the stored secret echoed back.
+    """
+    import modulo.api.mcp_server as ms
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.get_pipeline_graph",
+            return_value=([dict(_NODE_WITH_SECRET)], []),
+        ),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        read_resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+
+    read_body = read_resp.json()
+    assert read_body["nodes"][0]["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+    mock_session: Any = AsyncMock()
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    pipeline = _make_pipeline([dict(_NODE_WITH_SECRET)])
+
+    ms._ctx_org_id.set(_ORG_ID)
+    ms._ctx_role.set("operator")
+    try:
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "check_tool_scope", MagicMock()),
+            patch.object(ms, "_session", return_value=session_cm),
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+            patch(
+                "modulo.db.crud.pipeline.replace_pipeline_graph",
+                new=AsyncMock(return_value=([dict(_NODE_WITH_SECRET)], [])),
+            ) as mcp_replace,
+        ):
+            result = await ms.update_pipeline_graph(
+                str(_PIPELINE_ID),
+                read_body["nodes"],
+                read_body["edges"],
+            )
+    finally:
+        ms._ctx_org_id.set(None)
+        ms._ctx_role.set(None)
+
+    assert result.get("error") is None
+    written_nodes = mcp_replace.await_args.kwargs["nodes"]
+    # The mask echo was resolved to the REAL stored secret before the write.
+    assert written_nodes[0]["env_vars"]["GITHUB_TOKEN"] == _GHP_SECRET
+    assert SENSITIVE_VALUE_MASK not in json.dumps(written_nodes, ensure_ascii=False)
+    # The tool response re-masks: the write surface cannot echo the stored
+    # credential back to the caller.
+    assert result["nodes"][0]["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
+
+
 def test_snapshot_detail_masks_graph_nodes(client: TestClient) -> None:
     snapshot_id = uuid.uuid4()
     snapshot = SimpleNamespace(
