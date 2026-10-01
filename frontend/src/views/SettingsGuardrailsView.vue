@@ -2,9 +2,20 @@
     <div data-theme="agent" class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.SettingsGuardrailsView.title')" :subtitle="$t('views.SettingsGuardrailsView.subtitle')" />
-        <Button data-testid="settings-guardrails-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
-          {{ $t('views.SettingsGuardrailsView.create_guardrail') }}
-        </Button>
+        <div class="flex items-center gap-2">
+          <Button
+            v-if="isAdmin"
+            data-testid="settings-guardrails-import"
+            severity="secondary"
+            class="border-primary/30 hover:border-primary/60"
+            @click="openImportDialog"
+          >
+            {{ $t('views.SettingsGuardrailsView.import_guardrail') }}
+          </Button>
+          <Button data-testid="settings-guardrails-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
+            {{ $t('views.SettingsGuardrailsView.create_guardrail') }}
+          </Button>
+        </div>
       </header>
 
       <div
@@ -201,6 +212,54 @@
           </div>
         </form>
       </FormDialog>
+
+      <FormDialog
+        :open="importOpen"
+        @update:open="closeImportDialog"
+        :title="$t('views.SettingsGuardrailsView.import_guardrail')"
+        :description="$t('views.SettingsGuardrailsView.import_guardrail_description')"
+        :confirmText="$t('views.SettingsGuardrailsView.import_action')"
+        :loading="importing"
+        :confirmDisabled="!importYaml.trim()"
+        @confirm="importConfig"
+      >
+        <div data-testid="settings-guardrails-import-dialog" class="space-y-2">
+          <div>
+            <label for="settingsguardrailsview-import-yaml" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsGuardrailsView.import_config_yaml') }}</label>
+            <textarea
+              id="settingsguardrailsview-import-yaml"
+              v-model="importYaml"
+              rows="12"
+              spellcheck="false"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsGuardrailsView.import_placeholder')"
+              data-testid="settings-guardrails-import-textarea"
+            />
+          </div>
+
+          <p data-testid="settings-guardrails-import-hint" class="text-xs text-muted-foreground">
+            {{ $t('views.SettingsGuardrailsView.import_hint') }}
+          </p>
+
+          <div
+            v-if="importError"
+            data-testid="settings-guardrails-import-error"
+            role="alert"
+            class="text-sm font-medium text-destructive"
+          >
+            {{ importError }}
+          </div>
+
+          <div
+            v-if="importSuccess"
+            data-testid="settings-guardrails-import-success"
+            role="status"
+            class="text-sm font-medium text-success"
+          >
+            {{ importSuccess }}
+          </div>
+        </div>
+      </FormDialog>
     </div>
 </template>
 
@@ -227,6 +286,7 @@ const { t } = useI18n()
 const { jwtPayload } = useCurrentUser()
 
 const orgId = computed(() => jwtPayload.value?.org_id ?? '')
+const isAdmin = computed(() => jwtPayload.value?.org_role === 'admin')
 
 type PipelineItem = components['schemas']['PipelineResponse']
 
@@ -275,6 +335,12 @@ const dialogOpen = ref(false)
 const saving = ref(false)
 const formError = ref<string | null>(null)
 
+const importOpen = ref(false)
+const importing = ref(false)
+const importYaml = ref('')
+const importError = ref<string | null>(null)
+const importSuccess = ref<string | null>(null)
+
 interface GuardrailForm {
   name: string
   pipeline_id: string
@@ -305,6 +371,46 @@ function resetForm() {
 function openCreateDialog() {
   resetForm()
   dialogOpen.value = true
+}
+
+function openImportDialog() {
+  importYaml.value = ''
+  importError.value = null
+  importSuccess.value = null
+  importOpen.value = true
+}
+
+function closeImportDialog(value: boolean | undefined) {
+  if (!value && importing.value) return
+  importOpen.value = Boolean(value)
+}
+
+async function importConfig() {
+  importError.value = null
+  importSuccess.value = null
+  if (!importYaml.value.trim()) return
+
+  importing.value = true
+  try {
+    const { data, error: err } = await api.POST('/api/v1/guardrails/config/import', {
+      body: { config_yaml: importYaml.value },
+    })
+    if (err) {
+      importError.value = t('views.SettingsGuardrailsView.import_failed', { detail: formatApiError(err) })
+      return
+    }
+    const diffCount = Array.isArray(data?.diff) ? data.diff.length : 0
+    importSuccess.value = t('views.SettingsGuardrailsView.import_success', {
+      count: String(diffCount),
+      hash: data?.hash ?? '',
+    })
+    importYaml.value = ''
+    await loadGuardrails()
+  } catch (e: unknown) {
+    importError.value = t('views.SettingsGuardrailsView.import_failed', { detail: formatApiError(e) })
+  } finally {
+    importing.value = false
+  }
 }
 
 function actionLabel(g: GuardrailItem): string {
