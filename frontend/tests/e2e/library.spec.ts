@@ -21,8 +21,11 @@ test.describe('Library Page', () => {
 
     await page.goto('/library')
 
+    // Staging first paint can exceed the default 5 s expect budget under load
+    // (a staging @regression run flaked this assertion while the SPA was still
+    // painting), so wait on the same readiness budget the real-stack journeys use.
     const filter = page.getByTestId('library-type-filter-button')
-    await expect(filter).toBeVisible()
+    await expect(filter).toBeVisible({ timeout: 30_000 })
     await filter.click()
 
     const dropdown = page.getByTestId('library-type-filter-dropdown')
