@@ -1207,6 +1207,24 @@ class TestPendingRetry:
         redis_client.srem.assert_awaited_once_with(ts._streak_notify_pending_key(ORG), member)
 
     @pytest.mark.asyncio
+    async def test_retry_skips_member_when_active_state_unreadable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A read failure on the trigger's active state (``None``) SKIPS the
+        member this tick — it is neither dispatched (could be a stale notice)
+        nor dropped (it may still be deactivated); the next tick re-checks."""
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
+        redis_client.smembers.return_value = {member}
+        with (
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=None),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
+        ):
+            retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
+        assert retried == 0
+        notify.assert_not_awaited()
+        redis_client.srem.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_retry_skipped_when_budget_exhausted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A budget-exhausted sweep skips the retry pass entirely (FAR-190 qa
         round 2 FIX 2): once the sweep deadline has passed the pass returns 0
@@ -1289,6 +1307,37 @@ class TestPendingRetry:
     @pytest.mark.asyncio
     async def test_no_redis_is_noop(self) -> None:
         assert await ts._retry_pending_streak_notifications(ORG, None) == 0
+
+
+class TestDispatchStreakNotify:
+    """``_dispatch_streak_notify`` — the shared inline-notification budget gate."""
+
+    @pytest.mark.asyncio
+    async def test_budget_exhausted_defers_to_pending_retry(self) -> None:
+        """Once the per-tick inline budget is spent, a trip is NOT dropped: it
+        is deferred to the pending-retry path (``notify_deferred``) and a
+        pending marker is written so the next tick dispatches it."""
+        redis_client = AsyncMock()
+        delta: dict[str, Any] = dict.fromkeys(ts._SWEEP_SUMMARY_KEYS, 0)
+        with (
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
+            patch.object(ts, "_write_streak_notify_pending", new_callable=AsyncMock) as pending,
+        ):
+            remaining = await ts._dispatch_streak_notify(
+                ORG,
+                data=_deactivated_data(),
+                threshold=5,
+                reason="no_delivery",
+                pipeline_name="p",
+                redis_client=redis_client,
+                notify_budget=0,
+                delta=delta,
+            )
+        assert remaining == 0
+        notify.assert_not_awaited()
+        pending.assert_awaited_once()
+        assert delta["notify_deferred"] == 1
+        assert delta["notify_failed"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -2060,6 +2109,60 @@ def _claimed_cron_trip(trigger_id: uuid.UUID = TRIGGER_ID, **overrides: Any) -> 
     return data
 
 
+class _CountSession:
+    """Session double for ``_count_recent_streak_deactivations``.
+
+    Routes the ``SELECT count(*)`` to a canned value and records every
+    statement so the test can assert which audit stream the query scoped to.
+    """
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+        self.executed: list[Any] = []
+        self.begin_cm = _Begin()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _Begin:
+        return self.begin_cm
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append(stmt)
+        r = MagicMock()
+        r.scalar_one.return_value = self._count
+        return r
+
+
+class TestCountRecentDeactivations:
+    """The deactivation count is scoped to one audit stream when a type is given."""
+
+    @pytest.mark.asyncio
+    async def test_cron_type_scopes_to_cron_stream(self) -> None:
+        session = _CountSession(2)
+        factory = MagicMock(return_value=session)
+        with patch.object(ch, "_set_rls_org", new_callable=AsyncMock):
+            count = await ts._count_recent_streak_deactivations(factory, ORG, hours=24, trigger_type="cron")
+        assert count == 2
+        compiled = str(session.executed[0].compile(compile_kwargs={"literal_binds": True}))
+        assert ts.CRON_STREAK_DEACTIVATION_EVENT_TYPE in compiled
+        assert ts.STREAK_DEACTIVATION_EVENT_TYPE not in compiled
+
+    @pytest.mark.asyncio
+    async def test_ongoing_type_scopes_to_ongoing_stream(self) -> None:
+        session = _CountSession(1)
+        factory = MagicMock(return_value=session)
+        with patch.object(ch, "_set_rls_org", new_callable=AsyncMock):
+            count = await ts._count_recent_streak_deactivations(factory, ORG, hours=24, trigger_type="ongoing")
+        assert count == 1
+        compiled = str(session.executed[0].compile(compile_kwargs={"literal_binds": True}))
+        assert ts.STREAK_DEACTIVATION_EVENT_TYPE in compiled
+        assert ts.CRON_STREAK_DEACTIVATION_EVENT_TYPE not in compiled
+
+
 class _ClaimSession:
     """Session double for ``_claim_cron_streak_alert``'s three reads.
 
@@ -2384,6 +2487,32 @@ class TestCronSweep:
         assert summary["errors"] == 1
         assert summary["tripped"] == 0
         notify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cron_claim_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A cancellation while claiming a cron trip is re-raised, never
+        swallowed as an isolated per-trigger error — a cancelled sweep must
+        actually stop, not report a clean tick."""
+        _patch_env(monkeypatch)
+        cron = _cron_sweep_trigger()
+        delta: dict[str, Any] = dict.fromkeys(ts._SWEEP_SUMMARY_KEYS, 0)
+
+        async def _cancel(*args: Any, **kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        with (
+            patch.object(ts, "_claim_cron_streak_alert", new_callable=AsyncMock, side_effect=_cancel),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await ts._handle_cron_notify_trip(
+                MagicMock(),
+                ORG,
+                cron,
+                delta=delta,
+                notify_budget=ts._STREAK_NOTIFY_MAX_PER_TICK,
+                redis_client=AsyncMock(),
+            )
+        assert delta["errors"] == 0
 
 
 class TestCronAuditStreams:
