@@ -1459,7 +1459,7 @@ async def eval_coverage(
     covered_count = 0
     nodes_result: list[dict[str, Any]] = []
     for n in nodes_raw:
-        nid = str(n.get("id", ""))
+        nid = str(n.get("id") or "")
         name = n.get("name") or n.get("label", "") or nid
         count = eval_count_by_node.get(nid, 0)
         has_evals = count > 0

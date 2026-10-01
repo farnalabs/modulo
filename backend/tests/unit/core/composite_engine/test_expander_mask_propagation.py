@@ -152,7 +152,8 @@ async def test_snapshot_hop_carries_real_credential_from_save_as_composite() -> 
         _scalar_result(template),  # 4 composite template (expander)
         _scalar_result(0),  # 5 snapshot version max
         _scalars_result([]),  # 6 guardrail rows
-        unlock_result,  # 7 pg_advisory_unlock
+        _scalars_result([]),  # 7 policy-gate rows (FAR-967 chunk 10 pin loader)
+        unlock_result,  # 8 pg_advisory_unlock
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
