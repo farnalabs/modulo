@@ -473,6 +473,7 @@ export default {
       "context_json": "Context JSON",
       "raw_events": "Raw Events ({count})",
       "no_raw_events_loaded": "No raw events loaded.",
+      "no_raw_events_description": "Events for this group will appear here once they are ingested.",
       "events_of": "{count} of {total} events",
       "previous": "Previous",
       "next": "Next"
