@@ -442,6 +442,10 @@ async def _read_streak_outcomes(
                 "classification": classification.get("value"),
                 "reason": classification.get("reason"),
                 "completed_at": completed_at.isoformat() if completed_at is not None else None,
+                # FAR-1373 — tolerant read: records written before FAR-1336
+                # are six-key and carry no such key, so this is None for them.
+                # None must NEVER read as "verified" downstream (FAR-1373).
+                "delivery_confidence": classification.get("delivery_confidence"),
             }
         )
     return last_outcomes
@@ -515,7 +519,7 @@ async def get_trigger_streak_status(
             "threshold": int,                # configured max_no_delivery_streak
             "state": "ok" | "deactivated" | "unconfigured",
             "deactivated_reason": "no_delivery_streak" | "config_failure" | None,
-            "last_outcomes": [{run_id, classification, reason, completed_at}],  # <=5, newest first
+            "last_outcomes": [{run_id, classification, reason, completed_at, delivery_confidence}],  # <=5, newest first
         }
 
     The reader degrades PER SUB-READ, never as one big try/except: a failure

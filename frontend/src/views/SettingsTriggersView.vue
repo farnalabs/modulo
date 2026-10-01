@@ -163,6 +163,12 @@
                       <span :class="outcomeBadgeClass(o.classification)" class="rounded-full px-2 py-0.5 font-medium">
                         {{ outcomeLabel(o.classification) }}
                       </span>
+                      <span
+                        v-if="o.delivery_confidence === 'self_reported'"
+                        class="outcome-confidence rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                        :title="$t('views.SettingsTriggersView.outcome_confidence_self_reported_detail')"
+                        :aria-label="$t('views.SettingsTriggersView.outcome_confidence_self_reported_detail')"
+                      >{{ $t('views.SettingsTriggersView.outcome_confidence_self_reported') }}</span>
                       <span class="text-muted-foreground">{{ o.reason || '—' }}</span>
                       <span class="ml-auto text-muted-foreground">{{ formatTimestamp(o.completed_at ?? null) }}</span>
                     </li>
@@ -550,6 +556,9 @@ interface StreakOutcome {
   classification?: string | null
   reason?: string | null
   completed_at?: string | null
+  // FAR-1373: absent/null on legacy (pre-FAR-1336) records — an unknown
+  // confidence must never read as verified, so no qualifier renders for it.
+  delivery_confidence?: string | null
 }
 
 interface StreakStatus {

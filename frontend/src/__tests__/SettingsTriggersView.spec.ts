@@ -507,6 +507,101 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(wrapper.text()).toContain('pr_merged')
   })
 
+  it('FAR-1373: renders a visible qualifier for a self-reported outcome', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({
+          streak_status: streakStatus({
+            streak: 1,
+            last_outcomes: [
+              {
+                run_id: 'r1',
+                classification: 'delivered',
+                reason: 'pr_merged',
+                completed_at: '2026-08-01T00:00:00Z',
+                delivery_confidence: 'self_reported',
+              },
+            ],
+          }),
+        }),
+      ],
+    })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]').trigger('click')
+    await flush()
+
+    const qualifier = wrapper.find('.outcome-confidence')
+    expect(qualifier.exists()).toBe(true)
+    expect(qualifier.text()).toContain('Self-reported')
+    // Not tooltip-only: the qualifier text is visible in the DOM, and the
+    // full explanation is exposed to assistive tech via aria-label + title.
+    const detail = "This delivery verdict is self-reported by the run's own output. It has not been verified against a source of truth."
+    expect(qualifier.attributes('aria-label')).toBe(detail)
+    expect(qualifier.attributes('title')).toBe(detail)
+  })
+
+  it('FAR-1373: renders NO qualifier for an outcome without delivery_confidence (legacy record)', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({
+          streak_status: streakStatus({
+            streak: 1,
+            last_outcomes: [
+              {
+                run_id: 'r1',
+                classification: 'delivered',
+                reason: 'pr_merged',
+                completed_at: '2026-08-01T00:00:00Z',
+                // legacy six-key record: no delivery_confidence at all
+              },
+            ],
+          }),
+        }),
+      ],
+    })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]').trigger('click')
+    await flush()
+
+    // The outcome row itself still renders (badge + reason + timestamp) ...
+    expect(wrapper.text()).toContain('pr_merged')
+    // ... but no confidence qualifier: an unknown confidence must never read
+    // as verified (or as any other asserted state).
+    expect(wrapper.find('.outcome-confidence').exists()).toBe(false)
+  })
+
+  it('FAR-1373: renders NO qualifier when delivery_confidence is explicitly null', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({
+          streak_status: streakStatus({
+            streak: 1,
+            last_outcomes: [
+              {
+                run_id: 'r1',
+                classification: 'delivered',
+                reason: 'pr_merged',
+                completed_at: '2026-08-01T00:00:00Z',
+                delivery_confidence: null,
+              },
+            ],
+          }),
+        }),
+      ],
+    })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]').trigger('click')
+    await flush()
+
+    expect(wrapper.find('.outcome-confidence').exists()).toBe(false)
+  })
+
   it('FIX 4: a failed toggle shows an inline row error without wiping the loaded list', async () => {
     ;(api.POST as any).mockRejectedValue(new Error('network down'))
     const wrapper = mountView(fakeJwt('admin'), { ...baseListData, items: [ongoing()] })

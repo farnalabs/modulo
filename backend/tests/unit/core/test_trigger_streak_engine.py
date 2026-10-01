@@ -1690,6 +1690,54 @@ class TestGetTriggerStreakStatus:
         assert status["last_outcomes"][0]["run_id"]
 
     @pytest.mark.asyncio
+    async def test_last_outcomes_surface_delivery_confidence(self) -> None:
+        """FAR-1373 — the projection carries ``delivery_confidence`` when the
+        stored record has it (FAR-1336 eight-key shape), so the readout can
+        qualify a self-reported verdict instead of presenting it as confirmed."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            outcome_rows=[
+                (
+                    uuid.uuid4(),
+                    {
+                        "value": "delivered",
+                        "reason": "pr_merged",
+                        "delivery_confidence": "self_reported",
+                    },
+                    now,
+                ),
+            ]
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "seeded outcome must surface"
+        assert status["last_outcomes"][0]["delivery_confidence"] == "self_reported"
+
+    @pytest.mark.asyncio
+    async def test_last_outcomes_legacy_record_without_delivery_confidence_is_none(self) -> None:
+        """FAR-1373 — a legacy six-key record (written before FAR-1336, no
+        ``delivery_confidence`` key) projects ``delivery_confidence: None``
+        without raising: an unknown confidence must never read as verified."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        legacy_record = {
+            "value": "delivered",
+            "reason": "pr_merged",
+            "delivered_pr_urls": [],
+            "computed_at": now.isoformat(),
+            "work_intact": True,
+            "declared_success_nodes": 1,
+        }
+        assert "delivery_confidence" not in legacy_record, "fixture must model the pre-FAR-1336 shape"
+        session = _StatusSession(outcome_rows=[(uuid.uuid4(), legacy_record, now)])
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "legacy outcome must surface"
+        assert status["last_outcomes"][0]["delivery_confidence"] is None
+        # The four pre-existing keys are untouched by the additive projection.
+        assert status["last_outcomes"][0]["classification"] == "delivered"
+        assert status["last_outcomes"][0]["reason"] == "pr_merged"
+        assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
+        assert status["last_outcomes"][0]["run_id"]
+
+    @pytest.mark.asyncio
     async def test_outcomes_query_binds_oid_and_tid(self) -> None:
         """FIX 2 — the outcomes sub-read must execute with the raw boundary
         fragment's ``:oid`` / ``:tid`` bind params supplied. The ORM auto-binds
