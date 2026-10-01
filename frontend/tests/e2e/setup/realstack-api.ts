@@ -77,25 +77,30 @@ const LOGIN_BACKOFF_MS = 2_000
 // still fails the journey instead of hanging it.
 const API_ATTEMPTS = 4
 const API_BACKOFF_BASE_MS = 1_000
+// Per-attempt request deadline, re-armed inside the retry loop so the linear
+// backoff between attempts is never charged against a later attempt's timeout
+// budget.
+const API_TIMEOUT_MS = 20_000
 
 /**
  * Re-issue `fetch` while it returns an explicit transient 5xx status, with the
  * bounded linear backoff shared by `apiFetch` and `fireWebhook` (the
- * attempt/backoff policy lives in one place). A transport error (timeout /
- * reset) is deliberately NOT caught here: on a non-idempotent request the
- * server may have committed before the socket dropped, so re-issuing it could
- * double-apply — and the observed staging failures are all explicit 5xx
- * responses, which the API guarantees are rolled back. The body is read once,
- * after the final attempt, so a retried request never consumes it twice.
+ * attempt/backoff policy lives in one place). Each attempt gets a fresh
+ * `API_TIMEOUT_MS` deadline, so the backoff between attempts cannot consume a
+ * later attempt's headroom. A transport error (timeout / reset) is deliberately
+ * NOT caught here: on a non-idempotent request the server may have committed
+ * before the socket dropped, so re-issuing it could double-apply — and the
+ * observed staging failures are all explicit 5xx responses, which the API
+ * guarantees are rolled back. The body is read once, after the final attempt,
+ * so a retried request never consumes it twice.
  */
 async function fetchWithTransientRetry(
   url: string,
   init: RequestInit,
-  attempts = API_ATTEMPTS,
 ): Promise<{ status: number; text: string }> {
   for (let attempt = 1; ; attempt++) {
-    const res = await fetch(url, init)
-    if (isTransientHttpStatus(res.status) && attempt < attempts) {
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(API_TIMEOUT_MS) })
+    if (isTransientHttpStatus(res.status) && attempt < API_ATTEMPTS) {
       await new Promise((resolve) => setTimeout(resolve, API_BACKOFF_BASE_MS * attempt))
       continue
     }
@@ -153,7 +158,6 @@ export async function apiFetch<T>(
       Authorization: `Bearer ${token}`,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
   })
   let parsed: T | null = null
   if (text) {
@@ -705,7 +709,6 @@ export async function fireWebhook(apiBase: string, triggerId: string, payload: R
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(20_000),
   })
   let parsed: { run_id: string | null; status: string } | null = null
   try {
