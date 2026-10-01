@@ -387,6 +387,19 @@ jobs:
               else
                 echo "$pr" >> /tmp/approved_prs.json
                 APPROVED_COUNT=$((APPROVED_COUNT + 1))
+                # Workflow-touching PR detection (2026-10-01 defect): a PR that
+                # modifies .github/workflows/* can only be merged by a
+                # workflows-capable credential - GITHUB_TOKEN (the github-actions
+                # App) has no `workflows` permission under `permissions:` at all.
+                # Emit a distinct, searchable annotation for every queued PR that
+                # carries one so a workflow PR can never be silently stuck again.
+                WF_COUNT=$(gh api "repos/${{ github.repository }}/pulls/$NUM/files?per_page=100" \
+                  --jq '[.[].filename | select(startswith(".github/workflows/"))] | length' 2>/dev/null || echo "")
+                case "$WF_COUNT" in
+                  0|"") ;;
+                  *[!0-9]*) ;;
+                  *) echo "::warning::PR #$NUM modifies .github/workflows/* — requires a workflow-scoped merge" ;;
+                esac
               fi
             else
               echo "not approved yet -- skipping"
@@ -734,17 +747,34 @@ jobs:
 
       - name: Push merge-queue branch (for reference)
         if: steps.merge.outputs.merged_count != '0'
+        env:
+          # Workflow-scoped PAT: the reference branch can contain merged
+          # .github/workflows/* changes, which GITHUB_TOKEN (the github-actions
+          # App) can NEVER push - GitHub has no `workflows` permission key for
+          # the App token at all (2026-10-01: reference pushes were rejected
+          # server-side with "refusing to allow a GitHub App to create or update
+          # workflow ... without `workflows` permission").
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
+          # Route BOTH git auth mechanisms to the same PAT: the workflow-level
+          # GIT_CONFIG_* insteadOf below rewrites the push URL with
+          # GITHUB_TOKEN, and actions/checkout persists a GITHUB_TOKEN
+          # basic-auth extraheader in .git/config. Whichever one git honours,
+          # it must be the workflow-scoped PAT for this push.
+          GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.MODULO_REVIEWBOT_TOKEN }}@github.com/.insteadOf'
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          # Best-effort: GITHUB_TOKEN cannot carry the `workflows` permission, so
-          # pushing a merged branch that modifies .github/workflows/* is rejected.
-          # The reference branch is a debug aid only - a rejection must not abort
-          # the queue before the real gates (migration heads, backend, frontend) run.
+          # Best-effort: the reference branch is a debug aid only - a rejection
+          # must not abort the queue before the real gates (migration heads,
+          # backend, frontend) run.
+          if [ -n "$GH_TOKEN" ]; then
+            git config --local --replace-all "http.https://github.com/.extraheader" \
+              "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          fi
           if git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1; then
             echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
           else
-            echo "::warning::Reference push rejected (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission). Queue continues without a reference branch."
+            echo "::warning::Reference push failed (workflow-scoped PAT rejected or network error - see git output above). Queue continues without a reference branch."
           fi
 
       - name: Initialize failure tracking
@@ -870,6 +900,17 @@ jobs:
         if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          # Workflows-capable credential, used ONLY for PRs that touch
+          # .github/workflows/* (selected per-PR in the loop below).
+          # MODULO_REVIEWBOT_TOKEN is a classic PAT (vault: github-reviewbot-pat,
+          # login modulo-reviewbot) whose X-OAuth-Scopes include `workflow` and
+          # whose repo permissions include push:true on farnalabs/modulo (both
+          # probed live 2026-10-01). GITHUB_TOKEN - the github-actions App
+          # installation token - has no `workflows` permission key at all and
+          # never can, so GitHub refuses it server-side on any PR that modifies
+          # a workflow file (2026-10-01: merge-queue run 36798142570, PR #1127
+          # stuck approved + green for ~21h behind a silently-successful run).
+          WORKFLOW_PAT: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
           # FAR-530: the merge step's own output is the authoritative record of
           # which PRs squash-merged into the queue branch (oldest first). It does
           # not depend on ref ordering the way a git-log range scrape does.
@@ -950,7 +991,33 @@ jobs:
              # No post-approval non-merge code (merge-only head moves keep approval valid).
              echo "  PR #$NUM ${GUARD_OUT#*|}"
 
-            if gh pr merge --squash "$NUM" 2>&1; then
+            # Workflow-scoped merge credential, selected per-PR (Wall A / Wall B,
+            # 2026-10-01). A PR that touches .github/workflows/* merges with the
+            # workflows-capable PAT; every other PR keeps `github.token` so its
+            # merge behaviour stays byte-identical - including the deliberate
+            # push-event suppression that the manual 'Trigger main CI and deploy
+            # after merge' step below is built around (GITHUB_TOKEN-authored
+            # merges fire no push:main workflows; PAT merges do, which would
+            # double-run ci.yml/deploy.yml AND newly fire bdd.yml,
+            # main-integration.yml, fast-lane-post-merge.yml and
+            # publish-images.yml on every ordinary merge).
+            MERGE_TOKEN="$GH_TOKEN"
+            WF_COUNT=$(gh api "repos/${{ github.repository }}/pulls/$NUM/files?per_page=100" \
+              --jq '[.[].filename | select(startswith(".github/workflows/"))] | length' 2>/dev/null || echo "")
+            case "$WF_COUNT" in
+              0|"") ;;
+              *[!0-9]*)
+                echo "  PR #$NUM: could not determine workflow-file status (got '$WF_COUNT') - merging with github.token" ;;
+              *)
+                if [ -z "$WORKFLOW_PAT" ]; then
+                  echo "::error::PR #$NUM modifies .github/workflows/* but secrets.MODULO_REVIEWBOT_TOKEN is empty - GITHUB_TOKEN cannot merge it (the GitHub App has no workflows permission)."
+                  FAILED="$FAILED $NUM"
+                  continue
+                fi
+                MERGE_TOKEN="$WORKFLOW_PAT"
+                echo "  PR #$NUM modifies .github/workflows/* - merging with the workflow-scoped PAT" ;;
+            esac
+            if GH_TOKEN="$MERGE_TOKEN" gh pr merge --squash "$NUM" 2>&1; then
               echo "    PR #$NUM merged --"
               GH_MERGED="$GH_MERGED $NUM"
               # Delete the PR's source branch right after a successful merge
@@ -999,7 +1066,10 @@ jobs:
           # in $FAILED we do NOT close, comment, or delete the branch: we emit a
           # loud warning and leave the PR open for the next cycle to retry.
           # `failed_gh_merge` is still written to $GITHUB_OUTPUT below because
-          # downstream steps read it.
+          # downstream steps read it - and the job's FINAL step turns a non-empty
+          # list into a ::error:: + a FAILED run, so a PR left unmerged can never
+          # again hide behind a green 'Merge: Queue' conclusion (2026-10-01:
+          # every tick concluded success while PR #1127 sat unmerged).
           for NUM in $FAILED; do
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo "::warning::PR #$NUM: squash-merge attempt failed; PR stays OPEN for the next queue cycle (not closed). See run $RUN_URL for the outcome and logs."
@@ -1595,18 +1665,32 @@ jobs:
       # If CI failed or conflicts -- preserve for fixer
       - name: Preserve merge-queue branch on CI failure
         if: failure() && steps.merge.outputs.merged_count != '0'
+        env:
+          # Same workflow-scoped PAT as the reference push: the preserved branch
+          # can contain merged .github/workflows/* changes, which GITHUB_TOKEN
+          # (the github-actions App) can never push - it has no `workflows`
+          # permission at all (2026-10-01).
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN }}
+          # Route BOTH git auth mechanisms to the same PAT (see the reference
+          # push step): workflow-level GIT_CONFIG_* insteadOf rewrites the push
+          # URL with GITHUB_TOKEN, and actions/checkout persists a GITHUB_TOKEN
+          # extraheader. Whichever git honours, it must be the PAT here.
+          GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.MODULO_REVIEWBOT_TOKEN }}@github.com/.insteadOf'
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          # Best-effort: same limitation as the reference push - GITHUB_TOKEN cannot
-          # push branches that modify .github/workflows/*. If the preserve push fails,
-          # the fixer still receives the notification (with the merged PRs), so the
-          # branch is a convenience, not a hard requirement.
+          # Best-effort: if the preserve push fails, the fixer still receives
+          # the notification (with the merged PRs), so the branch is a
+          # convenience, not a hard requirement.
+          if [ -n "$GH_TOKEN" ]; then
+            git config --local --replace-all "http.https://github.com/.extraheader" \
+              "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          fi
           if git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1; then
             echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
             echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
           else
-            echo "::warning::Could not preserve merge-queue branch (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission)."
+            echo "::warning::Could not preserve merge-queue branch (workflow-scoped PAT rejected or network error - see git output above)."
           fi
 
       - name: Notify branch-fixer on CI failure
@@ -1671,3 +1755,31 @@ jobs:
             echo "::error::Branch Fixer webhook dispatch failed (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-queue CI-failure notification was not delivered."
             exit 1
           fi
+
+      # The run's verdict on unmerged PRs. MUST stay the LAST step of this job:
+      # placed here, every downstream success()-gated step (ticket close, CI/deploy
+      # dispatch, cleanup, self-chain) has already run for the PRs that DID merge,
+      # and the failure()-gated Branch Fixer notification has already run (or been
+      # correctly skipped) for real CI failures - so this step fails the run for
+      # exactly one reason: a PR the queue attempted to merge and could not.
+      #
+      # 2026-10-01 defect: `gh pr merge` failures were recorded, warned about, and
+      # then swallowed - every tick concluded `success` while PR #1127 sat approved,
+      # CI-green and unmerged for ~21 hours (Wall A: GitHub App has no `workflows`
+      # permission; Wall B: gh's client-side blockedReason refused before calling
+      # the API). The queue also merges other PRs behind a failure, so the run
+      # looked healthy. A silent success is what hid the bug - this step removes it.
+      - name: Fail the run when a PR was left unmerged
+        if: always() && steps.ghmerge.outputs.failed_gh_merge != ''
+        env:
+          FAILED_PRS: ${{ steps.ghmerge.outputs.failed_gh_merge }}
+        shell: bash
+        run: |
+          LIST="PR #${FAILED_PRS// /, #}"
+          echo "::error::Merge queue could not merge ${LIST} this tick - the PR(s) stay OPEN for the next cycle, but this run is FAILED so a PR left unmerged can never be reported as a silent success. Per-PR reasons are in the 'Merge source PRs via gh pr merge' step logs."
+          {
+            echo "## Merge queue: PR(s) left unmerged"
+            echo ""
+            echo "${LIST} failed to merge this tick and remain open. This run is marked failed so the outcome is visible."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
