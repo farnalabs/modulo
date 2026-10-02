@@ -67,6 +67,45 @@ function isTransientHttpStatus(status: number): boolean {
   return status === 502 || status === 503 || status === 504
 }
 
+/**
+ * An API helper response that carried a non-success HTTP status. Carrying the
+ * status (rather than stringifying it into the message) lets the HITL recovery
+ * distinguish a transient infrastructure 5xx — which must NOT be reported as a
+ * product failure — from a deterministic 4xx/application error, which must.
+ */
+export class HttpStatusError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'HttpStatusError'
+    this.status = status
+  }
+}
+
+/**
+ * True when `err` is a transient infrastructure failure of the kind the
+ * realstack harness deliberately tolerates:
+ *
+ * - an explicit transient HTTP 5xx (502/503/504) — the staging DB-blip class
+ *   that rolls back and is safe to re-issue, or
+ * - a transient transport failure (timeout / network reset) that never reached
+ *   the API, so no server state was observed.
+ *
+ * Used by the HITL recovery to classify a run that never completed: a run left
+ * claimed-but-undecided because every re-issue was refused by a sustained
+ * outage is an unobservable-infrastructure condition, NOT a failed product
+ * assertion. A real outage mixes both — a 503 might be interleaved with a
+ * gateway timeout — so classifying only the explicit-5xx arm would wrongly
+ * report the mixed storm as a wedge. A deterministic response that DID reach
+ * the API (4xx / application 500) is deliberately NOT transient: it is
+ * observable evidence of a real defect and must still hard-fail.
+ */
+function isTransientHttpError(err: unknown): boolean {
+  if (err instanceof HttpStatusError) return isTransientHttpStatus(err.status)
+  return isTransientTransportError(err)
+}
+
 // apiLogin is a single idempotent-safe ARRANGE call, so a short bounded retry
 // with a fixed backoff is enough to ride out a staging blip.
 const LOGIN_ATTEMPTS = 3
@@ -453,7 +492,7 @@ type PendingReviewsResponse = components['schemas']['PendingReviewsResponse']
 export async function getRunPendingReviews(apiBase: string, token: string, runId: string): Promise<PendingReview[]> {
   const res = await apiFetch<PendingReviewsResponse>(apiBase, token, 'GET', `/api/v1/runs/${runId}/hitl/pending`)
   if (res.status !== 200) {
-    throw new Error(`[realstack] pending-review list failed: ${res.status} ${res.text.slice(0, 300)}`)
+    throw new HttpStatusError(`[realstack] pending-review list failed: ${res.status} ${res.text.slice(0, 300)}`, res.status)
   }
   return res.body?.reviews ?? []
 }
@@ -468,7 +507,7 @@ export async function claimReview(apiBase: string, token: string, runId: string,
     {},
   )
   if (res.status !== 200 || !res.body?.claim_token) {
-    throw new Error(`[realstack] review claim failed: ${res.status} ${res.text.slice(0, 300)}`)
+    throw new HttpStatusError(`[realstack] review claim failed: ${res.status} ${res.text.slice(0, 300)}`, res.status)
   }
   return res.body.claim_token
 }
@@ -487,7 +526,7 @@ export async function approveReview(
     notes: notes ?? null,
   })
   if (res.status !== 200) {
-    throw new Error(`[realstack] review approve failed: ${res.status} ${res.text.slice(0, 300)}`)
+    throw new HttpStatusError(`[realstack] review approve failed: ${res.status} ${res.text.slice(0, 300)}`, res.status)
   }
 }
 
@@ -509,21 +548,40 @@ export async function approveReview(
  * ``awaiting_human``) is refused — only the API claim path re-issues a fresh
  * token while the gate is claimed (FAR-686 same-account re-claim). Recovery
  * MUST therefore go through this API path, never the UI.
+ *
+ * Returns a classification of the attempt so the caller can tell an
+ * infrastructure storm (every step refused with a transient 5xx) from a real
+ * wedge (a re-issue that reached the API but the run still did not complete).
  */
+export interface ReissueOutcome {
+  /**
+   * True when the attempt failed with a transient infrastructure condition —
+   * an explicit 502/503/504, or a transport failure that never reached the
+   * API. False when it succeeded or reached the API with a deterministic
+   * response.
+   */
+  transientFailure: boolean
+  /** Human-readable result/error detail, for diagnostics and skip reasons. */
+  detail: string
+}
+
 export async function reissueApproveBestEffort(
   apiBase: string,
   token: string,
   runId: string,
   notes?: string,
-): Promise<void> {
+): Promise<ReissueOutcome> {
   try {
     const reviews = await getRunPendingReviews(apiBase, token, runId)
     const review = reviews.find((r) => r.decision === null)
-    if (!review) return
+    if (!review) return { transientFailure: false, detail: 'no undecided review' }
     const claimToken = await claimReview(apiBase, token, runId, review.review_id)
     await approveReview(apiBase, token, runId, review.review_id, claimToken, notes)
+    return { transientFailure: false, detail: 'ok' }
   } catch (err) {
-    console.warn('[realstack] HITL recovery: approve re-issue failed:', err instanceof Error ? err.message : String(err))
+    const detail = err instanceof Error ? err.message : String(err)
+    console.warn('[realstack] HITL recovery: approve re-issue failed:', detail)
+    return { transientFailure: isTransientHttpError(err), detail }
   }
 }
 
@@ -552,7 +610,20 @@ export async function reissueApproveBestEffort(
  * bounded), so the caller can size the deadline with headroom under its hook.
  * The caller should extend its ``beforeEach`` hook timeout (``test.setTimeout``)
  * so the test timeout shared with the hook covers deadline + teardown.
+ *
+ * Returns a discriminated outcome rather than throwing on a non-complete run:
+ * a run that never completed because EVERY re-issue failed transiently — an
+ * explicit 5xx or a transport failure that never reached the API
+ * (``infra-blocked``) could not be observed at all, so it is an infrastructure
+ * outage, not a product failure; a run that stayed incomplete despite a
+ * re-issue reaching the API with a deterministic response (``wedged``) is a
+ * real defect and the caller MUST fail on it.
  */
+export type HitlRecoveryResult =
+  | { kind: 'complete'; status: string }
+  | { kind: 'infra-blocked'; lastError: string }
+  | { kind: 'wedged'; lastError: string }
+
 export async function waitForRunCompletionWithHitlRecovery(
   apiBase: string,
   token: string,
@@ -567,12 +638,13 @@ export async function waitForRunCompletionWithHitlRecovery(
     /** Approve note carried on each re-issue. */
     notes?: string
   },
-): Promise<string> {
+): Promise<HitlRecoveryResult> {
   const startedAt = opts.startedAt ?? Date.now()
   const deadline = startedAt + opts.deadlineMs
   const pollMs = opts.pollMs ?? 5_000
   let status = ''
   let lastError: unknown
+  const reissues: ReissueOutcome[] = []
   // Attempt 0 never re-issues the decision (only attempt > 0 does). If the
   // deadline has already elapsed, the in-loop poll is skipped (remaining clamps
   // to 0) and the single observation happens via the last-chance re-observe
@@ -581,7 +653,7 @@ export async function waitForRunCompletionWithHitlRecovery(
   for (let attempt = 0; ; attempt++) {
     if (attempt > 0) {
       // Re-issue the decision through the API (see reissueApproveBestEffort).
-      await reissueApproveBestEffort(apiBase, token, runId, opts.notes)
+      reissues.push(await reissueApproveBestEffort(apiBase, token, runId, opts.notes))
     }
     const remaining = Math.max(0, Math.min(pollMs, deadline - Date.now()))
     if (remaining > 0) {
@@ -606,13 +678,32 @@ export async function waitForRunCompletionWithHitlRecovery(
       lastError = err
     }
   }
-  if (status !== 'complete') {
-    throw new Error(
-      `run ${runId} did not complete after re-issuing the approve decision; ` +
-        `last poll: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
-    )
+  if (status === 'complete') return { kind: 'complete', status }
+  // A run left incomplete is `infra-blocked` ONLY when at least one re-issue
+  // was attempted AND every one of them failed transiently (an explicit
+  // 502/503/504, or a transport failure that never reached the API). Any
+  // re-issue that reached the API (approve succeeded, or returned a
+  // deterministic 4xx/application 500) means the run was observable but did
+  // not complete — a real defect the caller must fail on, never hide behind a
+  // skip.
+  if (reissues.length > 0 && reissues.every((r) => r.transientFailure)) {
+    return { kind: 'infra-blocked', lastError: reissues[reissues.length - 1].detail }
   }
-  return status
+  // `lastError` can legitimately be unset here: if the caller's budget was
+  // already exhausted (or every poll returned a non-`complete` status without
+  // throwing), no poll ever failed, so there is no error to surface. Report a
+  // descriptive fallback rather than the literal "undefined" string so a
+  // wedge is diagnosable from the skip/failure reason alone.
+  const lastErrorDetail =
+    lastError instanceof Error
+      ? lastError.message
+      : lastError != null
+        ? String(lastError)
+        : `run ${runId} did not complete within the ${opts.deadlineMs} ms recovery budget, and no status poll failed`
+  return {
+    kind: 'wedged',
+    lastError: lastErrorDetail,
+  }
 }
 
 export interface RunIoResponse {
