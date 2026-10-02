@@ -134,6 +134,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
         _scalars_result([backend]),
         _scalar_result(4),
         _scalars_result([guardrail_row]),
+        _scalars_result([]),  # policy gate rows (empty - no gates bound)
         unlock_result,
     ]
 
@@ -239,6 +240,7 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
         _scalar_result(1),  # snapshot_version max
         _scalars_result([]),  # guardrail rows (none bound)
+        _scalars_result([]),  # policy gate rows (none bound)
         unlock_result,
     ]
 
@@ -296,6 +298,7 @@ async def test_snapshot_carries_pipeline_default_autonomy_level(autonomy: str | 
         _scalars_result([edge]),
         _scalar_result(1),
         _scalars_result([]),
+        _scalars_result([]),  # policy gate rows (none bound)
         MagicMock(),
     ]
 
@@ -344,6 +347,7 @@ async def test_snapshot_carries_pipeline_max_autonomy_level(ceiling: str | None)
         _scalars_result([edge]),
         _scalar_result(1),
         _scalars_result([]),
+        _scalars_result([]),  # policy gate rows (none bound)
         MagicMock(),
     ]
 
@@ -420,6 +424,7 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
         _scalar_result(1),  # snapshot_version max
         _scalars_result([]),  # guardrail rows (none bound)
+        _scalars_result([]),  # policy gate rows (none bound)
         MagicMock(),  # unlock
     ]
 
@@ -430,7 +435,7 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     assert snapshot.pipeline_id == pipeline_id
     mock_sleep.assert_awaited_once_with(SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS)
     # Lock held across the copy, released exactly once in the finally path.
-    assert session.execute.await_count == 7
+    assert session.execute.await_count == 8
 
 
 async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:

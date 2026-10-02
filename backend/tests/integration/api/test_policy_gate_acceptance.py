@@ -775,3 +775,73 @@ async def test_pg_spec_c18_versions_bump_monotonically_with_snapshot(
     got_missing = await client.get(f"/api/v1/evals/{missing}/policy-gate", headers=env.headers)
     assert got_missing.status_code == 404, got_missing.text
     assert got_missing.json()["detail"] == _MSG_EVAL_NOT_FOUND
+
+
+async def test_pg_spec_toggle_gate_disable_reenable_roundtrip(
+    db_engine: AsyncEngine, client: AsyncClient, env: _Env
+) -> None:
+    """FAR-967 F9 (operator-control acceptance): ``PATCH .../policy-gate/toggle``
+    flips ``enabled`` end-to-end against real Postgres — the advisory lock is a
+    real ``pg_advisory_xact_lock`` here, the symmetric CHECK invariant holds
+    after EACH flip, the response reports the new state, the gate VERSION is
+    untouched (a toggle is state, not an edit), and the
+    ``policy_gate.toggled`` audit event lands."""
+    node_id = uuid.uuid4()
+    eval_id = await _seed_eval(
+        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
+    )
+    created = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
+    assert created.status_code == 201, created.text
+    gate_id = created.json()["id"]
+    assert created.json()["enabled"] is True
+
+    async def _db_state() -> tuple[bool, object, object, int]:
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT enabled, enabled_at, disabled_at, version FROM policy_gates "
+                        "WHERE id = :id AND deleted_at IS NULL"
+                    ),
+                    {"id": str(gate_id)},
+                )
+            ).one()
+        return row[0], row[1], row[2], int(row[3])
+
+    # ── disable ────────────────────────────────────────────────────────────
+    disabled = await client.patch(
+        f"/api/v1/evals/{eval_id}/policy-gate/toggle", json={"enabled": False}, headers=env.headers
+    )
+    assert disabled.status_code == 200, disabled.text
+    body = disabled.json()
+    assert body["id"] == gate_id
+    assert body["enabled"] is False
+    assert body["enabled_at"] is None
+    assert body["disabled_at"] is not None
+
+    enabled, enabled_at, disabled_at, version = await _db_state()
+    assert enabled is False
+    assert enabled_at is None
+    assert disabled_at is not None, "the disabled state must satisfy the symmetric CHECK"
+    assert version == 1, "a toggle must not bump the gate version"
+
+    # ── re-enable ──────────────────────────────────────────────────────────
+    reenabled = await client.patch(
+        f"/api/v1/evals/{eval_id}/policy-gate/toggle", json={"enabled": True}, headers=env.headers
+    )
+    assert reenabled.status_code == 200, reenabled.text
+    body2 = reenabled.json()
+    assert body2["enabled"] is True
+    assert body2["enabled_at"] is not None
+    assert body2["disabled_at"] is None
+
+    enabled, enabled_at, disabled_at, version = await _db_state()
+    assert enabled is True
+    assert enabled_at is not None
+    assert disabled_at is None, "re-enabling must clear disabled_at (symmetric CHECK)"
+    assert version == 1
+
+    # ── audit trail: created + one toggled event per flip ──────────────────
+    events = await _audit_event_types(db_engine, env.org_id, gate_id)
+    assert "policy_gate.created" in events
+    assert events.count("policy_gate.toggled") == 2

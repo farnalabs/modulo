@@ -40,6 +40,7 @@ from modulo.db.crud.run import (
     _is_valid_int_limit_value,
     _is_valid_pin_entry,
     _json_bind,
+    _load_snapshot_policy_gate_pins,
     _merge_rank_guarded_refs,
     _percentile,
     _pin_fingerprint_mismatch,
@@ -293,6 +294,36 @@ class TestGuardrailHelpers:
 
     def test_is_valid_pin_entry_empty_name(self):
         assert _is_valid_pin_entry({"name": ""}) is False
+
+
+# ---------------------------------------------------------------------------
+# _load_snapshot_policy_gate_pins
+# ---------------------------------------------------------------------------
+
+
+class TestLoadSnapshotPolicyGatePins:
+    async def test_returns_row_triple_when_present(self):
+        session = AsyncMock()
+        result = MagicMock()
+        result.one_or_none = MagicMock(return_value=(["pin"], "abc", 3))
+        session.execute = AsyncMock(return_value=result)
+
+        pins, fingerprint, version = await _load_snapshot_policy_gate_pins(session, uuid.uuid4(), uuid.uuid4())
+
+        assert (pins, fingerprint, version) == (["pin"], "abc", 3)
+
+    async def test_fails_open_to_none_triple_on_db_error(self):
+        """A SQLAlchemy failure on the pin-column read (unmigrated DB during
+        bluegreen, or an unresolvable column) must fail OPEN to ``(None, None,
+        None)`` so the run falls back to the live gates, never crash."""
+        from sqlalchemy.exc import SQLAlchemyError
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=SQLAlchemyError("boom"))
+
+        pins, fingerprint, version = await _load_snapshot_policy_gate_pins(session, uuid.uuid4(), uuid.uuid4())
+
+        assert (pins, fingerprint, version) == (None, None, None)
 
 
 # ---------------------------------------------------------------------------

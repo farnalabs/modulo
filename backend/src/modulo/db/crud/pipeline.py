@@ -936,6 +936,14 @@ async def _clone_snapshots(
             model_backend_pins_json=copy.deepcopy(snap["model_backend_pins_json"]),
             composite_bindings_json=copy.deepcopy(snap["composite_bindings_json"]),
             parameter_bindings_json=copy.deepcopy(snap["parameter_bindings_json"]),
+            # Pin pairs the clone must carry verbatim (FAR-967 F10): a
+            # cloned snapshot with NULL pin columns would silently run the
+            # clone's runs UNPINNED (falling back to live gates/guardrails),
+            # dropping the snapshot-integrity guarantee the source had.
+            guardrail_pins_json=copy.deepcopy(snap.get("guardrail_pins_json")),
+            guardrail_pins_fingerprint=snap.get("guardrail_pins_fingerprint"),
+            policy_gate_pins_json=copy.deepcopy(snap.get("policy_gate_pins_json")),
+            policy_gate_pins_fingerprint=snap.get("policy_gate_pins_fingerprint"),
             tag=snap["tag"],
             notes=snap["notes"],
             default_autonomy_level=snap["default_autonomy_level"],
@@ -1000,6 +1008,11 @@ def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dic
         "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
         "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
         "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
+        # Pin pairs carried through clone (FAR-967 F10) — see _clone_snapshots.
+        "guardrail_pins_json": copy.deepcopy(snap.guardrail_pins_json),
+        "guardrail_pins_fingerprint": snap.guardrail_pins_fingerprint,
+        "policy_gate_pins_json": copy.deepcopy(snap.policy_gate_pins_json),
+        "policy_gate_pins_fingerprint": snap.policy_gate_pins_fingerprint,
         "tag": snap.tag,
         "notes": snap.notes,
         "default_autonomy_level": snap.default_autonomy_level,

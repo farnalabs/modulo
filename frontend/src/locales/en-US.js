@@ -1560,7 +1560,16 @@ export default {
         "unsavedChangesConfirm": "You have unsaved policy gate changes. Discard them?",
         "dirtyConfirmAriaLabel": "Unsaved changes confirmation",
         "dirtyConfirmStay": "Keep editing",
-        "dirtyConfirmProceed": "Discard"
+        "dirtyConfirmProceed": "Discard",
+        "enabledLabel": "Enabled",
+        "enabledDescription": "The gate is active and will be evaluated at run start.",
+        "disabledLabel": "Disabled",
+        "disabledDescription": "The gate is disabled and will be skipped during evaluation.",
+        "toggleAriaLabel": "Enable or disable policy gate",
+        "toggleDisableBlockWarning": "This gate is set to block runs. Disabling it will stop blocking runs until re-enabled.",
+        "toggleDisableConfirm": "Are you sure you want to disable this policy gate?",
+        "toggleConfirmDisable": "Disable",
+        "toggleError": "Failed to toggle the policy gate. Please try again."
       }
     },
     "RunDetailView": {

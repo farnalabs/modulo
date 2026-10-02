@@ -27,7 +27,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0273_runs_dispatch_phase"
+_HEAD_MIGRATION = "0274_policy_gate_pin_fingerprint_operator_control"
 
 
 def _source(name: str) -> str:

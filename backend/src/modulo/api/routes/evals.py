@@ -17,6 +17,11 @@ URLs:
     GET    /api/v1/eval-suites/{id}   — get eval suite (team-scoped)
     PATCH  /api/v1/eval-suites/{id}   — update eval suite (team-scoped, admin only)
     DELETE /api/v1/eval-suites/{id}   — delete eval suite (team-scoped, admin only)
+    POST   /api/v1/evals/{eval_id}/policy-gate       — create/replace a policy gate
+    PUT    /api/v1/evals/{eval_id}/policy-gate       — update a policy gate's action
+    DELETE /api/v1/evals/{eval_id}/policy-gate       — soft-delete a policy gate
+    GET    /api/v1/evals/{eval_id}/policy-gate       — read a policy gate
+    PATCH  /api/v1/evals/{eval_id}/policy-gate/toggle — enable/disable a policy gate
 """
 
 import logging
@@ -268,6 +273,19 @@ class PolicyGateUpdateRequest(BaseModel):
     action: str = Field(pattern=_POLICY_GATE_ACTION_PATTERN)
 
 
+class PolicyGateToggleRequest(BaseModel):
+    """Request body for PATCH /api/v1/evals/{eval_id}/policy-gate/toggle.
+
+    Toggles the operator safety control (CO-5).  Setting ``enabled``
+    atomically stamps the corresponding timestamp so the symmetric CHECK
+    constraint (ck_policy_gates_enabled_timestamps) is always satisfied.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool
+
+
 class PolicyGateResponse(BaseModel):
     """Response body for GET /api/v1/evals/{eval_id}/policy-gate."""
 
@@ -277,6 +295,10 @@ class PolicyGateResponse(BaseModel):
     version: int
     pre_version_raw: dict[str, Any] | None = None
     warnings: list[dict[str, str]] = Field(default_factory=list)
+    # FAR-967 operator safety control (CO-5): surfaced on every gate read.
+    enabled: bool
+    enabled_at: datetime | None = None
+    disabled_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +310,11 @@ _GATE_ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(:key))"
 _GATE_LOCK_KEY_PREFIX = "policy_gate:"
 
 
-async def _with_gate_advisory_lock(
+async def _with_gate_advisory_lock[T](
     eval_id: uuid.UUID,
     session: AsyncSession,
-    fn: Callable[..., Awaitable[PolicyGate]],
-) -> PolicyGate:
+    fn: Callable[..., Awaitable[T]],
+) -> T:
     """Execute *fn* while holding a transaction-scoped advisory lock keyed on *eval_id*.
 
     The lock is released when the transaction commits or rolls back.
@@ -308,6 +330,11 @@ async def _with_gate_advisory_lock(
     and short enough to surface contention to the caller quickly.
     On timeout, PostgreSQL raises ``statement_timeout`` (SQLSTATE 57014)
     which surfaces as a 503 Service Unavailable.
+
+    Generic over the wrapped callable's return type (FAR-967 F6): the
+    toggle handler wraps its load-and-mutate under the SAME lock, so the
+    helper must be able to return whatever the callback produces — not only
+    a ``PolicyGate``.
     """
     lock_key = f"{_GATE_LOCK_KEY_PREFIX}{eval_id}"
     await session.execute(text(_GATE_LOCK_TIMEOUT_SQL))
@@ -327,6 +354,10 @@ async def _create_or_replace_gate(
     requests), soft-deletes any conflicting gate, then inserts the new one.
     A second ``UniqueViolation`` while holding the lock is a true race
     that could not be resolved → 409 Conflict.
+
+    FAR-967 F6: when a live gate is replaced, the new row INHERITS its
+    ``enabled``/``enabled_at``/``disabled_at`` state — a replace never
+    silently re-enables a gate the operator disabled.
     """
 
     async def _do_insert() -> PolicyGate:
@@ -338,17 +369,41 @@ async def _create_or_replace_gate(
             )
         )
         live_gate = existing.scalar_one_or_none()
+        now = datetime.now(UTC)
         if live_gate is not None:
             # Soft-delete the conflicting gate
             live_gate.deleted_at = func.now()
             live_gate.deleted_by = principal.account_id
-        # Insert the new gate
+            # FAR-967 F6: the replacement INHERITS the operator's enabled
+            # state (and its timestamp pair).  A create-or-replace must
+            # never silently re-enable a gate the operator deliberately
+            # disabled — enforcement state is operator product state (CO-5),
+            # not something a re-POST should reset.
+            enabled = live_gate.enabled
+            enabled_at = live_gate.enabled_at
+            disabled_at = live_gate.disabled_at
+            # Normalise so the symmetric CHECK constraint
+            # (ck_policy_gates_enabled_timestamps) is satisfied on insert
+            # even if the carried row somehow arrived with a missing stamp.
+            if enabled and enabled_at is None:
+                enabled_at = now
+            if not enabled and disabled_at is None:
+                disabled_at = now
+        else:
+            # Fresh create — enabled at creation time so the symmetric CHECK
+            # constraint is satisfied at insert (CO-2).
+            enabled = True
+            enabled_at = now
+            disabled_at = None
         new_gate = PolicyGate(
             organisation_id=principal.organisation_id,
             eval_id=eval_id,
             node_id=gate_fields["node_id"],
             action=gate_fields["action"],
             version=1,
+            enabled=enabled,
+            enabled_at=enabled_at,
+            disabled_at=disabled_at,
         )
         session.add(new_gate)
         await session.flush()
@@ -562,6 +617,10 @@ async def create_policy_gate(
                         "eval_id": str(eval_id),
                         "action": gate.action,
                         "version": gate.version,
+                        # FAR-967 F6: enforcement state is part of what the
+                        # event records — an auditor must see whether the
+                        # gate this event created/replaced is active.
+                        "enabled": gate.enabled,
                     },
                 )
             except Exception:
@@ -613,6 +672,9 @@ async def create_policy_gate(
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         warnings=author_warnings,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
     )
 
 
@@ -713,6 +775,9 @@ async def update_policy_gate(
                         "action": gate.action,
                         "version": gate.version,
                         "pre_version_raw": snapshot,
+                        # FAR-967 F6: record whether the gate this event
+                        # updated is actively enforcing (see create event).
+                        "enabled": gate.enabled,
                     },
                 )
             except Exception:
@@ -754,6 +819,9 @@ async def update_policy_gate(
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
         warnings=author_warnings,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
     )
 
 
@@ -860,6 +928,178 @@ async def delete_policy_gate(
         ) from None
 
 
+# ---------------------------------------------------------------------------
+# Policy Gate toggle endpoint (FAR-967, CO-5 / CO-3)
+# ---------------------------------------------------------------------------
+
+_CODE_EVALS_POLICY_GATE_TOGGLE = "evals.policy_gate.toggle"
+_MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION = (
+    "Toggle would violate the enabled/disabled timestamp constraint. This is a server-side bug — please report it."
+)
+
+
+@router.patch(
+    "/evals/{eval_id}/policy-gate/toggle",
+    # FAR-967 F2: a break-glass principal must not be able to flip
+    # enforcement — the toggle carries the same mint deny as create /
+    # update / delete.
+    dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        404: {"description": "Policy gate not found"},
+        503: {"description": "Service Unavailable — lock timeout"},
+        500: {"description": "Internal Server Error"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_POLICY_GATE_TOGGLE)
+async def toggle_policy_gate(
+    eval_id: uuid.UUID,
+    req: PolicyGateToggleRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.update"),
+) -> PolicyGateResponse:
+    """Enable or disable a PolicyGate (admin only).
+
+    Toggles the ``enabled`` boolean and atomically stamps the corresponding
+    timestamp so the symmetric CHECK constraint is always satisfied:
+
+    - ``enabled=true``  → ``enabled_at=now(), disabled_at=NULL``
+    - ``enabled=false`` → ``disabled_at=now(), enabled_at=NULL``
+
+    The gate inherits the eval's edit permission (OQ-3).  ``enabled`` is
+    product state toggled via API/UI only — NEVER declarative / config-as-code
+    (CO-3).
+
+    The load-and-mutate runs under the same transaction-scoped advisory lock
+    as create-or-replace (FAR-967 F6) so a concurrent replace cannot
+    interleave with this read-modify-write.  A lock-acquisition timeout
+    (SQLSTATE 57014) → 503.
+
+    An audit-log entry is emitted (best-effort, same path as create/update).
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can toggle policy gates",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Load eval (404 when missing); the gate load happens under the
+            # advisory lock below so it serialises against a concurrent
+            # create-or-replace (FAR-967 F6).
+            await _load_eval_or_404(session, eval_id, principal)
+
+            now = datetime.now(UTC)
+
+            async def _do_toggle() -> tuple[PolicyGate, bool]:
+                gate = await _load_live_gate_or_404(session, eval_id, principal)
+                pre_enabled = gate.enabled
+
+                # Atomic toggle with timestamp stamping.
+                # The CHECK constraint will reject invalid states at the DB layer;
+                # we set the fields correctly so that never fires.
+                if req.enabled:
+                    gate.enabled = True
+                    gate.enabled_at = now
+                    gate.disabled_at = None
+                else:
+                    gate.enabled = False
+                    gate.disabled_at = now
+                    gate.enabled_at = None
+                return gate, pre_enabled
+
+            gate, pre_enabled = await _with_gate_advisory_lock(eval_id, session, _do_toggle)
+
+            # Audit log (best-effort — a failed audit never blocks the toggle)
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="policy_gate.toggled",
+                    actor_user_id=principal.account_id,
+                    resource_type="policy_gate",
+                    resource_id=gate.id,
+                    payload_json={
+                        "eval_id": str(eval_id),
+                        "enabled": req.enabled,
+                        "pre_enabled": pre_enabled,
+                        "action": gate.action,
+                    },
+                )
+            except Exception:
+                _log.exception(
+                    "policy_gate.toggle_audit_failed",
+                    extra={
+                        "org_id": str(principal.organisation_id),
+                        "eval_id": str(eval_id),
+                    },
+                )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception(_CODE_EVALS_POLICY_GATE_TOGGLE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        # Lock-acquisition timeout (SQLSTATE 57014) — same mapping as create.
+        if sqlstate_of(exc) == "57014":
+            _log.warning(
+                "policy_gate.toggle_lock_timeout",
+                extra={"org_id": str(principal.organisation_id), "eval_id": str(eval_id)},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_MSG_POLICY_GATE_LOCK_TIMEOUT,
+            ) from None
+        # Detect CHECK-constraint violation (symmetric timestamp invariant)
+        if sqlstate_of(exc) == "23514":
+            _log.warning(
+                "policy_gate.toggle_check_violation",
+                extra={
+                    "org_id": str(principal.organisation_id),
+                    "eval_id": str(eval_id),
+                    "enabled": req.enabled,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=_MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION,
+            ) from None
+        _log.exception(_CODE_EVALS_POLICY_GATE_TOGGLE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except Exception:
+        _log.exception(
+            "policy_gate.toggle_error",
+            extra={
+                "org_id": str(principal.organisation_id),
+                "eval_id": str(eval_id),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while toggling the policy gate.",
+        ) from None
+
+    return PolicyGateResponse(
+        id=gate.id,
+        eval_id=gate.eval_id,
+        action=gate.action,
+        version=gate.version,
+        pre_version_raw=gate.pre_version_raw,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
+    )
+
+
 @router.get(
     "/evals/{eval_id}/policy-gate",
     responses={
@@ -916,6 +1156,9 @@ async def get_policy_gate(
         action=gate.action,
         version=gate.version,
         pre_version_raw=gate.pre_version_raw,
+        enabled=gate.enabled,
+        enabled_at=gate.enabled_at,
+        disabled_at=gate.disabled_at,
     )
 
 
@@ -1216,7 +1459,7 @@ async def eval_coverage(
     covered_count = 0
     nodes_result: list[dict[str, Any]] = []
     for n in nodes_raw:
-        nid = str(n.get("id", ""))
+        nid = str(n.get("id") or "")
         name = n.get("name") or n.get("label", "") or nid
         count = eval_count_by_node.get(nid, 0)
         has_evals = count > 0

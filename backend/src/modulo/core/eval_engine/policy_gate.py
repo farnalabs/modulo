@@ -20,12 +20,20 @@ independent of PolicyGate validity).
 Guardrail-type evals are no longer special-cased at evaluation time
 (chunk 8 retired the ``GUARDRAIL_EVAL_TYPE`` re-check branch); they
 resolve through the same code path as non-guardrail evals.
+
+Pin-set integrity fingerprint (FAR-967 chunk 10, §3.3):
+    ``fingerprint_policy_gate_pins()`` computes a deterministic SHA-256
+    over the canonical JSON of a policy-gate pin set.  Unlike the
+    predecessor ``fingerprint_guardrail_pins()``, an empty list ``[]``
+    produces a deterministic digest (empty ≠ absent).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -229,3 +237,60 @@ def validate_binding(
 
     if violations:
         raise PolicyGateBindingViolationError(violations)
+
+
+# ---------------------------------------------------------------------------
+# Pin-set integrity fingerprint (FAR-967 chunk 10, §3.3)
+# ---------------------------------------------------------------------------
+
+
+def fingerprint_policy_gate_pins(
+    pins: Sequence[Any] | None,
+) -> str | None:
+    """Deterministic fingerprint of a serialized policy-gate pin set.
+
+    Computed over the canonical JSON of EVERY entry in the pin list (sorted
+    so re-serialization order never changes the digest).  A snapshot's
+    ``policy_gate_pins_json`` is fingerprinted at snapshot creation; the
+    run-start replay seam re-computes the fingerprint of the LOADED pins
+    and compares — a mismatch means the pins were tampered with (or
+    drifted) since creation and the replay fails closed as a mechanism
+    error.
+
+    **Every entry is covered verbatim** — dict or not.  Filtering
+    non-dict entries out of the digest (the pre-FAR-967-F5 behaviour)
+    meant appending a junk entry to the pin list left the digest
+    unchanged, so corruption went undetected and the junk later crashed
+    per-entry consumers.  Entries are now digested as-is, so ANY
+    appended/removed/replaced element — including a non-dict — flips the
+    digest and fails closed at run start.
+
+    **IMPORTANT — different empty-set semantics from the predecessor:**
+
+    - ``None`` (absent) → returns ``None`` (legacy snapshot, no pins)
+    - ``[]`` (empty list) → returns a **deterministic digest** (canonical
+      ``[]`` JSON).  An empty pin set means "zero gates pinned" — a
+      deliberate state, NOT indistinguishable from absent.
+    - Non-empty list → returns SHA-256 hex digest over all entries.
+
+    An implementer MUST NOT call ``fingerprint_guardrail_pins()`` for
+    Policy Gate pins — the semantics are wrong (the predecessor collapses
+    empty and absent into the same ``None`` return).
+    """
+    if pins is None:
+        return None
+    # Empty list IS a deliberate state — produce a deterministic digest.
+    if not pins:
+        canonical = "[]"
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if isinstance(pins, (str, bytes)) or not isinstance(pins, Sequence):
+        # Corrupt non-list top-level value: fail closed with a digest that
+        # can never equal a stored (list-computed) fingerprint, without
+        # raising out of the run-start seam.
+        canonical = "[<corrupt-policy-gate-pin-set>]"
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    # Cover every entry verbatim (dict, str, int, list — anything JSON-ish),
+    # so no element of the pin set is invisible to the integrity check.
+    items = sorted(json.dumps(pin, sort_keys=True, separators=(",", ":"), default=str) for pin in pins)
+    canonical = "[" + ",".join(items) + "]"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
