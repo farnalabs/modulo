@@ -3,7 +3,7 @@ Feature: Marcus — CISO at a Regulated Organisation
   I want every agent action to be auditable, attributable, and reversible
   So that I can approve AI-in-SDLC without expanding our regulatory risk
 
-  @goal-marcus-immutable-audit @awaiting-implementation
+  @goal-marcus-immutable-audit
   Scenario: Marcus verifies the audit log is append-only
     Given an audit event has been written for a run action
     When I attempt to delete or alter the audit event

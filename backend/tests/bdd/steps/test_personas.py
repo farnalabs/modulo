@@ -9,6 +9,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 from pytest_bdd import given, parsers, scenarios, then, when
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from modulo.core.audit_logger.append_only import (
+    AppendOnlyViolationError,
+    register_append_only_guard,
+)
+from modulo.db.models.audit_event import AuditEvent
+from modulo.db.models.base import Base
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -208,6 +217,99 @@ def only_admins_view_edit_backend(ctx):
     assert admin_principal["org_role"] == "admin"
     assert viewer_principal["org_role"] != "admin"
     assert runner_principal["org_role"] != "admin"
+
+
+# ===========================================================================
+# Marcus: goal-marcus-immutable-audit
+# ===========================================================================
+
+
+@given("an audit event has been written for a run action")
+def marcus_audit_event_written(request):
+    """Persist a REAL AuditEvent row in an in-memory engine."""
+    register_append_only_guard()
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=[AuditEvent.__table__])
+    session = Session(engine)
+    row = AuditEvent(
+        organisation_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        event_type="hitl.review.approved",
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        resource_type="run",
+        resource_id=uuid.uuid4(),
+        payload_json={"decision": "approved"},
+    )
+    session.add(row)
+    session.commit()
+    request.node._audit_engine = engine
+    request.node._audit_event_id = row.id
+    request.node._audit_original_event_type = row.event_type
+    session.close()
+
+
+def _attempt_audit_mutation(engine, event_id: uuid.UUID, mutation: str) -> bool:
+    """Return True when the append-only guard rejects the mutation.
+
+    Fresh session per attempt (a guard rejection deactivates the offending
+    session), hitting the REAL ``register_append_only_guard`` listeners on
+    the persisted row — never a mock.
+    """
+    session = Session(engine)
+    try:
+        row = session.get(AuditEvent, event_id)
+        if mutation == "delete":
+            session.delete(row)
+        else:
+            row.event_type = "tampered.audit.event"
+        session.commit()
+        return False
+    except AppendOnlyViolationError:
+        return True
+    finally:
+        session.close()
+
+
+@when("I attempt to delete or alter the audit event")
+def marcus_attempt_mutation(request):
+    request.node._audit_update_blocked = _attempt_audit_mutation(
+        request.node._audit_engine, request.node._audit_event_id, "update"
+    )
+    request.node._audit_delete_blocked = _attempt_audit_mutation(
+        request.node._audit_engine, request.node._audit_event_id, "delete"
+    )
+
+
+@then("the operation is rejected")
+def marcus_operation_rejected(request):
+    assert request.node._audit_update_blocked, "the append-only guard did not reject UPDATE"
+    assert request.node._audit_delete_blocked, "the append-only guard did not reject DELETE"
+
+
+@then("the audit log contains the original unmodified event")
+def marcus_original_event_preserved(request):
+    engine = request.node._audit_engine
+    session = Session(engine)
+    try:
+        row = session.get(AuditEvent, request.node._audit_event_id)
+        assert row is not None, "the audit event no longer exists"
+        assert row.event_type == request.node._audit_original_event_type, (
+            "the audit event was altered despite the append-only guard"
+        )
+    finally:
+        session.close()
+
+
+@then("the audit log is timestamped and attributable")
+def marcus_audit_timestamped_attributable(request):
+    engine = request.node._audit_engine
+    session = Session(engine)
+    try:
+        row = session.get(AuditEvent, request.node._audit_event_id)
+        assert row is not None, "the audit event no longer exists"
+        assert row.created_at is not None, "the audit event is not timestamped"
+        assert row.account_id is not None, "the audit event is not attributable to an actor"
+    finally:
+        session.close()
 
 
 # ===========================================================================
