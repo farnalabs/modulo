@@ -538,11 +538,12 @@ export async function reissueApproveBestEffort(
  * recovery re-claim has flipped the run to ``claimed`` the UI claim is refused
  * outright — see ``reissueApproveBestEffort``). Because each re-issue can
  * itself 503 AFTER its claim has already moved the run to ``claimed``, the run
- * is left claimed-but-undecided, which the committed-decision reconcile
- * (``cron_helpers`` F6a, ``stale_window`` ~= 2 min) then resumes to completion
- * via ``resume_run``. The re-issue cadence below is therefore ALIGNED to that
- * reconcile cadence: it keeps a fresh decision committed for the reconcile to
- * pick up, rather than hammering an endpoint that 503s under the same load.
+ * can be left claimed-but-undecided. This loop's own re-issue is what carries
+ * it: the committed-decision reconcile (``cron_helpers`` F6a) deliberately
+ * SKIPS a claimed-but-undecided row unconditionally (FAR-541 FIX C —
+ * ``_awaiting_human_has_committed_decision``), so it is NOT a backstop for this
+ * state. The re-issue cadence below is kept short so a fresh decision commits
+ * promptly without hammering an endpoint that 503s under the same load.
  *
  * The wait is bounded by a TOTAL DEADLINE measured from ``startedAt`` (not a
  * fixed iteration count, whose worst case (iterations x poll budget) overran
@@ -589,6 +590,19 @@ export async function waitForRunCompletionWithHitlRecovery(
       }
     }
     if (status === 'complete' || Date.now() >= deadline) break
+  }
+  // Last-chance re-observe at the boundary: a re-issue's own transient retry
+  // (up to ~4x20 s under a 503 storm) can run past the deadline, so the final
+  // in-loop poll budget clamps to 0 and the loop breaks WITHOUT observing a run
+  // that completed during that re-issue. One short bounded observe past the
+  // deadline restores that boundary without unbounded overrun — a genuinely
+  // wedged run still fails.
+  if (status !== 'complete') {
+    try {
+      status = await pollRunStatus(apiBase, token, runId, (s) => s === 'complete', { timeoutMs: pollMs })
+    } catch (err) {
+      lastError = err
+    }
   }
   if (status !== 'complete') {
     throw new Error(

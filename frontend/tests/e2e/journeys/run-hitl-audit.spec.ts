@@ -126,9 +126,9 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       // run completes; the bounded recovery loop and its rationale live in
       // waitForRunCompletionWithHitlRecovery. It is deadline-bounded (never a
       // fixed iteration count, whose worst case overran the hook timeout), and
-      // its re-issue cadence is aligned to the committed-decision reconcile
-      // stale window so a claimed-but-undecided run is still carried to
-      // completion by the backend rather than reported as a hard failure.
+      // its own re-issue — NOT the committed-decision reconcile, which skips a
+      // claimed-but-undecided row unconditionally — is what carries that run to
+      // completion rather than reporting it as a hard failure.
       const status = await waitForRunCompletionWithHitlRecovery(apiBase, token, run.run_id, {
         deadlineMs: 90_000,
         notes: 'E2E journey approval',
