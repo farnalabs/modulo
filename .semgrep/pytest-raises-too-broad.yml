@@ -1,4 +1,4 @@
-﻿rules:
+rules:
   - id: pytest-raises-too-broad
     patterns:
       - pattern: |

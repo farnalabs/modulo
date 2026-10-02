@@ -1,4 +1,4 @@
-﻿rules:
+rules:
   - id: model-dump-exclude-none-in-patch
     patterns:
       - pattern: $MODEL.model_dump(exclude_none=True)
