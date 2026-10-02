@@ -83,14 +83,16 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
   })
 
   test('claiming and approving the gate completes the run, lists it, and audits the decision', { tag: '@regression' }, async ({ page, env }) => {
-    // The recovery wait below is bounded by a 90 s deadline, but that budget
+    // The recovery wait below is bounded by a 180 s deadline, but that budget
     // is spent inside the shared test/beforeEach-hook timeout and the test
     // timeout BEGINS at hook start (Playwright: the test timeout is shared
     // with beforeEach). This test's beforeEach logs in and runs the
     // afterEach-style cleanup, so the default 180 s can be consumed by the
     // hook before the deadline is honoured. Extend the timeout so deadline +
-    // teardown always fit.
-    test.setTimeout(240_000)
+    // teardown always fit: the pre-recovery setup (including a park poll
+    // bounded at 120 s), the 180 s recovery, the post-recovery UI/audit
+    // assertions and teardown.
+    test.setTimeout(540_000)
     const apiBase = apiBaseFor(env)
     const token = await apiLogin(env)
     const cleanup: JourneyCleanup = { pipelineIds: [], schemaIds: [], token, apiBase }
@@ -122,15 +124,20 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       // and backend can transiently 503 mid-approve, which leaves the run
       // parked at its still-claimed gate (the UI approve 503s, and a recovery
       // attempt's own approve 503s AFTER its claim has already flipped the run
-      // to `claimed`). Re-issue the decision through the real API until the
-      // run completes; the bounded recovery loop and its rationale live in
+      // to `claimed`). The outage is not always a single blip: the 2026-10-02
+      // staging deploy saw an unbroken 503 storm for ~4.5 minutes, which
+      // outlasted the previous 90 s-per-attempt budget once Playwright's two
+      // retries were spent. Re-issue the decision through the real API until
+      // the run completes; the bounded recovery loop and its rationale live in
       // waitForRunCompletionWithHitlRecovery. It is deadline-bounded (never a
       // fixed iteration count, whose worst case overran the hook timeout), and
       // its own re-issue — NOT the committed-decision reconcile, which skips a
       // claimed-but-undecided row unconditionally — is what carries that run to
-      // completion rather than reporting it as a hard failure.
+      // completion rather than reporting it as a hard failure. Size each
+      // attempt (180 s) so a single attempt rides out a multi-minute outage;
+      // Playwright's two retries stack three such budgets (~9 min total).
       const status = await waitForRunCompletionWithHitlRecovery(apiBase, token, run.run_id, {
-        deadlineMs: 90_000,
+        deadlineMs: 180_000,
         notes: 'E2E journey approval',
       })
       expect(status).toBe('complete')
