@@ -2637,9 +2637,11 @@ class TestCronNotifyPayload:
 
     @pytest.mark.asyncio
     async def test_cron_notify_only_payload(self) -> None:
+        """FAR-1410 — a notify-only trip dispatches its OWN event (nothing was
+        deactivated), not trigger_deactivated."""
         dispatched = await self._dispatch(_claimed_cron_trip())
         payload = dispatched["payload"]
-        assert dispatched["event_type"] == "trigger_deactivated"
+        assert dispatched["event_type"] == "trigger_streak_alert"
         assert payload["trigger_type"] == "cron"
         assert payload["auto_deactivated"] is False
         assert payload["streak"] == 5
@@ -2648,8 +2650,63 @@ class TestCronNotifyPayload:
     async def test_ongoing_payload_defaults_unchanged(self) -> None:
         dispatched = await self._dispatch(_deactivated_data())
         payload = dispatched["payload"]
+        assert dispatched["event_type"] == "trigger_deactivated"
         assert payload["trigger_type"] == "ongoing"
         assert payload["auto_deactivated"] is True
+
+    @pytest.mark.asyncio
+    async def test_cron_opt_in_deactivation_dispatches_trigger_deactivated(self) -> None:
+        """FAR-1410 — a cron that opted in via no_delivery_auto_deactivate DID
+        deactivate, so it keeps trigger_deactivated (the alert event must not
+        swallow a real deactivation)."""
+        dispatched = await self._dispatch(_deactivated_data(trigger_type="cron", auto_deactivated=True))
+        assert dispatched["event_type"] == "trigger_deactivated"
+        assert dispatched["payload"]["trigger_type"] == "cron"
+        assert dispatched["payload"]["auto_deactivated"] is True
+
+    async def _render(self, event_type: str, payload: dict[str, Any]) -> tuple[str, str]:
+        """Render the ACTUAL dispatched payload through the real mapper."""
+        from modulo.core.notifier.event_mapper import NotificationEventMapper
+        from modulo.db.models.notification import Notification
+
+        session = AsyncMock()
+        with patch(
+            "modulo.core.notifier.event_mapper.create_notification",
+            new_callable=AsyncMock,
+            return_value=MagicMock(spec=Notification),
+        ) as mock_create:
+            await NotificationEventMapper().create_from_event(
+                session,
+                org_id=ORG,
+                event_type=event_type,
+                payload=payload,
+            )
+        kwargs = mock_create.await_args.kwargs
+        return str(kwargs["title"]), str(kwargs["body"])
+
+    @pytest.mark.asyncio
+    async def test_cron_notify_only_renders_without_deactivation_claim(self) -> None:
+        """FAR-1410 — end-to-end prove-the-fix: the notify-only trip's rendered
+        subject + body must not claim a deactivation (assert the strings, not
+        just the event name)."""
+        dispatched = await self._dispatch(_claimed_cron_trip())
+        title, body = await self._render(dispatched["event_type"], dispatched["payload"])
+        assert title == "No-delivery streak detected — p"
+        assert "deactivated" not in title
+        assert "was auto-deactivated" not in body
+        assert "No action was taken" in body
+        assert "no_delivery_auto_deactivate" in body
+
+    @pytest.mark.asyncio
+    async def test_cron_deactivation_renders_cron_worded_copy(self) -> None:
+        """FAR-1410 — the cron opt-in deactivation renders type-accurate copy:
+        cron-worded, never 'Ongoing trigger'."""
+        dispatched = await self._dispatch(_deactivated_data(trigger_type="cron", auto_deactivated=True))
+        title, body = await self._render(dispatched["event_type"], dispatched["payload"])
+        assert title == "Cron trigger auto-deactivated — p"
+        assert "Ongoing trigger" not in title
+        assert "Ongoing trigger" not in body
+        assert "no_delivery_auto_deactivate" in body
 
     @pytest.mark.asyncio
     async def test_retry_dispatches_notify_only_member_despite_active_trigger(

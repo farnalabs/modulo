@@ -8,7 +8,8 @@ and the subscribable webhook subset in ``api/routes.admin_notifications.py``
                       claim_expired, hitl_approve_sweep_suspected
   - Runs / cost:      run_failed, run_stalled, budget_exceeded,
                       circuit_breaker_tripped
-  - Triggers:         trigger_deactivated, org_triggers_auto_paused
+  - Triggers:         trigger_deactivated, trigger_streak_alert,
+                      org_triggers_auto_paused
   - Evals:            eval_regression, eval_blocked
   - Feedback/system:  feedback_pending, system_announcement
   - Guardrails:       guardrail_enforcement_gap, guardrail_kill_switch,
@@ -71,6 +72,7 @@ __all__ = [
     "EVENT_RUN_STALLED",
     "EVENT_SYSTEM_ANNOUNCEMENT",
     "EVENT_TRIGGER_DEACTIVATED",
+    "EVENT_TRIGGER_STREAK_ALERT",
     "MAX_ATTEMPTS",
     "MAX_DEAD_LETTERS",
     "RETRY_DELAYS",
@@ -219,9 +221,17 @@ EVENT_EVAL_REGRESSION = "eval_regression"
 EVENT_EVAL_BLOCKED = "eval_blocked"
 EVENT_FEEDBACK_PENDING = "feedback_pending"
 EVENT_SYSTEM_ANNOUNCEMENT = "system_announcement"
-# FAR-190 — an ongoing trigger auto-deactivated after N consecutive no-delivery
-# runs. Payload is sanitised (identifiers/titles + allow-listed reason fields).
+# FAR-190 — a trigger auto-deactivated after N consecutive no-delivery runs
+# (an ongoing trigger, or a cron that opted in via
+# ``no_delivery_auto_deactivate``). Payload is sanitised (identifiers/titles +
+# allow-listed reason fields).
 EVENT_TRIGGER_DEACTIVATED = "trigger_deactivated"
+# FAR-1410 — a notify-only no-delivery streak trip (FAR-1387): the threshold was
+# reached but NOTHING was deactivated — the trip is notify-only unless the cron
+# trigger opted in via ``no_delivery_auto_deactivate``. Kept DISTINCT from
+# EVENT_TRIGGER_DEACTIVATED because operators already filter on that event and
+# reusing it for a no-action trip would corrupt its meaning.
+EVENT_TRIGGER_STREAK_ALERT = "trigger_streak_alert"
 # FAR-1183 — the org cost-controls "Auto-stop on budget exceeded" toggle
 # tripped: the org crossed its daily spend limit / spend ceiling and the
 # org-wide trigger pause engaged automatically. Emitted in addition to the

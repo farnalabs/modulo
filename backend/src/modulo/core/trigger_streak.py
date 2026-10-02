@@ -1372,11 +1372,13 @@ async def _notify_streak_deactivation(
     allow-listed reason fields only — never tokens or raw output. The payload
     carries ``trigger_type`` (``ongoing`` / ``cron``) and ``auto_deactivated``
     so structured consumers (webhooks) can tell a cron notify-only trip from a
-    deactivation. NOTE: the registered event is ``trigger_deactivated`` whose
-    in-app/email templates are ongoing-worded — a distinct cron event type
-    would need registration in three non-engine modules and is tracked as a
-    follow-up; the audit streams (which carry the precise cron event types)
-    remain the authoritative record either way.
+    deactivation — and so can the in-app/email copy: FAR-1410 selects the event
+    from ``auto_deactivated`` (a notify-only trip dispatches
+    ``trigger_streak_alert``, whose copy states that nothing was deactivated; an
+    actual deactivation dispatches ``trigger_deactivated``, whose wording is
+    then rendered per ``trigger_type`` by the mapper). The audit streams (which
+    carry the precise cron event types) remain the authoritative record either
+    way.
 
     Bound: the dispatch runs under ``asyncio.wait_for`` (10s) so a hung endpoint
     can never blow the enclosing 120s dispatcher_reconcile tick — the
@@ -1412,11 +1414,21 @@ async def _notify_streak_deactivation(
     }
     ch = _ch()
     try:
-        from modulo.core.notifier import EVENT_TRIGGER_DEACTIVATED, Notifier
+        from modulo.core.notifier import EVENT_TRIGGER_DEACTIVATED, EVENT_TRIGGER_STREAK_ALERT, Notifier
 
+        # FAR-1410 — pick the event from what actually HAPPENED, not from the
+        # trigger type: a notify-only trip (auto_deactivated=False, today's cron
+        # default) deactivated nothing, so it dispatches trigger_streak_alert;
+        # every real deactivation (ongoing, or a cron that opted in via
+        # no_delivery_auto_deactivate) dispatches trigger_deactivated. Legacy
+        # pending-retry members predate the flag and default to True, keeping
+        # their original deactivation meaning.
+        event_type = (
+            EVENT_TRIGGER_DEACTIVATED if bool(data.get("auto_deactivated", True)) else EVENT_TRIGGER_STREAK_ALERT
+        )
         notifier = Notifier(ch._get_engine(), ch.get_settings().fernet_key)
         results = await asyncio.wait_for(
-            notifier.dispatch_event(org_id, EVENT_TRIGGER_DEACTIVATED, payload),
+            notifier.dispatch_event(org_id, event_type, payload),
             timeout=_STREAK_NOTIFY_TIMEOUT_SECONDS,
         )
     except asyncio.CancelledError:
