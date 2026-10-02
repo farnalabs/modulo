@@ -310,6 +310,14 @@ class IsolationPolicy:
     node's validated multi-host mapping (host -> env-var name) for
     ``scoped`` credentials; ``command_timeout`` bounds each in-sandbox
     step.
+
+    ``guard_owner`` (FAR-1315) is the identity of the NODE claiming the
+    run's one-PR guard slot (the node id). It rides this carrier alongside
+    ``single_pr_per_run`` so ``sandbox_policy``'s run ledger can tell
+    "the same node re-claiming its own slot" (allowed - node retries) from
+    "a different node of the same run" (denied - installed as a
+    pre-planted refusal). Optional and default ``None``, so every policy
+    built without it behaves exactly as before (unowned claim).
     """
 
     read_only: bool = False
@@ -319,6 +327,7 @@ class IsolationPolicy:
     allowed_hosts: dict[str, str] | None = None
     command_timeout: float = 60.0
     single_pr_per_run: bool = False
+    guard_owner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -544,7 +553,7 @@ class RuntimeProvider(ABC):
         provider_ref: str,
         spec: WorkspaceSpec,
         policy: IsolationPolicy,
-    ) -> None:
+    ) -> str | None:
         """Enforce the three named in-sandbox isolation controls (ADR 040).
 
         ``apply_isolation`` is the single owner of in-sandbox enforcement
@@ -557,6 +566,17 @@ class RuntimeProvider(ABC):
         arguments; the ref is the addressing primitive every workspace-
         taking method carries) — and ``spec`` carries the workspace
         attribution context.
+
+        FAR-1315 return contract (an additive widening of the ADR 040
+        ``-> None`` shape, not a redesign): implementations return the one-PR
+        guard's INSTALL STATUS (``installed``/``pre_planted``/``absent``/
+        ``failed``) when ``policy.single_pr_per_run`` armed the guard, else
+        ``None``. The dispatch ``finally`` threads it into
+        ``settle_run_pr_guard`` — only a LIVE install makes a definitive
+        ``receipt=False`` mean "confirmed no create" (an ``absent``/``failed``
+        install leaves the receipt meaningless, since the probe then runs
+        against a path no shim ever wrote). Providers that never install a
+        guard simply return ``None``.
 
         Optional base-class method (ADR 040 "Error honesty": the same
         carve-out from the contract freeze as :meth:`exec_command_stream`,

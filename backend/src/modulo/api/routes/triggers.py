@@ -82,7 +82,8 @@ _MAX_PREVIEW_COUNT = 50
 # the engine's cfg.get() call site in the same change.
 #
 # This is the union of every trigger-engine ``config.get(...)`` read site
-# plus the per-trigger-type fire paths in ``cron_helpers``.  The union is
+# plus the per-trigger-type fire paths in ``cron_helpers`` and the streak
+# engine in ``core/trigger_streak.py``.  The union is
 # accepted regardless of ``trigger_type`` so a key a *different* trigger
 # surface legitimately reads is never rejected on the wrong trigger type.
 # Keep in sync with ``_RECOGNISED_TRIGGER_CONFIG_KEYS`` in
@@ -121,6 +122,12 @@ _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
         "suite_ceiling",
         "entity_thresholds",
         "eval_definition_version",
+        # No-delivery streak config (core/trigger_streak.py — FAR-190/FAR-1387)
+        # threshold + legacy fallback + per-trigger min window + cron opt-in
+        "max_no_delivery_streak",
+        "max_consecutive_failures",
+        "no_delivery_min_window_hours",
+        "no_delivery_auto_deactivate",
     }
 )
 

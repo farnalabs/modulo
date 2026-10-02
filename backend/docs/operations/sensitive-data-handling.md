@@ -74,6 +74,8 @@ Masking is applied at these points:
 | MCP `update_pipeline_graph` tool | `merge_masked_graph_nodes()` before the write; `mask_pipeline_graph_node()` on the response | Same read/write neutrality as the REST graph endpoint |
 | MCP `modulo://pipelines/{id}/snapshots/{snapshot_id}` resource | `mask_pipeline_graph_node()` on each node of `graph_json` before rendering | Same node masking as the REST snapshot detail |
 | `POST /api/v1/library/export/{pipeline_id}?format=v1` | `strip_graph_node_credentials()` on `graph_nodes_json` — **STRIP**, not mask | Credential entries are removed and recorded in `redacted_credentials`, never masked (see §6) |
+| Every `LibraryPrimitiveResponse` read surface (`GET /api/v1/libraries` list / get / create / patch / delete / restore / adapt responses, community contribute + contributions list + admin publish responses, `POST /libraries/community/{id}/install` response, `GET /api/v1/library/contribute` list) — FAR-1380 | `mask_pipeline_graph_node()` on every node inside a **composite** primitive's `content_json` (via the `LibraryPrimitiveResponse._mask_composite_graph_credentials` model validator — one serialization chokepoint shared by all ten surfaces) | Same node masking as the pipeline graph read; non-composite primitives pass through byte-identical |
+| MCP `modulo://library/{type}/{slug}` resource — FAR-1380 | `mask_pipeline_graph_node()` on the composite primitive's `content_json` nodes before rendering the Content Summary | Same node masking as the pipeline graph read |
 
 Graph READ masking must not corrupt data on WRITE: the graph endpoints are
 full-replace, so a PATCH round-tripping a masked GET would otherwise persist
@@ -86,7 +88,13 @@ write. The composite-template write surfaces (create / PATCH / editor PUT /
 save-as-composite) go further (FAR-1374): after the echo-merge, a sentinel the
 merge could not map to a stored value is refused with 422
 (`COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL`) instead of being dropped, so a fresh
-mask sentinel is neither persisted nor silently lost.
+mask sentinel is neither persisted nor silently lost. **The library composite
+write surfaces follow the same FAR-1374 rule (FAR-1380)**:   `POST /api/v1/libraries` create, `PATCH /api/v1/libraries/{id}` and
+`POST /api/v1/libraries/community/contribute` each resolve the submitted
+composite `content_json` nodes against the stored sub-graph via
+`resolve_and_reject_mask_sentinels()` (no stored counterpart on create or
+contribute) — a submitted mask sentinel is refused 422 with the same issue
+code, never persisted.
 **CLI hashing parity (FAR-1232).** The declarative `modulo apply` CLI compares
 its YAML declarations against the API's MASKED reads, so the CLI carries its own
 redaction (`strip_secret_shaped_graph` in `modulo/cli/apply/models.py`): pipeline
@@ -108,7 +116,10 @@ found on: the feedback, HITL, variant-group, and run daily-facts surfaces
 endpoints (node COUNT only, never node contents); the workflow engine internals
 and demo seed fixtures (server-internal, never client-facing). The sentinel-mask
 storage pattern means the org read never exposes a clear secret for these
-surfaces to leak.
+surfaces to leak. **Composite library-primitive content was previously NOT
+masked on any read surface — the FAR-1374 control statement scoped it out
+pending a dedicated ticket; that gap is now closed on every enumerated read
+surface by FAR-1380 (rows above), including the MCP resource detail.**
 
 ### 2. Log redaction
 
@@ -203,6 +214,27 @@ The snapshot's sibling columns (`connector_bindings_json`,
 `:73`) store **scalar metadata only** — ids, names, types — never node
 credential payloads (built by `_build_connector_bindings`,
 `db/crud/pipeline_snapshot.py:231`, and friends). They are out of masking scope.
+
+**Fourth graph-storing entity (FAR-1380): `library_primitives.content_json`** —
+only when `primitive_type = "composite"` (then `content_json` IS a sub-pipeline
+graph: `{"nodes": [...], "edges": [...]}` with the same credential-bearing node
+fields). Non-composite primitives (their `content_json` is agent prompts /
+fixture maps etc.) are out of scope and pass through byte-identical.
+
+| Path (composite primitive) | Coverage |
+|---|---|
+| `GET /api/v1/libraries` (list) | **Masked** — `_mask_composite_graph_credentials` validator (`api/routes/library.py`, LibraryPrimitiveResponse); the list endpoint validates ORM rows into `LibraryPrimitiveResponse` |
+| `GET /api/v1/libraries/{id}` | **Masked** — same validator |
+| `POST /api/v1/libraries` (create response) | **Masked** — same validator; the WRITE is gated: `resolve_and_reject_mask_sentinels(submitted_nodes, None)` refuses a fresh sentinel 422 before the primitive is created |
+| `PATCH /api/v1/libraries/{id}` (rule + response) | **Masked + echo-merge + sentinel 422** — `resolve_and_reject_mask_sentinels(incoming_nodes, stored_nodes)` against the CURRENT sub-graph resolves a round-tripped echo and refuses an unmappable one |
+| `DELETE` / `restore` / `adapt` / community contribute + contributions list + admin publish responses | **Masked** — same validator |
+| `POST /libraries/community/{entry_id}/install` | **Masked** — same validator (installed registry row's content) |
+| `GET /api/v1/library/contribute` (fixture contributions list) | **Masked** — same validator |
+| MCP `modulo://library/{type}/{slug}` resource | **Masked** — nodes masked before the Content Summary render (`api/mcp_server.py`) |
+| MCP `search_library` tool / `modulo://library` resource / REST admin global-search `_search_library` (`api/routes/admin.py:514`) | **No node payload** — ids/names/ratings only; nothing to mask |
+| Community `GET /libraries/community` + `GET /libraries/community/{id}` | **Not in this repo's DB** — the community registry's OWN published blob is remote content (`core/library_service/community.py`); the registry build strips credentials at publish time (its own build-time gate, remote). The *installed* org copy of any composite is masked on read (row above) |
+| `POST /library/{pid}/create-pipeline` / `create-lifecycle-map` / collections install | **Write (store)** — graph/lifecycle content is materialized server-side into real entities; the newly created entity's own read surfaces mask (see the pipeline rows above) |
+| Adaptive org copy (`POST /libraries/{id}/adapt`, MCP `copy_library_primitive`) | **Write (store)** — `_build_copy_args` copies the primitive's `content_json` verbatim into the NEW row (service-level; `core/library_service/__init__.py`); that copy's reads are masked (rows above). A request-scoped echo cannot reach this path — the request carries only an id |
 
 Every serialization path for the three graph entities, one cell per path:
 

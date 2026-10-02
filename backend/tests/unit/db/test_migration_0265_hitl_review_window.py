@@ -13,8 +13,9 @@ Lenses:
   0270_pipeline_snapshots_max_autonomy_ge_default chains onto 0269,
   0271_org_api_keys_revocation_sweep_indexes chains onto 0270,
   0272_oauth_client_revoke_lookup_indexes chains onto 0271,
-  0273_runs_dispatch_phase chains onto 0272, and
-  0274_policy_gate_pin_fingerprint_operator_control chains onto 0273 as the
+  0273_runs_dispatch_phase chains onto 0272,
+  0274_policy_gate_pin_fingerprint_operator_control chains onto 0273, and
+  0275_run_cancel_reason_vocabulary chains onto 0274 as the
   current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -41,7 +42,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0274_policy_gate_pin_fingerprint_operator_control"
+_HEAD_MIGRATION = "0275_run_cancel_reason_vocabulary"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

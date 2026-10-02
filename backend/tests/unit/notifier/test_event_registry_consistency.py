@@ -17,6 +17,9 @@ regression test rather than a one-off correction.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from modulo.api.routes.admin_notifications import AVAILABLE_EVENTS
@@ -28,6 +31,42 @@ from modulo.core.notifier.event_mapper import (
 )
 
 _CONFIGURED_EVENTS = tuple(_EVENT_CONFIG)
+
+# The two en-US event-label maps the UI reads when it renders a registry event
+# as a human-readable name: AdminNotificationDeliveryLogView's delivery-log
+# event filter and TeamNotificationEndpoints' subscription picker. Both are fed
+# from GET /api/v1/admin/notifications/available-events, i.e. AVAILABLE_EVENTS,
+# and both fall back to the raw snake_case name when the key is missing - which
+# is exactly the silent drift this test closes.
+_LOCALE_PATH = Path(__file__).resolve().parents[4] / "frontend" / "src" / "locales" / "en-US.js"
+_EVENT_LABEL_MAPS = (
+    ("views", "AdminNotificationDeliveryLogView"),
+    ("components", "TeamNotificationEndpoints"),
+)
+_LOCALE_PAIR_RE = re.compile(r'"([A-Za-z0-9_]+)"\s*:\s*"([^"]*)"')
+
+
+def _locale_block(text: str, header: str) -> str:
+    """Return the brace-balanced body of the ``"<header>"`` object literal."""
+    start = text.index(header)
+    open_brace = text.index("{", start)
+    depth = 0
+    for offset in range(open_brace, len(text)):
+        char = text[offset]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_brace + 1 : offset]
+    raise AssertionError(f"unterminated locale object for {header!r}")
+
+
+def _event_label_map(section: str, component: str) -> dict[str, str]:
+    text = _LOCALE_PATH.read_text(encoding="utf-8")
+    body = _locale_block(text, f'"{section}": {{')
+    body = _locale_block(body, f'"{component}": {{')
+    return {match.group(1): match.group(2) for match in _LOCALE_PAIR_RE.finditer(body)}
 
 
 def test_available_events_are_not_duplicated() -> None:
@@ -55,3 +94,23 @@ def test_configured_event_has_render_templates(event_type: str) -> None:
     assert event_type in _TITLE_TEMPLATES
     assert event_type in _BODY_TEMPLATES
     assert event_type in _ACTION_URL_TEMPLATES
+
+
+@pytest.mark.parametrize(("section", "component"), _EVENT_LABEL_MAPS)
+def test_available_events_have_frontend_labels(section: str, component: str) -> None:
+    """Every subscribable event must render as a human-readable label, never its
+    raw snake_case name.
+
+    The UI degrades to the raw key when the en-US entry is missing, so an event
+    added to ``AVAILABLE_EVENTS`` without a label still works - it just reads
+    like an identifier in the delivery-log filter and the endpoint editor's
+    picker. That is the ``trigger_streak_alert`` gap FAR-1410 closed.
+    """
+    labels = _event_label_map(section, component)
+    missing = [event for event in AVAILABLE_EVENTS if event not in labels]
+    assert not missing, (
+        f"{section}.{component} is missing en-US labels for {missing}; "
+        f"add them next to the existing event labels in {_LOCALE_PATH}"
+    )
+    blank = [event for event in AVAILABLE_EVENTS if not labels.get(event, "").strip()]
+    assert not blank, f"{section}.{component} has blank labels for {blank}"

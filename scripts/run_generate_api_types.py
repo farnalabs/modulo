@@ -50,6 +50,13 @@ OUTPUT_FILE = str(REPO_ROOT / "frontend" / "src" / "lib" / "api" / _SCHEMA_TS_FI
 # openapi-typescript@7.13.0`) and frontend/package.json (^7.13.0).
 OPENAPI_TYPESCRIPT_VERSION = "7.13.0"
 
+# openapi-typescript imports `typescript` at runtime, but the package does not
+# declare it as a hard dependency. `pnpm dlx` installs it via the frontend
+# lockfile; the npm fallback (`npx`, no lockfile context) must name it
+# explicitly or openapi-typescript crashes on `ts.factory` being undefined.
+# Pinned to frontend/package.json's `typescript` (npm:@typescript/typescript6@^6.0.2).
+TYPESCRIPT_VERSION = "6.0.2"
+
 _TEMPLATE_ENV = {
     "DATABASE_URL": "sqlite+aiosqlite:///TEMPLATE_DB",
     "SECRET_KEY": "a" * 32,
@@ -73,13 +80,45 @@ def _run(cmd: list[str], cwd: str) -> int:
 def _find_pkg_manager() -> str | None:
     """Resolve the package manager binary used to drive `dlx`.
 
-    pnpm is preferred; npm is accepted as a fallback (both support the `dlx`
-    subcommand with the same openapi-typescript invocation). Returns the
-    resolved binary so the command is actually built from it - not just gated.
+    pnpm is preferred; npm is accepted as a fallback. The two managers spell
+    the ephemeral-package runner differently (`pnpm dlx` vs `npm exec`/`npx`),
+    so the caller must build the command from the resolved binary's name.
+    Returns the resolved binary so the command is actually built from it -
+    not just gated.
     """
     if sys.platform == "win32":
         return shutil.which("pnpm.cmd") or shutil.which("pnpm") or shutil.which("npm.cmd") or shutil.which("npm")
     return shutil.which("pnpm") or shutil.which("npm")
+
+
+def _dlx_command(pkg_manager: str, schema_path: str, out_path: str) -> list[str]:
+    """Build the ephemeral openapi-typescript invocation for *pkg_manager*.
+
+    ``pnpm dlx`` and ``npx`` are the npm/pnpm equivalents: npm has no ``dlx``
+    subcommand (`npm dlx` exits "Unknown command"), so an npm fallback must use
+    ``npx --yes`` or the schema-freshness gate dies on the sandbox. npx runs
+    openapi-typescript from an isolated cache with no project lockfile, so it
+    must also install its undeclared ``typescript`` peer explicitly — pinned to
+    frontend/package.json's ``typescript`` version.
+    """
+    pkg = f"openapi-typescript@{OPENAPI_TYPESCRIPT_VERSION}"
+    base = Path(pkg_manager).name.lower()
+    if base.startswith("pnpm"):
+        return [pkg_manager, "dlx", pkg, schema_path, "--output", out_path]
+    return [
+        pkg_manager,
+        "exec",
+        "--yes",
+        "--package",
+        pkg,
+        "--package",
+        f"typescript@{TYPESCRIPT_VERSION}",
+        "--",
+        "openapi-typescript",
+        schema_path,
+        "--output",
+        out_path,
+    ]
 
 
 def _generate_schema(tempdir: str) -> tuple[int, str]:
@@ -126,7 +165,7 @@ def _generate_schema(tempdir: str) -> tuple[int, str]:
         print("Neither pnpm nor npm found on PATH", file=sys.stderr)
         return 1, out_path
     rc = _run(
-        [pkg_manager, "dlx", f"openapi-typescript@{OPENAPI_TYPESCRIPT_VERSION}", schema_path, "--output", out_path],
+        _dlx_command(pkg_manager, schema_path, out_path),
         FRONTEND_DIR,
     )
     return rc, out_path

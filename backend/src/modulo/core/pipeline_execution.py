@@ -34,11 +34,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.crud.run import get_run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES
 
 _log = logging.getLogger(__name__)
 
@@ -416,10 +417,21 @@ _WATCHDOG_AWAIT_BOUND_SECONDS = 5.0
 
 
 class ClaimSupersededError(Exception):
-    """Raised when this executor's claim token no longer matches the run's current claim.
+    """A fenced heartbeat/lease write matched zero rows — this executor must abort.
 
-    Signals a superseded executor (a successor re-claimed the run after an
-    event-loop stall) so it aborts before overwriting the successor's state.
+    Raised by :func:`heartbeat_once` when the fenced UPDATE matches no row,
+    which has exactly two causes and one meaning ("stop writing, abort"):
+
+    * the claim token no longer matches (a successor re-claimed the run after
+      an event-loop stall) — plan F3a; the original must not overwrite the
+      successor's state; or
+    * the run is already in a TERMINAL status (FAR-1330: the heartbeat UPDATE
+      is status-fenced, so a terminalised run can never be heartbeated again)
+      — the platform owns the outcome; the executor must not keep it alive.
+
+    One exception type is deliberate: every caller's response to either cause
+    is identical (set the ``superseded`` event and stop), so a second type
+    would only duplicate each handler without changing control flow.
     """
 
 
@@ -666,6 +678,36 @@ async def _read_current_claim_token(aeng: AsyncEngine, run_id: str, org_id: str)
         return str(row[0]) if row and row[0] else None
 
 
+# FAR-1330 — the heartbeat write is STATUS-fenced as well as token-fenced.
+#
+# Every other run-lifecycle writer was already status-guarded (the claim
+# UPDATE admits only ``pending`` / stale-``running`` rows; ``mark_complete``
+# and ``fail_run_terminal`` both require ``status='running'``), so this was
+# the one remaining way to write a terminal row: a still-live executor whose
+# claim token still matched kept stamping ``heartbeat_at`` on a run the
+# platform had ALREADY terminalised — observed on run ``03721c8e`` as
+# ``heartbeat_at`` ~31 minutes AFTER ``completed_at``, i.e. a dead run that
+# looked alive to every heartbeat reader (ongoing-run gauges, stale-run
+# sweeps, operators).
+#
+# The fence is an ALLOWLIST of ``ACTIVE_RUN_STATUSES`` (single source of
+# truth: ``modulo.db.models.run``) rather than a denylist of terminal
+# statuses, so a terminal status added later is fenced without editing this
+# file. Legitimate in-flight heartbeats are unaffected: a live run is always
+# in an ACTIVE_RUN_STATUSES state, and a run that races into a terminal state
+# simply stops matching — the executor then sees rowcount 0 and aborts. It
+# can neither resurrect the run (this UPDATE only ever touches
+# ``heartbeat_at``) nor overwrite its terminal state (every terminal writer
+# is status-guarded), so the race has no writer side.
+_HEARTBEAT_ACTIVE_STATUSES = "active_statuses"
+_HEARTBEAT_SQL = text(
+    "UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND status IN :active_statuses RETURNING id"
+).bindparams(bindparam(_HEARTBEAT_ACTIVE_STATUSES, expanding=True))
+_HEARTBEAT_TOKEN_FENCED_SQL = text(
+    "UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND claim_token=:tok AND status IN :active_statuses RETURNING id"
+).bindparams(bindparam(_HEARTBEAT_ACTIVE_STATUSES, expanding=True))
+
+
 async def heartbeat_once(
     aeng: AsyncEngine,
     run_id: str,
@@ -679,37 +721,41 @@ async def heartbeat_once(
     ``job.update()`` refreshes ``touched`` in the SAQ job hash so the sweeper
     does not re-queue a live run (saq.queue.base.update sets touched=now()).
 
-    When *claim_token* is provided the write is ATOMICALLY fenced: a single
-    ``UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND claim_token=:tok``
-    (no read-then-compare window). Rowcount 0 means the run was superseded
-    (token rotated by a successor) or the row is gone — raises
-    :class:`ClaimSupersededError` so the caller aborts. ``job.update()`` is
-    only called when the write actually landed (rowcount > 0), so a superseded
-    original never touches the successor's job hash.
+    The write is DOUBLE-fenced (both fences are required for rowcount > 0):
+
+    * **status fence (FAR-1330)** — ``status IN ACTIVE_RUN_STATUSES``: a
+      terminal run can never be heartbeated again, whatever its claim token
+      says. Without it a live executor could keep a terminalised run looking
+      alive (``heartbeat_at`` past ``completed_at``).
+    * **claim fence (plan F3a)** — when *claim_token* is provided the write is
+      ATOMICALLY fenced on ``claim_token=:tok`` (no read-then-compare window).
+
+    Rowcount 0 therefore means the run was superseded (token rotated by a
+    successor), is already terminal, or is gone — all three are "stop
+    writing": when *claim_token* is provided the caller gets
+    :class:`ClaimSupersededError` and aborts. ``job.update()`` only runs when
+    the write actually landed (rowcount > 0), so a superseded or terminalised
+    executor never touches the successor's / dead run's job hash.
     """
+    params: dict[str, Any] = {"rid": run_id, _HEARTBEAT_ACTIVE_STATUSES: sorted(ACTIVE_RUN_STATUSES)}
+    if claim_token is not None:
+        params["tok"] = claim_token
     updated = False
     async with aeng.connect() as c:
         await c.execute(
             text(_SQL_SET_ORG_ID),
             {"val": org_id},
         )
-        if claim_token is not None:
-            result = await c.execute(
-                text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND claim_token=:tok RETURNING id"),
-                {"rid": run_id, "tok": claim_token},
-            )
-            updated = result.fetchone() is not None
-        else:
-            await c.execute(
-                text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid"),
-                {"rid": run_id},
-            )
-            updated = True
+        stmt = _HEARTBEAT_TOKEN_FENCED_SQL if claim_token is not None else _HEARTBEAT_SQL
+        result = await c.execute(stmt, params)
+        updated = result.fetchone() is not None
         await c.commit()
     if updated and job is not None:
         await job.update()
     if claim_token is not None and not updated:
-        raise ClaimSupersededError(f"claim token superseded for run {run_id}")
+        raise ClaimSupersededError(
+            f"heartbeat fenced off for run {run_id}: claim token superseded, run already terminal, or row gone"
+        )
 
 
 async def heartbeat_loop(
@@ -727,9 +773,11 @@ async def heartbeat_loop(
 
     The executor's claim token is captured at loop start (the claim just wrote
     it) and used to fence every heartbeat (plan F3a). When the run is
-    superseded the heartbeat UPDATE matches zero rows and raises
-    :class:`ClaimSupersededError`: the loop sets *superseded* (if provided) and
-    breaks so ``run_executor_with_watchdog`` aborts the executor.
+    superseded — OR has already reached a terminal status (FAR-1330: the
+    heartbeat UPDATE is status-fenced, so a terminalised run can never be
+    heartbeated again) — the heartbeat UPDATE matches zero rows and raises
+    :class:`ClaimSupersededError`: the loop sets *superseded* (if provided)
+    and breaks so ``run_executor_with_watchdog`` aborts the executor.
 
     Fail-closed health: consecutive DB/network failures (exceptions) are
     counted; after 3 in a row *health_failed* is set (if provided) and the loop
@@ -783,7 +831,10 @@ async def _heartbeat_round(
         await heartbeat_once(aeng, run_id, org_id, job=job, claim_token=claim_token)
         return True, 0
     except ClaimSupersededError:
-        _log.warning("Heartbeat superseded for run %s — aborting heartbeat", run_id)
+        _log.warning(
+            "Heartbeat fenced off for run %s (superseded claim or already terminal) — aborting heartbeat",
+            run_id,
+        )
         if superseded is not None:
             superseded.set()
         return False, consecutive_failures

@@ -138,6 +138,9 @@ class TestNoSaqEvictionRedispatch:
                 s = str(stmt)
                 if "FROM organisations" in s:
                     return _Result(scalars=[_ORG])
+                if s.startswith("SELECT id FROM runs"):
+                    # FAR-1329 aged-nodeless router — no aged zombie here.
+                    return _Result()
                 if "UPDATE runs SET" in s:
                     # Dedicated terminalizer UPDATEs (B4/B5) — none matched here.
                     return _Result()

@@ -1092,6 +1092,7 @@ async def _seed_saq_running_run(
     dispatcher: str | None = "saq",
     heartbeat_at: datetime | None = None,
     started_at: datetime | None = None,
+    node_attempt_count: int = 0,
 ) -> uuid.UUID:
     from sqlalchemy import insert
 
@@ -1111,6 +1112,10 @@ async def _seed_saq_running_run(
         "run_number": _next_run_number(),
         "claim_count": claim_count,
         "dispatcher": dispatcher,
+        # FAR-1329: the age-bound mid-graph gate EXCLUDES zero-progress rows
+        # (they belong to the nodeless chokepoint), so a mid-graph wedge test
+        # must seed real node attempts.
+        "node_attempt_count": node_attempt_count,
     }
     values.update(
         {col: value for col, value in (("heartbeat_at", heartbeat_at), ("started_at", started_at)) if value is not None}
@@ -1219,9 +1224,15 @@ async def test_mid_graph_wedge_terminalizes_age_bound_run_under_rls(
     db_engine: AsyncEngine,
     migrated_db_url: str,
 ) -> None:
-    """A running SAQ run whose started_at is older than the age-bound window is
-    terminal-failed ``executor_superseded`` (B4) — a mid-graph stall can keep
-    a fresh heartbeat alive, so the age gate bounds the damage."""
+    """A running SAQ run that made NODE PROGRESS and then wedged past the
+    age-bound window is terminal-failed ``no_progress`` (B4) — a mid-graph
+    stall can keep a fresh heartbeat alive, so the age gate bounds the damage.
+
+    FAR-1329: the code is the TRUTHFUL age-gate code, never the supersede
+    vocabulary — this predicate never compares runs. The run is seeded with
+    ``node_attempt_count > 0`` so it is a genuine mid-graph wedge (a
+    ZERO-progress run is routed to the nodeless chokepoint instead — see
+    ``test_zero_progress_aged_run_routes_to_nodeless_not_mid_graph``)."""
     from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
 
     org_id, user_id = await _seed_org_account(db_engine, "WedgeOrg", cap=None)
@@ -1234,6 +1245,7 @@ async def test_mid_graph_wedge_terminalizes_age_bound_run_under_rls(
         pipe,
         snap,
         started_at=now - timedelta(hours=3),
+        node_attempt_count=3,
     )
 
     count = await _terminalize_count(app_engine, org_id, _terminalize_mid_graph_wedges, max_age_minutes=135)
@@ -1241,7 +1253,61 @@ async def test_mid_graph_wedge_terminalizes_age_bound_run_under_rls(
 
     status, code = await _run_state(db_engine, org_id, run)
     assert status == "failed"
-    assert code == "executor_superseded"
+    assert code == "no_progress"
+    assert code != "executor_superseded"
+
+
+async def test_zero_progress_aged_run_routes_to_nodeless_not_mid_graph(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1329: a ZERO-progress run at the age bound takes the purpose-built
+    nodeless path, not the mid-graph-wedge path.
+
+    Pre-fix the age gate's predicate had no node-progress condition, so a
+    claimed-but-nodeless run older than the bound was stamped
+    ``executor_superseded`` / "Superseded by a newer run." — a false cause
+    that cost a full investigation (FAR-1318 / run 03721c8e: three runs, all
+    ``nodes: []``, all "superseded"). Now the mid-graph gate's UPDATE excludes
+    the zero-progress shape, and the router fails the run through
+    ``_fail_nodeless_run`` (``executor_stalled`` -> ``agent.stall`,
+    "Claimed by SAQ but dispatched no node")."""
+    from modulo.core import cron_helpers as ch
+    from modulo.core.cron_helpers import _terminalize_aged_nodeless_zombies, _terminalize_mid_graph_wedges
+
+    org_id, user_id = await _seed_org_account(db_engine, "ZeroProgOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeZeroProg", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        started_at=datetime.now(UTC) - timedelta(hours=3),
+        # node_attempt_count defaults to 0 and no outputs/checkpoints exist.
+    )
+
+    # The age gate must NOT claim it.
+    count = await _terminalize_count(app_engine, org_id, _terminalize_mid_graph_wedges, max_age_minutes=135)
+    assert count == 0
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "running"
+
+    # The nodeless router fails it through the FAR-714 chokepoint.
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
+    summary = ch._dispatcher_summary()
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        routed = await _terminalize_aged_nodeless_zombies(
+            session, org_id, max_age_minutes=135, summary=summary, max_rows=None
+        )
+    assert routed == [run]
+    assert summary["claimed_but_never_dispatched"] == 1
+
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "failed"
+    assert code == "executor_stalled"
 
 
 async def test_mid_graph_wedge_spares_recently_started_run(

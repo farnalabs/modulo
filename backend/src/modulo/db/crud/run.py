@@ -2514,13 +2514,30 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
 
 #: GitHub PR URL grammar for the one-PR-per-run scan (FAR-1274). Mirrors
 #: ``pipeline_engine.node_runner._PR_URL_PATTERN`` so the detector and the
-#: raw-output ``pr_url`` extractor agree on what counts as a PR URL — two
-#: copies are the same deliberate layering trade-off recorded for the
+#: raw-output ``pr_url`` extractor agree on what counts as a PR URL — copies
+#: are the same deliberate layering trade-off recorded for the
 #: idempotency-ref regex above (``modulo.db`` may not import ``modulo.core``:
-#: import-linter contract ``db-does-not-import-core``). Case-INSENSITIVE so a
-#: scheme/host-case variant (``HTTP://GitHub.com/...``) still matches and then
-#: collapses onto one key in :func:`_normalise_pr_url` instead of being
-#: silently missed.
+#: import-linter contract ``db-does-not-import-core``). A shared constant is
+#: not reachable from every consumer (``sandbox_policy`` must also stay
+#: dependency-free), so every copy — pattern AND flags — is pinned by
+#: ``tests/unit/db/test_pr_url_regex_pins.py`` (FAR-1402) instead.
+#:
+#: Case-INSENSITIVE — the ONE deliberate flag divergence from the extractor
+#: copy, and it belongs to THIS copy (FAR-1402). The flag-relevant literals
+#: (``https``/``github``/``pull``) are always lowercase in what the PLATFORM
+#: itself emits, so the extractor's case-sensitive search never misses a
+#: ``gh`` echo; this scan, by contrast, sweeps AGENT-TEXT evidence
+#: (summaries, declared ``pr_url`` fields) where the same PR URL appears
+#: spelled ``HTTPS://GITHUB.COM/...`` — a case-sensitive harvest would drop
+#: that sighting and report one PR where two were delivered (the false
+#: negative ``test_case_variant_second_pr_url_still_breaches`` exists to
+#: catch). Over-matching is safe for THIS copy only because every hit
+#: collapses onto one key in :func:`_normalise_pr_url` before dedup, so a
+#: case variant of the SAME PR can never double-count into a false breach.
+#: The extractor copy must NOT gain the flag: it persists its first
+#: ``search()`` match verbatim as the marker's canonical ``pr_url``, so a
+#: case-variant agent-prose mention would otherwise win ahead of ``gh``'s
+#: lowercase echo and be recorded as THE delivery URL.
 _PR_URL_PATTERN = re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+", re.IGNORECASE)
 
 #: A line carrying a JSON ``"url":`` key is a ``gh pr list --json ...,url``

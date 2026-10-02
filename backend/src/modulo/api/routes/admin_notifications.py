@@ -30,6 +30,7 @@ from modulo.core.notifier import (
     EVENT_HITL_DEADLINE_WARNING,
     EVENT_RUN_STALLED,
     EVENT_TRIGGER_DEACTIVATED,
+    EVENT_TRIGGER_STREAK_ALERT,
     endpoint_events_to_list,
 )
 from modulo.core.ssrf import pinned_async_client
@@ -67,6 +68,7 @@ AVAILABLE_EVENTS = [
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_TRIGGER_DEACTIVATED,
+    EVENT_TRIGGER_STREAK_ALERT,
 ]
 
 

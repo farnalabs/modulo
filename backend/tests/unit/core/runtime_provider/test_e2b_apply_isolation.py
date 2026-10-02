@@ -331,6 +331,9 @@ def test_isolation_policy_defaults_match_legacy_defaults() -> None:
     assert policy.allowed_hosts is None
     assert policy.command_timeout == 60.0
     assert policy.single_pr_per_run is False
+    # FAR-1315: the run-claim owner defaults to unset (unowned claim), so
+    # every policy built without it behaves exactly as before.
+    assert policy.guard_owner is None
 
 
 def test_isolation_policy_is_frozen() -> None:
@@ -401,3 +404,48 @@ async def test_apply_isolation_without_the_flag_installs_no_guard() -> None:
     await provider.apply_isolation("sbx-plain", _spec(), IsolationPolicy())
 
     assert not sandbox.commands.calls
+
+
+# ---------------------------------------------------------------------------
+# 7. FAR-1315: guard_owner reaches the run ledger through the E2B path
+# ---------------------------------------------------------------------------
+
+
+async def test_apply_isolation_threads_guard_owner_into_the_run_ledger() -> None:
+    """``policy.guard_owner`` (the claiming node id) crosses the E2B
+    ``apply_isolation`` boundary into the run ledger: the owner can re-claim
+    its own slot (a node retry), while a DIFFERENT node of the same run is
+    denied — which is what makes the second flagged node install a
+    pre-planted refusal instead of a fresh claimable marker."""
+    from modulo.core.pipeline_engine.sandbox_policy import (
+        _GH_PR_GUARD_CLAIM_SENTINEL,
+        acquire_run_pr_guard,
+        reset_run_pr_guard_claims,
+        settle_run_pr_guard,
+    )
+
+    reset_run_pr_guard_claims()
+    scope = str(uuid.uuid4())
+    sandbox = _RecordingSandbox()
+    provider = E2BRuntimeProvider(api_key="owner-key")
+    provider._sandboxes["sbx-owner"] = sandbox
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        run_id=uuid.UUID(scope),
+    )
+    try:
+        await provider.apply_isolation(
+            "sbx-owner",
+            spec,
+            IsolationPolicy(single_pr_per_run=True, guard_owner="node-1"),
+        )
+        # The install took the run's slot for THIS owner...
+        assert acquire_run_pr_guard(scope, "node-1") == "acquired"
+        # ...so a second flagged node of the same run is denied...
+        assert acquire_run_pr_guard(scope, "node-2") == "held"
+        # ...and only the owner's own settle (claim observed) spends it.
+        assert settle_run_pr_guard(scope, "node-1", f"noise {_GH_PR_GUARD_CLAIM_SENTINEL}") == "spent"
+        assert acquire_run_pr_guard(scope, "node-2") == "spent"
+    finally:
+        reset_run_pr_guard_claims()

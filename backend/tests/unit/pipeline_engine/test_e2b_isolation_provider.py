@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from contextlib import nullcontext
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,12 +44,14 @@ from modulo.core.pipeline_engine.node_runner import (
 )
 from modulo.core.runtime_provider import (
     ExecResult,
+    ExecStreamChunk,
     IsolationPolicy,
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
     WorkspaceSpec,
 )
-from tests.unit.pipeline_engine.conftest import install_fake_dispatch
+from tests.unit.pipeline_engine.conftest import FakeDispatchProvider, install_fake_dispatch
+from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -65,8 +68,12 @@ class _RecordingIsolationProvider(RuntimeProvider):
 
     provider_id = "e2b"
 
-    def __init__(self) -> None:
+    def __init__(self, install_status: str | None = "installed") -> None:
         self.calls: list[tuple[str, WorkspaceSpec, IsolationPolicy]] = []
+        # FAR-1315 (MAJOR 2b): the status apply_sandbox_policy would classify
+        # for a flagged node's guard install. Tests vary it to model a live
+        # install ("installed") vs the shipped runner image (no gh -> "absent").
+        self.install_status = install_status
 
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         return "ws-fake"
@@ -91,8 +98,13 @@ class _RecordingIsolationProvider(RuntimeProvider):
         provider_ref: str,
         spec: WorkspaceSpec,
         policy: IsolationPolicy,
-    ) -> None:
+    ) -> str | None:
         self.calls.append((provider_ref, spec, policy))
+        # FAR-1315: stand in for apply_sandbox_policy's classified install
+        # status — a flagged node's guard DID land here (the fake installs
+        # nothing but models a successful install), so the dispatch settle
+        # may treat a definitive receipt=False as "confirmed no create".
+        return self.install_status if policy.single_pr_per_run else None
 
 
 class _RefusingIsolationProvider(_RecordingIsolationProvider):
@@ -103,7 +115,7 @@ class _RefusingIsolationProvider(_RecordingIsolationProvider):
         provider_ref: str,
         spec: WorkspaceSpec,
         policy: IsolationPolicy,
-    ) -> None:
+    ) -> str | None:
         raise ProviderCapabilityUnsupportedError("Runtime provider 'Refusing' does not implement apply_isolation")
 
 
@@ -715,3 +727,595 @@ async def test_flagged_node_emits_no_disarm_warning(
     assert not _flag_missing_records(caplog)
     assert len(fake.calls) == 1
     assert fake.calls[0][2].single_pr_per_run is True
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315: guard_owner threading + the dispatch finally settling the ledger
+# ---------------------------------------------------------------------------
+
+
+async def test_helper_threads_guard_owner_into_the_typed_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1315: ``guard_owner`` (the claiming node's identity) rides the SAME
+    typed carrier as the flag from the call site to the provider, and its
+    default stays ``None`` so every policy built without it is unchanged."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+
+    await _apply_isolation_via_provider(
+        "sbx-owner",
+        org_id=_ORG_ID,
+        run_id="run-1",
+        read_only=False,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+        single_pr_per_run=True,
+        guard_owner="n7",
+    )
+    assert fake.calls[0][2].guard_owner == "n7"
+
+    await _apply_isolation_via_provider(
+        "sbx-owner",
+        org_id=_ORG_ID,
+        run_id="run-1",
+        read_only=False,
+        git_credentials=None,
+        egress_policy=None,
+        egress_allowlist=None,
+    )
+    assert fake.calls[1][2].guard_owner is None
+    assert fake.calls[1][2].single_pr_per_run is False
+
+
+async def test_flagged_node_threads_guard_owner_at_the_real_call_site(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """FAR-1315 CRITICAL: ``guard_owner`` is threaded at the REAL
+    ``_sandbox_agent_impl`` call site, not just in the helper.
+
+    The helper-level test above proves ``_apply_isolation_via_provider``
+    forwards the argument it is GIVEN - it says nothing about the call site
+    actually giving it. With ``guard_owner=node_id`` deleted from
+    ``node_runner._sandbox_agent_impl``, every flagged node claims with owner
+    ``\"\"``, ``acquire_run_pr_guard`` returns ``\"acquired\"`` for EVERY node
+    (empty == empty), each installs a LIVE guard, and the run produces two
+    PRs - while every other test stays green. This test drives the REAL
+    ``make_sandbox_agent_fn(...)`` dispatch and pins the recorded policy's
+    owner to THIS node's id, the analogue of the ``single_pr_per_run is True``
+    assertion beside it."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-owner-wired")
+    install_fake_dispatch(monkeypatch, ref="sbx-owner-wired")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert len(fake.calls) == 1
+    policy = fake.calls[0][2]
+    assert policy.single_pr_per_run is True
+    # The node id ("n1" in _base_node_def) - WITHOUT this the run's one-PR
+    # ledger has no owner and every flagged node re-acquires the slot.
+    assert policy.guard_owner == "n1"
+
+
+async def test_flagged_node_settles_the_run_claim_ledger_on_finish(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """FAR-1315 wiring: a flagged node settles its run-scoped one-PR slot in
+    the dispatch ``finally`` — keyed by the run id and THIS node's id as the
+    owner — so the next flagged node of the run installs a pre-planted
+    refusal after an observed claim, or a fresh live guard after a
+    claim-less finish."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+    recorded: list[tuple[Any, ...]] = []
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    monkeypatch.setattr(
+        sandbox_policy,
+        "settle_run_pr_guard",
+        lambda *args, **kwargs: recorded.append(args) or "noop",
+    )
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-settle")
+    install_fake_dispatch(monkeypatch, ref="sbx-settle")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert recorded, "a flagged node must settle its run claim slot in the finally"
+    run_scope, owner = recorded[0][0], recorded[0][1]
+    assert run_scope == "run-1"
+    assert owner == "n1"
+    # The captured streams ride along for the sentinel scan.
+    assert len(recorded[0]) > 2
+
+
+async def test_unflagged_node_never_settles_the_run_claim_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """Regression: the settle gate is the explicit flag — a node running the
+    policy step for an enforcement control only must never touch the ledger
+    (its own output could otherwise be mistaken for a claim sentinel)."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    fake = _RecordingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, fake)
+    recorded: list[tuple[Any, ...]] = []
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    monkeypatch.setattr(
+        sandbox_policy,
+        "settle_run_pr_guard",
+        lambda *args, **kwargs: recorded.append(args) or "noop",
+    )
+
+    fn = make_sandbox_agent_fn(_base_node_def())  # read_only=True, NO flag
+    sandbox = await _completed_no_output_sandbox("sbx-settle-off")
+    install_fake_dispatch(monkeypatch, ref="sbx-settle-off")
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert not recorded
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 gate hardening: the observation channel end to end (E2B tier)
+# ---------------------------------------------------------------------------
+#
+# The tests above MONKEYPATCH settle (wiring proofs). These drive the REAL
+# ``settle_run_pr_guard`` in the dispatch ``finally`` with real spend
+# evidence: shim-produced stdout, a harvested receipt, and a shim-read
+# transcript that must NOT spend. Fail-without-fix for the whole block: moving
+# the settle out of the finally (or passing ``None`` streams) leaves every
+# assertion below failing.
+
+
+class _ClaimingIsolationProvider(_RecordingIsolationProvider):
+    """Stands in for ``apply_sandbox_policy``'s run-ledger claim.
+
+    The real E2B ``apply_isolation`` takes the claim for
+    (scope=``spec.run_id``, owner=``policy.guard_owner``) BEFORE the node runs
+    — without it the dispatch finally's settle would have no entry to
+    spend/release and every ledger assertion would be vacuous."""
+
+    async def apply_isolation(
+        self,
+        provider_ref: str,
+        spec: WorkspaceSpec,
+        policy: IsolationPolicy,
+    ) -> str | None:
+        status = await super().apply_isolation(provider_ref, spec, policy)
+        if policy.single_pr_per_run and spec.run_id is not None:
+            from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard
+
+            acquire_run_pr_guard(str(spec.run_id), policy.guard_owner)
+        return status
+
+
+def _override_harvest_reply(dispatch: Any, reply: str) -> None:
+    """Make the dispatch's claim-receipt harvest probe answer *reply*."""
+    original = dispatch.exec_command
+
+    async def _exec(ref: str, command: list[str], *, cmd_timeout: int | None = None) -> ExecResult:
+        if command and "MODULO_CLAIM_RECEIPT" in command[-1]:
+            return ExecResult(exit_code=0, stdout=reply, stderr="")
+        return await original(ref, command, cmd_timeout=cmd_timeout)
+
+    dispatch.exec_command = _exec
+
+
+async def _dispatch_flagged_e2b(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    *,
+    chunks: list[tuple[str, str]],
+    harvest_reply: str | None = None,
+    ref: str = "sbx-flag-e2e",
+    output_json: str | None = None,
+    install_status: str | None = "installed",
+) -> str:
+    """Run the REAL flagged E2B dispatch and return this run's id.
+
+    By default the node FAILS (no output.json), exactly like the wiring tests
+    — the assertion surface is the ledger the ``finally`` settles. Passing
+    ``output_json`` makes the node SUCCEED with that output (an agent-authored
+    ``output.json``), which is the shape the ``pr_url`` spend arm sees.
+    ``chunks`` is the agent's captured stdout/stderr; ``harvest_reply``
+    overrides the receipt-harvest probe (``None`` = the fake's empty reply,
+    i.e. the harvest ran but yielded no token -> unavailable);
+    ``install_status`` is what apply_isolation reports for the guard install
+    (``"absent"`` models the shipped runner image with no ``gh``)."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider(install_status=install_status)
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = install_fake_dispatch(
+        monkeypatch,
+        ref=ref,
+        chunks=[ExecStreamChunk(stream=stream, data=data) for stream, data in chunks],
+        exit_code=0 if output_json is not None else 1,
+    )
+    if harvest_reply is not None:
+        _override_harvest_reply(dispatch, harvest_reply)
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox(ref)
+    if output_json is not None:
+        # output.json is read through the R2b file-I/O seam (the fake_file_io
+        # fixture), not the legacy SDK handle.
+        fake_file_io.files["/home/user/output.json"] = output_json.encode("utf-8")
+    state = _run_state()
+    run_id = str(uuid.uuid4())
+    state["_run_id"] = run_id
+    expect_failure = nullcontext() if output_json is not None else pytest.raises(SandboxNodeFailedError)
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        expect_failure,
+    ):
+        await fn(state)
+    return run_id
+
+
+async def test_flagged_node_observes_shim_produced_output_and_spends_the_run_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    tmp_path,
+) -> None:
+    """The observation channel, end to end: stdout produced by the REAL shim's
+    successful create flows through the dispatch capture into the REAL settle
+    in the ``finally`` — the run's claim is SPENT for every later flagged
+    node. The harvest yields no token here, so this is the sentinel FALLBACK
+    arm a dispatch reaches when its receipt probe is unavailable."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    shim_stdout = shim_created_pr_stdout(tmp_path)
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", shim_stdout)],
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_spends_from_the_harvested_receipt_when_the_sentinel_was_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """MAJOR 1 at the dispatch level: the node created the PR and then emitted
+    more than the 512 KB drain window, so the captured stream carries NO
+    sentinel. The platform-side receipt harvest must still spend the run —
+    releasing here would let the next flagged node install a live guard and
+    open a SECOND PR."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", "post-create agent noise\n" * 200)],
+        harvest_reply="MODULO_CLAIM_RECEIPT_PRESENT",
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_shim_read_transcript_never_spends_when_the_harvest_confirms_no_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    tmp_path,
+) -> None:
+    """MAJOR 2 at the dispatch level: the captured stdout contains the claim
+    sentinel (the agent read the shim / echoed its text), but the harvest RAN
+    and confirmed no receipt — so the run must NOT be spent and the holder's
+    hold must be RELEASED. Spending here is the fail-closed DoS: every later
+    flagged node pre-plants and the run delivers no PR at all."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    shim_stdout = shim_created_pr_stdout(tmp_path)
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", shim_stdout)],
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """A FAILING flagged node must not leak its hold: with no spend evidence
+    the ``finally`` releases the slot so a later flagged node of the run can
+    still claim it. Fail-without-fix: moving the settle out of the ``finally``
+    leaves the entry ``held`` forever and the assertion reads ``held``."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    run_id = await _dispatch_flagged_e2b(monkeypatch, fake_file_io, chunks=[])
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 re-gate: the three findings, proven at the REAL dispatch level
+# ---------------------------------------------------------------------------
+
+
+async def test_pr_url_never_outranks_a_definitive_receipt_false(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """RE-GATE MAJOR 2(a) — FALSE SPEND, end to end.
+
+    A node whose ``gh pr create`` FAILED still reports a URL-shaped ``pr_url``
+    in its agent-authored ``output.json``, and the same URL appears in the
+    captured stdout (so the corroboration arm is satisfied too). The LIVE
+    shim's receipt harvest nevertheless confirms NO create succeeded — that
+    definitive negative must WIN and release the hold.
+
+    Fail-without-fix: the pre-fix precedence evaluated ``pr_url`` BEFORE
+    ``claim_receipt is False``, so this exact dispatch marked the run SPENT and
+    every later flagged node was pre-planted — the run then delivers nothing."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    url = "https://github.com/org/repo/pull/42"
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", f"attempted create, reporting {url}\n")],
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        output_json=f'{{"summary":"done","pr_url":"{url}"}}',
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", (
+            "a definitive receipt=False from a LIVE install must release the hold, "
+            "never be outranked by an agent-authored pr_url"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_absent_install_leaves_the_receipt_meaningless_so_the_sentinel_still_spends(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+    tmp_path,
+) -> None:
+    """RE-GATE MAJOR 2(b) — FALSE RELEASE, end to end.
+
+    The guard install reports ``absent`` (the shipped runner image's shape:
+    no ``gh`` on PATH), yet a claim sentinel is in the captured transcript.
+    The receipt probe runs against a path NO SHIM EVER WROTE — it answers
+    ABSENT exactly like a real "no receipt" probe, so read as definitive it
+    would suppress the sentinel arm and RELEASE a genuinely unguarded create.
+    With the install status threaded, the receipt is UNKNOWN and the sentinel
+    fallback still spends the run.
+
+    Fail-without-fix: the pre-fix settle read ``claim_receipt is False`` as
+    definitive regardless of install status, so this dispatch released the
+    hold (``acquired``) instead of spending it."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    shim_stdout = shim_created_pr_stdout(tmp_path)
+    run_id = await _dispatch_flagged_e2b(
+        monkeypatch,
+        fake_file_io,
+        chunks=[("stdout", shim_stdout)],
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        install_status="absent",
+    )
+    try:
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent", (
+            "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+class _BlockingHarvestDispatch(FakeDispatchProvider):
+    """Dispatch fake whose RECEIPT-HARVEST probe blocks until cancelled.
+
+    Lets a test cancel the dispatch task while it sits inside the harvest —
+    the exact window the re-gate's MAJOR 1 cancellation finding is about."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.harvest_started = asyncio.Event()
+
+    async def exec_command(
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        cmd_timeout: int | None = None,
+    ) -> ExecResult:
+        if command and "MODULO_CLAIM_RECEIPT" in command[-1]:
+            self.harvest_started.set()
+            await asyncio.Event().wait()  # parks until the probe task is cancelled
+        return await super().exec_command(provider_ref, command, cmd_timeout=cmd_timeout)
+
+
+async def test_cancel_during_the_claim_harvest_still_tears_down(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """RE-GATE MAJOR 1 — teardown must be UNCONDITIONAL.
+
+    The harvest is the FIRST await in the dispatch ``finally`` and
+    ``asyncio.CancelledError`` is a BaseException the ``except Exception``
+    handlers do not catch. Before the fix a cancel landing in that window
+    unwound the ``finally`` BEFORE the sandbox destroy, the provider close and
+    the fenced dispatch-marker clear — a leaked sandbox, a stale dispatch
+    marker and a stranded ledger hold. After the fix the cancellation is
+    recorded, teardown runs, and the cancellation is re-raised at the end.
+
+    Fail-without-fix: with the old ``wait_for(shield(...))`` form this test
+    sees the CancelledError but ``dispatch.events`` never contains
+    ``destroy_by_ref``/``close`` and the marker-clear mock is never awaited."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = _BlockingHarvestDispatch(ref="sbx-cancel-harvest")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_dispatch_provider",
+        AsyncMock(return_value=dispatch),
+    )
+    clear_mock = AsyncMock()
+    monkeypatch.setattr(node_runner_module, "_sandbox_clear_dispatch_marker", clear_mock)
+
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-cancel-harvest")
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        task = asyncio.ensure_future(fn(state))
+        await asyncio.wait_for(dispatch.harvest_started.wait(), timeout=10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert "destroy_by_ref" in dispatch.events, (
+        f"the sandbox must still be destroyed after a cancel during the harvest: {dispatch.events}"
+    )
+    assert "close" in dispatch.events, (
+        f"the dispatch provider must still be closed after a cancel during the harvest: {dispatch.events}"
+    )
+    assert clear_mock.await_count >= 1, (
+        "the fenced dispatch marker must still be cleared after a cancel during the harvest"
+    )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 coverage hardening: the E2B dispatch finally's defensive arms
+# ---------------------------------------------------------------------------
+
+
+async def test_flagged_dispatch_skips_the_harvest_without_a_sandbox_id(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """With an armed guard but no sandbox id (the dispatch lost its provider ref
+    after create), the receipt harvest is skipped and the settle runs on the
+    weaker evidence — the ``_sandbox_id`` guard's false arm."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    _patch_isolation_builder(monkeypatch, _ClaimingIsolationProvider())
+    # An empty dispatch ref makes ``_sandbox_id`` stay unset (None).
+    install_fake_dispatch(monkeypatch, ref="")
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    try:
+        result = await fn(state)
+    finally:
+        reset_run_pr_guard_claims()
+    assert result["artifacts"][0]["output"]["status"] == "failed"
+
+
+async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """Defence in depth: if ``settle_run_pr_guard`` itself raises
+    ``CancelledError`` the dispatch records it, still tears the sandbox down,
+    then re-raises — a cancellation must never skip the teardown."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    def _cancel_settle(*args: Any, **kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-cancel-settle")
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-cancel-settle")
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    try:
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await fn(state)
+    finally:
+        reset_run_pr_guard_claims()
+    assert "destroy_by_ref" in dispatch.events, (
+        f"the sandbox must still be destroyed when settle raises CancelledError: {dispatch.events}"
+    )
+    assert "close" in dispatch.events, "the provider must still be closed when settle raises CancelledError"
+
+
+async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """When the harvest already recorded a cancellation AND settle then raises
+    another, the dispatch keeps the FIRST one (the ``_gh_settle_cancelled is
+    None`` guard's false arm) and still tears down before re-raising."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    def _cancel_settle(*args: Any, **kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = _BlockingHarvestDispatch(ref="sbx-double-cancel")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_dispatch_provider",
+        AsyncMock(return_value=dispatch),
+    )
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-double-cancel")
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            task = asyncio.ensure_future(fn(state))
+            await asyncio.wait_for(dispatch.harvest_started.wait(), timeout=10)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    finally:
+        reset_run_pr_guard_claims()
+    assert "destroy_by_ref" in dispatch.events, (
+        f"the sandbox must still be destroyed when both harvest and settle cancel: {dispatch.events}"
+    )
+    assert "close" in dispatch.events, "the provider must still be closed when both harvest and settle cancel"

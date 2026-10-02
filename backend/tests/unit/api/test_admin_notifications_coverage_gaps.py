@@ -1004,3 +1004,29 @@ def test_hitl_deadline_warning_subscription_round_trips(api: tuple[TestClient, A
     assert resp.json()["events"] == ["hitl_deadline_warning"]
     persisted = session.add.call_args.args[0]
     assert persisted.events == ["hitl_deadline_warning"]
+
+
+# --- FAR-1410 — the notify-only streak-trip alert is a subscribable event ---
+
+
+def test_trigger_streak_alert_is_listed_in_available_events(api: tuple[TestClient, AsyncMock]) -> None:
+    """The notify-only trip's DISTINCT event must be offered by the registry —
+    reusing trigger_deactivated for it would corrupt that event's meaning."""
+    client, _ = api
+    resp = client.get("/api/v1/admin/notifications/available-events")
+    assert resp.status_code == 200
+    assert "trigger_streak_alert" in resp.json()
+
+
+def test_trigger_streak_alert_subscription_round_trips(api: tuple[TestClient, AsyncMock]) -> None:
+    """Round-trip: the create validator accepts the event, the endpoint
+    persists it, and the response echoes the subscription back."""
+    client, session = api
+    resp = client.post(
+        "/api/v1/admin/notifications",
+        json={"url": "https://hooks.example.com/streak", "events": ["trigger_streak_alert"]},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["events"] == ["trigger_streak_alert"]
+    persisted = session.add.call_args.args[0]
+    assert persisted.events == ["trigger_streak_alert"]

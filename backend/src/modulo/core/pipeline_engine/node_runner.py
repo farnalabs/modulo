@@ -1109,8 +1109,15 @@ async def _apply_isolation_via_provider(
     allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
     single_pr_per_run: bool = False,
-) -> None:
+    guard_owner: str | None = None,
+) -> str | None:
     """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
+
+    FAR-1315: returns the one-PR guard's INSTALL STATUS as reported by the
+    provider (``installed``/``pre_planted``/``absent``/``failed``) or ``None``
+    when no guard was armed — the dispatch ``finally`` threads it into
+    ``settle_run_pr_guard`` so a receipt probe against a path no shim ever
+    wrote is UNKNOWN, never "confirmed no create".
 
     The single enforcement path since FAR-1050 R6 retired the engine-side
     ``apply_sandbox_policy(sandbox, ...)`` invocation. Key resolution mirrors
@@ -1136,6 +1143,11 @@ async def _apply_isolation_via_provider(
     ``IsolationPolicy`` is the SINGLE carrier: the pre-FAR-1273
     ``workspace_metadata`` sentinel key is deleted, and ``spec`` here carries
     workspace attribution only.
+
+    FAR-1315: ``guard_owner`` (optional, default ``None`` — the node id at the
+    call site) rides the same carrier into the run ledger, so a SECOND flagged
+    node of the same run is denied a fresh claimable marker and installs a
+    pre-planted refusal instead.
     """
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import (
@@ -1171,9 +1183,10 @@ async def _apply_isolation_via_provider(
         allowed_hosts=allowed_hosts,
         command_timeout=command_timeout,
         single_pr_per_run=single_pr_per_run,
+        guard_owner=guard_owner,
     )
     try:
-        await provider.apply_isolation(sandbox_id, spec, policy)
+        return await provider.apply_isolation(sandbox_id, spec, policy)
     except asyncio.CancelledError:
         raise
     except ProviderCapabilityUnsupportedError as exc:
@@ -1660,6 +1673,14 @@ def _build_schema_failure_message(
     return "\n".join(parts)
 
 
+# GitHub PR URL in raw sandbox output (FAR-188): the FIRST match becomes the
+# marker's canonical ``pr_url``. Case-SENSITIVE on purpose (FAR-1402) — the
+# flag-relevant literals (https/github/pull) are always lowercase in gh's own
+# echo, while a case-variant agent-prose mention must not win the first match
+# and be persisted as THE delivery URL. The FAR-1274 detector sweep in
+# ``db.crud.run`` scans agent text instead and deliberately carries
+# re.IGNORECASE there. Every copy of this pattern — pattern AND flags — is
+# pinned by ``tests/unit/db/test_pr_url_regex_pins.py``.
 _PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
 
 # Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
@@ -8285,6 +8306,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     agent_stdout: str = ""
     agent_stderr: str = ""
     output_json: Any = None
+    # FAR-1315: the captured streams and the agent-reported pr_url are bound
+    # inside the try; pre-bind at function scope (same pattern as the vars
+    # above) so the finally-block settle REFERENCES them directly instead of
+    # probing ``locals()`` by string name — an unbound value is simply "" /
+    # None, which contributes no spend evidence.
+    agent_stdout_raw: str = ""
+    agent_stderr_raw: str = ""
+    pr_url: str = ""
     # FAR-228: the cancellation-retention handler below runs whenever a
     # CancelledError escapes — including during provisioning, BEFORE the
     # inner drain closure is ever defined. Pre-bind at function scope so
@@ -8297,6 +8326,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     # guardrails. Pre-bound at function scope so the finally-block teardown
     # short-circuits safely (None) when the bridge was never started.
     _bridge_server: LoopInterceptCallbackServer | None = None
+    # FAR-1315 (MAJOR 2b): the one-PR guard's INSTALL STATUS as reported by
+    # apply_isolation. Pre-bound at function scope so the finally-block
+    # settle references it directly (None there means "no live install
+    # known"), which keeps a receipt probe from being read as a
+    # definitive "confirmed no create".
+    _gh_guard_install_status: str | None = None
 
     # FAR-228 guard A (early skipped-return / fallback): when the run has
     # ALREADY delivered (a prior attempt's marker carries delivery_done=True)
@@ -9024,7 +9059,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 egress_allowlist=_resolved_allowlist_for_policy,
             )
             try:
-                await _apply_isolation_via_provider(
+                _gh_guard_install_status = await _apply_isolation_via_provider(
                     _sandbox_id,
                     org_id=org_id,
                     run_id=run_id,
@@ -9036,10 +9071,17 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     # FAR-1273: rides the typed IsolationPolicy (the single
                     # carrier) to the E2B policy call site.
                     single_pr_per_run=single_pr_per_run,
+                    # FAR-1315: the claiming node's identity for the run's
+                    # one-PR ledger (same typed carrier).
+                    guard_owner=node_id,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception:
+                # The install status is unknown when isolation failed — leave
+                # the pre-bound None so the settle can never read a receipt
+                # probe as definitive.
+                _gh_guard_install_status = None
                 if _policy_enforces_controls:
                     raise
                 _log.warning(
@@ -9480,8 +9522,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # drained content (which also survives a timeout where cmd_result is
         # None and would otherwise surface EMPTY output), falling back to the
         # SDK's captured stream for non-redirected (legacy) paths.
-        agent_stdout_raw: str = "".join(_drained_chunks) or (getattr(cmd_result, "stdout", "") or "")
-        agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
+        agent_stdout_raw = "".join(_drained_chunks) or (getattr(cmd_result, "stdout", "") or "")
+        agent_stderr_raw = getattr(cmd_result, "stderr", "") or ""
         _stdout_len = len(agent_stdout_raw)
         _stderr_len = len(agent_stderr_raw)
         # FAR-792: redact BEFORE truncation so credential-scrubbing sees the
@@ -9958,7 +10000,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         status: str = "completed" if exit_code == 0 else "failed"
         result_summary: str = ""
         changed_files: list[str] = []
-        pr_url: str = ""
+        pr_url = ""
         # A1 elevation input (agent-failure UX, phase 1): surface the
         # agent's RAW verdict from output.json VERBATIM — never derived from
         # exit_code. Missing / non-string values degrade to None so a
@@ -10280,14 +10322,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             attempt_key=attempt_key,
         )
         # FAR-811: emit the same stdout_artifact pointer on the exception path.
-        # The exception may fire before agent_stdout_raw is bound (e.g.
-        # provisioning failure), so the pointer is only written when pre-
-        # exception stdout was captured AND exceeded the cap.  ``locals()``
-        # guards the name lookup: when the exception fires before the drain
-        # populates agent_stdout_raw, ``_stdout_len`` is still 0 (pre-bound
-        # at function scope) and the guard short-circuits.
+        # The exception may fire before the drain populates agent_stdout_raw,
+        # so the pointer is only written when pre-exception stdout was captured
+        # AND exceeded the cap. ``agent_stdout_raw`` is pre-bound at function
+        # scope (empty string when the drain never ran) and ``_stdout_len`` is
+        # pre-bound to 0, so the length check short-circuits on its own.
         _exc_stdout_artifact: dict[str, Any] | None = None
-        if _stdout_len > _stdout_cap and "agent_stdout_raw" in locals():
+        if _stdout_len > _stdout_cap:
             # FAR-844: prefer the streaming writer's pointer.
             if _streaming_writer_instance is not None and not _streaming_writer_instance.finalized:
                 try:
@@ -10317,11 +10358,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     redacted_stdout=_redact_raw_output(agent_stdout_raw),
                 )
         # FAR-879: stderr parity on the exception path — mirror the stdout
-        # artifact logic above. The same ``locals()`` guard applies: when the
-        # exception fires before the drain populates agent_stderr_raw, the
-        # guard short-circuits.
+        # artifact logic above. ``agent_stderr_raw`` is pre-bound at function
+        # scope and ``_stderr_len`` starts at 0, so the length check alone
+        # short-circuits when the drain never ran.
         _exc_stderr_artifact: dict[str, Any] | None = None
-        if _stderr_len > _stdout_cap and "agent_stderr_raw" in locals():
+        if _stderr_len > _stdout_cap:
             _exc_stderr_artifact = _persist_full_stderr_artifact(
                 org_id=org_id,
                 run_id=run_id,
@@ -10361,6 +10402,93 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             via_provider=True,
         )
     finally:
+        # FAR-1315: settle this node's run-scoped one-PR guard slot. Runs ONLY
+        # for flagged nodes (the flag is bound before the try), is exception-
+        # safe (never masks teardown), and reads the captured streams /
+        # ``pr_url`` / install status from the function-scope pre-binds above
+        # DIRECTLY (no ``locals()`` string lookups — see
+        # tests/architecture/test_no_locals_lookup.py); an unbound value is
+        # simply "" / None and contributes no spend evidence.
+        #
+        # SPEND EVIDENCE (robust to a truncated drain window, unforgeable by
+        # reading the shim): first HARVEST the shim's success RECEIPT from the
+        # still-alive sandbox (this runs BEFORE the finally's workspace kill
+        # below; a stall path already killed it -> the exec fails -> None),
+        # plus a CORROBORATED delivered ``pr_url``; the captured streams
+        # (sentinel) only count as a fallback when the receipt is UNKNOWN.
+        # A definitive receipt=False (LIVE install + probe ran) ignores both
+        # pr_url and the sentinel and RELEASES this node's hold so a later
+        # flagged node can still claim; an unbound stream, an unavailable
+        # harvest, or an ABSENT/FAILED install simply contributes the weaker
+        # evidence (see ``settle_run_pr_guard``).
+        #
+        # CANCELLATION (re-gate MAJOR 1): the harvest is the first await in
+        # this finally, and ``asyncio.CancelledError`` is a BaseException the
+        # ``except Exception`` below would not catch — a cancel landing here
+        # used to unwind the finally BEFORE the sandbox kill / provider close
+        # / marker clear below (leaked sandbox, stale dispatch marker). The
+        # bounded harvest therefore catches it, treats the receipt as
+        # unknown, and the teardown runs UNCONDITIONALLY; the cancellation is
+        # re-raised only once teardown is guaranteed (end of this finally).
+        _gh_settle_cancelled: asyncio.CancelledError | None = None
+        if single_pr_per_run:
+            try:
+                from modulo.core.pipeline_engine.sandbox_policy import (
+                    harvest_gh_pr_claim_bounded,
+                    settle_run_pr_guard,
+                )
+
+                _claim_receipt: bool | None = None
+                if _dispatch_provider is not None and _sandbox_id:
+
+                    async def _claim_receipt_exec(command: list[str]) -> Any:
+                        return await _require_dispatch_provider(_dispatch_provider).exec_command(
+                            _sandbox_id or "",
+                            command,
+                            cmd_timeout=15,
+                        )
+
+                    try:
+                        # Bounded AND cancellation-safe: the probe task is
+                        # always awaited-or-cancelled (never left running
+                        # against a container this finally is about to kill),
+                        # and a cancellation is recorded rather than allowed to
+                        # unwind past the teardown below.
+                        _claim_receipt = await harvest_gh_pr_claim_bounded(
+                            _claim_receipt_exec,
+                            run_scope=run_id,
+                            timeout=20.0,
+                        )
+                    # Cancellation is RECORDED, not re-raised here: the dispatch
+                    # re-raises it only after the sandbox kill / provider close /
+                    # marker clear below run (FAR-1315 re-gate MAJOR 1).
+                    except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
+                        _claim_receipt = None
+                        _gh_settle_cancelled = _cancel_exc
+                    except Exception:
+                        _claim_receipt = None
+                _output_json = output_json
+                settle_run_pr_guard(
+                    run_id,
+                    node_id,
+                    agent_stdout_raw,
+                    agent_stderr_raw,
+                    "".join(_drained_chunks) if _drained_chunks else None,
+                    agent_stdout,
+                    agent_stderr,
+                    pr_url=pr_url or (_output_json.get("pr_url") if isinstance(_output_json, dict) else None),
+                    claim_receipt=_claim_receipt,
+                    # FAR-1315 (MAJOR 2b): only a LIVE install makes a
+                    # definitive receipt=False mean "confirmed no create".
+                    guard_install_status=_gh_guard_install_status,
+                )
+            except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
+                # Defence in depth: settle itself is synchronous, but never
+                # let a cancellation skip the teardown below either.
+                if _gh_settle_cancelled is None:
+                    _gh_settle_cancelled = _cancel_exc
+            except Exception:
+                _log.debug("sandbox_agent.gh_guard_settle_failed", exc_info=True)
         # FAR-211: stop the loop-interception callback server. Best-effort
         # (shielded + bounded) — a teardown failure must not mask the
         # sandbox kill or the marker clear below.
@@ -10437,6 +10565,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "sandbox_agent.dispatch_marker_clear_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
+        # FAR-1315 (re-gate MAJOR 1): every teardown step above has now run —
+        # deliver the cancellation that landed during the receipt harvest, so
+        # the caller still sees a cancelled task rather than a swallowed one.
+        if _gh_settle_cancelled is not None:
+            raise _gh_settle_cancelled
 
 
 async def _sandbox_cancel_retention_persist(

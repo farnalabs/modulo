@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_in_dev_operator, require_permission
+from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node, resolve_and_reject_mask_sentinels
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.routes.lifecycle_maps import LifecycleMapResponse
 from modulo.api.team_scope import validate_owner_team_for_create
@@ -257,6 +258,35 @@ class LibraryPrimitiveResponse(BaseModel):
     @model_validator(mode="after")
     def _compute_trust_tier(self) -> Self:
         self.trust_tier = _trust_tier_for(self.source, self.verified)
+        return self
+
+    @model_validator(mode="after")
+    def _mask_composite_graph_credentials(self) -> Self:
+        """Mask credential-bearing node fields in a composite primitive's content (FAR-1380).
+
+        A ``composite`` library primitive stores its sub-pipeline graph in
+        ``content_json`` with the SAME credential-bearing node fields
+        (``env_vars`` / ``context_files`` / ``composite_parameter_values`` /
+        ``parameter_overrides``) a pipeline graph stores — so anyone holding
+        ``library.search`` could read a contributor's plaintext credentials
+        back out of the library. Every read surface that serialises a
+        ``LibraryPrimitiveResponse`` (list, get, create, patch, delete, restore,
+        adapt, community contribute/list/publish, community entry install)
+        passes through this validator, so the shipped
+        :func:`modulo.api.middleware.sensitive_mask.mask_pipeline_graph_node`
+        per-node masker covers them all at one chokepoint. Non-composite
+        primitives pass through untouched; a masker failure is impossible to
+        leak through (``mask_pipeline_graph_node`` scrubs fail-closed).
+        """
+        if self.primitive_type != "composite":
+            return self
+        content = self.content_json
+        nodes = content.get("nodes")
+        if not isinstance(nodes, list):
+            return self
+        masked_content = dict(content)
+        masked_content["nodes"] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
+        self.content_json = masked_content
         return self
 
 
@@ -759,6 +789,15 @@ async def create_library_primitive_endpoint(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
                 )
+            write_content = req.content_json
+            if req.primitive_type == "composite" and isinstance(write_content.get("nodes"), list):
+                # FAR-1374 parity: resolve masked echoes first (a create has no
+                # stored counterpart to resolve against), then fail closed with
+                # 422 on any sentinel the resolve could not map — composite
+                # sub-graphs store the caller's declared credential values
+                # as-is, and a submitted mask sentinel is never persisted.
+                write_content = dict(write_content)
+                write_content["nodes"] = resolve_and_reject_mask_sentinels(list(write_content["nodes"]), None)
             prim = await create_library_primitive(
                 session,
                 org_id=principal.organisation_id,
@@ -770,7 +809,7 @@ async def create_library_primitive_endpoint(
                 author=principal.account_id.hex,
                 version="1.0",
                 tags=req.tags,
-                content_json=req.content_json,
+                content_json=write_content,
                 source_url=None,
                 forked_from=None,
                 checksum=None,
@@ -827,6 +866,20 @@ async def update_library_primitive_endpoint(
                             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail=str(exc),
                         ) from None
+                    if existing.primitive_type == "composite" and isinstance(
+                        updates["content_json"].get("nodes"), list
+                    ):
+                        # FAR-1181 + FAR-1374 parity: a PATCH round-tripping the
+                        # masked GET resolves mask echoes against the stored
+                        # composite sub-graph BEFORE the write (the echo is
+                        # restored to the stored value), and a sentinel the
+                        # resolve cannot map is refused 422 instead of being
+                        # dropped or persisted.
+                        updates["content_json"] = dict(updates["content_json"])
+                        updates["content_json"]["nodes"] = resolve_and_reject_mask_sentinels(
+                            list(updates["content_json"]["nodes"]),
+                            [n for n in (existing.content_json or {}).get("nodes", []) if isinstance(n, dict)],
+                        )
             prim = await update_library_primitive(session, primitive_id, updates)
     except IntegrityError:
         _log.exception("library.update_library_primitive_endpoint")
@@ -1874,6 +1927,14 @@ async def community_contribute_endpoint(
     """Submit a community library contribution."""
     try:
         org_id = _require_organisation_id(principal)
+        submitted_content = req.content_json
+        if req.primitive_type == "composite" and isinstance(submitted_content.get("nodes"), list):
+            # FAR-1374 parity with the library create/patch gates: a composite
+            # contribution stores a caller-submitted sub-graph; a fresh mask
+            # sentinel (no stored counterpart exists on contribute) is refused
+            # 422 rather than persisted into a draft contribution row.
+            submitted_content = dict(submitted_content)
+            submitted_content["nodes"] = resolve_and_reject_mask_sentinels(list(submitted_content["nodes"]), None)
         result = await contribute_primitive(
             session,
             org_id=org_id,
@@ -1883,7 +1944,7 @@ async def community_contribute_endpoint(
             slug=req.slug,
             description=req.description,
             tags=req.tags,
-            content_json=req.content_json,
+            content_json=submitted_content,
             source_url=req.source_url,
         )
     except IntegrityError:

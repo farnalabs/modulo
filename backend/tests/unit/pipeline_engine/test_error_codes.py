@@ -139,6 +139,32 @@ def test_hitl_review_terminalizer_codes_map_to_their_own_hitl_entries():
     assert "hitl.review_missing" in expand_code_variants("hitl_review_missing")
 
 
+def test_age_gate_no_progress_code_is_registered_not_supersede():
+    """FAR-1329: the age-bound terminalizer writes its OWN truthful code.
+
+    ``_terminalize_mid_graph_wedges`` matches ``status='running' AND
+    dispatcher='saq' AND started_at < now() - 135min`` — an AGE gate whose
+    predicate never compares runs. It used to stamp the legacy
+    ``executor_superseded`` code, which rendered as ``run.superseded`` /
+    "Superseded by a newer run." and sent a full investigation down the wrong
+    path (run 03721c8e: three runs, all zero-node, all falsely "superseded").
+    The raw code it now writes must be registered in the SAME change (a
+    closed vocabulary — an unregistered spelling resolves to
+    ``harness.unknown`` / "Unknown error"), while a GENUINELY superseded run
+    (the executor's ``SupersededNodeError`` path) keeps ``run.superseded``.
+    """
+    assert map_legacy_code("no_progress") == "run.no_progress"
+    assert map_legacy_code("no_progress") != "harness.unknown"
+    spec = ERROR_CODE_REGISTRY["run.no_progress"]
+    assert spec.error_class == "run"
+    assert spec.retryable is False
+    assert class_for("no_progress") == "run"
+    assert "no_progress" in known_error_codes()
+    assert "run.no_progress" in expand_code_variants("no_progress")
+    # The genuine supersede vocabulary is untouched.
+    assert map_legacy_code("executor_superseded") == "run.superseded"
+
+
 def test_map_legacy_code_unknown_and_none_fall_back_to_harness_unknown():
     """Unmapped codes and None resolve to the harness.unknown fallback."""
     assert map_legacy_code("some_mystery_code") == "harness.unknown"

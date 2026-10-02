@@ -17,7 +17,10 @@ the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
   - eval_blocked      → level: error,  scope: org
   - feedback_pending  → level: info,   scope: user (target_user_id assigned)
   - system_announcement → level: info,  scope: org
-  - trigger_deactivated → level: warning, scope: org (FAR-190)
+  - trigger_deactivated → level: warning, scope: org (FAR-190; wording is
+                          payload-driven per trigger_type — FAR-1410)
+  - trigger_streak_alert → level: warning, scope: org (FAR-1410, a notify-only
+                          cron streak trip that deactivated NOTHING)
   - org_triggers_auto_paused → level: warning, scope: admin (FAR-1183)
   - guardrail_enforcement_gap / guardrail_kill_switch / guardrail_unexpected_skip → scope: admin (FAR-223)
 """
@@ -50,6 +53,7 @@ from modulo.core.notifier import (
     EVENT_RUN_STALLED,
     EVENT_SYSTEM_ANNOUNCEMENT,
     EVENT_TRIGGER_DEACTIVATED,
+    EVENT_TRIGGER_STREAK_ALERT,
 )
 from modulo.db.crud.notifications import create_notification
 from modulo.db.models.notification import Notification
@@ -191,6 +195,19 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
+    # FAR-1410 — a notify-only cron no-delivery streak trip (FAR-1387): the
+    # threshold was reached and NOTHING was deactivated, so it gets its own
+    # render config + category rather than borrowing the deactivation's
+    # (operators filtering on triggers.auto_deactivated must never see a trip
+    # that took no action).
+    EVENT_TRIGGER_STREAK_ALERT: {
+        "level": "warning",
+        "scope": "org",
+        "category": "triggers.streak_alert",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
     # FAR-1183 — org cost-controls auto-stop ("Auto-stop on budget exceeded") tripped.
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: {
         "level": "warning",
@@ -256,6 +273,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
     EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
     EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
+    EVENT_TRIGGER_STREAK_ALERT: "No-delivery streak detected — {pipeline_name}",
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: "Triggers paused — budget exceeded",
     EVENT_CIRCUIT_BREAKER_TRIPPED: "Circuit breaker tripped — {pipeline_name}",
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
@@ -289,6 +307,11 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_TRIGGER_DEACTIVATED: (
         'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
         "(threshold {threshold})."
+    ),
+    EVENT_TRIGGER_STREAK_ALERT: (
+        'Cron trigger "{pipeline_name}" reached {streak} consecutive no-delivery runs (threshold {threshold}). '
+        "No action was taken — the trigger was not deactivated. Auto-deactivation for a cron trigger is opt-in "
+        "via no_delivery_auto_deactivate."
     ),
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: (
         "All pipeline triggers were auto-paused because {reason_label}: spend reached {spend_usd} USD "
@@ -327,6 +350,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_FEEDBACK_PENDING: "/feedback/inbox",
     EVENT_SYSTEM_ANNOUNCEMENT: None,
     EVENT_TRIGGER_DEACTIVATED: None,
+    EVENT_TRIGGER_STREAK_ALERT: "/settings/triggers",
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: None,
     # No deep link: there is no /pipelines/{id} detail route (only the editor),
     # mirroring the sibling auto-pause event's None action.
@@ -335,6 +359,38 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_GUARDRAIL_KILL_SWITCH: None,
     EVENT_GUARDRAIL_UNEXPECTED_SKIP: _RUN_DETAIL_URL,
 }
+
+# FAR-1410 — payload-driven wording overrides, selected from the payload's
+# ``trigger_type`` before the base templates above. ``trigger_deactivated``'s
+# base copy is ongoing-worded (FAR-190), but the same event also fires for a
+# CRON trigger that opted in to auto-deactivation via
+# ``no_delivery_auto_deactivate`` (FAR-1387), where "Ongoing trigger" would be
+# wrong. An (event_type, trigger_type) pair with no override falls back to the
+# base template, so the ongoing case renders byte-identically to before.
+_TRIGGER_TYPE_TEMPLATE_OVERRIDES: dict[str, dict[str, dict[str, str]]] = {
+    EVENT_TRIGGER_DEACTIVATED: {
+        "cron": {
+            "title": "Cron trigger auto-deactivated — {pipeline_name}",
+            "body": (
+                'Cron trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery '
+                "runs (threshold {threshold}). Auto-deactivation was enabled for this trigger via "
+                "no_delivery_auto_deactivate."
+            ),
+        },
+    },
+}
+
+
+def _template_override(event_type: str, payload: dict[str, Any], field: str) -> str | None:
+    """FAR-1410 — the payload-driven template variant for ``field`` ("title" /
+    "body"), or ``None`` when the base template applies."""
+    variants = _TRIGGER_TYPE_TEMPLATE_OVERRIDES.get(event_type)
+    if variants is None:
+        return None
+    override = variants.get(str(payload.get("trigger_type") or ""))
+    if override is None:
+        return None
+    return override.get(field)
 
 
 def notification_categories() -> frozenset[str]:
@@ -368,12 +424,15 @@ class NotificationEventMapper:
             _log.debug("mapper.unknown_event_type", extra={"event_type": event_type})
             return None
 
+        # FAR-1410 — title/body wording may vary by the payload's trigger_type
+        # (e.g. trigger_deactivated renders ongoing- or cron-worded copy);
+        # ``or`` falls back to the base template when no override applies.
         title = self._resolve_template(
-            _TITLE_TEMPLATES.get(event_type, event_type),
+            _template_override(event_type, payload, "title") or _TITLE_TEMPLATES.get(event_type, event_type),
             payload,
         )
         body = self._resolve_template(
-            _BODY_TEMPLATES.get(event_type, ""),
+            _template_override(event_type, payload, "body") or _BODY_TEMPLATES.get(event_type, ""),
             payload,
         )
         action_url = _ACTION_URL_TEMPLATES.get(event_type)
