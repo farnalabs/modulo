@@ -5,9 +5,9 @@ import {
   cleanupJourneyEntities,
   createManualNodePipeline,
   pollRunStatus,
-  reissueApproveBestEffort,
   triggerRun,
   uniqueName,
+  waitForRunCompletionWithHitlRecovery,
   type JourneyCleanup,
 } from '../setup/realstack-api'
 
@@ -83,6 +83,14 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
   })
 
   test('claiming and approving the gate completes the run, lists it, and audits the decision', { tag: '@regression' }, async ({ page, env }) => {
+    // The recovery wait below is bounded by a 90 s deadline, but that budget
+    // is spent inside the shared test/beforeEach-hook timeout and the test
+    // timeout BEGINS at hook start (Playwright: the test timeout is shared
+    // with beforeEach). This test's beforeEach logs in and runs the
+    // afterEach-style cleanup, so the default 180 s can be consumed by the
+    // hook before the deadline is honoured. Extend the timeout so deadline +
+    // teardown always fit.
+    test.setTimeout(240_000)
     const apiBase = apiBaseFor(env)
     const token = await apiLogin(env)
     const cleanup: JourneyCleanup = { pipelineIds: [], schemaIds: [], token, apiBase }
@@ -112,50 +120,19 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
 
       // The run must really resume and complete on the backend. Staging's DB
       // and backend can transiently 503 mid-approve, which leaves the run
-      // parked at its still-claimed gate. Re-issue the decision in a bounded
-      // loop until the run completes. Recovery MUST NOT go through the UI
-      // approve control: while the first approve request is still in flight
-      // that control is disabled ("Approving…"), so clicking it blocks until
-      // the test timeout instead of letting the loop retry. Re-issue through
-      // the real API instead (same-account re-claim re-issues a fresh token,
-      // FAR-686), which works regardless of the UI button's state.
-      //
-      // BOUND the re-issue phase by a total DEADLINE, not a fixed iteration
-      // count: a retry loop sized only by iterations runs for (iterations ×
-      // poll budget), which overran Playwright's 120 s test timeout on
-      // staging (2026-10-01) — the run had in fact completed while the loop
-      // kept trying, and the test died on the deadline with a misleading
-      // "did not complete" message. The deadline below leaves the suite ~30 s
-      // of headroom, and the final status is re-observed after the loop so a
-      // run that completed during the last re-issue still passes.
-      let status = ''
-      let lastError: unknown
-      const approveDeadline = Date.now() + 90_000
-      while (status !== 'complete' && Date.now() < approveDeadline) {
-        try {
-          status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 15_000 })
-        } catch (err) {
-          lastError = err
-          await reissueApproveBestEffort(apiBase, token, run.run_id, 'E2E journey approval')
-        }
-      }
-      if (status !== 'complete') {
-        // Last chance: the run may have completed during the final re-issue
-        // (the sub-budget poll above was capped at 15 s), so re-observe once
-        // with the remaining headroom before failing. A genuinely wedged run
-        // still fails — this only removes the false negative at the boundary.
-        try {
-          status = await pollRunStatus(apiBase, token, run.run_id, (s) => s === 'complete', { timeoutMs: 25_000 })
-        } catch (err) {
-          lastError = err
-        }
-      }
-      if (status !== 'complete') {
-        throw new Error(
-          `run ${run.run_id} did not complete after re-issuing the approve decision; ` +
-            `last poll: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
-        )
-      }
+      // parked at its still-claimed gate (the UI approve 503s, and a recovery
+      // attempt's own approve 503s AFTER its claim has already flipped the run
+      // to `claimed`). Re-issue the decision through the real API until the
+      // run completes; the bounded recovery loop and its rationale live in
+      // waitForRunCompletionWithHitlRecovery. It is deadline-bounded (never a
+      // fixed iteration count, whose worst case overran the hook timeout), and
+      // its own re-issue — NOT the committed-decision reconcile, which skips a
+      // claimed-but-undecided row unconditionally — is what carries that run to
+      // completion rather than reporting it as a hard failure.
+      const status = await waitForRunCompletionWithHitlRecovery(apiBase, token, run.run_id, {
+        deadlineMs: 90_000,
+        notes: 'E2E journey approval',
+      })
       expect(status).toBe('complete')
 
       // Observable effect: the decision is hoisted as success feedback...
