@@ -6194,10 +6194,20 @@ async def _dispatcher_reconcile_body(
     q = RedisQueue(redis_client, name=queue_name)
     # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
     enqueue_failed_redispatched = 0
-    # FAR-904: cumulative row budget across all orgs.  Tracks terminalizer
-    # rows + reconcile-scan rows so the sweep always completes within the
-    # inner deadline instead of timing out mid-org.  Overflow drains on
-    # subsequent ticks.
+    # FAR-904: cumulative RECONCILE-SCAN row budget across all orgs — the
+    # rows counted by ``summary["scanned"]`` in the per-org row loop.
+    # (The batch terminalizers are separately bounded by ``terminalize_max``
+    # per statement, so they are already capped and are not counted here.)
+    #
+    # FAR-1425: the budget is only useful if it can actually STOP the work.
+    # Checked at the inter-org boundary alone it never binds on a
+    # single-org deployment — the self-hosted default, and the shape prod
+    # had (``orgs_probed=1``): ``rows_processed`` is still 0 when the only
+    # org is reached, so the loop never breaks and the org's row select ran
+    # UNBOUNDED, while the timeout message advertised ``max_rows=500``.  The
+    # remaining budget is therefore passed INTO ``_reconcile_org``, which
+    # both LIMITs the row select and stops the per-row loop at the budget.
+    # Overflow drains on subsequent ticks.
     rows_processed = 0
     # qa F3: the composed recovery predicate is the SINGLE composition
     # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
@@ -6235,6 +6245,10 @@ async def _dispatcher_reconcile_body(
             terminalized_run_ids=terminalized_run_ids,
             terminalize_max=terminalize_max,
             early_detect_minutes=early_detect_minutes,
+            # FAR-1425: hand the ORG the remainder of the tick's row budget,
+            # not just the inter-org gate.  ``rows_processed < max_rows`` is
+            # guaranteed here (the break above), so this is always >= 1.
+            row_budget=max_rows - rows_processed,
         )
         rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
@@ -6334,8 +6348,29 @@ async def _reconcile_org(
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS,
     early_detect_minutes: int | None = None,
+    row_budget: int | None = None,
 ) -> int:
-    """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
+    """Run one org's reconcile pass (terminalizers + row select + per-row loop).
+
+    FAR-1425: ``row_budget`` is the remainder of the tick's cumulative
+    ``max_rows`` budget.  It is applied TWICE, because the budget is only
+    meaningful if it can stop the work:
+
+    * the row select is ``LIMIT``ed to it — the two correlated
+      ``NOT EXISTS`` legs in the SELECT list are evaluated once per FETCHED
+      row, so an unbounded fetch is itself unbounded work even before the
+      per-row loop starts;
+    * the per-row loop breaks at it (defence in depth — the LIMIT already
+      guarantees it, but the loop must not be able to exceed the budget the
+      timeout message advertises).
+
+    When the fetch fills the budget exactly the org may still have matching
+    rows left; the overflow is counted in ``summary["rows_deferred"]`` (one
+    entry for this org's capped scan) and drains on a later 60s tick.
+
+    ``row_budget=None`` (a direct caller such as a test that is exercising
+    one specific branch) means unbounded, exactly as before FAR-1425.
+    """
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.run import Run
 
@@ -6366,60 +6401,69 @@ async def _reconcile_org(
                 if len(terminalized) >= terminalize_max:
                     summary["terminalize_capped"] += 1
                 terminalized_run_ids.extend((run_id, org_id) for run_id in terminalized)
-            rows = (
-                await session.execute(
-                    select(
-                        Run.id,
-                        Run.pipeline_id,
-                        Run.status,
-                        Run.dispatched_at,
-                        Run.heartbeat_at,
-                        Run.node_token_usage,
-                        # FAR-583 B1: the legacy outputs_json column is gone
-                        # from the scan — the row-level nodeless recheck
-                        # discriminates on whether the run still has NO
-                        # ``__final__`` row in the per-node store (the
-                        # finalisation-represented marker). Computed as a
-                        # correlated NOT EXISTS (see _nodeless_zombie_predicate;
-                        # one shared expression — qa iteration 1 rider).
-                        _final_row_absent_expr().label("outputs_absent"),
-                        # FAR-1088 F4: the zero-node checkpoint leg as a row
-                        # flag — the SAME shared expression the SQL predicate
-                        # uses, so the row-level recheck
-                        # (_is_nodeless_zombie_row) enforces the identical
-                        # premise for rows matched via OTHER branches (e.g.
-                        # stale heartbeat).
-                        _checkpoint_absent_expr().label("checkpoints_absent"),
-                        Run.started_at,
-                        Run.claim_count,
-                        Run.dispatcher,
-                        # FAR-1088 W-B: consumed by the row-level nodeless
-                        # recheck (_is_nodeless_zombie_row) — a live dispatch
-                        # marker shields the row from the nodeless repair
-                        # until the in-flight safety floor passes.
-                        Run.sandbox_dispatch_state,
-                        text("runs.enqueue_failed_at AS enqueue_failed_at"),
-                        Pipeline.retry_policy,
-                    )
-                    .join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
-                    .where(
-                        Run.organisation_id == org_id,
-                        # The F6a statuses must be IN this scan tuple too (qa
-                        # F1): the gated-recovery branch below can only ever
-                        # match rows this outer WHERE let through.
-                        Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
-                        re_dispatch_predicate,
-                        _reconcile_capacity_marker_exclusion(tuning.capacity_redispatch_seconds),
-                    )
-                )
-            ).all()
+            row_select = select(
+                Run.id,
+                Run.pipeline_id,
+                Run.status,
+                Run.dispatched_at,
+                Run.heartbeat_at,
+                Run.node_token_usage,
+                # FAR-583 B1: the legacy outputs_json column is gone
+                # from the scan — the row-level nodeless recheck
+                # discriminates on whether the run still has NO
+                # ``__final__`` row in the per-node store (the
+                # finalisation-represented marker). Computed as a
+                # correlated NOT EXISTS (see _nodeless_zombie_predicate;
+                # one shared expression — qa iteration 1 rider).
+                _final_row_absent_expr().label("outputs_absent"),
+                # FAR-1088 F4: the zero-node checkpoint leg as a row
+                # flag — the SAME shared expression the SQL predicate
+                # uses, so the row-level recheck
+                # (_is_nodeless_zombie_row) enforces the identical
+                # premise for rows matched via OTHER branches (e.g.
+                # stale heartbeat).
+                _checkpoint_absent_expr().label("checkpoints_absent"),
+                Run.started_at,
+                Run.claim_count,
+                Run.dispatcher,
+                # FAR-1088 W-B: consumed by the row-level nodeless
+                # recheck (_is_nodeless_zombie_row) — a live dispatch
+                # marker shields the row from the nodeless repair
+                # until the in-flight safety floor passes.
+                Run.sandbox_dispatch_state,
+                text("runs.enqueue_failed_at AS enqueue_failed_at"),
+                Pipeline.retry_policy,
+            )
+            row_select = row_select.join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
+            row_select = row_select.where(
+                Run.organisation_id == org_id,
+                # The F6a statuses must be IN this scan tuple too (qa
+                # F1): the gated-recovery branch below can only ever
+                # match rows this outer WHERE let through.
+                Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
+                re_dispatch_predicate,
+                _reconcile_capacity_marker_exclusion(tuning.capacity_redispatch_seconds),
+            )
+            if row_budget is not None:
+                # FAR-1425: bound the FETCH itself. The two correlated NOT
+                # EXISTS legs above are SELECT-list expressions, so Postgres
+                # evaluates them once per fetched row — an unbounded fetch is
+                # unbounded work inside this single statement, on top of the
+                # per-row loop below.
+                row_select = row_select.limit(row_budget)
+            rows = (await session.execute(row_select)).all()
         except asyncio.CancelledError:
             raise
         except Exception:
             _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
             return enqueue_failed_redispatched
 
-        for row in rows:
+        for row_index, row in enumerate(rows):
+            # FAR-1425: defence in depth — the LIMIT already caps the fetch,
+            # but the loop must never be able to exceed the budget the
+            # inner-deadline message advertises (``max_rows=...``).
+            if row_budget is not None and row_index >= row_budget:
+                break
             summary["scanned"] += 1
             enqueue_failed_redispatched = await _reconcile_one_row(
                 session,
@@ -6433,6 +6477,11 @@ async def _reconcile_org(
                 terminalized_run_ids,
                 early_detect_minutes=early_detect_minutes,
             )
+        # FAR-1425: a fetch that fills the budget exactly may have left rows
+        # behind. Count the org as deferred so the cap is visible instead of
+        # silently reported as a clean tick; the remainder drains next tick.
+        if row_budget is not None and len(rows) >= row_budget:
+            summary["rows_deferred"] = summary.get("rows_deferred", 0) + 1
     return enqueue_failed_redispatched
 
 

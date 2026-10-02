@@ -7,6 +7,12 @@ hits the inner deadline and times out with an empty TimeoutError message.
 The fix adds a cumulative row budget (max_rows) and attaches budget/elapsed
 context to the timeout error.
 
+FAR-1425: That budget was only checked BETWEEN orgs, so on a single-org
+deployment (the self-hosted default) it never bound and ``_reconcile_org``
+fetched and processed every matching row while the timeout message still
+advertised ``max_rows=500``.  The remainder of the budget is now handed to
+each org, which LIMITs the row select and stops the per-row loop at it.
+
 FAR-905: The runner_marker_sweep and runner_workspace_reconcile SAQ wrappers
 persist ``"error": "sweep_failed"`` as a static string without the actual
 exception details.  The fix embeds the exception type and message in the
@@ -18,7 +24,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -654,3 +660,147 @@ class TestLibrarySyncErrorAttribution:
         assert "unexpected cron failure" in result["error"]
         assert "ConnectionError" in result["error"]
         assert "Network unreachable" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1425: the row budget must be RESPECTED by a single-org sweep
+# ---------------------------------------------------------------------------
+
+
+class _BudgetSession:
+    """Session double for the ``_reconcile_org`` row-budget tests.
+
+    With the batch terminalizer registry emptied the row select is the ONLY
+    statement executed, so every recorded statement can be treated as it.
+    """
+
+    def __init__(self, rows: list[Any]) -> None:
+        self.rows = rows
+        self.statements: list[Any] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    async def execute(self, stmt: Any, params: Any = None) -> MagicMock:
+        self.statements.append(stmt)
+        result = MagicMock()
+        result.all.return_value = list(self.rows)
+        return result
+
+
+def _budget_tuning() -> ch.ReconcileTuning:
+    return ch.ReconcileTuning(
+        nodeless_window=15,
+        max_age_minutes=135,
+        claim_cap=3,
+        stale_window=90,
+        capacity_redispatch_seconds=60,
+        hitl_review_cancel_grace_seconds=3600,
+    )
+
+
+async def _run_org(rows: list[Any], row_budget: int | None) -> tuple[dict[str, Any], _BudgetSession, Any]:
+    """Drive the REAL ``_reconcile_org`` with *row_budget* applied."""
+    session = _BudgetSession(rows)
+    summary: dict[str, Any] = {"scanned": 0}
+    with (
+        patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+        patch.object(ch, "_BATCH_TERMINALIZER_SPECS", ()),
+        patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, return_value=0) as one_row,
+    ):
+        await ch._reconcile_org(
+            factory=MagicMock(return_value=session),
+            q=MagicMock(),
+            redis_client=MagicMock(),
+            org_id=uuid.uuid4(),
+            re_dispatch_predicate=ch.text("1 = 1"),
+            tuning=_budget_tuning(),
+            enqueue_failed_redispatched=0,
+            summary=summary,
+            terminalized_run_ids=[],
+            row_budget=row_budget,
+        )
+    return summary, session, one_row
+
+
+class TestSingleOrgRowBudget:
+    """FAR-1425: ``max_rows`` is advertised in the inner-deadline message, so
+    it must bound ONE org's scan — the inter-org gate alone never binds on a
+    single-org deployment (the self-hosted default, and prod's shape)."""
+
+    @pytest.mark.asyncio
+    async def test_row_select_is_limited_to_the_budget(self) -> None:
+        """The fetch itself is bounded — the two correlated NOT EXISTS legs
+        are SELECT-list expressions evaluated once per FETCHED row."""
+        _summary, session, _one_row = await _run_org([object() for _ in range(10)], row_budget=3)
+        assert len(session.statements) == 1
+        assert "LIMIT" in str(session.statements[0])
+
+    @pytest.mark.asyncio
+    async def test_row_loop_never_exceeds_the_budget(self) -> None:
+        """A single org processes at most ``row_budget`` rows even when the
+        session hands back more, and reports the capped org as deferred."""
+        summary, _session, one_row = await _run_org([object() for _ in range(10)], row_budget=3)
+        assert one_row.await_count == 3
+        assert summary["scanned"] == 3
+        assert summary.get("rows_deferred", 0) == 1
+
+    @pytest.mark.asyncio
+    async def test_under_budget_processes_every_row_and_defers_nothing(self) -> None:
+        """The budget bounds the scan; it does not truncate work that fits."""
+        summary, session, one_row = await _run_org([object() for _ in range(2)], row_budget=5)
+        assert one_row.await_count == 2
+        assert summary["scanned"] == 2
+        assert summary.get("rows_deferred", 0) == 0
+        assert "LIMIT" in str(session.statements[0])
+
+    @pytest.mark.asyncio
+    async def test_direct_call_without_a_budget_stays_unbounded(self) -> None:
+        """``row_budget=None`` is the pre-FAR-1425 contract for direct
+        callers — no LIMIT, no defer accounting."""
+        summary, session, one_row = await _run_org([object() for _ in range(7)], row_budget=None)
+        assert one_row.await_count == 7
+        assert summary["scanned"] == 7
+        assert summary.get("rows_deferred", 0) == 0
+        assert "LIMIT" not in str(session.statements[0])
+
+    @pytest.mark.asyncio
+    async def test_single_org_receives_the_whole_budget(self) -> None:
+        """The tick hands the ONE org ``max_rows`` itself, rather than only
+        gating at the (never reached) inter-org boundary."""
+        summary = ch._dispatcher_summary()
+        captured: list[int] = []
+
+        async def fake_reconcile_org(*args: Any, **kwargs: Any) -> int:
+            captured.append(int(kwargs["row_budget"]))
+            summary["scanned"] += 7
+            return 0
+
+        with (
+            patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=[uuid.uuid4()]),
+            patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org),
+            patch.object(ch, "reconciler_recovery_predicate"),
+            patch.object(ch, "_open_system_factory"),
+            patch("modulo.core.cron_helpers.AsyncRedis"),
+        ):
+            await ch._dispatcher_reconcile_body(
+                _settings=_make_settings(dispatcher_reconcile_max_rows_per_tick=500),
+                factory=MagicMock(),
+                queue_name="runs",
+                reenqueue_window=5,
+                tuning=_budget_tuning(),
+                terminalize_max=25,
+                facts_max=25,
+                max_rows=500,
+                redis_client=MagicMock(),
+                summary=summary,
+                terminalized_run_ids=[],
+            )
+
+        assert captured == [500]
