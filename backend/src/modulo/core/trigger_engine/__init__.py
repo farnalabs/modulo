@@ -432,7 +432,7 @@ class _RateLimitState:
 #
 # The set is the union of every ``config.get(...)`` read site across the
 # trigger engine and its fire paths (``cron_helpers``, ``agent_signal``,
-# ``slack_app_mention``); see the mirrored definition in
+# ``slack_app_mention``, ``trigger_streak``); see the mirrored definition in
 # ``modulo.api.routes.triggers`` for the per-surface grouping.
 _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
     {
@@ -468,6 +468,12 @@ _RECOGNISED_TRIGGER_CONFIG_KEYS: frozenset[str] = frozenset(
         "suite_ceiling",
         "entity_thresholds",
         "eval_definition_version",
+        # No-delivery streak config (core/trigger_streak.py — FAR-190/FAR-1387)
+        # threshold + legacy fallback + per-trigger min window + cron opt-in
+        "max_no_delivery_streak",
+        "max_consecutive_failures",
+        "no_delivery_min_window_hours",
+        "no_delivery_auto_deactivate",
     }
 )
 
