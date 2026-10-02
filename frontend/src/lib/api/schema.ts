@@ -4505,14 +4505,17 @@ export interface paths {
          * Reveal Node Prompt
          * @description Reveal the messages reconstructed for a node's LLM call.
          *
-         *     Reconstructs a system message from the run's SNAPSHOT-frozen prompt
-         *     template, assistant messages from prior node outputs, and a user message
-         *     from the run's input payload (or checkpoint state). This is a
-         *     reconstruction of the run's frozen configuration plus observed run data -
-         *     NOT the rendered prompt actually dispatched to the model, which is a
-         *     single rendered user message built from dispatch-time context. Returns
-         *     the full prompt text, structured messages (system, user, assistant), and
-         *     an estimated token count. Sensitive credential-like values are masked.
+         *     Reconstructs a system message from the run's FROZEN prompt template -
+         *     the snapshot node's prompt_template with the run's frozen variant
+         *     per-agent prompt override applied on top when one applies (the same
+         *     precedence dispatch uses) - assistant messages from prior node outputs,
+         *     and a user message from the run's input payload (or checkpoint state).
+         *     This is a reconstruction of the run's frozen configuration plus observed
+         *     run data - NOT the rendered prompt actually dispatched to the model,
+         *     which is a single rendered user message built from dispatch-time
+         *     context. Returns the full prompt text, structured messages (system,
+         *     user, assistant), and an estimated token count. Sensitive
+         *     credential-like values are masked.
          */
         post: operations["reveal_node_prompt_api_v1_runs__run_id__nodes__node_id__prompt_reveal_post"];
         delete?: never;

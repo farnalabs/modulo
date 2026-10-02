@@ -71,6 +71,7 @@ def _make_run(
     *,
     input_payload: dict[str, Any] | None = None,
     outputs_json: dict[str, Any] | None = None,
+    variant_config_snapshot: dict[str, Any] | None = None,
 ) -> MagicMock:
     r = MagicMock()
     r.id = _RUN_ID
@@ -79,6 +80,9 @@ def _make_run(
     r.langgraph_thread_id = _THREAD_ID
     r.input_payload = input_payload or {"query": "test input"}
     r.outputs_json = outputs_json
+    # Normal runs carry no frozen variant config (NULL column); override tests
+    # pass the frozen column shape explicitly.
+    r.variant_config_snapshot = variant_config_snapshot
     return r
 
 
@@ -234,12 +238,90 @@ class TestLookupAgentForNode:
         result = _lookup_agent_for_node(graph, "manual-node")
         assert result is None
 
-    def test_returns_none_when_node_not_found(self) -> None:
+    def test_raises_404_when_node_not_found(self) -> None:
+        # FAR-1398: the lookup gates through _require_node, so an absent node
+        # is a 404 (never ambiguous with "node exists but has no agent").
+        from fastapi import HTTPException
+
         from modulo.api.routes.runs import _lookup_agent_for_node
 
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID)}]}
-        result = _lookup_agent_for_node(graph, "nonexistent")
-        assert result is None
+        with pytest.raises(HTTPException) as exc_info:
+            _lookup_agent_for_node(graph, "nonexistent")
+        assert exc_info.value.status_code == 404
+        assert "not found in pipeline graph" in exc_info.value.detail
+
+
+class TestFindNode:
+    def test_returns_node_when_found(self) -> None:
+        from modulo.api.routes.runs import _find_node
+
+        graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID)}, {"id": "node-b"}]}
+        node = _find_node(graph, "node-b")
+        assert node is not None
+        assert node["id"] == "node-b"
+
+    def test_returns_none_when_node_not_found(self) -> None:
+        from modulo.api.routes.runs import _find_node
+
+        graph = {"nodes": [{"id": "node-a"}]}
+        assert _find_node(graph, "nonexistent") is None
+
+
+class TestResolveRevealPromptTemplate:
+    """FAR-1398: dispatch precedence - frozen variant override > snapshot node."""
+
+    def test_variant_override_wins_over_snapshot_template(self) -> None:
+        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+
+        graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
+        variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<VARIANT>"}}}
+        assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<VARIANT>"
+
+    def test_falls_back_to_snapshot_template_without_variant_config(self) -> None:
+        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+
+        graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
+        assert _resolve_reveal_prompt_template(graph, "node-a", None) == "<SNAPSHOT>"
+
+    def test_override_for_a_different_agent_does_not_apply(self) -> None:
+        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+
+        graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
+        variant = {"_run_overrides": {"prompt_templates": {str(uuid.uuid4()): "<OTHER>"}}}
+        assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SNAPSHOT>"
+
+    def test_non_agent_node_ignores_variant_config(self) -> None:
+        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+
+        graph = {"nodes": [{"id": "node-a", "prompt_template": "<SNAPSHOT>"}]}
+        variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<VARIANT>"}}}
+        assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SNAPSHOT>"
+
+    @pytest.mark.parametrize(
+        "variant",
+        [
+            "not-a-dict",
+            {"variant_id": "v1"},
+            {"_run_overrides": "not-a-dict"},
+            {"_run_overrides": {"prompt_templates": "not-a-dict"}},
+            {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): 123}}},
+            {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): ""}}},
+        ],
+        ids=[
+            "column-not-dict",
+            "no-run-overrides",
+            "run-overrides-not-dict",
+            "prompt-templates-not-dict",
+            "value-not-str",
+            "empty-string",
+        ],
+    )
+    def test_malformed_variant_config_falls_back_to_snapshot_template(self, variant: Any) -> None:
+        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+
+        graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
+        assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SNAPSHOT>"
 
 
 class TestBuildMessagesFromTemplateAndState:
@@ -388,17 +470,19 @@ class TestRevealNodePrompt:
         assert resp.status_code == 404
         assert "Snapshot" in resp.json()["detail"]
 
-    def test_reveal_agent_not_found_returns_404(self, client: TestClient) -> None:
+    def test_reveal_deleted_agent_serves_frozen_template_fail_closed(self, client: TestClient) -> None:
+        """FAR-1398 behaviour change (404 -> 200): a DELETED live Agent row no
+        longer 404s the reveal. The snapshot is the sole surviving record of
+        the run's prompt, so the frozen template is served and the current
+        policy flag fails CLOSED (``prompt_always_visible=False``) because
+        there is no live row to grant visibility. The 404 remains for a node
+        absent from the snapshot graph entirely (see
+        ``test_reveal_node_not_found_returns_404``).
+        """
         session = _session_holder[0]
         run = _make_run()
-        snapshot = _make_snapshot()
-        snapshot.graph_json = {
-            "nodes": [
-                {"id": _NODE_ID, "agent_id": str(_AGENT_ID)},
-            ],
-            "edges": [],
-        }
-
+        snapshot = _make_snapshot(prompt_template="<FROZEN>")
+        # agent=None: the agents query resolves no live row (deleted agent).
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=None))
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
@@ -406,8 +490,12 @@ class TestRevealNodePrompt:
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
 
-        assert resp.status_code == 404
-        assert "Agent" in resp.json()["detail"]
+        assert resp.status_code == 200
+        body = resp.json()
+        system_contents = [m["content"] for m in body["messages"] if m["role"] == "system"]
+        assert system_contents == ["<FROZEN>"]
+        assert "<FROZEN>" in body["prompt"]
+        assert body["prompt_always_visible"] is False
 
     def _make_mock_execute(self, run, snapshot, agent=None, checkpoint_row=None):
         """Helper to build the common mock_execute pattern."""
@@ -497,6 +585,87 @@ class TestRevealNodePrompt:
         assert "<LIVE>" not in body["prompt"]
         assert "<LIVE>" not in json.dumps(body["messages"])
         assert body["prompt_always_visible"] is True
+
+    def test_reveal_applies_run_frozen_variant_prompt_override(self, client: TestClient) -> None:
+        """FAR-1398 regression: dispatch applies the run's frozen variant
+        ``prompt_templates`` override ON TOP OF the snapshot node template
+        (``node_runner._resolve_node_run_overrides``), so for an A/B
+        ``prompt_version`` run the reveal must attest the OVERRIDE - showing
+        the base snapshot template would claim a configuration that was
+        never in effect.
+        """
+        session = _session_holder[0]
+        run = _make_run(
+            variant_config_snapshot={
+                "variant_id": "var-1",
+                "_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<VARIANT>"}},
+            }
+        )
+        snapshot = _make_snapshot(prompt_template="<SNAPSHOT>")
+        agent = _make_agent(prompt_template="<LIVE>")
+        agent.prompt_always_visible = True
+
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
+
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        system_contents = [m["content"] for m in body["messages"] if m["role"] == "system"]
+        assert system_contents == ["<VARIANT>"]
+        assert "<VARIANT>" in body["prompt"]
+        assert "<SNAPSHOT>" not in body["prompt"]
+        # Only the template source changed - the live policy flag still reads.
+        assert body["prompt_always_visible"] is True
+
+    @pytest.mark.parametrize(
+        "variant_config",
+        [
+            None,
+            "not-a-dict",
+            {"variant_id": "v1"},
+            {"_run_overrides": "not-a-dict"},
+            {"_run_overrides": {"prompt_templates": "not-a-dict"}},
+            {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): 123}}},
+            {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): ""}}},
+            {"_run_overrides": {"prompt_templates": {str(uuid.uuid4()): "<OTHER>"}}},
+        ],
+        ids=[
+            "no-variant-config",
+            "column-not-dict",
+            "no-run-overrides",
+            "run-overrides-not-dict",
+            "prompt-templates-not-dict",
+            "value-not-str",
+            "empty-string",
+            "other-agent-only",
+        ],
+    )
+    def test_reveal_falls_back_to_snapshot_template_when_no_override_applies(
+        self, client: TestClient, variant_config: Any
+    ) -> None:
+        """Every malformed/absent variant-config shape falls back to the
+        snapshot node template (dispatch only overrides on a NON-EMPTY str
+        for this node's own agent)."""
+        session = _session_holder[0]
+        run = _make_run(variant_config_snapshot=variant_config)
+        snapshot = _make_snapshot(prompt_template="<SNAPSHOT>")
+        agent = _make_agent(prompt_template="<LIVE>")
+
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
+
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        system_contents = [m["content"] for m in body["messages"] if m["role"] == "system"]
+        assert system_contents == ["<SNAPSHOT>"]
 
     def test_reveal_masks_sensitive_values(self, client: TestClient) -> None:
         session = _session_holder[0]

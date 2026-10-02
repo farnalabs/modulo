@@ -1071,13 +1071,23 @@ def test_build_messages_prefers_string_user_input() -> None:
     assert {"role": "user", "content": "plain text"} in messages
 
 
-async def test_load_reveal_agent_rejects_unknown_node() -> None:
+async def test_validate_node_and_resolve_visibility_rejects_unknown_node() -> None:
     from fastapi import HTTPException
 
     session = _make_session()
     graph = {"nodes": [{"id": "other"}]}
     with pytest.raises(HTTPException, match="not found in pipeline graph"):
-        await runs_module._load_reveal_agent(session, graph, "missing-node")
+        await runs_module._validate_node_and_resolve_visibility(session, graph, "missing-node")
+
+
+def test_resolve_reveal_prompt_template_rejects_unknown_node() -> None:
+    # FAR-1398: BOTH reveal helpers gate through _require_node, so the 404
+    # does not depend on which one the handler happens to call first.
+    from fastapi import HTTPException
+
+    graph = {"nodes": [{"id": "other"}]}
+    with pytest.raises(HTTPException, match="not found in pipeline graph"):
+        runs_module._resolve_reveal_prompt_template(graph, "missing-node", None)
 
 
 def test_run_with_retry_is_transparent() -> None:
