@@ -52,6 +52,13 @@
         files: ^backend/src/
         pass_filenames: false
         stages: [pre-commit]
+      - id: validate-semgrep-rules
+        name: validate .semgrep rule files (shape)
+        entry: uv run --project backend --no-sync python scripts/run_validate_semgrep_rules.py
+        language: system
+        files: ^\.semgrep/.*\.ya?ml$
+        pass_filenames: false
+        stages: [pre-commit]
       - id: vulture
         name: vulture (dead code gate)
         entry: uv run --project backend --no-sync python scripts/run_vulture.py
