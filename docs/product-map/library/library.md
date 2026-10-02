@@ -87,7 +87,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       `LibraryPrimitiveUpdate` handling in `api/routes/library.py`,
       `test_library_routes.py`)
 - [x] Library collections (FAR-760): a `library_collection` primitive can be created as a
-      draft (201), its manifest pins updated while draft, and published (200) — invalid
+      draft (201), its manifest pins updated while draft, and published (200) – invalid
       pins, duplicate pins, an empty manifest and more than `MAX_COLLECTION_PINS` are
       rejected 422, a duplicate slug is 409, mutating a non-collection or non-draft
       primitive is 400, and every collection endpoint 404s when the `library_collection`
@@ -101,7 +101,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       (`core/workflow_import_export/__init__.py`: `export_pipeline_bundle` /
       `export_pipeline_bundle_v2`)
 - [x] Workflow import (`import.feature`) is covered by executing BDD driving the real
-      two-phase REST surface — `POST /api/v1/libraries/import/analyse` resolves every
+      two-phase REST surface – `POST /api/v1/libraries/import/analyse` resolves every
       bundle reference (connector types to the org's local instances, schemas by
       abstract_name, model backends by name) and detects pipeline-name conflicts with a
       disambiguation suffix suggestion, then `POST /api/v1/libraries/import/confirm`
@@ -111,14 +111,14 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## Known Gaps
 
-- **`community_registry.feature` is a separate surface from contribution** — contribution
+- **`community_registry.feature` is a separate surface from contribution** – contribution
   authoring and registry browsing are tracked under one feature here but cited separately.
-- **Workflow import verifies no Ed25519 signature** — `/api/v1/libraries/import/confirm`
+- **Workflow import verifies no Ed25519 signature** – `/api/v1/libraries/import/confirm`
   accepts any structural `bundle_json`; bundle signatures are verified on the
   community-registry install path, not the workflow-import path (the drafted
   `import.feature` signature scenario was re-anchored to the shipped 400
   "Invalid bundle JSON" tamper rejection instead).
-- **Schema-structure disambiguation is materialise-time only** — an imported schema
+- **Schema-structure disambiguation is materialise-time only** – an imported schema
   whose name collides with a different-structure local schema is saved with a
   `(imported)` suffix by `materialize_import`'s `_reconcile_existing_schema`
   (unit-covered), while the /import/analyse BDD surface locks abstract-name
@@ -126,7 +126,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## QA History
 
-- 2026-09-26: **Improve Architecture product-map walk** — closed the
+- 2026-09-26: **Improve Architecture product-map walk** – closed the
   `workflows/import.feature` `@awaiting-implementation` gap: the five pinned
   scenarios were rewritten to the real two-phase import contract and are now
   executing BDD coverage driving `POST /api/v1/libraries/import/analyse` +
@@ -135,19 +135,19 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   with no entities, connector disambiguation, schema abstract-name resolution,
   duplicate pipeline-name suffix). The drafts that asserted a wire shape the
   workflow-import path does not ship (an Ed25519 signature check on
-  `/import/confirm` — signatures are verified on the community-registry install
-  path — and a connector-instance selection list) were re-anchored to the
+  `/import/confirm` – signatures are verified on the community-registry install
+  path – and a connector-instance selection list) were re-anchored to the
   shipped contract instead. The five scenarios were removed from
   `PINNED_AWAITING_IMPLEMENTATION`; `workflows/export.feature` is cited here too.
-- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-25: **Improve Architecture product-map walk** – reconciled the
   manifest `feat-library` registry entry with this tracker (both now
   `status: covered`): the FAR-760 collections authoring behaviour this entry ticks
   is now also ticked in the manifest registry (draft → update pins → publish,
   endpoint 404s with `library_collection` off), with the default-off flag gate
   recorded as a deferral rather than a missing behaviour.
-- 2026-09-21: **product-map walk** — closed the composite
+- 2026-09-21: **product-map walk** – closed the composite
   content_json boundary gap: `composite_library.feature`'s "Composite content_json
-  validation — missing required fields returns error" scenario (previously
+  validation – missing required fields returns error" scenario (previously
   pinned `@awaiting-implementation`) now drives the REAL `POST /api/v1/libraries`
   create route. `LibraryPrimitiveCreate` gained a `model_validator` that rejects a
   composite payload whose `content_json` lacks the `nodes`/`edges` graph body with
@@ -155,7 +155,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   IntegrityError mapping). Unit coverage added in `test_library_routes.py`, and the
   scenario was removed from `PINNED_AWAITING_IMPLEMENTATION`.
 
-- 2026-09-21: **review follow-up** — extended the composite `content_json` graph
+- 2026-09-21: **review follow-up** – extended the composite `content_json` graph
   validation to the update boundary. `PATCH /api/v1/libraries/{id}` now fetches the
   target primitive inside the transaction and rejects a composite whose patched
   `content_json` lacks the `nodes`/`edges` lists with 422 (previously an existing
@@ -163,7 +163,7 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   `_assert_composite_content_json` helper backs both the create `model_validator`
   and the update route; unit coverage added in `test_library_routes.py`.
 
-- 2026-09-13: **product-map review pass** — closed the contribution BDD
+- 2026-09-13: **product-map review pass** – closed the contribution BDD
   gap: wired `library/contribute.feature` into the executing suite via the new
   `steps/test_library_contributions.py` (11 scenarios) and dropped the file from the
   tracked orphaned-BDD debt list (`_ORPHANED_BDD_FEATURES`). The rewritten feature
@@ -173,14 +173,14 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   `contribution.publish`), version-bump (201 draft, 409 on draft original) and the
   contribution/version list surfaces. Contribution is no longer unit-tested only.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/library`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
   header action surface stays visible to Assistant's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/library/:id/create-pipeline`: the whole-page view(s) `LibraryPipelineWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -188,30 +188,30 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the shared
+- 2026-09-11: **product-map review pass** – registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/library` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the search control the page ships stays visible to Assistant's docs indexer
   and `/api/v1/manifest`.
 
-- 2026-09-10: **product-map review pass** — registered the
+- 2026-09-10: **product-map review pass** – registered the
   `library-collection-badge` testid of `LibraryPrimitiveCard.vue` in the `/library`
   manifest `elements:` inventory, so the collection-membership badge on library
   cards is no longer invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **product-map review pass** — registered the collection
+- 2026-09-10: **product-map review pass** – registered the collection
   authoring/detail and collections-tab testids (`collection-*`,
   `library-section-collections`, `library-create-collection`, `library-collections-error`)
   in the manifest `elements:` inventory and added `LibraryView.vue`,
   `CollectionCreateView.vue` and `CollectionDetailView.vue` to the reverse testid-coverage
   guard (`test_mapped_route_elements_cover_owning_view_testids`), so the FAR-760 collection
   surface can no longer ship controls invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **product-map review pass** — added the FAR-760 library
+- 2026-09-10: **product-map review pass** – added the FAR-760 library
   collections behaviour (flag-gated draft → publish lifecycle) and cited the collection
   unit test and frontend views; the graph-root registry index now lists the collection
   routes. Verified against `backend/tests/unit/api/test_library_collection.py`,
   `frontend/src/views/CollectionCreateView.vue` and `CollectionDetailView.vue`.
-- 2026-08-27: **product-map review pass** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** – added this behaviour-tracker
   for the registered manifest feature `feat-library`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/library.py`,
   `core/library_sync`, `core/library_service/*` and the library BDD/unit suites.

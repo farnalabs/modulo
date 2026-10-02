@@ -46,13 +46,13 @@ status: covered
 # Runtime Provider Core
 
 Provider abstraction that executes `sandbox_agent` nodes and manages workspaces
-(ADR 044 — Agent Dispatch Model). Runtime providers (`local`, `runner_docker` with
+(ADR 044 – Agent Dispatch Model). Runtime providers (`local`, `runner_docker` with
 `docker`/`local_docker` aliases, `e2b`) expose the same capability surface, gated
 per-environment via environment profiles and validated at graph-validation time.
 `ShellConnector` (the legacy command connector) is deprecated since ADR 044 and maps
 onto the same runtime-provider surface; its product-map entry carries the ADR 044
 deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 029)
-— workspace state lives in `runs.sandbox_dispatch_state`.
+– workspace state lives in `runs.sandbox_dispatch_state`.
 
 ## Behaviours
 
@@ -61,7 +61,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       (explicit provider_type/hint match; `ProviderNotConfiguredError` otherwise)
 - [x] Built-in providers: `local`, `runner_docker` (aliases `docker`, `local_docker`), `e2b`
 - [x] Environment profiles CRUD (`/api/v1/environment-profiles`): list, create, get,
-      update, delete, restore, and `POST /{id}/test` (SSE sandbox connectivity check) —
+      update, delete, restore, and `POST /{id}/test` (SSE sandbox connectivity check) –
       input-validated, org-scoped, gated on the `environment_profiles` feature
 - [x] Graph validator rejects pipelines whose nodes need a capability the profile lacks
       (`test_environment_capabilities`)
@@ -69,13 +69,13 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       (run model fields: node retry/resume markers)
 - [x] ShellConnector is deprecated (ADR 044, 2026-07-16) with a runtime
       `DeprecationWarning` and doc notice; existing ShellConnector pipelines continue
-      running, and the node type is marked deprecated in the UI — new pipelines should
+      running, and the node type is marked deprecated in the UI – new pipelines should
       use `sandbox_agent`
 - [x] Platform-provider matrix is BDD-exercised against the REAL runtime-provider
       seams network-free and DB-free (`provider_matrix.feature`):
       `build_hub` registers `local` unconditionally and gates `e2b` /
       the docker family on their documented env signals (an unrelated
-      `MODULO_RUNNER_*` var never registers Docker — FAR-996); the hub resolves
+      `MODULO_RUNNER_*` var never registers Docker – FAR-996); the hub resolves
       deterministically (hint wins, docker-family aliases share one provider,
       known-but-unregistered types raise `ProviderNotConfiguredError` naming the
       remediation env var, unknown types raise `UnknownProviderTypeError` naming
@@ -86,7 +86,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       members (`ProviderCapabilityUnsupportedError`, `WorkspaceGoneError`,
       `StreamingUnsupportedError`, `ArtifactTooLargeError`, `RateLimitedError`,
       `SdkMissingError`, `ProvisionTimeoutError`, `UnknownRefError`,
-      `BackendUnreachableError`) with an explicit dual hierarchy — the
+      `BackendUnreachableError`) with an explicit dual hierarchy – the
       pre-existing `ProviderNotConfiguredError` / `UnknownProviderTypeError`
       config tree is deliberately NOT re-parented under the new base, so each
       dispatch catch-site stays reconciled
@@ -94,7 +94,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       chunks, `done` on every stream end, `exit_code` stays `None` until the END
       of a healthy stream (never a fabricated zero exit on a mid-stream
       engine/proxy drop), and the ABC default raises the typed
-      `StreamingUnsupportedError` — never a raw `NotImplementedError` (ADR 040
+      `StreamingUnsupportedError` – never a raw `NotImplementedError` (ADR 040
       error-honesty carve-out)
 - [x] `destroy_workspace_by_ref` (ADR 040 substrate-level destroy): idempotent on
       already-destroyed / foreign refs (no-op success), confirmed-gone `True` /
@@ -102,11 +102,11 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `AsyncSandbox.connect` on E2B, typed `ProviderCapabilityUnsupportedError`
       default
 - [x] `read_log_tail` (FAR-1050 R1): bounded tail read (`max_bytes` newest-end
-      cap, 4k raw fallback, `b""` on invalid ref / fetch failure — never raises),
+      cap, 4k raw fallback, `b""` on invalid ref / fetch failure – never raises),
       with E2B's legacy `_fetch_sandbox_log_tail` content parity pinned
 - [x] `apply_isolation` + the frozen `IsolationPolicy` carrier (FAR-1050 R3): the
-      single owner of the three in-sandbox controls — git-credential scoping,
-      the selected-mode egress allowlist, and the read-only seal — with
+      single owner of the three in-sandbox controls – git-credential scoping,
+      the selected-mode egress allowlist, and the read-only seal – with
       flag-gated parity to the legacy `sandbox_policy.apply_sandbox_policy`
       (enforcement-critical-raise vs egress-best-effort split) and a typed
       `ProviderCapabilityUnsupportedError` refusal on non-overriding providers;
@@ -118,7 +118,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       `apply_sandbox_policy`, which installs a `gh` shim that permits exactly
       ONE `gh pr create` per sandbox run for the `gh` binaries it managed to
       guard (a bounded, best-effort defence-in-depth layer behind the
-      prompt-level one-PR-per-run rule, FAR-1254 — explicitly not a guarantee
+      prompt-level one-PR-per-run rule, FAR-1254 – explicitly not a guarantee
       on its own); every other `gh`
       invocation passes through untouched, and
       a create that FAILS (non-zero exit) releases its claim so a transient
@@ -127,10 +127,10 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       sandbox PATH at install time (and absolute paths to those same binaries);
       `gh api` PR creation, a `gh` copy outside the PATH, shell aliases/functions,
       and a `gh` installed into the PATH AFTER the install are NOT intercepted;
-      nor is any non-E2B dispatch — only the E2B provider implements
+      nor is any non-E2B dispatch – only the E2B provider implements
       `apply_isolation`, so `runner_docker` / `local` runs get NO guard. A
       missing `gh` or a failed install degrades to the prompt-level guard
-      (both are logged). The install is BEST-EFFORT — a failure is logged and the
+      (both are logged). The install is BEST-EFFORT – a failure is logged and the
       run degrades to the prompt-level guard, never wedges the dispatch (unlike
       the enforcement-critical steps); the gate
       `_should_apply_sandbox_policy(..., single_pr_per_run=...)` runs the
@@ -143,7 +143,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       sentinel-only node now gets NO guard, and the metadata constant itself was
       deleted. **Migration required:** existing sentinel-only pipelines (the
       live Prompt-to-PR nodes among them) must be migrated to the explicit flag
-      — set `single_pr_per_run: true` on each such node; until then no shim is
+      – set `single_pr_per_run: true` on each such node; until then no shim is
       installed for them, and every dispatch logs the
       `sandbox_agent.single_pr_per_run_flag_missing` warning (node id +
       pipeline id) so the disarm stays observable. Unit-covered in
@@ -156,32 +156,32 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       routing/best-effort), with the e2b call site's own policy-flag read
       pinned in `tests/unit/core/runtime_provider/test_e2b_apply_isolation.py`
 - [x] One-PR-per-run: POST-RUN detection + an admin alert outside the sandbox
-      (FAR-1274) — this DETECTS and alerts after the fact; it does **NOT
+      (FAR-1274) – this DETECTS and alerts after the fact; it does **NOT
       prevent** a second PR. It is a stopgap until a preventive,
       platform-mediated PR-create path exists (outstanding, XL/design).
       Every terminal write that funnels through `db.crud.run` (the
       `update_run_status` ORM + fenced writers and `request_cancellation`) runs
       `_enforce_one_pr_per_run`, which is **armed ONLY for runs whose frozen
-      pipeline snapshot declares the FAR-1273 `single_pr_per_run` node flag** —
+      pipeline snapshot declares the FAR-1273 `single_pr_per_run` node flag** –
       multi-PR-by-design pipelines (and runs whose snapshot cannot be read)
       stay silent, so the detector honours each run's own declared contract.
       For an armed run it re-scans the run's **platform-captured**
-      delivery evidence — the stored blobs' strings, i.e. the persisted
+      delivery evidence – the stored blobs' strings, i.e. the persisted
       transcript (`agent_stdout` / `agent_stderr` / `sandbox_log_tail`, marker
-      `raw_output`) plus the agent-declared `pr_url` fields — for distinct
+      `raw_output`) plus the agent-declared `pr_url` fields – for distinct
       GitHub pull-request URLs: URLs are **normalised before dedup**
-      (scheme-insensitive, lowercase host/path, trailing punctuation stripped —
+      (scheme-insensitive, lowercase host/path, trailing punctuation stripped –
       variants of one PR never count twice), `gh pr list --json` listing lines
       (other open PRs a pre-check echoes) are skipped, and both collection
       (≤50 URLs) and the rendered list (first 10 + "and N more") are bounded so
       the alert body and log line stay bounded. Two or more distinct URLs
       breach the contract and are recorded LOUDLY: an `error`-level,
       admin-scoped in-app notification (category `run.duplicate_pr_delivery`,
-      deep-linked to the run; admin-scoped means READABLE BY ORG ADMINS ONLY —
+      deep-linked to the run; admin-scoped means READABLE BY ORG ADMINS ONLY –
       the visibility clause requires a live `admin` membership) written in a
-      **SAVEPOINT of the same transaction** as the terminal status — a failed
+      **SAVEPOINT of the same transaction** as the terminal status – a failed
       alert rolls back only itself, never the terminal status, and a
-      rolled-back terminalization leaves no phantom alert — plus an
+      rolled-back terminalization leaves no phantom alert – plus an
       `error`-level `delivery_contract.duplicate_pr` log line. The alert is
       idempotent per run (a re-terminalization does not stack a second row).
       Detection deliberately does **not** use the delivery sentinel: FAR-1254's
@@ -204,7 +204,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       from the transcript alone; single-PR happy path silent; multi-PR-by-design
       pipeline without the flag silent; unreadable snapshot fails safe to
       silent; `gh pr list` pre-check noise silent; URL-variant dedup; collection
-      and rendered-list bounds; the production write shape — blobs carried by
+      and rendered-list bounds; the production write shape – blobs carried by
       `update_run_status` itself, nothing pre-seeded; DB-level alert INSERT
       failure still commits the terminal status; same-transaction rollback drops
       the alert; re-terminalization idempotency; a failed blob read never blocks
@@ -212,7 +212,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
       (admin-scope rows readable by org admins only)
 - [x] File-I/O primitives (FAR-1050 R2a): `read_file` / `write_file` /
       `list_files` / `get_info` (+ the frozen `WorkspaceFileInfo` value object)
-      on the ABC — exec-based binary-safe defaults (base64 over the text exec
+      on the ABC – exec-based binary-safe defaults (base64 over the text exec
       channel, shlex-quoted paths, `mkdir -p` parent creation, sorted full
       child paths, `stat` parsing, 30s per-command bound, typed
       `RuntimeProviderError` on a non-zero exit) with E2B native `sandbox.files`
@@ -221,12 +221,12 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
 
 ## Known Gaps
 
-- **E2B provider is V3-deferred / environment-dependent** — runs only where the E2B
+- **E2B provider is V3-deferred / environment-dependent** – runs only where the E2B
   integration is configured.
 
 ## QA History
 
-- 2026-09-25: **product-map walk** — walked the FAR-1050 runtime-provider
+- 2026-09-25: **product-map walk** – walked the FAR-1050 runtime-provider
   primitive series into this entry: the ADR 040 `RuntimeProviderError` family
   (slice 1), `exec_command_stream` + `destroy_workspace_by_ref` (slice 2),
   `read_log_tail` (R1), `apply_isolation` + `IsolationPolicy` (R3), and the
@@ -237,7 +237,7 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
   (`runtime_providers/file_io.feature`, steps in
   `features/runtime_providers/test_file_io_steps.py`) driving the REAL
   `LocalRuntimeProvider` exec-based defaults. Status: covered.
-- 2026-09-22: **product-map walk** — closed the "No BDD coverage for the
+- 2026-09-22: **product-map walk** – closed the "No BDD coverage for the
   platform-provider matrix" gap (`provider_matrix.feature`, steps in
   `features/runtime_providers/test_provider_matrix_steps.py`), driving the REAL
   `build_hub` / `RuntimeProviderHub.resolve` / factory `initialise` seams
@@ -251,10 +251,10 @@ deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 0
   vocabulary, missing type → unresolvable), and the config-driven `initialise`
   (docker-family aliases under a config name, e2b skipped without an api_key,
   unknown config types rejected). 13 scenarios execute in CI.
-- 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
+- 2026-09-02: **FAR-551** – collapsed the duplicate `/admin/environments` UI +
   `environments.py` router into `/environment-profiles`; ported the `/test`
   connectivity check; added the missing API feature-gate.
-- 2026-08-25: **product-map review pass** — restored this entry as part of
+- 2026-08-25: **product-map review pass** – restored this entry as part of
   rebuilding the `docs/product-map/` feature graph. This entry is the one ADR 044
   requires to carry the ShellConnector deprecation notice
   (ADR 044 (agent-dispatch-model)). Re-verified the runtime_provider package

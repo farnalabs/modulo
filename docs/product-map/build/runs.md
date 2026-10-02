@@ -73,14 +73,14 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `runner_role.feature`)
 - [x] Run-level cost warnings (missing self-report surfacing, FAR-1305): a
       `self_reported` cost component with an eligible sandbox node but no
-      accepted agent report stays visible in the run-detail breakdown — never
-      rendered as a phantom `$0.000000` money line — and the response's
+      accepted agent report stays visible in the run-detail breakdown – never
+      rendered as a phantom `$0.000000` money line – and the response's
       structured `warnings` list (GET /api/v1/runs/{id}) carries a
       `missing_self_report` entry whose `missing_self_report_reason`
       distinguishes the two missing states truthfully: `agent_not_reported`
       (no cost key ever presented) vs `zero_report_unproven` (a node DID
       present an explicit `model_cost_usd: 0.0` but the trust boundary
-      refused it as unproven — token usage not all-zero). The run-detail and
+      refused it as unproven – token usage not all-zero). The run-detail and
       compute-run-warnings copy render the two states distinctly (a rejected
       zero is never described as "not reported by the agent"), the reason
       rides the MCP breakdown wire (`_MCP_BREAKDOWN_KEYS`), and GET
@@ -94,7 +94,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       not the triggering user's grants. Referenced resources (schema, connector,
       model backend, agent) are usable by the run regardless of the triggerer's
       direct access; the only user-facing check is "can you trigger this
-      pipeline?" (`trigger_run` team gate). Secrets are brokered — injected by
+      pipeline?" (`trigger_run` team gate). Secrets are brokered – injected by
       the engine, never readable by the user. `runs.owner_team_id` is metadata
       (dashboard aggregation), not a security control.
 - [x] Error-state handling: failed states and node recovery flows are covered by
@@ -110,14 +110,14 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `completed` with a `final_state`, an unhandled node exception lands on `failed`
       with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`, no
       further nodes execute). A node that returns `None` output is a normal empty
-      result — the run continues to the next node with no error — and sequential
+      result – the run continues to the next node with no error – and sequential
       pipelines complete nodes strictly in order. A trigger refused by
       `max_concurrent_runs` while a pending run is already active surfaces 429
       (`run_lifecycle.feature`, `run_sequential.feature`, registered for execution by
       `steps/test_pipelines.py`)
 - [x] Run-outcome delivery signal (FAR-189/228): every terminal run carries a
       `run_classification` JSON record written atomically with terminalization by
-      the shared fenced terminal write — `value` (`delivered` / `no_delivery` /
+      the shared fenced terminal write – `value` (`delivered` / `no_delivery` /
       `excluded` / `unclassified`), a stored `reason` (`pr_delivered` /
       `email_delivered` / `no_work` / `no_delivery` / `needs_human` /
       `source_error` / `parse_error` / `operator_or_hitl_cancelled` /
@@ -126,7 +126,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       and the `work_intact` / `declared_success_nodes` terminalization-fact
       metadata. A classifier/persist failure writes a fail-closed `unclassified`
       marker (`crud/run.py` `_write_unclassified_classification`, SAVEPOINT-fenced
-      and bounded) — a terminal run NEVER commits with a NULL record — and the
+      and bounded) – a terminal run NEVER commits with a NULL record – and the
       periodic reconciliation sweep (`reconcile_missing_classifications`, wired into
       `dispatcher_reconcile`) backfills raw-SQL terminalizers within a minute
       (`pipeline_engine/classify.py`, `test_run_classification.py`)
@@ -134,7 +134,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       vocabulary renamed from `self_reported` by FAR-1388):
       `delivered_pr_urls` are harvested in one walk from each node's structured
       return, the node telemetry value, and every FAR-188 raw-output marker's
-      `pr_url` (deduplicated, validated) — and nothing cross-checks the URLs
+      `pr_url` (deduplicated, validated) – and nothing cross-checks the URLs
       against an SCM of record. The record's `pr_url_provenance` map records per
       URL how it entered the record (`declared` = the run's output contract
       asserted it; `matched` = it merely appears in emitted output; `declared`
@@ -144,42 +144,42 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       carry the deprecated `self_reported` alias, are never backfilled, and
       readers tolerate either spelling (that old spelling must not be confused
       with the unrelated cost-provenance `self_reported` component kind).
-      Both keys are ADDITIVE metadata — they
-      never change the verdict — and the eight-key shape is forward-only:
+      Both keys are ADDITIVE metadata – they
+      never change the verdict – and the eight-key shape is forward-only:
       pre-FAR-1336 six-key rows are never backfilled and readers treat an absent
       key as legacy/unknown, never an error (`classify.py`, `test_run_classification.py`)
 - [x] Run detail serializes the stored classification record and the derived
       gate-fired flag (FAR-228): `GET /api/v1/runs/{id}` returns
-      `run_classification` (defensive-coerced — a non-dict degrades to null, never
+      `run_classification` (defensive-coerced – a non-dict degrades to null, never
       a 500) and `gate_fired` (True when the idempotency gate suppressed a delivery
       retry, the classification reason is `email_delivered`, or a raw-output marker
       carries `delivery_done`) (`test_runs_endpoint.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
-  MVP cut — restore from git history when re-enabling. See FAR-542._
+  MVP cut – restore from git history when re-enabling. See FAR-542._
 
 ## Known Gaps
 
-- **No PRD section reference** — the run execution/detail surfaces have no single PRD
+- **No PRD section reference** – the run execution/detail surfaces have no single PRD
   section mapped in code or ADRs.
-- **Wasm/Sandbox surfaces are split** — workspace leases/events live here, but the
+- **Wasm/Sandbox surfaces are split** – workspace leases/events live here, but the
   run sandbox lifecycle is tracked under `feat-environments`; cross-cutting coverage
   is not unified in one tracker.
 
 ## QA History
 
-- 2026-10-01: **Improve Architecture product-map walk** — closed the
+- 2026-10-01: **Improve Architecture product-map walk** – closed the
   sub-surface gap left by FAR-1336 (delivery-signal provenance/confidence,
   merged as run classification record addenda) and FAR-228: the run-outcome
   delivery signal (`run_classification` record, fail-closed `unclassified`
   marker + reconciliation sweep, run-detail serialization + derived
-  `gate_fired`) had NO product-map home in either layer — invisible to the
+  `gate_fired`) had NO product-map home in either layer – invisible to the
   feature graph and to Assistant's `search_documentation` indexer. Added the
   three checked behaviour lines above plus the `pipeline_engine/classify.py`
   code and `test_run_classification.py` unit-test citations. The FAR-1373
   streak-readout half is tracked under `feat-triggers`.
   `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-30: **Improve Architecture product-map walk** — reconciled this
+- 2026-09-30: **Improve Architecture product-map walk** – reconciled this
   tracker with the shipped FAR-1305 missing-cost surface (merged 2026-09-30):
   the manifest `feat-runs` registry tracks the truthful
   `missing_self_report_reason` (`agent_not_reported` vs `zero_report_unproven`)
@@ -187,10 +187,10 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   line and the `core/cost_controller/` code + `test_run_warnings.py` /
   `test_cost_aggregate.py` / `test_runs_endpoint.py` unit citations.
   `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-24: **product-map walk** — closed the deferred run recovery/retry
+- 2026-09-24: **product-map walk** – closed the deferred run recovery/retry
   BDD drafts (`build/runs.md` error-state coverage). The run-level `/resume` /
-  `/retry` endpoints those scenarios targeted never shipped — recovery is
-  per-node via `POST /runs/{id}/nodes/{node_id}/recover` — so
+  `/retry` endpoints those scenarios targeted never shipped – recovery is
+  per-node via `POST /runs/{id}/nodes/{node_id}/recover` – so
   `errors/retry.feature` was deleted (its retry-from-node / retry-on-success
   semantics are the replay / already-completed-409 cases now locked by the
   recovery surface) and `errors/recovery.feature` was rewritten to drive the
@@ -202,7 +202,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   both files from `PINNED_AWAITING_IMPLEMENTATION`; the scenarios now execute
   in CI. `_ORPHANED_BDD_FEATURES` stays empty.
 
-- 2026-09-21: **product-map walk** — closed the active-run observability BDD gap
+- 2026-09-21: **product-map walk** – closed the active-run observability BDD gap
   (tracked under `feat-observability`): `active_run_observability.feature` is no
   longer `@awaiting-implementation`. The two scenarios now drive the REAL
   `GET /api/v1/runs/{id}` / `GET /api/v1/runs/{id}/events` routes with only the
@@ -211,7 +211,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   `child_runs`) and the node lifecycle events end to end (real `RunEventBroker`
   replay + filter). Cited here and in `observability.md`.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/runs/diff`: the compared run-output
@@ -221,21 +221,21 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/runs`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
   header action surface stays visible to Assistant's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the shared
+- 2026-09-11: **product-map review pass** – registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/runs` manifest
   `elements:` inventory and wired the component into the reverse testid-coverage
   guard, so the runs-list search control the page ships stays visible to Assistant's
   docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/runs/diff`: the whole-page view(s) `AgentOutputDiffView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -243,7 +243,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — closed the
+- 2026-09-11: **product-map review pass** – closed the
   `/runs/:id` element-inventory drift for the HitlBriefing surface embedded in
   `hitl/HitlReviewCard.vue`: the gate card renders `HitlBriefing.vue` (the
   gate reason/context briefing with its collapse toggle and condition-result
@@ -253,7 +253,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   `HitlBriefing.vue` alongside the previously-closed shared components, so a
   newly shipped briefing testid can no longer drift invisible to Assistant's docs
   indexer / `/api/v1/manifest`.
-- 2026-09-11: **product-map review pass** — closed the
+- 2026-09-11: **product-map review pass** – closed the
   `/runs/:id` element-inventory drift for the shared components the Run Detail
   page renders: `shared/JsonViewer.vue` (the collapsible JSON explorer used for
   IO/output/telemetry inspection), `shared/ErrorAlert.vue` (its dismiss
@@ -265,17 +265,17 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   the layout + those shared owning components, so a newly shipped run-detail /
   json-viewer / gate testid can no longer drift invisible to Assistant's docs
   indexer / `/api/v1/manifest`.
-- 2026-09-09: **product-map review pass** — closed the dead-BDD-file
+- 2026-09-09: **product-map review pass** – closed the dead-BDD-file
   Known Gap recorded here on 2026-09-08: `run_lifecycle.feature` / `run_sequential.feature`
-  are no longer orphaned — they were wired into `steps/test_pipelines.py` (12 scenarios)
+  are no longer orphaned – they were wired into `steps/test_pipelines.py` (12 scenarios)
   when the same gap was closed on the `feat-pipelines` tracker, but this entry was not
   updated. Both files are now cited in `bdd:` and the run-lifecycle / sequential-ordering
   behaviour is ticked. Status: covered.
-- 2026-09-08: **product-map review pass** — recorded `run_lifecycle.feature`
+- 2026-09-08: **product-map review pass** – recorded `run_lifecycle.feature`
   / `run_sequential.feature` as a dead-BDD-file known gap (run-time surfaces owned here that
   no step module registers). Superseded by the 2026-09-09 closure above once
   `steps/test_pipelines.py` registered both files.
-- 2026-08-28: **product-map review pass** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass** – added this behaviour-tracker
   for the registered manifest feature `feat-runs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/runs.py`,
   `api/routes/run_ws.py`, `db/crud/run.py`, `core/line_diff.py` and the runs unit/BDD

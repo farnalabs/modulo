@@ -60,7 +60,7 @@ schemas, model-backends, pipelines and triggers features.
       `backend/tests/unit/cli/test_apply_loader.py`)
 - [x] Secrets are refs-only: backend `api_key` and trigger `config_json`
       secret-shaped entries must be `${env:VAR}` or `secretref://<key>`
-      references — inline secret literals are forbidden at validation;
+      references – inline secret literals are forbidden at validation;
       `${env:}` refs resolve client-side (missing/empty var blocks that
       entity), `secretref://` is blocked pending server-side resolution, and
       `hmac_secret` / `signing_secret` are Fernet-encrypted server-side on
@@ -72,7 +72,7 @@ schemas, model-backends, pipelines and triggers features.
       hashed over canonical managed-field views (`api_key` excluded; trigger
       `config_json` compared on the desired key set with masked secrets
       stripped symmetrically and `daily_spend_limit` quantised to the column's
-      4dp scale) — runtime state (`next_fire_at`, `streak_epoch`, ...) never
+      4dp scale) – runtime state (`next_fire_at`, `streak_epoch`, ...) never
       produces drift (`backend/src/modulo/cli/apply/plan.py`,
       `test_apply_plan.py`)
 - [x] Entities apply in dependency order `schemas -> model_backends ->
@@ -88,7 +88,7 @@ schemas, model-backends, pipelines and triggers features.
       `test_apply_trigger.py`)
 - [x] Backend writes are verified: the server-side health-check endpoint
       re-runs after each create/update and an unhealthy result moves the entity
-      to `failed` (exit 1) — a stored-but-broken credential is never reported
+      to `failed` (exit 1) – a stored-but-broken credential is never reported
       as plain success (`test_apply_executor.py`)
 - [x] `--refresh-secrets` re-sends trigger configs whose secrets rotated,
       because the server masks stored secrets and cannot tell a rotated value
@@ -101,7 +101,7 @@ schemas, model-backends, pipelines and triggers features.
       drift (`test_apply_cli.py`)
 - [x] `--diff` (drift mode) is read-only: it fetches the live org state and
       reports the plan-shaped report explicitly labelled `mode=drift` WITHOUT
-      writing anything (the run returns after the plan phase — no
+      writing anything (the run returns after the plan phase – no
       POST/PATCH/PUT code path is reachable), adds a per-entity breakdown
       (`drift_detail`): a graph node/edge added/removed/modified breakdown
       matched by id for drifted pipelines (top-level-only pipeline drift gets
@@ -115,7 +115,7 @@ schemas, model-backends, pipelines and triggers features.
       `git+<repo-url>[@<ref>]#<path>` ref instead of inline content;
       `modulo apply` resolves a movable ref to its commit SHA at plan time
       (`git ls-remote`, bounded, identity fast-path for an already-pinned
-      ref) and writes the canonical pinned form — the desired view, the PATCH
+      ref) and writes the canonical pinned form – the desired view, the PATCH
       payload, the stored graph and every run snapshot therefore carry the
       same pinned SHA; malformed or unresolvable refs BLOCK the entity (fail
       closed, never a silent unpinned write) and graph-save validation
@@ -152,11 +152,11 @@ schemas, model-backends, pipelines and triggers features.
 - [x] Pipeline runtime limits (FAR-1294): `modulo apply` manages
       `node_timeout_seconds` (per-node timeout, >= 1, platform default 300)
       and `max_duration_seconds` (wall-clock run-duration cap, >= 1, platform
-      default 3600) on create AND update — but only when DECLARED. Omission
+      default 3600) on create AND update – but only when DECLARED. Omission
       leaves a UI/API-set value untouched; the REST API rejects an explicit
       null for both (the columns are never "no timeout" / "no cap"), so a
       declared `null` is a load-time error with an actionable message instead
-      of a mid-apply 422; YAML booleans (`on`/`yes` — which pydantic's lax int
+      of a mid-apply 422; YAML booleans (`on`/`yes` – which pydantic's lax int
       coercion would turn into a one-second kill-switch that applies cleanly
       and then converges) are rejected at load by
       `_validate_runtime_limit`. The two keys are gated independently
@@ -171,7 +171,7 @@ schemas, model-backends, pipelines and triggers features.
 ## Known Gaps
 
 ## QA History
-- 2026-09-30: **Improve Architecture product-map walk** — closed the
+- 2026-09-30: **Improve Architecture product-map walk** – closed the
   `feat-apply` sub-surface gap for FAR-1294: `modulo apply` gained the two
   pipeline runtime limits (`node_timeout_seconds` / `max_duration_seconds`)
   on 2026-09-29 (PR #1105) but neither the manifest `feat-apply` registry nor
@@ -182,20 +182,20 @@ schemas, model-backends, pipelines and triggers features.
   `tests/unit/cli/test_apply_models.py` (round-trip, omit-vs-declare,
   per-key independence, boolean rejection). `_ORPHANED_BDD_FEATURES` stays
   empty.
-- 2026-09-19: **product-map review pass** — closed the
+- 2026-09-19: **product-map review pass** – closed the
   "`--diff` graph detail is pipeline-only" gap. Extended `drift_detail` so a
   drifted schema / model backend / trigger carries a per-entity managed-field
   breakdown (`{"fields": {added/removed/modified}}`, keyed `<kind>:<name>` so
   a schema or trigger sharing a pipeline's name never collides with the
   bare-name pipeline key), computed over the SAME canonical views that decided
-  drift (`plan._CURRENT_VIEWS` / `_trigger_current_view` — spend-limit
+  drift (`plan._CURRENT_VIEWS` / `_trigger_current_view` – spend-limit
   quantization, `config_json` secret stripping and desired-key restriction
   inclusive), and the table output now renders `drift detail <kind> '<name>'`
   field lines alongside the pipeline graph lines. Verified by
   `test_apply_drift.py` (schema / model backend / trigger field breakdowns,
   renderer output, and the no-bare-name-entry-for-non-pipeline guard).
 
-- 2026-09-19: **product-map review pass** — closed the
+- 2026-09-19: **product-map review pass** – closed the
   "No BDD feature file" gap. Registered `cli/apply.feature` into the executing
   BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
   `modulo.cli.apply` seams network-free and DB-free: the loader / `ApplyConfig`
@@ -203,7 +203,7 @@ schemas, model-backends, pipelines and triggers features.
   across documents, empty config, trigger forward-references), refs-only
   secrets (`resolve_secret_refs`: env-ref resolution, missing-var and
   `secretref://` blocks), the plan engine (created / unchanged / updated /
-  blocked — provider mismatch + immutable schema versions), the executor
+  blocked – provider mismatch + immutable schema versions), the executor
   against a respx-mocked API (dry-run report, real-apply exit semantics on a
   blocked ref, and the health-check verification that moves a stored-but-broken
   backend into `failed` while the create POST is still sent), and the drift
@@ -212,7 +212,7 @@ schemas, model-backends, pipelines and triggers features.
   `drift create` / `drift summary` rendering). `_ORPHANED_BDD_FEATURES` stays
   empty.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/model-backends`, `/settings/triggers`
   and wired the two components into the reverse testid-coverage guard
@@ -220,7 +220,7 @@ schemas, model-backends, pipelines and triggers features.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-10: **product-map review pass** — added this
+- 2026-09-10: **product-map review pass** – added this
   behaviour-tracker for the registered manifest feature `feat-apply`
   (FAR-681), which had `product_map` refs from four routes but no
   `docs/product-map/` entry, so the graph root's "all registered manifest
