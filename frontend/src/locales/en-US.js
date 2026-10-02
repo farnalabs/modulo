@@ -473,6 +473,7 @@ export default {
       "context_json": "Context JSON",
       "raw_events": "Raw Events ({count})",
       "no_raw_events_loaded": "No raw events loaded.",
+      "no_raw_events_description": "Events for this group will appear here once they are ingested.",
       "events_of": "{count} of {total} events",
       "previous": "Previous",
       "next": "Next"
@@ -1559,7 +1560,16 @@ export default {
         "unsavedChangesConfirm": "You have unsaved policy gate changes. Discard them?",
         "dirtyConfirmAriaLabel": "Unsaved changes confirmation",
         "dirtyConfirmStay": "Keep editing",
-        "dirtyConfirmProceed": "Discard"
+        "dirtyConfirmProceed": "Discard",
+        "enabledLabel": "Enabled",
+        "enabledDescription": "The gate is active and will be evaluated at run start.",
+        "disabledLabel": "Disabled",
+        "disabledDescription": "The gate is disabled and will be skipped during evaluation.",
+        "toggleAriaLabel": "Enable or disable policy gate",
+        "toggleDisableBlockWarning": "This gate is set to block runs. Disabling it will stop blocking runs until re-enabled.",
+        "toggleDisableConfirm": "Are you sure you want to disable this policy gate?",
+        "toggleConfirmDisable": "Disable",
+        "toggleError": "Failed to toggle the policy gate. Please try again."
       }
     },
     "RunDetailView": {
@@ -3127,7 +3137,9 @@ export default {
       "outcome_delivered": "Delivered",
       "outcome_no_delivery": "No delivery",
       "outcome_excluded": "Excluded",
-      "outcome_unclassified": "Unclassified"
+      "outcome_unclassified": "Unclassified",
+      "outcome_confidence_agent_reported": "Agent-reported",
+      "outcome_confidence_agent_reported_detail": "This delivery verdict is agent-reported from the run's own output. It has not been verified against a source of truth."
     },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",
@@ -3431,7 +3443,15 @@ export default {
       "regex_requires_pattern": "Regex detection requires a pattern.",
       "schema_requires_json": "JSON schema detection requires valid JSON schema.",
       "created_success": "Guardrail created.",
-      "kill_switch_read_error": "Could not read kill-switch state."
+      "kill_switch_read_error": "Could not read kill-switch state.",
+      "import_guardrail": "Import Config",
+      "import_guardrail_description": "Apply a guardrail config YAML directly as the applied state — e.g. the elevated export from another organisation. No propose/review round-trip: the imported set replaces the applied guardrails in one step.",
+      "import_action": "Import",
+      "import_config_yaml": "Config YAML",
+      "import_placeholder": "Paste the guardrail config YAML to import…",
+      "import_hint": "Admin-only. The imported set becomes this org's applied guardrail policies immediately. Existing guardrails not present in the imported config are removed.",
+      "import_failed": "Import failed: {detail}",
+      "import_success": "Imported config as the applied guardrail state ({count} change(s), hash {hash})."
     },
     "RunDetailGuardrailSummary": {
       "guardrail_summary_title": "Guardrail Summary",

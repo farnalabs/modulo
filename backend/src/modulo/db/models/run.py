@@ -354,6 +354,19 @@ class Run(OrgScoped):
     sandbox_dispatch_state: Mapped[str | None] = mapped_column(Text)
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)
+    # FAR-1088 dispatch-phase instrumentation (migration 0273) — INTERNAL ONLY:
+    # NOT API-projected (absent from RunResponse / _build_list_item / MCP
+    # payloads). Records which phase of the dispatch pipeline the run last
+    # entered, for diagnosing claimed-but-nodeless runs.
+    #   * ``dispatch_phase`` — the phase label ('claimed', later
+    #     loading_setup/setup_complete/streaming/...); NULL for runs claimed
+    #     before this shipped.
+    #   * ``dispatch_phase_entered_at`` — when that phase was entered.
+    # The floor write is the claim itself: ``pipeline_execution`` stamps
+    # 'claimed' inside the atomic claim UPDATE, so a run that was claimed can
+    # never lack a phase even if no node ever ran.
+    dispatch_phase: Mapped[str | None] = mapped_column(Text)
+    dispatch_phase_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # FAR-583 B1: the legacy blob columns (outputs_json / node_telemetry_json /
     # raw_output_markers) are NO LONGER mapped on the ORM — the per-node store
     # `run_node_outputs` is the single blob surface (crud.run_node_outputs).
@@ -373,10 +386,12 @@ class Run(OrgScoped):
     # `run_node_outputs` store (see the mapping note above). FAR-189 run-outcome
     # shape {value, reason, delivered_pr_urls, computed_at, work_intact,
     # declared_success_nodes, pr_url_provenance, delivery_confidence}.
-    # delivered_pr_urls are self-reported by the run's own output and
+    # delivered_pr_urls are agent-reported by the run's own output and
     # UNVERIFIED against an SCM; pr_url_provenance records how each URL was
-    # harvested and delivery_confidence states that plainly (self_reported,
-    # FAR-1336). The eight-key shape is forward-only: rows written before
+    # harvested and delivery_confidence states that plainly (agent_reported,
+    # FAR-1336/FAR-1388 — rows written before the FAR-1388 rename carry the
+    # deprecated pre-rename spelling, are never backfilled, and readers
+    # tolerate both). The eight-key shape is forward-only: rows written before
     # FAR-1336 are six-key and are never backfilled, so readers must treat an
     # absent pr_url_provenance/delivery_confidence key as legacy/unknown, not
     # an error. UNIQUE(run_id) is the runs PK; the record is

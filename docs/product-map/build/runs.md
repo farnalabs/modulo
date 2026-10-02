@@ -6,6 +6,7 @@ code:
   - backend/src/modulo/api/routes/runs.py
   - backend/src/modulo/api/routes/run_ws.py
   - backend/src/modulo/db/crud/run.py
+  - backend/src/modulo/core/pipeline_engine/classify.py
   - backend/src/modulo/core/line_diff.py
   - backend/src/modulo/core/cost_controller
 unit-tests:
@@ -14,6 +15,7 @@ unit-tests:
   - backend/tests/unit/api/test_run_ws.py
   - backend/tests/unit/api/test_run_api_key_auth.py
   - backend/tests/unit/api/test_runs_team_scope.py
+  - backend/tests/unit/pipeline_engine/test_run_classification.py
   - backend/tests/unit/core/cost_controller/test_run_warnings.py
   - backend/tests/unit/core/cost_controller/test_cost_aggregate.py
 bdd:
@@ -113,6 +115,45 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `max_concurrent_runs` while a pending run is already active surfaces 429
       (`run_lifecycle.feature`, `run_sequential.feature`, registered for execution by
       `steps/test_pipelines.py`)
+- [x] Run-outcome delivery signal (FAR-189/228): every terminal run carries a
+      `run_classification` JSON record written atomically with terminalization by
+      the shared fenced terminal write — `value` (`delivered` / `no_delivery` /
+      `excluded` / `unclassified`), a stored `reason` (`pr_delivered` /
+      `email_delivered` / `no_work` / `no_delivery` / `needs_human` /
+      `source_error` / `parse_error` / `operator_or_hitl_cancelled` /
+      `hitl_timeout` / `budget_exceeded` / `compensation_failed` /
+      `router_no_match` / `classifier_error`), `delivered_pr_urls`, `computed_at`,
+      and the `work_intact` / `declared_success_nodes` terminalization-fact
+      metadata. A classifier/persist failure writes a fail-closed `unclassified`
+      marker (`crud/run.py` `_write_unclassified_classification`, SAVEPOINT-fenced
+      and bounded) — a terminal run NEVER commits with a NULL record — and the
+      periodic reconciliation sweep (`reconcile_missing_classifications`, wired into
+      `dispatcher_reconcile`) backfills raw-SQL terminalizers within a minute
+      (`pipeline_engine/classify.py`, `test_run_classification.py`)
+- [x] The delivery signal is agent-reported and honestly labelled (FAR-1336,
+      vocabulary renamed from `self_reported` by FAR-1388):
+      `delivered_pr_urls` are harvested in one walk from each node's structured
+      return, the node telemetry value, and every FAR-188 raw-output marker's
+      `pr_url` (deduplicated, validated) — and nothing cross-checks the URLs
+      against an SCM of record. The record's `pr_url_provenance` map records per
+      URL how it entered the record (`declared` = the run's output contract
+      asserted it; `matched` = it merely appears in emitted output; `declared`
+      wins when both routes see the URL) and `delivery_confidence` states plainly
+      that every record written today is `agent_reported` (`verified` is reserved
+      for a future SCM-confirmed source). Rows stored before the FAR-1388 rename
+      carry the deprecated `self_reported` alias, are never backfilled, and
+      readers tolerate either spelling (that old spelling must not be confused
+      with the unrelated cost-provenance `self_reported` component kind).
+      Both keys are ADDITIVE metadata — they
+      never change the verdict — and the eight-key shape is forward-only:
+      pre-FAR-1336 six-key rows are never backfilled and readers treat an absent
+      key as legacy/unknown, never an error (`classify.py`, `test_run_classification.py`)
+- [x] Run detail serializes the stored classification record and the derived
+      gate-fired flag (FAR-228): `GET /api/v1/runs/{id}` returns
+      `run_classification` (defensive-coerced — a non-dict degrades to null, never
+      a 500) and `gate_fired` (True when the idempotency gate suppressed a delivery
+      retry, the classification reason is `email_delivered`, or a raw-output marker
+      carries `delivery_done`) (`test_runs_endpoint.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut — restore from git history when re-enabling. See FAR-542._
@@ -127,6 +168,17 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-01: **Improve Architecture product-map walk** — closed the
+  sub-surface gap left by FAR-1336 (delivery-signal provenance/confidence,
+  merged as run classification record addenda) and FAR-228: the run-outcome
+  delivery signal (`run_classification` record, fail-closed `unclassified`
+  marker + reconciliation sweep, run-detail serialization + derived
+  `gate_fired`) had NO product-map home in either layer — invisible to the
+  feature graph and to Assistant's `search_documentation` indexer. Added the
+  three checked behaviour lines above plus the `pipeline_engine/classify.py`
+  code and `test_run_classification.py` unit-test citations. The FAR-1373
+  streak-readout half is tracked under `feat-triggers`.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-30: **Improve Architecture product-map walk** — reconciled this
   tracker with the shipped FAR-1305 missing-cost surface (merged 2026-09-30):
   the manifest `feat-runs` registry tracks the truthful

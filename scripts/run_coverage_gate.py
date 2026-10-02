@@ -60,13 +60,25 @@ Gate semantics (fail-closed):
   diff has no production files once the exclusions are applied.  A diff that
   only adds comments, docstrings, or blank lines also skips — only
   executable changed lines enter the coverage denominator (FAR-962).
+  "No changed production lines" means no executable production line was
+  added *and none was removed*: a diff whose only production change is a
+  DELETION does not skip (see "Deletions earn no coverage credit" below,
+  FAR-1317).
+- **Deletion-only production change** → FAIL, exit 1 (FAR-1317).  When
+  executable production lines are removed and none added, the gate fails
+  with a dedicated reason instead of skipping into a pass.  The gate cannot
+  tell a justified deletion from a load-bearing one, so it fails closed and
+  routes the change to review.
 - **Changed production lines, but no coverage data for them** → FAIL,
   exit 1.  If production lines changed but diff-cover cannot match them to
   the coverage report (the report does not contain those files at all), every
   such changed line counts as unmeasured coverage, i.e. 0%.
 - **Threshold breach** → FAIL, exit 1.
 - **Tiny diff (≤10 non-blank lines)** → PASS with a note.  Trivial
-  changes (typo fixes, label tweaks) should not fail the gate.
+  changes (typo fixes, label tweaks) should not fail the gate.  The
+  exemption does NOT apply when the diff also removes executable
+  production lines — such a change scores its added lines against the
+  real threshold (FAR-1317, see below).
 - **Unmeasured changed file** → counts as 0% coverage.  A brand-new
   production file with no coverage in the report is a gate failure: a file
   absent from BOTH the raw report's file list and diff-cover's ``src_stats``
@@ -95,6 +107,31 @@ Branch coverage edge cases:
   exist on changed lines but every ``taken`` value is ``"-"`` (never
   executed), branch coverage is 0% and the gate fails.  This is NOT a
   vacuous pass — the branches exist and were not exercised.
+
+Deletions earn no coverage credit (FAR-1317):
+
+The gate scores only *added* executable production lines, and a change can
+never pass on the strength of a deletion alone.  (Incident: a Branch Fixer
+commit on PR #1022 deleted the load-bearing ``expires_at IS NULL`` branch
+with the stated rationale "to bring the changed-lines coverage gate to
+100%" — the gate made deleting real code the cheapest path to green.  It
+was only restored by independent review on PR #1029.)
+
+- Deleted lines never enter the numerator or the denominator (FAR-962);
+  they confer no credit.
+- A **deletion-only** production change FAILS with a dedicated reason
+  rather than skipping into a pass under the "no changed production
+  lines" rule.  The gate cannot distinguish a justified deletion from a
+  load-bearing one, so it fails closed and the change goes to review.
+- When a change **mixes deletions with additions**, the added lines alone
+  must clear the real threshold: the ≤10-line tiny-diff exemption is
+  withheld for any diff that removes executable production lines, so
+  deleting uncovered code alongside a handful of new lines cannot ride
+  the trivial-diff pass.  A mixed change whose added code meets the
+  threshold passes — the deletion itself neither helps nor hurts.
+- Non-executable deletions (comments, docstrings, blank lines) and
+  deletions in excluded paths (tests, migrations, scripts, generated
+  code) are not production deletions: they still SKIP as before.
 
 Usage (local)::
 
@@ -208,6 +245,16 @@ _DIFF_COVER_TOTAL_RE = re.compile(r"Total:\s*(\d+)\s+line", re.IGNORECASE)
 # ``@@ -old,count +new,count @@``: captures the new-file start line so the
 # per-hunk bracket/string state can be seeded from the file content.
 _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+# The same header, capturing the OLD-file start line: used to seed the
+# bracket/string state for the deleted side of a hunk (FAR-1317).
+_OLD_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
+# ``diff --git a/<old> b/<new>`` — per-file header in a multi-file ``git diff``
+# output.  Group 2 (the b/ side) is the file's current path, which is the key
+# the rest of the gate uses for changed files.
+_DIFF_GIT_HEADER_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
+# A git object id produced by ``git merge-base`` (fullmatch-bounded before it
+# is embedded in a ``git show <sha>:<path>`` argument).
+_MERGE_BASE_SHA_RE = re.compile(r"[0-9a-f]{7,64}")
 
 # Matches a standalone Python string literal (triple-quoted or single/double
 # quoted) with no other code around it.  Used to exclude docstrings and bare
@@ -688,6 +735,177 @@ def _count_added_lines(diff_range: str, filepath: str) -> int:
     if is_js:
         return sum(1 for _ in _iter_executable_js_lines(added))
     return sum(1 for content in added if content.strip())
+
+
+def _split_diff_by_file(diff_text: str) -> Iterator[tuple[str, list[str]]]:
+    """Split a multi-file ``git diff`` into ``(path, hunk_lines)`` pairs.
+
+    *path* is the b/-side path of each ``diff --git a/<old> b/<new>`` header
+    (the file's current path — the same key ``git diff --name-only`` yields
+    for modified files).  The yielded lines are everything after the header
+    up to the next one: file metadata (``index``/``---``/``+++``) and hunks.
+    """
+    current: str | None = None
+    lines: list[str] = []
+    for raw in diff_text.splitlines():
+        header = _DIFF_GIT_HEADER_RE.match(raw)
+        if header:
+            if current is not None:
+                yield current, lines
+            current = header.group(2)
+            lines = []
+        elif current is not None:
+            lines.append(raw)
+    if current is not None:
+        yield current, lines
+
+
+def _count_python_deleted_lines(diff_lines: Sequence[str], old_lines: Sequence[str]) -> int:
+    """Count executable Python lines REMOVED in a ``--unified=0`` file diff.
+
+    Mirrors :func:`_count_python_added_lines` for the old side of the diff:
+    each hunk is seeded with the bracket/triple-quote state recovered from the
+    OLD file content (*old_lines*) at the hunk's ``-old_start`` line, then the
+    removed lines are replayed in order — so a deleted docstring body or a
+    deleted bracket continuation is correctly recognised as non-executable,
+    exactly like an added one.  Added (``+``) lines do not exist in the old
+    file and never advance the old-side state.
+
+    *diff_lines* is one file's chunk of ``git diff --unified=0`` output (see
+    :func:`_split_diff_by_file`).  When *old_lines* is empty (the blob could
+    not be read), the state falls back to depth zero — a conservative
+    degradation that can only over-count deletions inside multi-line strings,
+    never under-count executable deletions.
+    """
+    depth: int = 0
+    delimiter: str | None = None
+    total = 0
+    for raw in diff_lines:
+        if raw.startswith(("+++", "---", "\\")):
+            continue
+        header = _OLD_HUNK_HEADER_RE.match(raw)
+        if header:
+            depth, delimiter = _python_state_before(old_lines, int(header.group(1)))
+            continue
+        if raw.startswith("+"):
+            continue
+        if raw.startswith("-"):
+            content = raw[1:]
+            total += sum(1 for _ in _iter_executable_python_lines((content,), depth, delimiter))
+            depth, delimiter, _, _ = _python_line_state(content, depth, delimiter)
+        elif raw.startswith(" "):
+            # Context lines advance the old-side state (defensive; a
+            # ``--unified=0`` diff carries none).
+            depth, delimiter, _, _ = _python_line_state(raw[1:], depth, delimiter)
+        # Anything else (index/rename/mode metadata) is not file content.
+    return total
+
+
+def _old_file_lines(compare_branch: str, filepath: str) -> list[str]:
+    """Return *filepath*'s content at the merge base of *compare_branch* and HEAD.
+
+    The merge base is the old side of the ``<compare_branch>...HEAD`` range,
+    so this is the file as the deletions saw it.  Used to seed the
+    old-side bracket/string state when counting deleted executable lines
+    (FAR-1317).  Returns ``[]`` when the ref/blob cannot be read (the caller
+    then falls back to depth-zero state).
+    """
+    try:
+        safe_branch = _validate_ref(compare_branch, "compare-branch")
+    except ValueError:
+        return []
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", safe_branch, "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(REPO_ROOT),
+        )
+    except Exception:
+        return []
+    if merge_base.returncode != 0:
+        return []
+    first_line = merge_base.stdout.splitlines()[0].strip() if merge_base.stdout else ""
+    if not _MERGE_BASE_SHA_RE.fullmatch(first_line):
+        return []
+    safe_path = _safe_repo_path(filepath)
+    if safe_path is None:
+        return []
+    # first_line is fullmatch-bounded to hex by _MERGE_BASE_SHA_RE and
+    # safe_path is regex-bounded by _safe_repo_path before reaching argv.
+    try:
+        shown = subprocess.run(  # NOSONAR - sha is [0-9a-f]{7,64} fullmatch, path bounded, no shell
+            ["git", "show", f"{first_line}:{safe_path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(REPO_ROOT),
+        )
+    except Exception:
+        return []
+    if shown.returncode != 0:
+        return []
+    return shown.stdout.splitlines()
+
+
+def _get_production_deletions(compare_branch: str, language: str) -> dict[str, int]:
+    """Return ``{filepath: executable_deleted_lines}`` for production files.
+
+    Counts executable lines REMOVED from non-excluded production files within
+    ``<compare_branch>...HEAD`` (FAR-1317).  Deletions earn no coverage
+    credit, but the gate must see them to (a) refuse to let a deletion-only
+    change SKIP into a pass and (b) withhold the tiny-diff exemption from a
+    change that removes production code.  Only deletions of *executable*
+    lines count: removing comments, docstrings, or blank lines is not a
+    production deletion and still skips.
+
+    Excluded paths (tests, migrations, scripts, generated code) are filtered
+    with the same :func:`_is_excluded` rule as the added-line counter, so a
+    test-only deletion never triggers the deletion rule.  Returns an empty
+    dict when the range is invalid or the diff fails.
+    """
+    pathspecs = _EXTENSIONS.get(language)
+    if not pathspecs:
+        return {}
+    try:
+        diff_range = _diff_range(compare_branch)
+    except ValueError:
+        return {}
+    safe_range = _safe_repo_path(diff_range)
+    if safe_range is None:
+        return {}
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--unified=0", "--diff-filter=MDR", safe_range, "--", *pathspecs],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(REPO_ROOT),
+        )
+    except Exception:
+        return {}
+    if result.returncode != 0 or not result.stdout:
+        return {}
+
+    js_extensions = (".ts", ".tsx", ".js", ".jsx", ".vue")
+    deletions: dict[str, int] = {}
+    for filepath, chunk in _split_diff_by_file(result.stdout):
+        safe_path = _safe_repo_path(filepath)
+        if safe_path is None or _is_excluded(filepath):
+            continue
+        removed = [raw[1:] for raw in chunk if raw.startswith("-") and not raw.startswith("---")]
+        if not removed:
+            continue
+        if filepath.endswith(".py"):
+            count = _count_python_deleted_lines(chunk, _old_file_lines(compare_branch, filepath))
+        elif filepath.endswith(js_extensions):
+            count = sum(1 for _ in _iter_executable_js_lines(removed))
+        else:
+            count = sum(1 for content in removed if content.strip())
+        if count:
+            deletions[filepath] = count
+    return deletions
 
 
 def _get_changed_production_files(compare_branch: str, language: str) -> dict[str, int]:
@@ -1208,6 +1426,12 @@ class GateResult:
     branch_actual_pct: float | None = None
     branch_passed: bool | None = None  # None = no branch data (vacuous)
     branch_threshold: int = 0
+    # Executable production lines removed by this diff (FAR-1317).  Deletions
+    # earn no coverage credit: this never enters the numerator or the
+    # denominator.  It is diagnostic (summary note) and drives two decisions
+    # in ``evaluate``: a deletion-only diff FAILs instead of skipping, and the
+    # tiny-diff exemption is withheld when it is non-zero.
+    deleted_lines: int = 0
 
     def summary(self) -> str:
         if self.skipped:
@@ -1239,7 +1463,12 @@ class GateResult:
                 branch_part = f" | branch {bpct} < {self.branch_threshold}%"
         else:
             branch_part = ""
-        return line_part + branch_part
+        note = ""
+        if self.deleted_lines > 0 and self.changed_lines > 0:
+            # Deletion-only results (changed_lines == 0) already carry the
+            # rule in skip_reason; a mixed change gets the credit note here.
+            note = f" | {self.deleted_lines} deleted line(s) earn no coverage credit (FAR-1317)"
+        return line_part + branch_part + note
 
 
 def _run_diff_cover(
@@ -1494,13 +1723,54 @@ def evaluate(
     against the production-only lines diff-cover measured.  Lines it did not
     measure count as 0% coverage, and the numerator and denominator always
     come from the same production-only file set.
+
+    Deletions (FAR-1317): executable production lines removed by the diff
+    are counted separately (never credited) and drive two decisions — a
+    deletion-only diff FAILs instead of skipping into a pass, and the
+    tiny-diff exemption is withheld when any production line was removed.
     """
     # --- Get changed production files and count executable added lines ---
     changed_files = _get_changed_production_files(compare_branch, language)
     changed_lines = sum(changed_files.values())
 
+    # --- Count deleted executable production lines (FAR-1317) ---
+    deleted_files = _get_production_deletions(compare_branch, language)
+    deleted_lines = sum(deleted_files.values())
+
+    # --- No added production lines: a deletion-only change FAILs (never SKIPs) ---
+    if changed_lines == 0:
+        if deleted_lines > 0:
+            return GateResult(
+                language=language,
+                skipped=False,
+                skip_reason=(
+                    f"deletion-only production change: {deleted_lines} executable line(s) in "
+                    f"{len(deleted_files)} file(s) removed and none added — deletions earn no "
+                    "coverage credit and cannot pass the gate (FAR-1317)"
+                ),
+                passed=False,
+                actual_pct=None,
+                threshold=fail_under,
+                changed_lines=0,
+                deleted_lines=deleted_lines,
+            )
+        return GateResult(
+            language=language,
+            skipped=True,
+            skip_reason="no changed production lines in this diff",
+            passed=True,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=0,
+        )
+
     # --- Tiny-diff exemption ---
-    if 0 < changed_lines <= TINY_DIFF_THRESHOLD:
+    # Withheld when the diff also removes executable production lines
+    # (FAR-1317): a couple of surviving lines must not clear the gate via the
+    # trivial-diff pass when the rest of the change is a deletion.  The added
+    # lines are scored against the real threshold instead (and, as always,
+    # only they — not the deleted lines — enter the denominator).
+    if not deleted_files and changed_lines <= TINY_DIFF_THRESHOLD:
         return GateResult(
             language=language,
             skipped=False,
@@ -1510,18 +1780,6 @@ def evaluate(
             threshold=fail_under,
             changed_lines=changed_lines,
             tiny_diff=True,
-        )
-
-    # --- No changed lines → skip ---
-    if changed_lines == 0:
-        return GateResult(
-            language=language,
-            skipped=True,
-            skip_reason="no changed production lines in this diff",
-            passed=True,
-            actual_pct=None,
-            threshold=fail_under,
-            changed_lines=0,
         )
 
     # --- Missing report ---
@@ -1535,6 +1793,7 @@ def evaluate(
                 actual_pct=None,
                 threshold=fail_under,
                 changed_lines=changed_lines,
+                deleted_lines=deleted_lines,
             )
         return GateResult(
             language=language,
@@ -1544,6 +1803,7 @@ def evaluate(
             actual_pct=None,
             threshold=fail_under,
             changed_lines=changed_lines,
+            deleted_lines=deleted_lines,
         )
 
     # --- Run diff-cover with JSON report to detect unmeasured lines ---
@@ -1564,6 +1824,7 @@ def evaluate(
             changed_lines=changed_lines,
             measured_lines=0,
             unmeasured_lines=changed_lines,
+            deleted_lines=deleted_lines,
             branch_actual_pct=0.0,
             branch_passed=False,
             branch_threshold=branch_fail_under,
@@ -1661,6 +1922,7 @@ def evaluate(
         changed_lines=scored_lines,
         measured_lines=measured_lines,
         unmeasured_lines=unmeasured_lines,
+        deleted_lines=deleted_lines,
         branch_covered=branch_covered,
         branch_total=branch_total,
         branch_unmeasured=branch_unmeasured,

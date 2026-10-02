@@ -988,6 +988,31 @@ class TestResumeRunEdgeCases:
         complete.assert_awaited_once()
         assert complete.await_args.kwargs["claim_token"] == "tok-fresh"
 
+    async def test_resume_skips_flush_when_no_writer_attached(self) -> None:
+        """The post-resume flush is guarded: a tracker with no writer is skipped."""
+
+        async def _clear_writer(*args: Any, **kwargs: Any) -> dict[str, str]:
+            kwargs["dispatch_tracker"].durable_writer = None
+            return {"status": "failed"}
+
+        with (
+            patch.object(pe, "claim_resume_run_async", new_callable=AsyncMock, return_value="tok"),
+            patch.object(pe, "load_and_setup", new_callable=AsyncMock) as load,
+            patch.object(pe, "run_executor_with_watchdog", side_effect=_clear_writer),
+            patch.object(pe, "mark_complete", new_callable=AsyncMock) as complete,
+        ):
+            run_obj = MagicMock()
+            executor_obj = MagicMock()
+            executor_obj.resume = AsyncMock()
+            load.return_value = (run_obj, executor_obj)
+            result = await pe.resume_run(
+                async_engine=MagicMock(),  # type: ignore[arg-type]
+                run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+            )
+        assert result["status"] == "failed"
+        complete.assert_not_awaited()
+
     async def test_load_and_setup_cancelled_error_propagates(self) -> None:
         """CancelledError from load_and_setup must propagate."""
         with (

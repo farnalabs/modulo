@@ -4,9 +4,10 @@ Structural - load the migration module and assert its contract without a
 database, and pin model/migration parity for the two new ``org_api_keys``
 lookup indexes:
 
-* the chain is pinned (0271 -> ``0270_pipeline_snapshots_max_autonomy_ge_default``)
-  and it is the single linear head, so the pre-commit check-migration-heads
-  hook and every ``test_single_head_*`` pin cannot be ambushed by a renumber;
+* the chain is pinned (0271 -> ``0270_pipeline_snapshots_max_autonomy_ge_default``,
+  with ``0274_policy_gate_pin_fingerprint_operator_control`` now the single linear head)
+  so the pre-commit check-migration-heads hook and every ``test_single_head_*``
+  pin cannot be ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
   the revocation and stale-sweep read paths rely on (``auth/api_key.py::
   revoke_run_api_key`` / ``revoke_run_api_key_sweep`` and
@@ -38,6 +39,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0271_org_api_keys_revocation_sweep_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
+_HEAD_MIGRATION = "0274_policy_gate_pin_fingerprint_operator_control"
 _TABLE = 'public."org_api_keys"'
 
 #: Index name -> (ordered key columns, partial WHERE predicate). This is the
@@ -104,7 +106,7 @@ def _model_indexes() -> dict[str, Index]:
 class TestChain:
     def test_single_head_is_0271(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
+        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0270_pipeline_snapshots_max_autonomy_ge_default(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

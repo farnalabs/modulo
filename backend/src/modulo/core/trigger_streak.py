@@ -1,12 +1,20 @@
-"""FAR-190 — ongoing-trigger no-delivery streak engine.
+"""FAR-190 / FAR-1387 — no-delivery streak engine (ongoing + cron triggers).
 
-The engine walks an ongoing trigger's terminal run-classification records
-(FAR-189) and auto-deactivates the trigger after N consecutive no-delivery
-runs, then notifies. It runs as a system sweep (``enforce_no_delivery_streaks``,
-wired into ``cron_helpers.dispatcher_reconcile`` every 60s) — NEVER inline in
+The engine walks a trigger's terminal run-classification records (FAR-189) and,
+after N consecutive no-delivery runs, notifies. For ``ongoing`` triggers it also
+auto-deactivates the trigger (FAR-190). For ``cron`` triggers (FAR-1387) the
+default trip is NOTIFY-ONLY — no auto-deactivation — because a cron is the
+operator's explicit schedule and org-wide silent deactivation is a blast-radius
+risk; auto-deactivation is opt-in per trigger via the ``config_json`` key
+``no_delivery_auto_deactivate`` (default OFF for cron; ongoing behaviour is
+unchanged). It runs as a system sweep (``enforce_no_delivery_streaks``, wired
+into ``cron_helpers.dispatcher_reconcile`` every 60s) — NEVER inline in
 terminalization. The streak is bounded by ``GREATEST(last_delivery_at,
-streak_epoch)`` and the deactivation is a guarded atomic UPDATE (count folded
-into the WHERE), so a re-enabled trigger or a stale tick can never be hit.
+streak_epoch)``, and the ongoing/config-enabled deactivation is a guarded
+atomic UPDATE (count folded into the WHERE), so a re-enabled trigger or a stale
+tick can never be hit. A cron notify-only trip is latched by an append-only
+``cron_trigger.no_delivery_streak_alert`` audit record bounded by the SAME
+boundary, so the 60s sweep can never re-notify a streak that has not reset.
 
 The engine was extracted from ``cron_helpers`` (which had grown to ~4400 lines)
 so the scheduler helpers and the streak engine evolve independently. It imports
@@ -16,13 +24,16 @@ the shared scheduler helpers (``_set_rls_org`` / ``_open_factory`` /
 module import time — which keeps the ``cron_helpers -> trigger_streak`` wiring
 free of a circular import regardless of which module is imported first.
 
-Every ``active=True`` transition of an ongoing trigger MUST re-anchor
+Every ``active=True`` transition of a trigger MUST re-anchor
 ``streak_epoch`` (migration backfill anchors at deploy; this anchors at
 create + re-enable) — see ``anchor_trigger_streak_epoch``, routed through all
 active-write sites (triggers.py update/toggle/restore, mcp_server, the
-cost_controller circuit-breaker reset). There is no un-epoch'd activation
-path: a row whose epoch is NULL (rolling-deploy skew) COALESCEs to now() and
-therefore can never be deactivated until re-anchored.
+cost_controller circuit-breaker reset). The anchor is trigger-type agnostic, so
+a re-enabled ``cron`` trigger re-anchors exactly like an ongoing one (FAR-1387:
+its streak and its notify-latch both restart from the re-enable moment). There
+is no un-epoch'd activation path: a row whose epoch is NULL (rolling-deploy
+skew) COALESCEs to now() and therefore can never be deactivated until
+re-anchored.
 """
 
 from __future__ import annotations
@@ -79,6 +90,43 @@ def _ch() -> Any:
 # still stops the pool.
 ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT = 5
 ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT = 24
+
+# FAR-1387 — cron-trigger coverage (notify-only by default).
+#
+# A ``cron`` trigger counts the SAME streak (same walk, same boundary, same
+# classification records) with its OWN defaults — existing crons have no config
+# and must not silently inherit ongoing's product defaults:
+#
+# * Threshold: 5 consecutive no-delivery runs (a daily cron trips after 5
+#   failed days — the FAR-1387 incident that hid for 11 days would have tripped
+#   on day 5). Same value as ongoing, independently named so either can move
+#   without touching the other.
+# * Minimum wall-clock window: 48h (NOT ongoing's 24h). The window requires
+#   ``GREATEST(last_delivery_at, streak_epoch) <= now - window`` before a trip
+#   can fire, i.e. the trigger must have gone this long without a delivery.
+#   24h after the last delivery is exactly one missed daily period — too tight
+#   to tell one late/skipped fire (weekend, maintenance, an upstream blip) from
+#   a broken schedule, and a cron's runs cluster at its fire time. 48h = two
+#   full daily periods: a daily cron that missed a single day never trips,
+#   while a broken intraday (hourly) cron is still surfaced within 2 days of
+#   its last delivery — 7 days (a weekly period) would leave an hourly cron
+#   silent for a week. Per-trigger ``no_delivery_min_window_hours`` and the
+#   ``MODULO_CRON_STREAK_MIN_WINDOW_HOURS`` deployment env override both win
+#   over this default (0 = no window, mirroring the ongoing override).
+CRON_MAX_NO_DELIVERY_STREAK_DEFAULT = 5
+CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT = 48
+
+# Trigger types the engine covers (FAR-190 ongoing, FAR-1387 cron). Anything
+# else gets the bare unconfigured status base and is never swept.
+STREAK_TRIGGER_TYPES = ("ongoing", "cron")
+
+# Per-trigger ``config_json`` key opting a CRON trigger in to auto-deactivation
+# on trip (decision B of FAR-1387). Default OFF for cron — the trip notifies
+# and surfaces without flipping ``active``. The ongoing engine never consults
+# this key (its auto-deactivation behaviour is unchanged); the key sits on the
+# same config surface as ``max_no_delivery_streak`` / ``no_delivery_min_window_hours``.
+STREAK_AUTO_DEACTIVATE_CONFIG_KEY = "no_delivery_auto_deactivate"
+
 # Per-org per-hour deactivation cap (mass-cascade guard): a single org cannot
 # have more than this many auto-deactivations per rolling hour — a burst is
 # deferred to the next tick rather than cascading. The per-trigger atomic
@@ -99,6 +147,21 @@ STREAK_DEACTIVATE_ENABLED_DEFAULT = True
 STREAK_DEACTIVATION_EVENT_TYPE = "ongoing_trigger.auto_deactivated"
 STREAK_NOTIFY_FAILED_EVENT_TYPE = "ongoing_trigger.deactivation_notify_failed"
 STREAK_MASS_CASCADE_EVENT_TYPE = "ongoing_trigger.mass_cascade_alert"
+
+# FAR-1387 — cron-equivalent audit event types (append-only, never renamed).
+# Deliberately DISTINCT from the ``ongoing_trigger.*`` names: reusing those for
+# cron records would corrupt the existing stream's meaning (every existing
+# reader assumes an ``ongoing_trigger.*`` record describes an ongoing trigger).
+#   no_delivery_streak_alert    — a notify-only cron trip (the dedup latch: at
+#                                 most one per GREATEST(last_delivery, epoch))
+#   auto_deactivated            — a cron auto-deactivated by an opt-in
+#                                 ``no_delivery_auto_deactivate`` config trip
+#   notify_failed               — first-attempt notifier failure for either
+#   mass_cascade_alert          — >=5 cron auto-deactivations in 24h (org)
+CRON_STREAK_ALERT_EVENT_TYPE = "cron_trigger.no_delivery_streak_alert"
+CRON_STREAK_DEACTIVATION_EVENT_TYPE = "cron_trigger.auto_deactivated"
+CRON_STREAK_NOTIFY_FAILED_EVENT_TYPE = "cron_trigger.notify_failed"
+CRON_STREAK_MASS_CASCADE_EVENT_TYPE = "cron_trigger.mass_cascade_alert"
 
 # ``deactivated_by`` sentinel values carried in the deactivation audit payload
 # (append-only, never renamed). The on-demand reader maps the payload field to
@@ -267,6 +330,22 @@ _STREAK_STATUS_COUNT_SQL = (
     "SELECT __STREAK_COUNT__ AS streak"  # nosec B608 - static constant fragments, never user input
 ).replace("__STREAK_COUNT__", _STREAK_COUNT_SQL)
 
+# FAR-1387 — the cron notify-only trip read: the streak count AND the streak
+# boundary in ONE statement. The caller applies the same predicates the guarded
+# UPDATE folds into its WHERE (``streak >= threshold`` AND ``boundary <=
+# window_cutoff``) in Python, so the read-only trip and the guarded
+# deactivation can never disagree about when a streak has fired. The boundary
+# half is returned because the notify-latch and (later) a re-anchor are both
+# expressed against it. Same ``:oid``/``:tid`` bind-parameter scoping rules as
+# the other raw fragments (text() bypasses the tenant-filter listener).
+_STREAK_TRIP_READ_SQL = (
+    (
+        "SELECT __STREAK_COUNT__ AS streak, __BOUNDARY__ AS boundary"  # nosec B608 - static constant fragments
+    )
+    .replace("__STREAK_COUNT__", _STREAK_COUNT_SQL)
+    .replace("__BOUNDARY__", _STREAK_BOUNDARY_SQL)
+)
+
 
 # ---------------------------------------------------------------------------
 # Activation anchor + re-enable helpers
@@ -340,34 +419,55 @@ def _streak_deactivate_enabled() -> bool:
     return raw.strip().lower() not in ("0", "false", "off", "no")
 
 
-def _streak_min_window_hours_default() -> int:
+def _streak_min_window_hours_default(trigger_type: str = "ongoing") -> int:
     """Product default minimum wall-clock window before a no-delivery streak
-    fires (24h — a quiet stretch must not self-deactivate within the first day
-    after a delivery). A deployment overrides this to 0 via
+    fires, per trigger type.
+
+    Ongoing: 24h — a quiet stretch must not self-deactivate within the first
+    day after a delivery. A deployment overrides this to 0 via
     ``MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS`` so a fast-moving repo's quiet
-    stretch still stops the pool. Per-trigger ``no_delivery_min_window_hours``
-    config overrides both.
+    stretch still stops the pool.
+
+    Cron (FAR-1387): 48h — two full daily periods (see the
+    ``CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT`` rationale), overridable via
+    ``MODULO_CRON_STREAK_MIN_WINDOW_HOURS``. An unknown type falls back to the
+    ongoing default (the covered set is closed — ``STREAK_TRIGGER_TYPES``).
+
+    Per-trigger ``no_delivery_min_window_hours`` config overrides both.
     """
-    raw = os.environ.get("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS")
+    env_name = (
+        "MODULO_CRON_STREAK_MIN_WINDOW_HOURS" if trigger_type == "cron" else "MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS"
+    )
+    raw = os.environ.get(env_name)
     if raw is None:
-        return ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+        return (
+            CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+            if trigger_type == "cron"
+            else ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+        )
     try:
         return max(0, int(raw))
     except (TypeError, ValueError):
-        return ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+        return (
+            CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+            if trigger_type == "cron"
+            else ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+        )
 
 
-def _streak_config(config: dict[str, Any] | None) -> tuple[int, int]:
+def _streak_config(config: dict[str, Any] | None, *, trigger_type: str = "ongoing") -> tuple[int, int]:
     """Resolve (threshold, min_window_hours) from a trigger's ``config_json``.
 
     Threshold: ``max_no_delivery_streak``, falling back to the legacy
-    ``max_consecutive_failures`` key (read for one release) — else a deployment
-    default (5). Window: per-trigger ``no_delivery_min_window_hours``, else the
-    env default (24h product; 0 for a deployment). Only genuine ``int`` values are
-    accepted — a boolean (``int(True) == 1``) or a float is rejected so a
-    mis-typed config can never fire instantly or silently truncate. Invalid
-    values fall back to the defaults — a mis-typed config can never disable the
-    guard or fire instantly.
+    ``max_consecutive_failures`` key (read for one release) — else a per-type
+    default (5 for both ongoing and cron today, independently named constants;
+    see ``CRON_MAX_NO_DELIVERY_STREAK_DEFAULT``). Window: per-trigger
+    ``no_delivery_min_window_hours``, else the per-type env default (ongoing:
+    24h product / 0 for a deployment; cron: 48h product). Only genuine ``int``
+    values are accepted — a boolean (``int(True) == 1``) or a float is rejected
+    so a mis-typed config can never fire instantly or silently truncate.
+    Invalid values fall back to the defaults — a mis-typed config can never
+    disable the guard or fire instantly.
     """
     cfg = config or {}
     raw_threshold = cfg.get("max_no_delivery_streak")
@@ -377,17 +477,33 @@ def _streak_config(config: dict[str, Any] | None) -> tuple[int, int]:
         parsed: int | None = None
     else:
         parsed = raw_threshold
+    default_threshold = (
+        CRON_MAX_NO_DELIVERY_STREAK_DEFAULT if trigger_type == "cron" else ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT
+    )
     threshold = (
         # A missing, non-int, zero, or negative threshold is invalid — fall
         # back to the default (never fire instantly on a mis-typed config).
-        ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT if parsed is None or parsed < 1 else parsed
+        default_threshold if parsed is None or parsed < 1 else parsed
     )
     raw_window = cfg.get("no_delivery_min_window_hours")
     if raw_window is None or isinstance(raw_window, bool) or not isinstance(raw_window, int):
-        window = _streak_min_window_hours_default()
+        window = _streak_min_window_hours_default(trigger_type)
     else:
         window = max(0, raw_window)
     return threshold, window
+
+
+def _streak_auto_deactivate_enabled(config: dict[str, Any] | None) -> bool:
+    """FAR-1387 decision B — is a CRON trigger opted in to auto-deactivation?
+
+    Reads the per-trigger ``no_delivery_auto_deactivate`` config key. Default
+    OFF: a cron trip notifies and surfaces without flipping ``active``. Only a
+    genuine JSON ``true`` enables it — a mis-typed value (string, int, null)
+    fails CLOSED to notify-only, never to auto-deactivation. The ongoing
+    engine never consults this function.
+    """
+    raw = (config or {}).get(STREAK_AUTO_DEACTIVATE_CONFIG_KEY)
+    return raw is True
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +515,7 @@ def _resolve_streak_threshold(trigger: Any, config_threshold: int | None) -> int
     """Resolve the threshold: caller-supplied wins, else the trigger's config."""
     if config_threshold is not None:
         return int(config_threshold)
-    threshold, _ = _streak_config(trigger.config_json)
+    threshold, _ = _streak_config(trigger.config_json, trigger_type=getattr(trigger, "trigger_type", "ongoing"))
     return threshold
 
 
@@ -442,6 +558,10 @@ async def _read_streak_outcomes(
                 "classification": classification.get("value"),
                 "reason": classification.get("reason"),
                 "completed_at": completed_at.isoformat() if completed_at is not None else None,
+                # FAR-1373 — tolerant read: records written before FAR-1336
+                # are six-key and carry no such key, so this is None for them.
+                # None must NEVER read as "verified" downstream (FAR-1373).
+                "delivery_confidence": classification.get("delivery_confidence"),
             }
         )
     return last_outcomes
@@ -453,9 +573,19 @@ async def _read_streak_deactivation_reason(
     trigger_id: uuid.UUID,
     trigger: Any,
 ) -> str | None:
-    """Read the newest auto-deactivation reason SINCE the last active=True."""
+    """Read the newest auto-deactivation reason SINCE the last active=True.
+
+    The audit stream is type-scoped (FAR-1387): an ongoing trigger reads its
+    ``ongoing_trigger.auto_deactivated`` records, a cron trigger reads
+    ``cron_trigger.auto_deactivated`` — a cron record never masquerades as an
+    ongoing one and vice versa.
+    """
     from modulo.db.models.audit_event import AuditEvent
 
+    trigger_type = getattr(trigger, "trigger_type", "ongoing")
+    deactivation_event_type = (
+        CRON_STREAK_DEACTIVATION_EVENT_TYPE if trigger_type == "cron" else STREAK_DEACTIVATION_EVENT_TYPE
+    )
     streak_epoch = getattr(trigger, "streak_epoch", None)
     epoch_cutoff = streak_epoch if streak_epoch is not None else datetime.now(UTC)
     audit_row = (
@@ -465,7 +595,7 @@ async def _read_streak_deactivation_reason(
                 AuditEvent.organisation_id == org_id,
                 AuditEvent.resource_type == "trigger",
                 AuditEvent.resource_id == trigger_id,
-                AuditEvent.event_type == STREAK_DEACTIVATION_EVENT_TYPE,
+                AuditEvent.event_type == deactivation_event_type,
                 AuditEvent.created_at >= epoch_cutoff,
             )
             .order_by(AuditEvent.created_at.desc())
@@ -488,24 +618,27 @@ async def get_trigger_streak_status(
     trigger: Any,
     config_threshold: int | None = None,
 ) -> dict[str, Any]:
-    """FAR-191 — READ-ONLY on-demand streak status for ONE trigger.
+    """FAR-191 / FAR-1387 — READ-ONLY on-demand streak status for ONE trigger.
 
     Computes the current no-delivery streak / threshold / state for the trigger
-    detail + list serializers so the operator can see how close an ongoing
-    trigger is to auto-deactivation, whether it HAS been auto-deactivated (and
-    why), and the last-N outcome summary. Reuses the sweep's SQL walk constants
-    (``_STREAK_COUNT_SQL`` via ``_STREAK_STATUS_COUNT_SQL``) so the on-demand
-    read and the deactivation sweep count the SAME streak.
+    detail + list serializers so the operator can see how close a covered
+    trigger (ongoing or cron) is to its trip, whether it HAS been
+    auto-deactivated (and why), and the last-N outcome summary. Reuses the
+    sweep's SQL walk constants (``_STREAK_COUNT_SQL`` via
+    ``_STREAK_STATUS_COUNT_SQL``) so the on-demand read and the deactivation
+    sweep count the SAME streak. A cron trigger gets REAL values here — no
+    longer the bare unconfigured base (FAR-1387); uncovered types still return
+    the base without issuing a query.
 
     NEVER deactivates, NEVER writes, NEVER triggers the mass-cascade/cap/notify
     machinery. Best-effort and NEVER raises: any failure is swallowed and logged
     and the caller receives ``{enabled: False, state: 'unconfigured'}`` so the
     API degrades gracefully instead of 500ing the trigger list.
 
-    ``enabled`` means the streak engine is active for this trigger (ongoing type
-    + the deactivate+notify kill switch on). It deliberately does NOT mean
-    ``active=True``: an auto-deactivated trigger still reports its deactivation
-    state and the streak that caused it.
+    ``enabled`` means the streak engine is active for this trigger (a covered
+    trigger type + the deactivate+notify kill switch on). It deliberately does
+    NOT mean ``active=True``: an auto-deactivated trigger still reports its
+    deactivation state and the streak that caused it.
 
     Returns::
 
@@ -515,7 +648,7 @@ async def get_trigger_streak_status(
             "threshold": int,                # configured max_no_delivery_streak
             "state": "ok" | "deactivated" | "unconfigured",
             "deactivated_reason": "no_delivery_streak" | "config_failure" | None,
-            "last_outcomes": [{run_id, classification, reason, completed_at}],  # <=5, newest first
+            "last_outcomes": [{run_id, classification, reason, completed_at, delivery_confidence}],  # <=5, newest first
         }
 
     The reader degrades PER SUB-READ, never as one big try/except: a failure
@@ -525,7 +658,9 @@ async def get_trigger_streak_status(
     be reported as 'unconfigured' just because the reason read hiccuped.
     """
     base = _streak_status_base()
-    if getattr(trigger, "trigger_type", None) != "ongoing":
+    # FAR-1387: the engine covers ongoing + cron; every other type keeps the
+    # cheap unconfigured base with NO queries (the N+1 guard).
+    if getattr(trigger, "trigger_type", None) not in STREAK_TRIGGER_TYPES:
         return base
     org_id = getattr(trigger, "organisation_id", None)
     trigger_id = getattr(trigger, "id", None)
@@ -671,13 +806,20 @@ async def record_ongoing_deactivation_lifecycle(
     threshold: int | None = None,
     reason: str = "no_delivery",
     deactivated_by: str = STREAK_DEACTIVATED_BY_STREAK,
+    trigger_type: str = "ongoing",
 ) -> None:
-    """Shared deactivation lifecycle ceremony (FAR-190 / FAR-158): the
-    append-only AuditEvent (actor=system) is the primary record; the TriggerEvent
-    row keeps the fire-outcome log consistent. Run in the SAME transaction as the
-    ``active=False`` write. Used by the no-delivery streak deactivation AND the
-    config-failure deactivation (``cron_helpers._bump_ongoing_failure``) so both
-    auto-deactivation paths leave identical, searchable audit records.
+    """Shared deactivation lifecycle ceremony (FAR-190 / FAR-158 / FAR-1387):
+    the append-only AuditEvent (actor=system) is the primary record; the
+    TriggerEvent row keeps the fire-outcome log consistent. Run in the SAME
+    transaction as the ``active=False`` write. Used by the no-delivery streak
+    deactivation AND the config-failure deactivation
+    (``cron_helpers._bump_ongoing_failure``) so both auto-deactivation paths
+    leave identical, searchable audit records.
+
+    ``trigger_type`` selects the append-only audit event stream: ``ongoing``
+    keeps ``ongoing_trigger.auto_deactivated`` (byte-identical to before),
+    ``cron`` writes ``cron_trigger.auto_deactivated`` — cron records never
+    corrupt the ongoing stream's meaning (FAR-1387).
     """
     from types import SimpleNamespace
 
@@ -686,6 +828,9 @@ async def record_ongoing_deactivation_lifecycle(
 
     ch = _ch()
     streak = int(streak or 0)
+    is_cron = trigger_type == "cron"
+    event_type = CRON_STREAK_DEACTIVATION_EVENT_TYPE if is_cron else STREAK_DEACTIVATION_EVENT_TYPE
+    type_label = "Cron" if is_cron else "Ongoing"
     if deactivated_by == STREAK_DEACTIVATED_BY_STREAK:
         detail = f"auto-deactivated after {streak} consecutive no-delivery runs (threshold {int(threshold or 0)})"
     else:
@@ -693,19 +838,19 @@ async def record_ongoing_deactivation_lifecycle(
     await append_audit_event(
         session,
         org_id=org_id,
-        event_type=STREAK_DEACTIVATION_EVENT_TYPE,
+        event_type=event_type,
         actor_user_id=None,  # system
         resource_type="trigger",
         resource_id=trigger_id,
         payload_json={
             "actor": SYSTEM_ACTOR,
-            "summary": f"Ongoing trigger {short_id(trigger_id) or 'unknown'} {detail}",
+            "summary": f"{type_label} trigger {short_id(trigger_id) or 'unknown'} {detail}",
             "trigger_id": str(trigger_id),
             "pipeline_id": str(pipeline_id) if pipeline_id else "",
             "streak": streak,
             "threshold": int(threshold) if threshold is not None else None,
             "reason": reason or "no_delivery",
-            "trigger_type": "ongoing",
+            "trigger_type": trigger_type,
             "deactivated_by": deactivated_by,
         },
     )
@@ -727,7 +872,8 @@ async def _record_streak_deactivation(
     reason: str | None,
 ) -> None:
     """Lifecycle records for one no-delivery deactivation — thin wrapper over the
-    shared :func:`record_ongoing_deactivation_lifecycle`.
+    shared :func:`record_ongoing_deactivation_lifecycle`. The trigger type
+    (ongoing / opt-in cron) rides on ``data['trigger_type']``.
     """
     await record_ongoing_deactivation_lifecycle(
         session,
@@ -738,6 +884,54 @@ async def _record_streak_deactivation(
         threshold=int(threshold),
         reason=reason or "no_delivery",
         deactivated_by=STREAK_DEACTIVATED_BY_STREAK,
+        trigger_type=str(data.get("trigger_type") or "ongoing"),
+    )
+
+
+async def _record_cron_streak_alert(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    data: dict[str, Any],
+    threshold: int,
+    reason: str | None,
+) -> None:
+    """FAR-1387 — the append-only notify-only trip record for a cron trigger.
+
+    This row is BOTH the operator-facing surfacing (audit log) and the sweep's
+    dedup latch: the trip check consults it against
+    ``GREATEST(last_delivery_at, streak_epoch)``, so the 60s sweep notifies
+    once per streak, and a delivery or a re-enable (which move the boundary
+    forward) re-arms the trip. Written BEFORE the notification dispatch, in the
+    claim transaction — the audit row is the durable truth even if every
+    dispatch attempt fails (a first-attempt failure additionally records the
+    CRITICAL ``cron_trigger.notify_failed`` row).
+    """
+    from modulo.core.audit_logger import append_audit_event
+    from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
+
+    streak = int(data.get("streak") or 0)
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type=CRON_STREAK_ALERT_EVENT_TYPE,
+        actor_user_id=None,  # system
+        resource_type="trigger",
+        resource_id=data["id"],
+        payload_json={
+            "actor": SYSTEM_ACTOR,
+            "summary": (
+                f"Cron trigger {short_id(data['id']) or 'unknown'} reached a no-delivery streak of "
+                f"{streak} (threshold {int(threshold)}) — notified; not auto-deactivated"
+            ),
+            "trigger_id": str(data["id"]),
+            "pipeline_id": str(data.get("pipeline_id") or ""),
+            "streak": streak,
+            "threshold": int(threshold),
+            "reason": reason or "no_delivery",
+            "trigger_type": "cron",
+            "deactivated_by": None,
+        },
     )
 
 
@@ -751,11 +945,18 @@ async def _count_recent_streak_deactivations(
     org_id: uuid.UUID,
     *,
     hours: int,
+    trigger_type: str | None = None,
 ) -> int:
     """Count an org's streak auto-deactivations in the last *hours* (audit chain
     is the primary lifecycle record, so the count reads audit_events). Best-
     effort: a count failure reads 0 (the per-trigger atomic UPDATE remains the
     hard correctness bound; the cap is a soft operational throttle).
+
+    ``trigger_type`` scopes the count to one audit stream (``ongoing`` /
+    ``cron``) — used by the per-type mass-cascade alert. ``None`` counts BOTH
+    streams: the per-org per-hour deactivation CAP is an org-wide blast-radius
+    budget (its own constant documents "auto-deactivations", type-agnostic), so
+    an opt-in cron deactivation spends the same hourly budget as an ongoing one.
     """
     from sqlalchemy import func
 
@@ -763,13 +964,20 @@ async def _count_recent_streak_deactivations(
 
     ch = _ch()
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
+    deactivation_types: tuple[str, ...]
+    if trigger_type == "cron":
+        deactivation_types = (CRON_STREAK_DEACTIVATION_EVENT_TYPE,)
+    elif trigger_type == "ongoing":
+        deactivation_types = (STREAK_DEACTIVATION_EVENT_TYPE,)
+    else:
+        deactivation_types = (STREAK_DEACTIVATION_EVENT_TYPE, CRON_STREAK_DEACTIVATION_EVENT_TYPE)
     try:
         async with factory() as session, session.begin():
             await ch._set_rls_org(session, org_id)
             result = await session.execute(
                 select(func.count()).where(
                     AuditEvent.organisation_id == org_id,
-                    AuditEvent.event_type == STREAK_DEACTIVATION_EVENT_TYPE,
+                    AuditEvent.event_type.in_(deactivation_types),
                     AuditEvent.created_at >= cutoff,
                 )
             )
@@ -781,14 +989,15 @@ async def _count_recent_streak_deactivations(
         return 0
 
 
-async def _select_active_ongoing_triggers(
+async def _select_active_streak_triggers(
     factory: async_sessionmaker[AsyncSession],
     org_id: uuid.UUID,
     *,
     max_triggers: int = 100,
     after_id: uuid.UUID | None = None,
 ) -> list[Any]:
-    """One keyset page of the org's active ongoing triggers for the sweep.
+    """One keyset page of the org's active streak-covered triggers (ongoing +
+    cron, FAR-1387) for the sweep.
 
     ``after_id`` is the exclusive ``id > after_id`` cursor: the sweep walks an
     org in ``max_triggers``-sized pages, so an org with more triggers than the
@@ -801,7 +1010,7 @@ async def _select_active_ongoing_triggers(
     async with factory() as session, session.begin():
         await ch._set_rls_org(session, org_id)
         stmt = select(Trigger).where(
-            Trigger.trigger_type == "ongoing",
+            Trigger.trigger_type.in_(STREAK_TRIGGER_TYPES),
             Trigger.active.is_(True),
             Trigger.deleted_at.is_(None),
         )
@@ -837,8 +1046,10 @@ async def _deactivate_trigger_on_no_delivery_streak(
     trigger_id: uuid.UUID,
     threshold: int,
     window_cutoff: datetime,
+    trigger_type: str = "ongoing",
 ) -> dict[str, Any] | None:
-    """Guarded atomic deactivation for ONE ongoing trigger (FAR-190).
+    """Guarded atomic deactivation for ONE covered trigger (FAR-190 for
+    ongoing, FAR-1387 opt-in for cron).
 
     The streak is computed INSIDE the UPDATE's WHERE from the live trigger row
     (``active`` + ``streak_epoch``) and the classification log, so a re-enabled
@@ -847,9 +1058,10 @@ async def _deactivate_trigger_on_no_delivery_streak(
     transaction (per-trigger isolation): the deactivation UPDATE, the AuditEvent
     lifecycle record, and the fire-outcome TriggerEvent commit together, and a
     failure for this trigger can never stop the other triggers in the sweep.
-    Returns ``{id, pipeline_id, organisation_id, config_json, streak, reason}``
-    when deactivated, else ``None`` (below threshold / inside the wall-clock
-    window / already inactive).
+    ``trigger_type`` selects the audit stream the lifecycle record lands on.
+    Returns ``{id, pipeline_id, organisation_id, config_json, streak, reason,
+    trigger_type}`` when deactivated, else ``None`` (below threshold / inside
+    the wall-clock window / already inactive).
     """
     ch = _ch()
     async with factory() as session, session.begin():
@@ -872,6 +1084,7 @@ async def _deactivate_trigger_on_no_delivery_streak(
             "organisation_id": row[2],
             "config_json": row[3] or {},
             "streak": int(row[4] or 0),
+            "trigger_type": trigger_type,
         }
         reason = await _newest_streak_no_delivery_reason(session, org_id, trigger_id)
         data["reason"] = reason or "no_delivery"
@@ -884,6 +1097,99 @@ async def _deactivate_trigger_on_no_delivery_streak(
             threshold,
         )
         return data
+
+
+async def _claim_cron_streak_alert(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    threshold: int,
+    window_cutoff: datetime,
+) -> dict[str, Any] | None:
+    """FAR-1387 — claim THIS tick's cron notify-only trip, or ``None``.
+
+    One transaction, three steps:
+      1. trip read (``_STREAK_TRIP_READ_SQL``): streak >= threshold AND
+         boundary <= window_cutoff — the SAME predicates the guarded
+         deactivation UPDATE folds into its WHERE, so the read-only trip and
+         the opt-in deactivation can never disagree about when a streak fired;
+      2. latch check: a prior ``cron_trigger.no_delivery_streak_alert`` at or
+         after the boundary means this streak has already notified (the
+         boundary moves forward on every delivery and on every re-enable
+         re-anchor, re-arming the trip);
+      3. latch write: the append-only audit record (the durable surfacing).
+
+    Returns ``{streak, reason}`` when the claim is granted (the caller then
+    dispatches the notification outside this transaction), else ``None``. Under
+    the sweep's normal single-tick cadence at most one claim per streak is
+    granted; a pathological concurrent tick could duplicate one notification
+    (never a state change — the alert path never writes to ``triggers``).
+    """
+    ch = _ch()
+    async with factory() as session, session.begin():
+        await ch._set_rls_org(session, org_id)
+        trip = await session.execute(
+            text(_STREAK_TRIP_READ_SQL),
+            {"oid": str(org_id), "tid": str(trigger_id)},
+        )
+        row = trip.first()
+        streak = int(row[0] or 0) if row is not None else 0
+        boundary = row[1] if row is not None else None
+        if streak < threshold or boundary is None or boundary > window_cutoff:
+            return None
+        latched = await _cron_streak_alert_latched(session, org_id, trigger_id, since=boundary)
+        if latched:
+            return None
+        reason = await _newest_streak_no_delivery_reason(session, org_id, trigger_id)
+        data: dict[str, Any] = {
+            "id": trigger_id,
+            "streak": streak,
+            "reason": reason or "no_delivery",
+            "trigger_type": "cron",
+            "auto_deactivated": False,
+        }
+        await _record_cron_streak_alert(session, org_id=org_id, data=data, threshold=threshold, reason=reason)
+        _log.warning(
+            "streak.cron_trip org=%s trigger=%s streak=%s threshold=%s (notify-only)",
+            org_id,
+            trigger_id,
+            streak,
+            threshold,
+        )
+        return data
+
+
+async def _cron_streak_alert_latched(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    *,
+    since: datetime,
+) -> bool:
+    """Has this streak already alerted (or been auto-deactivated)?
+
+    True when a cron streak audit record (alert OR opt-in deactivation) exists
+    at or after ``since`` — the boundary (``GREATEST(last_delivery_at,
+    streak_epoch)``), so a delivery or a re-enable re-anchor re-arms the trip.
+    Best-effort at the caller: this runs INSIDE the claim transaction, so a
+    failure raises and the claim aborts (fail-closed: no notify on uncertain
+    evidence, the same posture as the walk's unclassified stop).
+    """
+    from sqlalchemy import func
+
+    from modulo.db.models.audit_event import AuditEvent
+
+    result = await session.execute(
+        select(func.count()).where(
+            AuditEvent.organisation_id == org_id,
+            AuditEvent.resource_type == "trigger",
+            AuditEvent.resource_id == trigger_id,
+            AuditEvent.event_type.in_((CRON_STREAK_ALERT_EVENT_TYPE, CRON_STREAK_DEACTIVATION_EVENT_TYPE)),
+            AuditEvent.created_at >= since,
+        )
+    )
+    return int(result.scalar_one() or 0) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -913,6 +1219,13 @@ def _streak_pending_member(
             "pipeline_name": pipeline_name or "",
             "retry_count": int(retry_count),
             "last_retry_at": last_retry_at,
+            # FAR-1387 — carried so a retried dispatch keeps its identity, and
+            # so the retry pass can tell a deactivation member (trigger is
+            # inactive by design) from a cron notify-only member (trigger is
+            # still active BY design — its active state must never drop it).
+            # Legacy members predate the keys: ongoing + deactivated.
+            "trigger_type": str(data.get("trigger_type") or "ongoing"),
+            "auto_deactivated": bool(data.get("auto_deactivated", True)),
         },
         separators=(",", ":"),
     )
@@ -962,13 +1275,20 @@ async def _record_streak_notify_failed(
     threshold: int,
     reason: str,
 ) -> None:
-    """Critical audit entry when the deactivation notifier fails on the FIRST
+    """Critical audit entry when the streak notifier fails on the FIRST
     attempt (FAR-190 item 10). Best-effort — a failed audit write must never
     raise out of the sweep. Subsequent retries deliberately do NOT re-enter this
     path (the per-member pending set is the retry state; an audit row per retry
     tick would flood the chain).
+
+    The audit stream follows ``data['trigger_type']`` (FAR-1387): ongoing
+    failures land on ``ongoing_trigger.deactivation_notify_failed``, cron
+    failures on ``cron_trigger.notify_failed`` — never mixed.
     """
     ch = _ch()
+    trigger_type = str(data.get("trigger_type") or "ongoing")
+    is_cron = trigger_type == "cron"
+    auto_deactivated = bool(data.get("auto_deactivated", True))
     try:
         from modulo.core.audit_logger import append_audit_event
         from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
@@ -978,15 +1298,15 @@ async def _record_streak_notify_failed(
             await append_audit_event(
                 session,
                 org_id=org_id,
-                event_type=STREAK_NOTIFY_FAILED_EVENT_TYPE,
+                event_type=CRON_STREAK_NOTIFY_FAILED_EVENT_TYPE if is_cron else STREAK_NOTIFY_FAILED_EVENT_TYPE,
                 actor_user_id=None,  # system
                 resource_type="trigger",
                 resource_id=data["id"],
                 payload_json={
                     "actor": SYSTEM_ACTOR,
                     "summary": (
-                        f"Deactivation notifier failed on first attempt for trigger "
-                        f"{short_id(data['id']) or 'unknown'} "
+                        f"{'Deactivation' if auto_deactivated else 'No-delivery streak'} notifier failed "
+                        f"on first attempt for trigger {short_id(data['id']) or 'unknown'} "
                         f"(streak {int(data.get('streak') or 0)})"
                     ),
                     "trigger_id": str(data["id"]),
@@ -994,7 +1314,7 @@ async def _record_streak_notify_failed(
                     "streak": int(data.get("streak") or 0),
                     "threshold": int(threshold),
                     "reason": reason,
-                    "trigger_type": "ongoing",
+                    "trigger_type": trigger_type,
                 },
             )
     except asyncio.CancelledError:
@@ -1044,16 +1364,23 @@ async def _notify_streak_deactivation(
     redis_client: AsyncRedis | None,
     retry_count: int = 0,
 ) -> bool:
-    """Best-effort post-commit deactivation notification (FAR-190 item 10).
+    """Best-effort post-commit streak notification (FAR-190 item 10 / FAR-1387).
 
     Reuses the existing notifier surface (constants in ``notifier/__init__``,
     event config in ``event_mapper._EVENT_CONFIG``, AVAILABLE_EVENTS in
     admin_notifications). Payload is sanitised: identifiers + titles +
-    allow-listed reason fields only — never tokens or raw output.
+    allow-listed reason fields only — never tokens or raw output. The payload
+    carries ``trigger_type`` (``ongoing`` / ``cron``) and ``auto_deactivated``
+    so structured consumers (webhooks) can tell a cron notify-only trip from a
+    deactivation. NOTE: the registered event is ``trigger_deactivated`` whose
+    in-app/email templates are ongoing-worded — a distinct cron event type
+    would need registration in three non-engine modules and is tracked as a
+    follow-up; the audit streams (which carry the precise cron event types)
+    remain the authoritative record either way.
 
     Bound: the dispatch runs under ``asyncio.wait_for`` (10s) so a hung endpoint
     can never blow the enclosing 120s dispatcher_reconcile tick — the
-    deactivation (audit + trigger_events) is the durable truth. Failure
+    deactivation / alert audit record is the durable truth. Failure
     handling:
 
     * dispatch raises / times out: CRITICAL log + critical audit on the FIRST
@@ -1070,7 +1397,7 @@ async def _notify_streak_deactivation(
     payload = {
         "trigger_id": str(data["id"]),
         "pipeline_name": pipeline_name or "",
-        "trigger_type": "ongoing",
+        "trigger_type": str(data.get("trigger_type") or "ongoing"),
         "streak": int(data.get("streak") or 0),
         "threshold": int(threshold),
         "reason": safe_reason,
@@ -1078,6 +1405,9 @@ async def _notify_streak_deactivation(
         # deactivation is surfaced here as a contract field and never silently
         # re-activates the trigger (stays inactive until the operator re-enables).
         "delivered_after_deactivation": False,
+        # FAR-1387 — False on a cron notify-only trip (the trigger is STILL
+        # active by design); True for every ongoing deactivation.
+        "auto_deactivated": bool(data.get("auto_deactivated", True)),
         "mass_cascade_alert": False,
     }
     ch = _ch()
@@ -1186,12 +1516,16 @@ def _build_deactivation_payload(
     pipeline_id: uuid.UUID | None,
     data: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build the deactivation payload forwarded to the notifier."""
+    """Build the streak-notify payload forwarded to the notifier — carries the
+    trigger type + deactivation flag through so a RETRIED dispatch keeps the
+    identity the first attempt had (FAR-1387)."""
     return {
         "id": trigger_id,
         "pipeline_id": pipeline_id,
         "streak": int(data.get("streak") or 0),
         "reason": data.get("reason") or "no_delivery",
+        "trigger_type": str(data.get("trigger_type") or "ongoing"),
+        "auto_deactivated": bool(data.get("auto_deactivated", True)),
     }
 
 
@@ -1256,23 +1590,31 @@ async def _retry_one_pending_member(
         pipeline_id = uuid.UUID(data["pipeline_id"]) if data.get("pipeline_id") else None
         threshold = int(data.get("threshold") or 0)
         retry_count = int(data.get("retry_count") or 0)
-        # Re-check the trigger's active state before dispatching. A pending
-        # member exists precisely because the trigger was JUST auto-
-        # deactivated (active=False), so dispatch while it stays deactivated;
-        # drop only when it has been re-enabled (active=True) — a re-enabled
-        # trigger must NOT receive a stale "auto-deactivated" notification.
-        # A read failure (None) skips the member this tick without dropping.
-        active = await _trigger_active_state(org_id, trigger_id)
-        if active is None:
-            return "skip", attempted  # read failure — skip, don't drop
-        if active:
-            await _srem_streak_member(redis_client, key, raw)
-            _log.warning(
-                "streak.notify_pending_dropped org=%s trigger=%s (re-enabled)",
-                org_id,
-                trigger_id,
-            )
-            return "dropped", attempted
+        # Re-check the trigger's active state before dispatching — ONLY for a
+        # deactivation member (legacy members without the flag count as one).
+        # Such a member exists precisely because the trigger was JUST
+        # auto-deactivated (active=False), so dispatch while it stays
+        # deactivated; drop only when it has been re-enabled (active=True) — a
+        # re-enabled trigger must NOT receive a stale "auto-deactivated"
+        # notification. A read failure (None) skips the member this tick
+        # without dropping.
+        #
+        # FAR-1387: a cron notify-only member (``auto_deactivated: False``) is
+        # the opposite shape — its trigger is STILL active by design, so the
+        # active re-check would drop every one of them on the first retry;
+        # those members skip the check and dispatch unconditionally.
+        if bool(data.get("auto_deactivated", True)):
+            active = await _trigger_active_state(org_id, trigger_id)
+            if active is None:
+                return "skip", attempted  # read failure — skip, don't drop
+            if active:
+                await _srem_streak_member(redis_client, key, raw)
+                _log.warning(
+                    "streak.notify_pending_dropped org=%s trigger=%s (re-enabled)",
+                    org_id,
+                    trigger_id,
+                )
+                return "dropped", attempted
         attempted += 1
         if attempted > max_retries:
             return "stop", attempted  # per-tick dispatch cap reached — leave the rest pending
@@ -1420,9 +1762,13 @@ async def _retry_pending_streak_notifications(
 # ---------------------------------------------------------------------------
 
 
-async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int) -> None:
-    """Critical audit entry for a mass-cascade alert (FAR-190 item 9). Best-effort."""
+async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int, *, trigger_type: str = "ongoing") -> None:
+    """Critical audit entry for a mass-cascade alert (FAR-190 item 9 /
+    FAR-1387 cron equivalent). Best-effort. Writes the audit stream matching
+    ``trigger_type`` so a cron cascade lands on ``cron_trigger.mass_cascade_alert``.
+    """
     ch = _ch()
+    is_cron = trigger_type == "cron"
     try:
         from modulo.core.audit_logger import append_audit_event
         from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
@@ -1432,21 +1778,21 @@ async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int) -> None:
             await append_audit_event(
                 session,
                 org_id=org_id,
-                event_type=STREAK_MASS_CASCADE_EVENT_TYPE,
+                event_type=CRON_STREAK_MASS_CASCADE_EVENT_TYPE if is_cron else STREAK_MASS_CASCADE_EVENT_TYPE,
                 actor_user_id=None,  # system
                 resource_type="organisation",
                 resource_id=org_id,
                 payload_json={
                     "actor": SYSTEM_ACTOR,
                     "summary": (
-                        f"Mass cascade: {int(count)} ongoing triggers auto-deactivated "
+                        f"Mass cascade: {int(count)} {'cron' if is_cron else 'ongoing'} triggers auto-deactivated "
                         f"within {ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h "
                         f"(org {short_id(org_id) or 'unknown'})"
                     ),
                     "deactivated_count": int(count),
                     "window_hours": ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS,
                     "threshold": ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD,
-                    "trigger_type": "ongoing",
+                    "trigger_type": trigger_type,
                 },
             )
     except asyncio.CancelledError:
@@ -1458,17 +1804,24 @@ async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int) -> None:
 async def _streak_mass_cascade_alerted_this_window(
     factory: async_sessionmaker[AsyncSession],
     org_id: uuid.UUID,
+    *,
+    trigger_type: str = "ongoing",
 ) -> bool:
     """DB-derived dedup for the mass-cascade alert: has this org already fired a
     mass-cascade alert within the window? The audit chain is the source of truth
     (the deactivation count already comes from audit_events), so there is NO
-    Redis dependency — a Redis outage can never suppress the alert.
+    Redis dependency — a Redis outage can never suppress the alert. Dedup is
+    per audit stream (FAR-1387): a cron cascade alert never masks an ongoing
+    one or vice versa.
     """
     from sqlalchemy import func
 
     from modulo.db.models.audit_event import AuditEvent
 
     ch = _ch()
+    cascade_event_type = (
+        CRON_STREAK_MASS_CASCADE_EVENT_TYPE if trigger_type == "cron" else STREAK_MASS_CASCADE_EVENT_TYPE
+    )
     cutoff = datetime.now(UTC) - timedelta(hours=ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS)
     try:
         async with factory() as session, session.begin():
@@ -1476,7 +1829,7 @@ async def _streak_mass_cascade_alerted_this_window(
             result = await session.execute(
                 select(func.count()).where(
                     AuditEvent.organisation_id == org_id,
-                    AuditEvent.event_type == STREAK_MASS_CASCADE_EVENT_TYPE,
+                    AuditEvent.event_type == cascade_event_type,
                     AuditEvent.created_at >= cutoff,
                 )
             )
@@ -1491,22 +1844,34 @@ async def _streak_mass_cascade_alerted_this_window(
 async def _maybe_alert_mass_cascade(
     factory: async_sessionmaker[AsyncSession],
     org_id: uuid.UUID,
+    *,
+    trigger_type: str = "ongoing",
 ) -> bool:
-    """Mass-cascade guard (FAR-190 item 9): when an org has deactivated >= 5
-    triggers within 24h (an infra-outage signature), raise a critical alert —
-    once per window. The alert side-effects (critical log + critical audit +
-    ops error ingestion) run UNCONDITIONALLY once the threshold is crossed; the
-    DB audit chain (never Redis) dedups the once-per-window firing, so a Redis
-    outage degrades to a duplicate alert (noisy), never a suppressed one. The
+    """Mass-cascade guard (FAR-190 item 9 / FAR-1387): when an org has
+    deactivated >= 5 triggers of ONE type within 24h (an infra-outage
+    signature), raise a critical alert — once per window per audit stream. The
+    alert side-effects (critical log + critical audit + ops error ingestion)
+    run UNCONDITIONALLY once the threshold is crossed; the DB audit chain
+    (never Redis) dedups the once-per-window firing, so a Redis outage
+    degrades to a duplicate alert (noisy), never a suppressed one. The
     per-trigger atomic UPDATE remains the hard bound. Best-effort — never raises.
+
+    Count and dedup are scoped to ``trigger_type``'s audit stream: an ongoing
+    cascade alert is computed EXACTLY as before FAR-1387 (cron deactivations
+    never nudge an ongoing org over the threshold), and an opt-in cron cascade
+    gets its own alert + dedup.
     """
+    is_cron = trigger_type == "cron"
     try:
         count = await _count_recent_streak_deactivations(
-            factory, org_id, hours=ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS
+            factory,
+            org_id,
+            hours=ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS,
+            trigger_type=trigger_type,
         )
         if count < ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD:
             return False
-        if await _streak_mass_cascade_alerted_this_window(factory, org_id):
+        if await _streak_mass_cascade_alerted_this_window(factory, org_id, trigger_type=trigger_type):
             return False  # already alerted this window
         _log.critical(
             "streak.mass_cascade org=%s deactivated_24h=%d threshold=%d — suspected infra outage",
@@ -1514,16 +1879,16 @@ async def _maybe_alert_mass_cascade(
             count,
             ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD,
         )
-        await _record_streak_mass_cascade(org_id, count)
+        await _record_streak_mass_cascade(org_id, count, trigger_type=trigger_type)
         await _ch()._ingest_saq_error(
             cast(AsyncSession, None),  # session param is vestigial (the helper opens its own)
             org_id,
             function="enforce_no_delivery_streaks",
             message=(
-                f"streak engine mass cascade: {count} ongoing triggers auto-deactivated in the last "
-                f"{ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h"
+                f"streak engine mass cascade: {count} {'cron' if is_cron else 'ongoing'} triggers "
+                f"auto-deactivated in the last {ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h"
             ),
-            context={"org_id": str(org_id), "deactivated_24h": count},
+            context={"org_id": str(org_id), "deactivated_24h": count, "trigger_type": trigger_type},
         )
         return True
     except asyncio.CancelledError:
@@ -1567,6 +1932,7 @@ async def _pipeline_name(
 _SWEEP_SUMMARY_KEYS = (
     "scanned",
     "deactivated",
+    "tripped",
     "capped",
     "alerts",
     "notify_failed",
@@ -1574,6 +1940,105 @@ _SWEEP_SUMMARY_KEYS = (
     "notify_deferred",
     "errors",
 )
+
+
+async def _dispatch_streak_notify(
+    org_id: uuid.UUID,
+    *,
+    data: dict[str, Any],
+    threshold: int,
+    reason: str,
+    pipeline_name: str,
+    redis_client: AsyncRedis | None,
+    notify_budget: int,
+    delta: dict[str, Any],
+) -> int:
+    """Inline streak notification honouring the per-tick budget — shared by the
+    deactivation path and the cron notify-only trip (identical semantics).
+    Returns the remaining inline-notification budget: decremented on every
+    attempt while budget remains (deferred to the pending-retry path once
+    exhausted, never dropped).
+    """
+    if notify_budget > 0:
+        notified = await _notify_streak_deactivation(
+            org_id,
+            data=data,
+            threshold=threshold,
+            reason=reason,
+            pipeline_name=pipeline_name,
+            redis_client=redis_client,
+        )
+        if not notified:
+            delta["notify_failed"] += 1
+        return notify_budget - 1
+    # Inline notification budget exhausted — defer this dispatch to the
+    # pending-retry path (never inline).
+    delta["notify_deferred"] += 1
+    _log.warning(
+        "streak.notify_budget_exceeded org=%s trigger=%s",
+        org_id,
+        data["id"],
+    )
+    await _write_streak_notify_pending(
+        redis_client,
+        org_id,
+        data=data,
+        threshold=threshold,
+        pipeline_name=pipeline_name,
+    )
+    return notify_budget
+
+
+async def _handle_cron_notify_trip(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    trigger: Any,
+    *,
+    delta: dict[str, Any],
+    notify_budget: int,
+    redis_client: AsyncRedis | None,
+) -> int:
+    """FAR-1387 — a cron trip that NOTIFIES and SURFACES without deactivating.
+
+    Claims the trip (streak >= threshold AND boundary past the cron min-window
+    AND not yet latched for this streak) via :func:`_claim_cron_streak_alert`,
+    counts it (``tripped``), then dispatches the notification under the shared
+    budget. NEVER flips ``active`` — auto-deactivation for cron is the opt-in
+    branch in :func:`_handle_trigger_in_sweep`. A claim failure is isolated
+    (WARNING + ``errors``) exactly like a deactivation-walk failure. Returns
+    the remaining inline-notification budget.
+    """
+    threshold, window_hours = _streak_config(trigger.config_json, trigger_type="cron")
+    window_cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
+    try:
+        claimed = await _claim_cron_streak_alert(
+            factory,
+            org_id=org_id,
+            trigger_id=trigger.id,
+            threshold=threshold,
+            window_cutoff=window_cutoff,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        delta["errors"] += 1
+        _log.warning("streak.walk_failed org=%s trigger=%s", org_id, trigger.id, exc_info=True)
+        return notify_budget
+    if claimed is None:
+        return notify_budget  # below threshold / inside the window / already latched
+    claimed["pipeline_id"] = getattr(trigger, "pipeline_id", None)
+    delta["tripped"] += 1
+    pipeline_name = await _pipeline_name(factory, org_id, claimed["pipeline_id"])
+    return await _dispatch_streak_notify(
+        org_id,
+        data=claimed,
+        threshold=threshold,
+        reason=claimed.get("reason") or "no_delivery",
+        pipeline_name=pipeline_name,
+        redis_client=redis_client,
+        notify_budget=notify_budget,
+        delta=delta,
+    )
 
 
 async def _handle_trigger_in_sweep(
@@ -1587,20 +2052,36 @@ async def _handle_trigger_in_sweep(
     recent_deactivations: int,
     deactivated_this_tick: int,
 ) -> tuple[int, int]:
-    """Deactivate + notify ONE trigger; returns ``(notify_budget, deactivated_this_tick)``.
+    """Trip + notify ONE covered trigger; returns ``(notify_budget,
+    deactivated_this_tick)``.
 
-    Capacity-capped triggers are counted and skipped without deactivating. A
-    guarded atomic deactivation below threshold is a no-op. On a deactivation,
-    the inline-notification budget is honoured (deferred to the pending-retry
-    path once exhausted) and the mass-cascade alert is checked. Isolated: any
-    per-trigger failure is swallowed (WARNING + error count) and cannot break
-    the enclosing sweep.
+    Ongoing (and a cron opted in via ``no_delivery_auto_deactivate``): the
+    capacity cap gates a guarded atomic deactivation (a below-threshold walk is
+    a no-op), then the inline-notification budget is honoured (deferred to the
+    pending-retry path once exhausted) and the per-type mass-cascade alert is
+    checked. Cron by default (FAR-1387): notify-only via
+    :func:`_handle_cron_notify_trip` — no cap, no deactivation; its storm
+    guards are the notify budget and the per-boundary audit latch. Isolated:
+    any per-trigger failure is swallowed (WARNING + error count) and cannot
+    break the enclosing sweep.
     """
+    trigger_type = str(getattr(trigger, "trigger_type", "ongoing") or "ongoing")
+    auto_deactivate = trigger_type != "cron" or _streak_auto_deactivate_enabled(getattr(trigger, "config_json", None))
+    if not auto_deactivate:
+        notify_budget = await _handle_cron_notify_trip(
+            factory,
+            org_id,
+            trigger,
+            delta=delta,
+            notify_budget=notify_budget,
+            redis_client=redis_client,
+        )
+        return notify_budget, deactivated_this_tick
     if recent_deactivations + deactivated_this_tick >= ONGOING_STREAK_DEACTIVATE_MAX_PER_ORG_PER_HOUR:
         delta["capped"] += 1
         _log.warning("streak.capped org=%s trigger=%s", org_id, trigger.id)
         return notify_budget, deactivated_this_tick
-    threshold, window_hours = _streak_config(trigger.config_json)
+    threshold, window_hours = _streak_config(trigger.config_json, trigger_type=trigger_type)
     window_cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
     try:
         deactivated = await _deactivate_trigger_on_no_delivery_streak(
@@ -1609,6 +2090,7 @@ async def _handle_trigger_in_sweep(
             trigger_id=trigger.id,
             threshold=threshold,
             window_cutoff=window_cutoff,
+            trigger_type=trigger_type,
         )
     except asyncio.CancelledError:
         raise
@@ -1622,35 +2104,17 @@ async def _handle_trigger_in_sweep(
     delta["deactivated"] += 1
     pipeline_name = await _pipeline_name(factory, org_id, deactivated["pipeline_id"])
     reason = deactivated.get("reason") or "no_delivery"
-    if notify_budget > 0:
-        notify_budget -= 1
-        notified = await _notify_streak_deactivation(
-            org_id,
-            data=deactivated,
-            threshold=threshold,
-            reason=reason,
-            pipeline_name=pipeline_name,
-            redis_client=redis_client,
-        )
-        if not notified:
-            delta["notify_failed"] += 1
-    else:
-        # Inline notification budget exhausted — defer this dispatch to the
-        # pending-retry path (never inline).
-        delta["notify_deferred"] += 1
-        _log.warning(
-            "streak.notify_budget_exceeded org=%s trigger=%s",
-            org_id,
-            deactivated["id"],
-        )
-        await _write_streak_notify_pending(
-            redis_client,
-            org_id,
-            data=deactivated,
-            threshold=threshold,
-            pipeline_name=pipeline_name,
-        )
-    if await _maybe_alert_mass_cascade(factory, org_id):
+    notify_budget = await _dispatch_streak_notify(
+        org_id,
+        data=deactivated,
+        threshold=threshold,
+        reason=reason,
+        pipeline_name=pipeline_name,
+        redis_client=redis_client,
+        notify_budget=notify_budget,
+        delta=delta,
+    )
+    if await _maybe_alert_mass_cascade(factory, org_id, trigger_type=trigger_type):
         delta["alerts"] += 1
     return notify_budget, deactivated_this_tick
 
@@ -1664,19 +2128,22 @@ async def _sweep_org(
     deadline: float,
     notify_budget: int,
 ) -> tuple[dict[str, Any], int]:
-    """Walk one org's active ongoing triggers (keyset pages) and deactivate.
+    """Walk one org's active streak-covered triggers (keyset pages).
 
-    Folds each trigger's streak count into a guarded atomic deactivation UPDATE
-    via :func:`_handle_trigger_in_sweep`, keyed by ``deactivated_this_tick`` +
-    the per-org per-hour cap. Returns ``(delta, remaining_notify_budget)`` where
-    ``delta`` aggregates the org's contribution to the sweep summary.
+    Ongoing triggers (and opted-in crons) fold their streak count into a
+    guarded atomic deactivation UPDATE; default cron triggers take the
+    notify-only trip. Both flow through
+    :func:`_handle_trigger_in_sweep`, keyed by ``deactivated_this_tick`` +
+    the per-org per-hour cap (cap: deactivations only). Returns ``(delta,
+    remaining_notify_budget)`` where ``delta`` aggregates the org's
+    contribution to the sweep summary.
     """
     delta: dict[str, Any] = dict.fromkeys(_SWEEP_SUMMARY_KEYS, 0)
     recent_deactivations = await _count_recent_streak_deactivations(factory, org_id, hours=1)
     deactivated_this_tick = 0
     after_id: uuid.UUID | None = None
     while time.monotonic() <= deadline:
-        page = await _select_active_ongoing_triggers(
+        page = await _select_active_streak_triggers(
             factory,
             org_id,
             max_triggers=max_triggers_per_tick,
@@ -1712,15 +2179,19 @@ async def enforce_no_delivery_streaks(
     max_triggers_per_tick: int = 100,
     budget_seconds: float = _STREAK_SWEEP_BUDGET_SECONDS,
 ) -> dict[str, Any]:
-    """FAR-190 sweep — auto-deactivate ongoing triggers on no-delivery streaks.
+    """FAR-190 / FAR-1387 sweep — no-delivery streaks for ongoing + cron.
 
     Runs as a system sweep (from ``dispatcher_reconcile``, every 60s — NEVER
-    inline in terminalization). Per org: walks the active ongoing triggers in
-    keyset pages (an org with more than ``max_triggers_per_tick`` triggers is
-    fully scanned, page by page — never starved) and, for each, folds the streak
-    count into a guarded atomic deactivation UPDATE. Per-org per-hour cap + the
-    24h mass-cascade alert guard against an infra outage cascading. The kill
-    switch (``_streak_deactivate_enabled``) gates ONLY the deactivate+notify
+    inline in terminalization). Per org: walks the active streak-covered
+    triggers (ongoing + cron) in keyset pages (an org with more than
+    ``max_triggers_per_tick`` triggers is fully scanned, page by page — never
+    starved). Ongoing triggers (and a cron with ``no_delivery_auto_deactivate``
+    set) fold the streak count into a guarded atomic deactivation UPDATE; a
+    default cron trip is NOTIFY-ONLY (counted as ``tripped``) — it notifies and
+    leaves an append-only ``cron_trigger.no_delivery_streak_alert`` record, and
+    never flips ``active``. Per-org per-hour cap + the per-type 24h
+    mass-cascade alert guard against an infra outage cascading. The kill switch
+    (``_streak_deactivate_enabled``) gates ONLY the deactivate+notify
     side-effect; classification persists regardless (the reconcile sweep is
     independent).
 
@@ -1812,7 +2283,7 @@ async def _enforce_org_streak(
     notify_budget: int,
     summary: dict[str, Any],
 ) -> int:
-    """Sweep one org's active ongoing triggers and fold its delta in.
+    """Sweep one org's active streak-covered triggers and fold its delta in.
 
     Isolated: a per-org sweep failure is swallowed (WARNING + an error count in
     ``summary``) and can never break the enclosing sweep. Returns the remaining

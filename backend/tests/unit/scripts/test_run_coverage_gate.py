@@ -18,6 +18,8 @@ from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 for parent in Path(__file__).resolve().parents:
     script_path = parent / "scripts" / "run_coverage_gate.py"
     if script_path.exists():
@@ -111,6 +113,29 @@ JSON_REPORT_EMPTY = {
     "total_percent_covered": 100.0,
     "num_changed_lines": 5,
 }
+
+# The genuine deletion counter, captured before the autouse fixture below
+# replaces it.  Real-git tests restore it with
+# ``patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS)``.
+_REAL_GET_PRODUCTION_DELETIONS = mod._get_production_deletions
+
+
+@pytest.fixture(autouse=True)
+def _no_production_deletions_by_default():
+    """Default every test to "the diff deletes no production lines".
+
+    ``evaluate`` consults ``_get_production_deletions`` (FAR-1317), which runs
+    real ``git diff`` against the enclosing checkout.  Left unpatched, a PR
+    that happens to delete production lines elsewhere in the repo would flip
+    these unit tests' expectations nondeterministically (deletion-only FAILs
+    where they expect SKIPs, tiny-diff withheld where they expect the
+    exemption).  Tests that exercise the real git plumbing restore the genuine
+    helper with ``_REAL_GET_PRODUCTION_DELETIONS``; tests that exercise the
+    deletion rule patch ``_get_production_deletions`` with their own return
+    value on top of this default.
+    """
+    with patch.object(mod, "_get_production_deletions", return_value={}):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -782,6 +807,36 @@ def test_summary_fail():
     assert "60.0%" in summary
 
 
+def test_summary_notes_deleted_lines_earn_no_credit():
+    """A mixed change's summary states the FAR-1317 no-credit rule."""
+    result = mod.GateResult(
+        language="Python",
+        skipped=False,
+        skip_reason="",
+        passed=True,
+        actual_pct=100.0,
+        threshold=98,
+        changed_lines=50,
+        deleted_lines=7,
+        branch_passed=None,
+    )
+    summary = result.summary()
+    assert "7 deleted line(s) earn no coverage credit" in summary
+
+
+def test_summary_without_deletions_has_no_credit_note():
+    result = mod.GateResult(
+        language="Python",
+        skipped=False,
+        skip_reason="",
+        passed=True,
+        actual_pct=100.0,
+        threshold=98,
+        changed_lines=50,
+    )
+    assert "no coverage credit" not in result.summary()
+
+
 # ---------------------------------------------------------------------------
 # Regex pattern unit tests
 # ---------------------------------------------------------------------------
@@ -1154,23 +1209,146 @@ class TestIsExecutableJsLine:
 # ---------------------------------------------------------------------------
 # FAR-962 regression: deleted and non-executable lines excluded from denominator
 # ---------------------------------------------------------------------------
-def test_deletion_only_diff_skips():
-    """A PR that only deletes lines (no executable additions) → SKIP.
+def test_deletion_only_diff_fails():
+    """A production diff whose only change is deleting lines → FAIL, not SKIP.
 
-    Regression: deleted lines were entering the changed-lines denominator,
-    causing deletion-heavy PRs to fail with inflated 'unmeasured lines'
-    counts (observed on PR #704: 31.2% effective coverage from deleted
-    lines counted as unmeasured).
+    FAR-962 regression (retained): deleted lines must not enter the
+    changed-lines denominator — ``changed_lines`` stays 0 here even though
+    three executable lines were removed (observed on PR #704: 31.2% effective
+    coverage from deleted lines counted as unmeasured).
+
+    FAR-1317: that 0 must no longer skip into a pass.  A deletion-only
+    change gets a dedicated FAIL reason instead — the gate cannot tell a
+    justified deletion from a load-bearing one (PR #1022: the ``expires_at
+    IS NULL`` branch deleted "to bring the changed-lines coverage gate to
+    100%"), so it fails closed.
     """
-    with patch.object(mod, "_get_changed_production_files", return_value={}):
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/module.py": 3}),
+    ):
         result = mod.evaluate(
             language="Python",
             report_path=Path("coverage.xml"),
             compare_branch="origin/main",
             fail_under=90,
         )
-    assert result.skipped is True
+    assert result.changed_lines == 0  # deletions never enter the denominator
+    assert result.skipped is False
+    assert result.passed is False
+    assert "deletion-only" in result.skip_reason.lower()
+    assert result.deleted_lines == 3
+
+
+def test_main_fails_on_deletion_only_change(tmp_path, capsys):
+    """End-to-end (main → exit code): a deletion-only change exits 1, not 0.
+
+    The gate's CI contract is its exit code; this proves the FAR-1317 FAIL
+    reaches it instead of the old SKIP-into-pass (exit 0).
+    """
+    xml = tmp_path / "coverage.xml"
+    lines = "\n".join(
+        f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)"/>' for i in range(101)
+    )
+    xml.write_text(
+        "<coverage><packages><package><classes>"
+        '<class filename="a.py"><lines>' + lines + "</lines></class></package></packages></coverage>"
+    )
+    lcov = tmp_path / "lcov.info"
+    lcov.write_text("TN:\nSF:src/x.ts\nDA:1,1\nBRDA:1,0,0,1\nend_of_record\n")
+
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/module.py": 3}),
+        patch(
+            "sys.argv",
+            [
+                "run_coverage_gate.py",
+                "--compare-branch",
+                "origin/main",
+                "--python-report",
+                str(xml),
+                "--js-report",
+                str(lcov),
+            ],
+        ),
+    ):
+        rc = mod.main()
+    assert rc == 1
+    assert "deletion-only" in capsys.readouterr().out.lower()
+
+
+def test_mixed_change_with_covered_additions_passes_despite_deletions(tmp_path):
+    """A justified deletion shipped WITH covered new code still PASSES.
+
+    No false failure (FAR-1317): deletions earn no credit — they are not in
+    the numerator or denominator — but they must not poison a legitimate
+    mixed change either.  Only the 50 added lines are scored, and they clear
+    the threshold.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+    json_pass = {
+        "src_stats": {
+            "src/calc.py": {
+                "percent_covered": 100.0,
+                "covered_lines": list(range(50)),
+                "violation_lines": [],
+            }
+        },
+        "total_num_lines": 50,
+        "total_num_violations": 0,
+        "total_percent_covered": 100.0,
+        "num_changed_lines": 50,
+    }
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 50}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/calc.py": 20}),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+        patch.object(mod, "_get_diff_cover_json", return_value=json_pass),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
     assert result.passed is True
+    assert result.actual_pct == 100.0
+    assert result.changed_lines == 50
+    assert result.deleted_lines == 20
+    assert result.tiny_diff is False
+
+
+def test_tiny_diff_exemption_withheld_when_production_lines_deleted(tmp_path):
+    """≤10 added lines + deletions → NO tiny-diff pass; the added lines are scored.
+
+    The cheap-green shape: delete the uncovered code, leave a handful of
+    surviving lines, ride the ≤10-line exemption.  With executable production
+    deletions present the exemption is withheld, so the surviving lines must
+    clear the real threshold — here they are unmeasured (0%) → FAIL.
+    """
+    fake_report = tmp_path / "coverage.xml"
+    fake_report.write_text("<coverage/>")
+
+    with (
+        patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 5}),
+        patch.object(mod, "_get_production_deletions", return_value={"src/calc.py": 40}),
+        patch.object(mod, "_run_diff_cover", return_value=(1, REAL_DIFF_COVER_FAIL_COMBINED)),
+        patch.object(mod, "_get_diff_cover_json", return_value=JSON_REPORT_EMPTY),
+    ):
+        result = mod.evaluate(
+            language="Python",
+            report_path=fake_report,
+            compare_branch="origin/main",
+            fail_under=90,
+        )
+
+    assert result.tiny_diff is False
+    assert result.passed is False
+    assert result.changed_lines == 5
+    assert result.deleted_lines == 40
 
 
 def test_comment_only_diff_skips():
@@ -1461,7 +1639,10 @@ def test_evaluate_comment_only_diff_skips_via_real_git_diff(tmp_path):
     )
     _commit_on_feature(repo, env)
 
-    with patch.object(mod, "REPO_ROOT", repo):
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
         changed = mod._get_changed_production_files("main", "Python")
         result = mod.evaluate(
             language="Python",
@@ -1493,7 +1674,10 @@ def test_evaluate_docstring_only_diff_skips_via_real_git_diff(tmp_path):
     )
     _commit_on_feature(repo, env)
 
-    with patch.object(mod, "REPO_ROOT", repo):
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
         changed = mod._get_changed_production_files("main", "Python")
         result = mod.evaluate(
             language="Python",
@@ -1523,7 +1707,10 @@ def test_evaluate_data_only_collection_diff_skips_via_real_git_diff(tmp_path):
     (repo / "src" / "module.py").write_text(feature_content, encoding="utf-8")
     _commit_on_feature(repo, env)
 
-    with patch.object(mod, "REPO_ROOT", repo):
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
         changed = mod._get_changed_production_files("main", "Python")
         result = mod.evaluate(
             language="Python",
@@ -1537,15 +1724,162 @@ def test_evaluate_data_only_collection_diff_skips_via_real_git_diff(tmp_path):
     assert result.passed is True
 
 
-def test_evaluate_deletion_only_diff_skips_via_real_git_diff(tmp_path):
-    """A real deletion-only diff must not enter the changed-lines denominator."""
+def test_evaluate_deletion_only_diff_fails_via_real_git_diff(tmp_path):
+    """A real deletion-only production diff must FAIL, not skip into a pass.
+
+    FAR-962 aspect retained: the deleted lines never enter the changed-lines
+    denominator (``_get_changed_production_files`` still returns ``{}`` — the
+    state that used to feed the "no changed production lines → SKIP" rule).
+    FAR-1317: that SKIP was a pass, so a PR whose only production change is
+    deleting code went green for free.  It now fails with the deletion-only
+    reason.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
     env = _init_repo(repo, "def f():\n    x = 1\n    return 1\n")
     (repo / "src" / "module.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     _commit_on_feature(repo, env)
 
-    with patch.object(mod, "REPO_ROOT", repo):
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
+        changed = mod._get_changed_production_files("main", "Python")
+        deletions = mod._get_production_deletions("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    assert changed == {}
+    assert deletions == {"src/module.py": 1}
+    assert result.skipped is False
+    assert result.passed is False
+    assert "deletion-only" in result.skip_reason.lower()
+    assert result.deleted_lines == 1
+
+
+def test_far1022_shape_deleting_uncovered_branch_fails_via_real_git_diff(tmp_path):
+    """FAR-1022 reproduction, driven through real ``git diff``.
+
+    The incident: a Branch Fixer commit DELETED the load-bearing ``expires_at
+    IS NULL`` branch — the whole arm, its own lines — "to bring the
+    changed-lines coverage gate to 100%".  A PR whose only production change
+    is that deletion used to hit "no changed production lines → SKIP" (exit
+    0): deleting real code was the cheapest path to green.  The gate must now
+    FAIL it with the deletion-only reason.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(
+        repo,
+        "def live(row, now):\n    if row.expires_at is None:\n        return True\n    return row.expires_at > now\n",
+    )
+    # The FAR-1022 "fix": drop the IS NULL arm entirely (pure deletion).
+    (repo / "src" / "module.py").write_text(
+        "def live(row, now):\n    return row.expires_at > now\n",
+        encoding="utf-8",
+    )
+    _commit_on_feature(repo, env)
+
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
+        changed = mod._get_changed_production_files("main", "Python")
+        deletions = mod._get_production_deletions("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    # The pre-fix signature: no ADDED lines, so the old gate skipped → passed.
+    assert changed == {}
+    assert deletions == {"src/module.py": 2}  # `if ...:` + `return True`
+    assert result.skipped is False
+    assert result.passed is False
+    assert "deletion-only" in result.skip_reason.lower()
+    assert "FAR-1317" in result.skip_reason
+
+
+def test_comment_deletion_only_still_skips_via_real_git_diff(tmp_path):
+    """Deleting only comments is not a production deletion → SKIP (no false failure)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(
+        repo,
+        "def f():\n" + "".join(f"    # comment {i}\n" for i in range(12)) + "    return 1\n",
+    )
+    (repo / "src" / "module.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    _commit_on_feature(repo, env)
+
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
+        deletions = mod._get_production_deletions("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    assert deletions == {}
+    assert result.skipped is True
+    assert result.passed is True
+
+
+def test_docstring_deletion_only_still_skips_via_real_git_diff(tmp_path):
+    """Deleting a whole docstring is not a production deletion → SKIP.
+
+    Exercises the OLD-side bracket/string state tracker end-to-end: the
+    removed docstring body lines are not independently parseable, so without
+    state seeded from the merge-base file they would count as executable
+    deletions and fail the gate (false failure).
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(
+        repo,
+        'def f():\n    """Summary.\n' + "".join(f"    doc line {i}\n" for i in range(12)) + '    """\n    return 1\n',
+    )
+    (repo / "src" / "module.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    _commit_on_feature(repo, env)
+
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
+        deletions = mod._get_production_deletions("main", "Python")
+        result = mod.evaluate(
+            language="Python",
+            report_path=None,
+            compare_branch="main",
+            fail_under=90,
+        )
+
+    assert deletions == {}
+    assert result.skipped is True
+    assert result.passed is True
+
+
+def test_deleted_production_file_fails_via_real_git_diff(tmp_path):
+    """Deleting an entire production file is a deletion-only change → FAIL."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = _init_repo(repo, "def f():\n    return 1\n")
+    (repo / "src" / "module.py").unlink()
+    _commit_on_feature(repo, env)
+
+    with (
+        patch.object(mod, "REPO_ROOT", repo),
+        patch.object(mod, "_get_production_deletions", _REAL_GET_PRODUCTION_DELETIONS),
+    ):
         changed = mod._get_changed_production_files("main", "Python")
         result = mod.evaluate(
             language="Python",
@@ -1555,8 +1889,9 @@ def test_evaluate_deletion_only_diff_skips_via_real_git_diff(tmp_path):
         )
 
     assert changed == {}
-    assert result.skipped is True
-    assert result.passed is True
+    assert result.skipped is False
+    assert result.passed is False
+    assert "deletion-only" in result.skip_reason.lower()
 
 
 # ---------------------------------------------------------------------------

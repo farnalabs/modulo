@@ -260,35 +260,86 @@ def _db_is_at_head(engine: Engine) -> bool:
     return versions == {head}
 
 
+def _alembic_context_fn_name() -> str | None:
+    """Name of the migration fn the active Alembic EnvironmentContext will run.
+
+    ``command.upgrade`` / ``command.downgrade`` / ``command.stamp`` each enter
+    an ``EnvironmentContext`` whose ``context_opts["fn"]`` is a closure named
+    after the command (``upgrade`` / ``downgrade`` / ``do_stamp``) BEFORE
+    ``script.run_env()`` executes this file.  The active context is installed
+    as the ``_proxy`` global on the ``alembic.context`` module — the same
+    mechanism that makes ``from alembic import context`` work inside env.py —
+    so this is the direction signal available to a Python-API invocation that
+    carries no ``config.cmd_opts``.
+    """
+    env_ctx = getattr(context, "_proxy", None)
+    if env_ctx is None:
+        return None
+    opts = getattr(env_ctx, "context_opts", None)
+    if not isinstance(opts, dict):
+        return None
+    return getattr(opts.get("fn"), "__name__", None)
+
+
 def _invocation_is_upgrade() -> bool:
-    """Return True when the current alembic invocation is an UPGRADE.
+    """Return True when the current alembic invocation is a UPGRADE.
 
     The boot fast-path (:func:`run_migrations_online`) must only skip when there
     is genuinely nothing to do — the DB is already at head AND the invocation
     moves FORWARD. ``alembic downgrade`` must ALWAYS run: it exists to move the
     DB AWAY from head, so skipping it while at head made downgrades a silent
-    no-op (dist/runtime-ops fix). The app lifespan calls
-    ``command.upgrade(config, 'heads')`` programmatically, where ``cmd_opts``
-    is absent — the direction is upgrade by construction, so the default is
-    True.
+    no-op (dist/runtime-ops fix, re-opened as FAR-967 F2).
 
-    The CLI stores parsed options on ``config.cmd_opts``, and the sub-command
-    lives in ``cmd_opts.cmd`` — a ``(fn, positional, kwarg)`` tuple whose first
-    element is the command function, so the invocation name is that function's
-    ``__name__`` (``"upgrade"`` / ``"downgrade"``). There is no
-    ``cmd_opts.command`` attribute on the CLI namespace: reading it made every
-    CLI invocation (including downgrades) classify as an upgrade-at-head and
-    fast-path-skip into a permanent silent no-op. Tests may inject either shape
-    explicitly (``SimpleNamespace(command="downgrade")``), so both are honoured.
+    Direction is resolved from the available signals, in order:
+
+    1. ``config.cmd_opts`` when present — the CLI stores parsed options there
+       and the sub-command lives in ``cmd_opts.cmd``, a ``(fn, positional,
+       kwarg)`` tuple whose first element is the command function, so the
+       invocation name is that function's ``__name__`` (``"upgrade"`` /
+       ``"downgrade"``).  There is no ``cmd_opts.command`` attribute on the
+       CLI namespace: reading it made every CLI invocation (including
+       downgrades) classify as an upgrade-at-head and fast-path-skip into a
+       permanent silent no-op.  Tests may inject either shape explicitly
+       (``SimpleNamespace(command="downgrade")``), so both are honoured.
+    2. When ``cmd_opts`` is absent — the Python-API case
+       (``command.upgrade(config, "heads")`` from the app lifespan, or
+       ``command.downgrade(...)`` from ops tooling and tests) — the active
+       Alembic ``EnvironmentContext`` is consulted: its ``fn`` closure is
+       named after the command (:func:`_alembic_context_fn_name`).
+    3. Only a positively-identified ``upgrade`` takes the at-head fast-path.
+       Any other direction — ``downgrade``, ``do_stamp``, or an
+       unrecognised fn — returns False so the migration machinery runs; a
+       genuine upgrade-to-head is a cheap no-op there, while wrongly skipping
+       a downgrade or stamp is a silent correctness bug.  The residual
+       no-signal fallback (env.py reached without either signal) also returns
+       True: that shape only arises when env.py is imported outside a run,
+       where the boot fast-path is not a live concern.
     """
+    # 1. Honour cmd_opts when present (CLI shape or test-injected shape).
     opts = getattr(config, "cmd_opts", None) if config is not None else None
     command_name = getattr(opts, "command", None)
     if isinstance(command_name, str):
-        return command_name != "downgrade"
+        return command_name == "upgrade"
     fn = getattr(opts, "cmd", None)
     if isinstance(fn, tuple):
         fn = fn[0]
-    return getattr(fn, "__name__", None) != "downgrade"
+    cmd_fn_name = getattr(fn, "__name__", None)
+    if isinstance(cmd_fn_name, str):
+        return cmd_fn_name == "upgrade"
+
+    # 2. cmd_opts absent (Python API): infer from the active Alembic context.
+    #    When a live EnvironmentContext is installed (we are inside
+    #    script.run_env), direction must be POSITIVELY identified as upgrade
+    #    to take the fast-path — downgrade, do_stamp, an unrecognised fn, or
+    #    a context_opts dict missing "fn" all return False so the migration
+    #    machinery runs.
+    if getattr(context, "_proxy", None) is not None:
+        return _alembic_context_fn_name() == "upgrade"
+
+    # 3. No alembic context at all (env.py imported outside a run): default
+    #    True — see docstring; the boot fast-path is not a live concern in
+    #    that shape.
+    return True
 
 
 # ---------------------------------------------------------------------------

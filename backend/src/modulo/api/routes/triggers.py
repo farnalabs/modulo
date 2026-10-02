@@ -190,15 +190,16 @@ async def _streak_status_for(session: AsyncSession, trigger: Trigger) -> dict[st
     """FAR-191 — ``streak_status`` for a trigger serializer.
 
     Returns the UNIFORM 6-key shape for every trigger (FIX 5): always delegates
-    to ``get_trigger_streak_status``, whose base handles non-ongoing triggers
-    (``{enabled: false, streak: 0, threshold: 0, state: 'unconfigured',
+    to ``get_trigger_streak_status``, whose base handles non-covered trigger
+    types (``{enabled: false, streak: 0, threshold: 0, state: 'unconfigured',
     deactivated_reason: null, last_outcomes: []}``) without issuing any query.
-    The threshold is resolved here and passed in so the reader is
+    Covered types (ongoing, cron — FAR-1387) get real values. The threshold is
+    resolved here (per trigger type) and passed in so the reader is
     self-contained. Best-effort — ``get_trigger_streak_status`` never raises,
     so a read failure degrades to the unconfigured base instead of 500ing the
     list.
     """
-    threshold, _ = _streak_config(trigger.config_json)
+    threshold, _ = _streak_config(trigger.config_json, trigger_type=trigger.trigger_type)
     return await get_trigger_streak_status(session, trigger, config_threshold=threshold)
 
 

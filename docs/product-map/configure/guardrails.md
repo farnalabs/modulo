@@ -30,7 +30,7 @@ bdd:
   - backend/tests/bdd/steps/test_guardrails_steps.py
   - backend/tests/bdd/steps/test_guardrail_config_steps.py
 depends-on: [feat-evals]
-status: partial
+status: covered
 ---
 
 # Guardrails
@@ -126,6 +126,16 @@ compensation, and single-node self-correction. Built on the eval engine
       (`backend/src/modulo/api/routes/guardrail_config.py`,
       `backend/tests/integration/test_guardrail_config_api.py`,
       `backend/tests/bdd/features/evals/guardrail_config.feature`)
+- [x] The in-page Import control ships on `/settings/guardrails`: an
+      admin-gated "Import Config" control opens a dialog that pastes a config
+      YAML (e.g. the elevated export of another org) and applies it directly as
+      the org's applied state — `POST /api/v1/guardrails/config/import` with
+      `{ config_yaml }`, surfaced through an in-dialog error channel for
+      invalid (422) / colliding (409) / forbidden (403) responses and a success
+      summary (change count + applied hash) followed by a guardrail-list
+      refresh; non-admins never see the control
+      (`frontend/src/views/SettingsGuardrailsView.vue`,
+      `frontend/src/__tests__/SettingsGuardrailsView.spec.ts`)
 
 ## Known Gaps
 
@@ -135,11 +145,17 @@ compensation, and single-node self-correction. Built on the eval engine
 - **Loop-interception covers Modulo-hosted sandbox agent loops only** — the
   pre-execution/post-result bridge does not intercept tool calls issued inside
   external/unmediated runtimes.
-- **The `/settings/guardrails` page does not yet offer an in-page Import
-  control** — cross-org inheritance is an API surface (import + the elevated
-  export read); the settings UI stays propose/apply/reject.
 
 ## QA History
+- 2026-10-01: **Improve Architecture product-map walk** — shipped the last
+  tracked `feat-guardrails` deferral: the `/settings/guardrails` page now
+  offers an admin-gated Import control wired to the existing
+  `POST /api/v1/guardrails/config/import` surface (dialog + in-dialog error
+  channel + success summary + list refresh), with vitest coverage in
+  `SettingsGuardrailsView.spec.ts`. The manifest registry and this tracker
+  both move to `status: covered`; the known-gap bullet about the missing
+  in-page Import control is removed. The remaining known gaps (single-node
+  correction, hosted-sandbox-only loop interception) stay acknowledged.
 - 2026-09-29: **Improve Architecture product-map walk** — reconciled the
   tracker frontmatter `status:` with the manifest `feat-guardrails` registry:
   the entry now reads `status: partial` (matching the manifest's still-unchecked

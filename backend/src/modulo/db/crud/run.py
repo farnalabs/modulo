@@ -81,6 +81,15 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
 
+# FAR-967 F1: marker embedded in the error_detail of a run blocked by a
+# snapshot policy-gate pin fingerprint mismatch. The override seam
+# (``recovery.guardrail_override``) matches this literal to refuse remediating
+# a pin-integrity failure — an operator-supplied input cannot fix a corrupted
+# snapshot, so the only remediation is a NEW run. Single-sourced here so the
+# stamping site (``_verify_policy_gate_pin_fingerprint``) and the refusal site
+# can never drift apart.
+POLICY_GATE_PIN_MISMATCH_MARKER = "snapshot policy-gate pin fingerprint mismatch"
+
 # Day-key format used for run-usage bucketing and the --older-than parser.
 _DAY_FORMAT = "%Y-%m-%d"
 
@@ -987,6 +996,119 @@ async def _rebuild_pinned_guardrail_defs(
     return pinned_defs, skipped_guardrails, False, ""
 
 
+# ---------------------------------------------------------------------------
+# Policy-gate pin loading + fingerprint verification (FAR-967 chunk 10)
+# ---------------------------------------------------------------------------
+
+
+async def _load_snapshot_policy_gate_pins(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]] | None, str | None, int | None]:
+    """Read a snapshot's pinned policy-gate set + fingerprint + version (fail-open).
+
+    Returns ``(pins, fingerprint, snapshot_version)``.  Column/table absent
+    on an unmigrated DB during bluegreen (or a backend that cannot resolve
+    the column) → ``(None, None, None)`` so the run falls back to the live
+    gates (pre-pinning behaviour).
+    """
+    try:
+        row = (
+            await session.execute(
+                select(
+                    PipelineSnapshot.policy_gate_pins_json,
+                    PipelineSnapshot.policy_gate_pins_fingerprint,
+                    PipelineSnapshot.snapshot_version,
+                ).where(PipelineSnapshot.id == snapshot_id)
+            )
+        ).one_or_none()
+        if row is not None:
+            return row[0], row[1], row[2]
+    except SQLAlchemyError:
+        _log.warning(
+            "policy_gates.pins_read_unavailable",
+            extra={"org_id": str(org_id)},
+        )
+    return None, None, None
+
+
+async def _verify_policy_gate_pin_fingerprint(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    snap_pins: list[dict[str, Any]] | None,
+    saved_fingerprint: str | None,
+    pipeline_id: uuid.UUID | None = None,
+    snapshot_version: int | None = None,
+) -> tuple[bool, str]:
+    """Verify the policy-gate pin fingerprint at run start (§3.4, §6.1).
+
+    Implements the three-case table:
+
+    (i)   No pins + no fingerprint → fall back to pipeline's CURRENT live
+          gates.  Returns ``(False, "")`` — no block.
+    (ii)  Pins present (including empty list), no fingerprint → proceed
+          WITHOUT verification (a bug that verifies anyway would spuriously
+          block).  Returns ``(False, "")`` — no block.
+    (iii) Pins + fingerprint present but mismatched → fail CLOSED, terminal
+          and non-retryable.  Returns ``(True, block_message)``.
+
+    A match (pins + fingerprint, recomputed == stored) also returns
+    ``(False, "")`` — the pins are verified and trusted.
+
+    The mismatch is TERMINAL (§3.4): the same snapshot deterministically
+    mismatches again, so the block is per-run and the only remediation is a
+    NEW run.  The user-facing message carries TRUNCATED digests (and names
+    the pipeline + snapshot version when known); the FULL digests go to the
+    log only.
+    """
+    from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
+
+    # Case (i): no pins, no fingerprint → fallback to live gates.
+    if not snap_pins and saved_fingerprint is None:
+        return False, ""
+
+    # Case (ii): pins present, no fingerprint → trust as-is.
+    if saved_fingerprint is None:
+        return False, ""
+
+    # Case (iii) + match: pins + fingerprint present → verify.
+    recomputed = fingerprint_policy_gate_pins(snap_pins)
+    if recomputed == saved_fingerprint:
+        return False, ""
+
+    # Mismatch — fail closed (§3.4).
+    truncated_stored = saved_fingerprint[:12] if saved_fingerprint else ""
+    truncated_recomputed = recomputed[:12] if recomputed else ""
+    identity = ""
+    if pipeline_id is not None:
+        identity += f"pipeline {pipeline_id}, "
+    identity += f"pipeline snapshot {snapshot_id}"
+    if snapshot_version is not None:
+        identity += f" (version {snapshot_version})"
+    block_message = (
+        f"policy gate mechanism error: {POLICY_GATE_PIN_MISMATCH_MARKER} "
+        f"({identity}, stored={truncated_stored}…, "
+        f"recomputed={truncated_recomputed}… — digest and content disagree; "
+        f"remediation: create a new run)"
+    )
+    _log.error(
+        "policy_gates.pin_fingerprint_mismatch",
+        extra={
+            "org_id": str(org_id),
+            "run_id": str(run_id),
+            "snapshot_id": str(snapshot_id),
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "snapshot_version": snapshot_version,
+            "stored_fingerprint": saved_fingerprint,
+            "recomputed_fingerprint": recomputed,
+        },
+    )
+    return True, block_message
+
+
 def _select_guardrail_definitions(
     guardrail_rows: list[Any],
     pinned_defs: list[Any],
@@ -1408,6 +1530,9 @@ async def _intercept_guardrails(
     Mechanism errors FAIL CLOSED when any bound guardrail carries a block or
     redact action (item 7: warn-on-error applies to warn-action only);
     observe/warn-only guardrails log-and-continue on mechanism error.
+
+    FAR-967 chunk 10: also verifies the policy-gate pin fingerprint
+    (§3.4) and applies the operator control (§5) to filter disabled gates.
     """
     from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
 
@@ -1417,6 +1542,50 @@ async def _intercept_guardrails(
         organisation_id=request.org_id,
     )
     pinned = await _resolve_pinned_guardrail_state(session, request, guardrail_rows)
+
+    # ── FAR-967 chunk 10: policy-gate pin fingerprint verification ────────
+    # Spec §3.4 / criteria 4 + 16: verified at RUN START — whenever the run
+    # carries a snapshot_id, not only on replay.  A fresh snapshot's
+    # fingerprint matches trivially (the pins + digest are written
+    # atomically at creation), so this is a cheap integrity read for every
+    # run; a genuine mismatch blocks the run before ANY evaluation happens
+    # (the run is stamped terminal eval_failed below and never dispatched).
+    #
+    # The operator control (§5, disabled-gate exclusion) is deliberately NOT
+    # re-implemented here: enforcement lives exclusively in the executor's
+    # per-gate eval-def build (``eval_defs.gate_disabled_excluded``), which
+    # is the authoritative record (FAR-967 F8 — no duplicate filter copy).
+    policy_gate_blocked = False
+    policy_gate_block_message = ""
+    if request.snapshot_id is not None:
+        (
+            pg_snap_pins,
+            pg_saved_fp,
+            pg_snapshot_version,
+        ) = await _load_snapshot_policy_gate_pins(session, request.org_id, request.snapshot_id)
+        policy_gate_blocked, policy_gate_block_message = await _verify_policy_gate_pin_fingerprint(
+            org_id=request.org_id,
+            run_id=request.run_id,
+            snapshot_id=request.snapshot_id,
+            snap_pins=pg_snap_pins,
+            saved_fingerprint=pg_saved_fp,
+            pipeline_id=request.pipeline_id,
+            snapshot_version=pg_snapshot_version,
+        )
+
+    # If the policy-gate fingerprint mismatched, block immediately — do not
+    # proceed to the guardrail interception pass.
+    if policy_gate_blocked:
+        return _GuardrailInterception(
+            payload=request.payload,
+            results=[],
+            redactions=[],
+            blocked=True,
+            block_message=policy_gate_block_message,
+            blocking_eval_name="",
+            observed_by_eval={},
+            summary_json=None,
+        )
 
     if _has_guardrail_work(guardrail_rows, pinned.pinned_defs, pinned.skipped_guardrails, pinned.blocked):
         return await _run_guardrail_gate(session, request, guardrail_rows=guardrail_rows, pinned=pinned)
@@ -2257,8 +2426,13 @@ async def _write_unclassified_classification(session: AsyncSession, run: Run) ->
                         # ``classify`` import, see the docstring above). The shape
                         # is held in lockstep with ``classify._unclassified_marker_dict``
                         # by an anti-drift test in test_run_classification.py.
+                        # The confidence value is ``agent_reported`` (FAR-1388
+                        # renamed the vocabulary); rows persisted before that
+                        # rename carry the pre-rename spelling, are never
+                        # backfilled, and readers tolerate both spellings, so
+                        # this fresh marker never needs the old one.
                         "pr_url_provenance": {},
-                        "delivery_confidence": "self_reported",
+                        "delivery_confidence": "agent_reported",
                     }
                 )
             )

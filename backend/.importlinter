@@ -107,6 +107,11 @@ ignore_imports =
     # core.
     modulo.db.crud.run -> modulo.core.guardrails
     modulo.db.crud.run -> modulo.core.eval_engine
+    # FAR-967 chunk 10 — run-start verification loads policy-gate pins from
+    # the snapshot, recomputes the fingerprint, and applies the operator
+    # control (enabled/disabled re-check); same cross-boundary category as
+    # the guardrail fingerprint verification exemption above.
+    modulo.db.crud.run -> modulo.core.eval_engine.policy_gate
     # FAR-213 run-termination compensation: the guardrail-blocked terminalization
     # seam lives in create_run (it writes the blocked_partial summary AFTER the
     # terminal status write). Same cross-boundary category as the FAR-208
@@ -118,6 +123,11 @@ ignore_imports =
     # ``serialize_guardrail_pin``); same cross-boundary category as the run.py
     # guardrail exemption above.
     modulo.db.crud.pipeline_snapshot -> modulo.core.guardrails
+    # FAR-967 chunk 10 — snapshot creation serializes PolicyGate rows into
+    # ``policy_gate_pins_json`` and computes the integrity fingerprint (thin
+    # DTO conversion + deterministic hash); same cross-boundary category as
+    # the guardrail pin exemption above.
+    modulo.db.crud.pipeline_snapshot -> modulo.core.eval_engine.policy_gate
     # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
     # variant / transition_run / request_cancellation) invokes the run-outcome
     # classifier inline, so every terminalizer that funnels through db.crud.run

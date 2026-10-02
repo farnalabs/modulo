@@ -221,4 +221,3 @@ Modulo is licensed under the [Business Source License 1.1](LICENSE). Production
 and commercial use is permitted, except offering Modulo as a paid hosted or
 managed service to third parties. Each release converts to the Apache License
 2.0 on its stated Change Date, three years after release.
-<!-- Prompt-to-PR pipeline verification run 2026-09-30: confirms the updated agent prompt (pre-push gate + changed-lines coverage guidance) renders and executes end to end. Safe to revert. -->

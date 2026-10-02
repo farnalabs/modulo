@@ -10,6 +10,7 @@ code:
   - backend/src/modulo/core/trigger_engine/polling.py
   - backend/src/modulo/core/trigger_engine/agent_signal.py
   - backend/src/modulo/core/trigger_engine/slack_app_mention.py
+  - backend/src/modulo/core/trigger_streak.py
   - backend/src/modulo/core/cron_helpers.py
   - backend/src/modulo/db/models/trigger.py
   - backend/src/modulo/db/models/trigger_event.py
@@ -22,6 +23,7 @@ unit-tests:
   - backend/tests/unit/trigger_engine/test_polling_shared_redis.py
   - backend/tests/unit/trigger_engine/test_agent_signal.py
   - backend/tests/unit/trigger_engine/test_slack_app_mention.py
+  - backend/tests/unit/core/test_trigger_streak_engine.py
   - backend/tests/unit/cron_scheduler/test_cron_validation.py
   - backend/tests/unit/api/test_triggers_endpoint.py
   - backend/tests/unit/api/test_admin_triggers.py
@@ -91,6 +93,23 @@ rate-limited by the `TriggerEngine`.
 - [x] Webhook replay (`POST /api/v1/triggers/{id}/webhook/replay/{event_id}`)
       re-fires a prior event, skipping HMAC/timestamp validation while
       preserving dedup and flood protection
+- [x] Streak/outcomes readout surfaces delivery health per trigger (`streak_status`:
+      enabled / streak / threshold / state / deactivated_reason / last_outcomes)
+      derived from the run-outcome classification records (≤5 outcomes, newest
+      first) (`core/trigger_streak.py`); each outcome's agent-reported confidence
+      rides the wire (FAR-1373, vocabulary renamed from `self_reported` by
+      FAR-1388): `last_outcomes` entries carry
+      `delivery_confidence` (`agent_reported` on post-FAR-1336 records,
+      including the pre-rename `self_reported` alias which stored rows still
+      carry and which is never backfilled — readers treat either spelling as
+      agent-reported; `None` —
+      never "verified" — on pre-FAR-1336 six-key rows), and
+      `SettingsTriggersView` renders an "Agent-reported" confidence qualifier chip
+      ONLY on a `delivered` outcome whose confidence is `agent_reported` or that
+      deprecated alias — a
+      no_delivery / excluded / unclassified row, a non-agent-reported confidence,
+      or an unknown/absent key renders no qualifier
+      (`test_trigger_streak_engine.py`, `SettingsTriggersView.spec.ts`)
 
 ## Known Gaps
 
@@ -99,6 +118,17 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-10-01: **Improve Architecture product-map walk** — closed the
+  sub-surface gap left by FAR-1373 (merged as the streak-outcome confidence
+  qualifier): the streak/outcomes readout's per-outcome `delivery_confidence`
+  wire surface and the `SettingsTriggersView` "Agent-reported" qualifier chip
+  (vocabulary renamed from `self_reported` by FAR-1388)
+  shipped with no product-map home — the manifest registry only mentioned the
+  streak UI and the tracker not at all. Added the checked behaviour line plus
+  the `core/trigger_streak.py` code and `test_trigger_streak_engine.py` /
+  `SettingsTriggersView.spec.ts` unit-test citations. The run-outcome
+  classification record the streak derives from is tracked under `feat-runs`.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-27: **Improve Architecture product-map walk** — closed the
   reverse-coverage guard gap for the org-wide trigger event log page
   (`/admin/trigger-events`, FAR-1255): the route's whole-page view

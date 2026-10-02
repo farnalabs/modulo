@@ -69,7 +69,7 @@ Masking is applied at these points:
 | `GET /api/v1/pipelines/{id}/snapshots/{snapshot_id}` | `mask_pipeline_graph_node()` on each node of `graph_json` | Same node masking as the graph read |
 | Snapshot diff endpoint | `mask_pipeline_graph_node()` on `nodes_added` / `nodes_removed` and the diffed graphs | Same node masking |
 | `GET /api/v1/composite-templates/...` (list / get / create / patch / restore / editor GET+PUT) | `mask_pipeline_graph_node()` on every node of `sub_pipeline_graph_json` (via `_mask_sub_pipeline_graph` / `_mask_template_response`) | Same node masking as the pipeline graph read; the editor PUT and the PATCH endpoint resolve mask echoes against the stored template nodes via `merge_masked_graph_nodes()` |
-| `POST /api/v1/pipelines/{id}/save-as-composite` | `mask_pipeline_graph_node()` on every copied node | Secret env values are masked BEFORE the template is persisted, so the org-readable template storage never receives them in the clear |
+| `POST /api/v1/pipelines/{id}/save-as-composite` | No write-side masking (FAR-1374) - `resolve_and_reject_mask_sentinels()` runs instead | The template stores the pipeline's declared credential values AS-IS (parity with `pipelines.graph_nodes_json`, which has never masked on write); every template READ surface masks. A submitted mask sentinel is refused 422 (`COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL`) before anything persists |
 | MCP `get_pipeline_graph` tool | `mask_pipeline_graph_node()` on every node of the response | Same node masking as the REST graph read |
 | MCP `update_pipeline_graph` tool | `merge_masked_graph_nodes()` before the write; `mask_pipeline_graph_node()` on the response | Same read/write neutrality as the REST graph endpoint |
 | MCP `modulo://pipelines/{id}/snapshots/{snapshot_id}` resource | `mask_pipeline_graph_node()` on each node of `graph_json` before rendering | Same node masking as the REST snapshot detail |
@@ -81,8 +81,12 @@ the mask literals over the stored secrets. `merge_masked_graph_nodes()`
 resolves mask echoes against the stored graph before a graph write commits —
 an echoed value is restored from storage, an echo with no stored counterpart
 is dropped (fail closed), and keys the caller removed stay removed. The same
-invariant holds on the MCP tool surface and on the composite-template editor /
-PATCH surfaces.
+echo-merge invariant holds on the MCP tool surface and on the pipeline graph
+write. The composite-template write surfaces (create / PATCH / editor PUT /
+save-as-composite) go further (FAR-1374): after the echo-merge, a sentinel the
+merge could not map to a stored value is refused with 422
+(`COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL`) instead of being dropped, so a fresh
+mask sentinel is neither persisted nor silently lost.
 **CLI hashing parity (FAR-1232).** The declarative `modulo apply` CLI compares
 its YAML declarations against the API's MASKED reads, so the CLI carries its own
 redaction (`strip_secret_shaped_graph` in `modulo/cli/apply/models.py`): pipeline
@@ -207,12 +211,12 @@ Every serialization path for the three graph entities, one cell per path:
 | REST graph GET `GET /pipelines/{id}/graph` | **Masked** — `_graph_response` calls `mask_pipeline_graph_node` per node (`api/routes/pipelines.py:1790`); test `test_pipeline_graph_masking.py:283` | N/A (not this entity) | N/A |
 | REST graph PATCH (full replace) | **Write + echo-merge** — `merge_masked_graph_nodes` resolves masked echoes against storage before persisting (`pipelines.py` PATCH graph route); test `test_pipeline_graph_masking.py:300` | N/A | N/A |
 | REST pipeline list / detail / patch / archive / clone / folder-move | **Stripped** — `PipelineResponse` has no graph field; `node_count` only via `_pipeline_response` (`pipelines.py:2213-2228`); clone copies the column server-side (`db/crud/pipeline.py:1141`, in `_read_clone_source_snapshot` at `:1057`) | N/A (not on this entity) | N/A |
-| REST save-as-composite `POST /pipelines/{id}/save-as-composite` | **Masked before persist** — copied nodes pass `mask_pipeline_graph_node` before template storage (`pipelines.py:3277+`); test `routes/test_composite_authoring.py:468` | N/A | write side of the same flow |
+| REST save-as-composite `POST /pipelines/{id}/save-as-composite` | **Write (store) + sentinel 422 (FAR-1374)** — copied nodes persist as-is (no write-side masking; parity with the pipeline graph write), and `resolve_and_reject_mask_sentinels` refuses a submitted mask sentinel with 422 before the template is created (`pipelines.py` save-as-composite route); test `routes/test_composite_authoring.py` `TestSaveAsCompositeCredentialStorage` | N/A | write side of the same flow |
 | REST snapshot list `GET /pipelines/{id}/snapshots` | N/A | **Stripped** — list response omits `graph_json` (`_snapshot_to_response`, `pipelines.py:3523`) | N/A |
 | REST snapshot detail + tag + rollback-recovered detail `GET/PATCH .../snapshots/{sid}` | N/A | **Masked** — `_snapshot_to_detail_response` uses `_masked_snapshot_graph` (`pipelines.py:3539`, used at `:3568`); test `test_pipeline_graph_masking.py:372` | N/A |
 | REST snapshot diff `POST .../snapshots/diff` | N/A | **Masked** — diffed graphs via `_masked_snapshot_graph` and added/removed nodes via `mask_pipeline_graph_node` (`pipelines.py:3820`, `:3825`) | N/A |
 | REST run fixture export `GET /runs/{run_id}/export-fixture` | N/A | **Masked** — `snapshot_graph_json = _masked_snapshot_graph(...)` (`runs.py:2106`, cited in the FAR-1181 comment at `:2101-2105`); test `test_pipeline_graph_masking.py:420` | N/A |
-| Composite template list / get / create-response / patch / restore / editor GET+PUT | N/A | N/A | **Masked + echo-merge** — `_mask_template_response` / `_mask_sub_pipeline_graph` (`api/routes/composite_templates.py:136`, `:41`); echo writes merge against storage (`merge_masked_graph_nodes`); tests `test_composite_templates_api.py` (`test_get_template_masks_secret_env_and_context_files`, `test_list_templates_masks_graph_nodes`, `test_patch_resolves_mask_echoes_before_storing_graph`, `test_editor_put_resolves_mask_echo_and_masks_response`) |
+| Composite template list / get / create-response / patch / restore / editor GET+PUT | N/A | N/A | **Masked + echo-merge + sentinel 422** — `_mask_template_response` / `_mask_sub_pipeline_graph` (`api/routes/composite_templates.py:136`, `:41`); echo writes merge against storage (`merge_masked_graph_nodes` via `resolve_and_reject_mask_sentinels`), and a sentinel the merge cannot map to a stored value is refused 422 (FAR-1374); tests `test_composite_templates_api.py` (`test_get_template_masks_secret_env_and_context_files`, `test_list_templates_masks_graph_nodes`, `test_patch_resolves_mask_echoes_before_storing_graph`, `test_editor_put_resolves_mask_echo_and_masks_response`, `test_create_rejects_mask_sentinel_with_422`, `test_patch_rejects_fresh_mask_sentinel_with_422`, `test_editor_put_rejects_fresh_mask_sentinel_with_422`) |
 | MCP `get_pipeline_graph` tool | **Masked** — `mask_pipeline_graph_node` per node (`api/mcp_server.py:2666`) | N/A | N/A |
 | MCP graph-update tool | **Write + echo-merge + masked response** — `merge_masked_graph_nodes` (`mcp_server.py:2836`), updated nodes masked (`:2884`) | N/A | N/A |
 | MCP standalone graph-update path | same as above (`mcp_server.py:2956-2969` internal list build before merge) | N/A | N/A |

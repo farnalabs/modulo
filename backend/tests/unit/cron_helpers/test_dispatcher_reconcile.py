@@ -178,9 +178,12 @@ def _run_row(
         # nodeless zombie has never finalised any node. FAR-583 B1: the
         # reconcile SELECT carries the computed ``outputs_absent`` flag
         # (NOT EXISTS(run_node_outputs __final__ row)) instead of the cut
-        # ``outputs_json`` column.
+        # ``outputs_json`` column. FAR-1088 F4: it also carries the
+        # ``checkpoints_absent`` flag (NOT EXISTS(checkpoint for the thread))
+        # — genuinely zero-node rows only; a mid-run death has checkpoints.
         node_token_usage=None if nodeless else {},
         outputs_absent=nodeless,
+        checkpoints_absent=nodeless,
         started_at=datetime.now(UTC) - timedelta(minutes=60) if nodeless else datetime.now(UTC) - timedelta(minutes=1),
         error_code=error_code,
         dispatcher=dispatcher,

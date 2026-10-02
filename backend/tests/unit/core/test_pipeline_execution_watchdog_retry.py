@@ -130,6 +130,7 @@ async def _consult_hook(
     graph_json: dict[str, Any] | None = None,
     reset_rowcount: int = 1,
     claim_count: int = 1,
+    zero_node: bool = False,
 ) -> tuple[bool, WatchdogRetryOutcome, AsyncMock]:
     """Run the REAL shared hook once with only DB seams mocked."""
     executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, executor._claim_token))
@@ -151,6 +152,7 @@ async def _consult_hook(
             final_status=final_status,
             error_code=error_code,
             exec_task=exec_task,
+            zero_node=zero_node,
             outcome=box,
         )
     exec_task.cancel()
@@ -480,6 +482,111 @@ async def test_zombie_stall_never_retries_correction_run():
         await exec_task
     fail.assert_awaited_once()
     assert box.requested is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-1088 — the zero-node failure carve-out, gated on an explicit flag
+# ---------------------------------------------------------------------------
+
+
+async def test_zero_node_flag_enables_failure_carve_out():
+    """``zero_node=True`` (the zombie watchdog's kill is pre-first-progress —
+    zero nodes by construction) lets a ``failure``-covered policy re-dispatch
+    the kill, under THAT policy's budget — the same decision the
+    dispatcher_reconcile cron path's carve-out makes."""
+    executor = _make_executor_mock(attempt_count=1)
+    dispatched, box, _sleep = await _consult_hook(
+        executor,
+        retry_policy={"on": ["failure"], "max_retries": 2},
+        final_status="stalled",
+        error_code="executor_stalled",
+        zero_node=True,
+    )
+    assert dispatched is True
+    assert box.requested is True
+    assert box.retry_budget == 2
+    executor._fenced_pending_reset.assert_awaited_once()
+
+
+async def test_without_zero_node_flag_failure_policy_does_not_cover_stall_kill():
+    """Default (``zero_node=False``): byte-for-byte old behaviour — a
+    failure-covered policy does NOT cover a stalled/executor_stalled kill, so
+    the watchdog terminal-fails. This is the gate that keeps the FAR-369
+    node-deadline watchdog (nodes may have executed) unchanged."""
+    executor = _make_executor_mock(attempt_count=1)
+    dispatched, box, _sleep = await _consult_hook(
+        executor,
+        retry_policy={"on": ["failure"], "max_retries": 2},
+        final_status="stalled",
+        error_code="executor_stalled",
+    )
+    assert dispatched is False
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+
+
+async def test_zombie_stall_redispatches_under_failure_policy_via_zero_node_carve_out():
+    """End-to-end at the zombie-watchdog site: a failure-covered policy
+    re-dispatches the setup-grace stall (the hook is consulted with
+    ``zero_node=True``) instead of terminal-failing it."""
+    executor = _make_executor_mock(attempt_count=1)
+    fail = AsyncMock()
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["failure"], "max_retries": 1})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        await zombie_watchdog(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            asyncio.Event(),
+            exec_task=exec_task,
+            stall_requested=stall,
+            grace_seconds=0.01,
+            retry_hook=hook,
+        )
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    fail.assert_not_awaited()
+    assert box.requested is True
+    assert box.final_status == "stalled"
+    assert box.retry_budget == 1
+    executor._fenced_pending_reset.assert_awaited_once()
+    assert stall.is_set()
+
+
+async def test_deadline_kill_gets_no_failure_carve_out():
+    """The FAR-369 node-deadline kill under the SAME failure-covered policy
+    still terminal-fails: ``_fail_overdue_node`` never passes ``zero_node``
+    (nodes may have executed on that path). Proves the carve-out is gated on
+    the explicit flag, not silently applied to every watchdog kill."""
+    executor = _make_executor_mock(attempt_count=1)
+    fail = AsyncMock(return_value=True)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["failure"], "max_retries": 2})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

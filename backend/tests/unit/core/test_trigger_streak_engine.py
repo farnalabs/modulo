@@ -1,15 +1,19 @@
-"""Unit tests for the FAR-190 ongoing-trigger no-delivery streak engine.
+"""Unit tests for the FAR-190 no-delivery streak engine (ongoing + FAR-1387 cron).
 
 Covers the streak engine in ``modulo.core.trigger_streak``:
 
 * ``_streak_config`` — per-trigger threshold (``max_no_delivery_streak`` with
-  the legacy ``max_consecutive_failures`` fallback) + wall-clock window.
+  the legacy ``max_consecutive_failures`` fallback) + wall-clock window, with
+  per-type defaults (ongoing 24h / cron 48h) and the cron
+  ``no_delivery_auto_deactivate`` opt-in key (FAR-1387).
 * ``_streak_deactivate_enabled`` — the kill switch for the deactivate+notify
   side-effect.
 * the deactivation SQL — NULL-epoch COALESCE, equal-completed_at ordering,
   excluded-mid-walk breaks, terminal-only predicates, guarded atomic UPDATE.
 * ``_deactivate_trigger_on_no_delivery_streak`` — threshold boundary,
   idempotent second tick, audit + trigger-event records in the same tx.
+* the cron notify-only trip (FAR-1387) — claim/latch SQL, no auto-deactivation
+  by default, config opt-in, cap independence, cron_* audit streams.
 * ``enforce_no_delivery_streaks`` — never-raises failure injection, per-org
   per-hour cap, mass-cascade alert, flag-off, notification failure retry.
 * the shared re-enable anchor helpers routed through the active-write sites.
@@ -205,6 +209,49 @@ class TestStreakConfig:
     def test_per_trigger_window_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
         assert ts._streak_config({"no_delivery_min_window_hours": 12})[1] == 12
+
+    # --- FAR-1387: cron defaults are their own, not ongoing's -------------
+
+    def test_cron_defaults(self) -> None:
+        """A config-less cron gets the cron threshold + the cron 48h min-window
+        default — never ongoing's 24h (existing crons have no config and must
+        not silently inherit ongoing's product defaults)."""
+        threshold, window = ts._streak_config({}, trigger_type="cron")
+        assert threshold == ts.CRON_MAX_NO_DELIVERY_STREAK_DEFAULT
+        assert threshold == 5
+        assert window == ts.CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+        assert window == 48
+        # Ongoing keeps its own defaults — untouched.
+        assert ts._streak_config({}) == (5, 24)
+
+    def test_cron_per_trigger_config_still_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The SAME config surface (``max_no_delivery_streak`` /
+        ``no_delivery_min_window_hours``) applies to cron, and per-trigger
+        values beat both the cron defaults and the env override."""
+        assert ts._streak_config({"max_no_delivery_streak": 3}, trigger_type="cron")[0] == 3
+        monkeypatch.setenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "0")
+        assert ts._streak_config({}, trigger_type="cron")[1] == 0
+        assert ts._streak_config({"no_delivery_min_window_hours": 12}, trigger_type="cron")[1] == 12
+
+    def test_cron_window_env_override_and_bad_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "72")
+        assert ts._streak_config({}, trigger_type="cron")[1] == 72
+        monkeypatch.setenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", "not-a-number")
+        assert ts._streak_config({}, trigger_type="cron")[1] == 48
+        # The ongoing env override must NOT leak into the cron default.
+        monkeypatch.delenv("MODULO_CRON_STREAK_MIN_WINDOW_HOURS", raising=False)
+        monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
+        assert ts._streak_config({}, trigger_type="cron")[1] == 48
+
+    def test_cron_auto_deactivate_config_key(self) -> None:
+        """``no_delivery_auto_deactivate`` is default OFF for cron (trip =
+        notify-only) and only a genuine JSON ``true`` opts in — a mis-typed
+        value fails CLOSED to notify-only, never to auto-deactivation."""
+        assert ts._streak_auto_deactivate_enabled({}) is False
+        assert ts._streak_auto_deactivate_enabled(None) is False
+        assert ts._streak_auto_deactivate_enabled({ts.STREAK_AUTO_DEACTIVATE_CONFIG_KEY: True}) is True
+        for bad in ("true", 1, "yes", None, False):
+            assert ts._streak_auto_deactivate_enabled({ts.STREAK_AUTO_DEACTIVATE_CONFIG_KEY: bad}) is False
 
 
 class TestKillSwitch:
@@ -558,7 +605,7 @@ class TestEnforceSweep:
         second = uuid.uuid4()
         call_count = 0
 
-        async def _flaky_deactivate(factory, *, org_id, trigger_id, threshold, window_cutoff):
+        async def _flaky_deactivate(factory, *, org_id, trigger_id, threshold, window_cutoff, trigger_type="ongoing"):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -569,7 +616,7 @@ class TestEnforceSweep:
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
             patch.object(
                 ts,
-                "_select_active_ongoing_triggers",
+                "_select_active_streak_triggers",
                 new_callable=AsyncMock,
                 return_value=[_sweep_trigger(), _sweep_trigger(second)],
             ),
@@ -596,7 +643,7 @@ class TestEnforceSweep:
         _patch_env(monkeypatch)
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=False),
-            patch.object(ts, "_select_active_ongoing_triggers", new_callable=AsyncMock) as select,
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock) as select,
             patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock) as deactivate,
         ):
             summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
@@ -615,7 +662,7 @@ class TestEnforceSweep:
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
             patch.object(
                 ts,
-                "_select_active_ongoing_triggers",
+                "_select_active_streak_triggers",
                 new_callable=AsyncMock,
                 return_value=[_sweep_trigger(first), _sweep_trigger(second)],
             ),
@@ -646,9 +693,7 @@ class TestEnforceSweep:
         _patch_env(monkeypatch)
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
-            patch.object(
-                ts, "_select_active_ongoing_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]
-            ),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]),
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
             patch.object(
                 ts,
@@ -675,15 +720,13 @@ class TestEnforceSweep:
         _patch_env(monkeypatch)
         captured: dict[str, Any] = {}
 
-        async def _capture(factory, *, org_id, trigger_id, threshold, window_cutoff):
+        async def _capture(factory, *, org_id, trigger_id, threshold, window_cutoff, trigger_type="ongoing"):
             captured["cutoff"] = window_cutoff
             return _deactivated_data()
 
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
-            patch.object(
-                ts, "_select_active_ongoing_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]
-            ),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]),
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
             patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock, side_effect=_capture),
             patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="p"),
@@ -700,9 +743,7 @@ class TestEnforceSweep:
         monkeypatch.setenv("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS", "0")
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
-            patch.object(
-                ts, "_select_active_ongoing_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]
-            ),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]),
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
             patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock, side_effect=_capture),
             patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="p"),
@@ -720,9 +761,7 @@ class TestEnforceSweep:
         _patch_env(monkeypatch)
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
-            patch.object(
-                ts, "_select_active_ongoing_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]
-            ),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[_sweep_trigger()]),
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
             patch.object(
                 ts,
@@ -759,7 +798,7 @@ class TestEnforceSweep:
 
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
-            patch.object(ts, "_select_active_ongoing_triggers", new_callable=AsyncMock, side_effect=_page_select),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, side_effect=_page_select),
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
             patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock, return_value=None),
             patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="p"),
@@ -790,7 +829,7 @@ class TestEnforceSweep:
         ):
             alerted = await ts._maybe_alert_mass_cascade(factory, ORG)
         assert alerted is True
-        record.assert_awaited_once_with(ORG, 5)
+        record.assert_awaited_once_with(ORG, 5, trigger_type="ongoing")
         ingest.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -818,7 +857,7 @@ class TestEnforceSweep:
         _patch_env(monkeypatch)
         with (
             patch.object(ts, "_streak_deactivate_enabled", return_value=True),
-            patch.object(ts, "_select_active_ongoing_triggers", new_callable=AsyncMock) as select,
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock) as select,
             patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock) as count,
         ):
             summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock(), budget_seconds=-1.0)
@@ -1168,6 +1207,24 @@ class TestPendingRetry:
         redis_client.srem.assert_awaited_once_with(ts._streak_notify_pending_key(ORG), member)
 
     @pytest.mark.asyncio
+    async def test_retry_skips_member_when_active_state_unreadable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A read failure on the trigger's active state (``None``) SKIPS the
+        member this tick — it is neither dispatched (could be a stale notice)
+        nor dropped (it may still be deactivated); the next tick re-checks."""
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
+        redis_client.smembers.return_value = {member}
+        with (
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=None),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
+        ):
+            retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
+        assert retried == 0
+        notify.assert_not_awaited()
+        redis_client.srem.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_retry_skipped_when_budget_exhausted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A budget-exhausted sweep skips the retry pass entirely (FAR-190 qa
         round 2 FIX 2): once the sweep deadline has passed the pass returns 0
@@ -1250,6 +1307,37 @@ class TestPendingRetry:
     @pytest.mark.asyncio
     async def test_no_redis_is_noop(self) -> None:
         assert await ts._retry_pending_streak_notifications(ORG, None) == 0
+
+
+class TestDispatchStreakNotify:
+    """``_dispatch_streak_notify`` — the shared inline-notification budget gate."""
+
+    @pytest.mark.asyncio
+    async def test_budget_exhausted_defers_to_pending_retry(self) -> None:
+        """Once the per-tick inline budget is spent, a trip is NOT dropped: it
+        is deferred to the pending-retry path (``notify_deferred``) and a
+        pending marker is written so the next tick dispatches it."""
+        redis_client = AsyncMock()
+        delta: dict[str, Any] = dict.fromkeys(ts._SWEEP_SUMMARY_KEYS, 0)
+        with (
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
+            patch.object(ts, "_write_streak_notify_pending", new_callable=AsyncMock) as pending,
+        ):
+            remaining = await ts._dispatch_streak_notify(
+                ORG,
+                data=_deactivated_data(),
+                threshold=5,
+                reason="no_delivery",
+                pipeline_name="p",
+                redis_client=redis_client,
+                notify_budget=0,
+                delta=delta,
+            )
+        assert remaining == 0
+        notify.assert_not_awaited()
+        pending.assert_awaited_once()
+        assert delta["notify_deferred"] == 1
+        assert delta["notify_failed"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1634,18 +1722,32 @@ def _ongoing_trigger(**overrides: Any) -> SimpleNamespace:
 
 
 def _outcome(
-    run_id: uuid.UUID, classification: str, reason: str, completed_at: datetime
+    run_id: uuid.UUID,
+    classification: str,
+    reason: str,
+    completed_at: datetime,
+    delivery_confidence: str | None = None,
 ) -> tuple[uuid.UUID, dict[str, Any], datetime]:
-    return (run_id, {"value": classification, "reason": reason}, completed_at)
+    """Build one ``_StatusSession`` outcome row (record, completed_at).
+
+    ``delivery_confidence`` defaults to ABSENT — the key is omitted from the
+    record entirely, modelling the pre-FAR-1336 six-key shape — rather than
+    being written as ``None``. Pass a value to model an eight-key record.
+    """
+    record: dict[str, Any] = {"value": classification, "reason": reason}
+    if delivery_confidence is not None:
+        record["delivery_confidence"] = delivery_confidence
+    return (run_id, record, completed_at)
 
 
 class TestGetTriggerStreakStatus:
     @pytest.mark.asyncio
-    async def test_non_ongoing_returns_cheap_shape(self) -> None:
-        """A non-ongoing trigger gets the cheap unconfigured shape with NO
-        queries issued (the N+1 guard)."""
+    async def test_uncovered_type_returns_cheap_shape(self) -> None:
+        """A trigger type the engine does not cover (FAR-1387 covers ongoing +
+        cron only) gets the cheap unconfigured shape with NO queries issued
+        (the N+1 guard)."""
         session = _StatusSession()
-        status = await ts.get_trigger_streak_status(session, SimpleNamespace(trigger_type="cron"))
+        status = await ts.get_trigger_streak_status(session, SimpleNamespace(trigger_type="webhook"))
         assert status == {
             "enabled": False,
             "streak": 0,
@@ -1654,7 +1756,21 @@ class TestGetTriggerStreakStatus:
             "deactivated_reason": None,
             "last_outcomes": [],
         }
-        assert not session.executed, "non-ongoing must not query"
+        assert not session.executed, "an uncovered type must not query"
+
+    @pytest.mark.asyncio
+    async def test_cron_returns_real_values_not_the_base(self) -> None:
+        """FAR-1387 — a covered cron trigger gets REAL streak values (streak,
+        resolved threshold, state, outcomes), never the bare unconfigured base
+        the status read used to hand every non-ongoing trigger."""
+        session = _StatusSession(streak=4)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(trigger_type="cron"))
+        assert status["enabled"] is True
+        assert status["streak"] == 4
+        assert status["threshold"] == ts.CRON_MAX_NO_DELIVERY_STREAK_DEFAULT
+        assert status["state"] == "ok"
+        assert status["deactivated_reason"] is None
+        assert session.executed, "a covered cron must run the streak walk"
 
     @pytest.mark.asyncio
     async def test_computes_streak_and_threshold(self) -> None:
@@ -1691,6 +1807,55 @@ class TestGetTriggerStreakStatus:
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
         assert [o["classification"] for o in status["last_outcomes"]] == ["no_delivery", "delivered"]
         assert status["last_outcomes"][0]["reason"] == "no_work"
+        assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
+        assert status["last_outcomes"][0]["run_id"]
+
+    @pytest.mark.asyncio
+    async def test_last_outcomes_surface_delivery_confidence(self) -> None:
+        """FAR-1373 — the projection carries ``delivery_confidence`` when the
+        stored record has it (FAR-1336 eight-key shape), so the readout can
+        qualify an agent-reported verdict instead of presenting it as
+        confirmed. The value is projected VERBATIM (no vocabulary check), so a
+        stored pre-rename alias value is passed through untouched too."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            outcome_rows=[
+                _outcome(uuid.uuid4(), "delivered", "pr_merged", now, delivery_confidence="agent_reported"),
+            ]
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "seeded outcome must surface"
+        assert status["last_outcomes"][0]["delivery_confidence"] == "agent_reported"
+
+    @pytest.mark.asyncio
+    async def test_last_outcomes_legacy_record_without_delivery_confidence_is_none(self) -> None:
+        """FAR-1373 — a legacy six-key record (written before FAR-1336, no
+        ``delivery_confidence`` key) projects ``delivery_confidence: None``
+        without raising: an unknown confidence must never read as verified.
+
+        This fixture is DELIBERATELY hand-built rather than going through
+        ``_outcome``: it models ``ClassificationResult.to_dict()`` BEFORE
+        FAR-1336 — six keys, the other four included — and the explicit
+        ``assert "delivery_confidence" not in`` below is the point of the test.
+        Leave the construction style as-is.
+        """
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        legacy_record = {
+            "value": "delivered",
+            "reason": "pr_merged",
+            "delivered_pr_urls": [],
+            "computed_at": now.isoformat(),
+            "work_intact": True,
+            "declared_success_nodes": 1,
+        }
+        assert "delivery_confidence" not in legacy_record, "fixture must model the pre-FAR-1336 shape"
+        session = _StatusSession(outcome_rows=[(uuid.uuid4(), legacy_record, now)])
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "legacy outcome must surface"
+        assert status["last_outcomes"][0]["delivery_confidence"] is None
+        # The four pre-existing keys are untouched by the additive projection.
+        assert status["last_outcomes"][0]["classification"] == "delivered"
+        assert status["last_outcomes"][0]["reason"] == "pr_merged"
         assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
         assert status["last_outcomes"][0]["run_id"]
 
@@ -1904,3 +2069,604 @@ class TestGetTriggerStreakStatus:
             assert "update" not in str(stmt).lower()
             assert "insert" not in str(stmt).lower()
             assert "delete" not in str(stmt).lower()
+
+    @pytest.mark.asyncio
+    async def test_cron_deactivated_reason_reads_cron_audit_stream(self) -> None:
+        """FAR-1387 — a cron trigger's deactivation-reason read is scoped to
+        the CRON audit stream: it reads ``cron_trigger.auto_deactivated``, never
+        the ongoing stream (and an ongoing trigger never reads the cron one)."""
+        session = _StatusSession(streak=5, audit_row=({"deactivated_by": ts.STREAK_DEACTIVATED_BY_STREAK},))
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(trigger_type="cron", active=False))
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] == "no_delivery_streak"
+        audit_stmts = [s for s, _ in session.executed if "audit_events" in str(s).lower()]
+        assert audit_stmts, "the reason read must issue an audit query"
+        compiled = audit_stmts[0].compile(compile_kwargs={"render_postcompile": True})
+        bound_values = " ".join(str(v) for v in compiled.params.values())
+        assert ts.CRON_STREAK_DEACTIVATION_EVENT_TYPE in bound_values
+        assert ts.STREAK_DEACTIVATION_EVENT_TYPE not in bound_values
+
+
+# ---------------------------------------------------------------------------
+# FAR-1387 — cron coverage: sweep scope, notify-only trip, opt-in deactivation
+# ---------------------------------------------------------------------------
+
+
+def _cron_sweep_trigger(trigger_id: uuid.UUID = TRIGGER_ID, config: dict[str, Any] | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=trigger_id,
+        pipeline_id=PIPELINE_ID,
+        config_json=config or {},
+        trigger_type="cron",
+    )
+
+
+def _claimed_cron_trip(trigger_id: uuid.UUID = TRIGGER_ID, **overrides: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "id": trigger_id,
+        "pipeline_id": PIPELINE_ID,
+        "streak": 5,
+        "reason": "no_work",
+        "trigger_type": "cron",
+        "auto_deactivated": False,
+    }
+    data.update(overrides)
+    return data
+
+
+class _CountSession:
+    """Session double for ``_count_recent_streak_deactivations``.
+
+    Routes the ``SELECT count(*)`` to a canned value and records every
+    statement so the test can assert which audit stream the query scoped to.
+    """
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+        self.executed: list[Any] = []
+        self.begin_cm = _Begin()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _Begin:
+        return self.begin_cm
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append(stmt)
+        r = MagicMock()
+        r.scalar_one.return_value = self._count
+        return r
+
+
+class TestCountRecentDeactivations:
+    """The deactivation count is scoped to one audit stream when a type is given."""
+
+    @pytest.mark.asyncio
+    async def test_cron_type_scopes_to_cron_stream(self) -> None:
+        session = _CountSession(2)
+        factory = MagicMock(return_value=session)
+        with patch.object(ch, "_set_rls_org", new_callable=AsyncMock):
+            count = await ts._count_recent_streak_deactivations(factory, ORG, hours=24, trigger_type="cron")
+        assert count == 2
+        compiled = str(session.executed[0].compile(compile_kwargs={"literal_binds": True}))
+        assert ts.CRON_STREAK_DEACTIVATION_EVENT_TYPE in compiled
+        assert ts.STREAK_DEACTIVATION_EVENT_TYPE not in compiled
+
+    @pytest.mark.asyncio
+    async def test_ongoing_type_scopes_to_ongoing_stream(self) -> None:
+        session = _CountSession(1)
+        factory = MagicMock(return_value=session)
+        with patch.object(ch, "_set_rls_org", new_callable=AsyncMock):
+            count = await ts._count_recent_streak_deactivations(factory, ORG, hours=24, trigger_type="ongoing")
+        assert count == 1
+        compiled = str(session.executed[0].compile(compile_kwargs={"literal_binds": True}))
+        assert ts.STREAK_DEACTIVATION_EVENT_TYPE in compiled
+        assert ts.CRON_STREAK_DEACTIVATION_EVENT_TYPE not in compiled
+
+
+class _ClaimSession:
+    """Session double for ``_claim_cron_streak_alert``'s three reads.
+
+    Routes by statement shape: the trip read (``AS streak ... AS boundary``),
+    the audit latch count (``audit_events``), and the newest-reason read.
+    """
+
+    def __init__(self, *, trip_row: Any = None, latched: bool = False, reason_row: Any = None) -> None:
+        self._trip_row = trip_row
+        self._latched = latched
+        self._reason_row = reason_row
+        self.executed: list[tuple[Any, Any]] = []
+        self.begin_cm = _Begin()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _Begin:
+        return self.begin_cm
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append((stmt, params))
+        s = str(stmt).lower()
+        if "as boundary" in s:
+            r = MagicMock()
+            r.first.return_value = self._trip_row
+            return r
+        if "audit_events" in s:
+            r = MagicMock()
+            r.scalar_one.return_value = 1 if self._latched else 0
+            return r
+        if "as reason" in s:
+            r = MagicMock()
+            r.first.return_value = self._reason_row
+            return r
+        return MagicMock()
+
+
+class TestCronTripClaim:
+    """The cron notify-only trip claim (trip read + boundary latch)."""
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_never_claims(self) -> None:
+        """streak == threshold - 1 grants no claim — the same walk boundary as
+        the guarded deactivation, evaluated read-only."""
+        session = _ClaimSession(trip_row=(4, datetime.now(UTC) - timedelta(hours=72)), reason_row=("no_work",))
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            out = await ts._claim_cron_streak_alert(
+                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
+            )
+        assert out is None
+        append.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_boundary_inside_min_window_never_claims(self) -> None:
+        """The cron min wall-clock window: a boundary NEWER than
+        now - window (a recent delivery, or a just re-anchored ``streak_epoch``
+        after a re-enable) cannot claim — a re-enabled cron's streak restarts
+        and sits out the window before any trip can fire."""
+        boundary = datetime.now(UTC) - timedelta(hours=1)  # fresh epoch / recent delivery
+        window_cutoff = datetime.now(UTC) - timedelta(hours=ts.CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT)
+        session = _ClaimSession(trip_row=(5, boundary), reason_row=("no_work",))
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            out = await ts._claim_cron_streak_alert(
+                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=window_cutoff
+            )
+        assert out is None
+        append.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_tripped_unlatched_claims_and_latches(self) -> None:
+        """At/over threshold with an old-enough boundary and no latch for this
+        streak: the claim is granted AND the append-only
+        ``cron_trigger.no_delivery_streak_alert`` latch is written in the same
+        transaction (the durable surfacing that keeps the 60s sweep from
+        re-notifying)."""
+        session = _ClaimSession(
+            trip_row=(5, datetime.now(UTC) - timedelta(hours=72)),
+            latched=False,
+            reason_row=("no_work",),
+        )
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            out = await ts._claim_cron_streak_alert(
+                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
+            )
+        assert out is not None
+        assert out["streak"] == 5
+        assert out["reason"] == "no_work"
+        assert out["trigger_type"] == "cron"
+        assert out["auto_deactivated"] is False
+        append.assert_awaited_once()
+        assert append.await_args.kwargs["event_type"] == ts.CRON_STREAK_ALERT_EVENT_TYPE
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["trigger_type"] == "cron"
+        assert payload["streak"] == 5
+        assert "Cron trigger" in payload["summary"]
+
+    @pytest.mark.asyncio
+    async def test_already_latched_streak_never_reclaims(self) -> None:
+        """The dedup latch: a prior alert at/after the boundary means this
+        streak already notified — no second claim, no second audit row, no
+        re-notify on every 60s tick."""
+        session = _ClaimSession(
+            trip_row=(6, datetime.now(UTC) - timedelta(hours=72)),
+            latched=True,
+            reason_row=("no_work",),
+        )
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            out = await ts._claim_cron_streak_alert(
+                factory, org_id=ORG, trigger_id=TRIGGER_ID, threshold=5, window_cutoff=datetime.now(UTC)
+            )
+        assert out is None
+        append.assert_not_awaited()
+
+
+class TestCronTripSQL:
+    """The cron trip read shares the sweep's walk/boundary constants."""
+
+    def test_trip_read_is_the_shared_walk_and_boundary(self) -> None:
+        sql = ts._STREAK_TRIP_READ_SQL
+        # Same streak walk: no-delivery count with the fail-closed stop set.
+        assert "run_classification ->> 'value' = 'no_delivery'" in sql
+        assert "('delivered','excluded','unclassified')" in sql
+        assert "r3.run_classification IS NULL" in sql
+        # Same boundary: GREATEST(last_delivery_at, streak_epoch) — so a
+        # re-enabled cron re-anchors its trip exactly like its streak.
+        assert "GREATEST(" in sql
+        assert "streak_epoch" in sql
+        assert "COALESCE((SELECT tr.streak_epoch FROM triggers tr" in sql
+        # Tenant/identity scoping via bind parameters only.
+        assert "r.organisation_id = :oid" in sql
+        assert "r.trigger_id = :tid" in sql
+
+    def test_covered_types_are_ongoing_and_cron(self) -> None:
+        assert ts.STREAK_TRIGGER_TYPES == ("ongoing", "cron")
+
+
+class TestCronSweep:
+    """The sweep's cron branches: notify-only by default, opt-in deactivation."""
+
+    @pytest.mark.asyncio
+    async def test_sweep_selects_both_covered_types(self) -> None:
+        """The sweep's trigger page selects ongoing AND cron (active, not
+        soft-deleted) — the FAR-1387 scope gate."""
+
+        class _SelectPageSession:
+            def __init__(self) -> None:
+                self.executed: list[tuple[Any, Any]] = []
+                self.begin_cm = _Begin()
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> _Begin:
+                return self.begin_cm
+
+            async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+                self.executed.append((stmt, params))
+                r = MagicMock()
+                r.scalars.return_value.all.return_value = []
+                return r
+
+        session = _SelectPageSession()
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+        ):
+            out = await ts._select_active_streak_triggers(factory, ORG)
+        assert out == []
+        selects = [s for s, _ in session.executed if "triggers" in str(s).lower()]
+        assert selects, "the sweep page must issue a triggers SELECT"
+        compiled = str(selects[0].compile(compile_kwargs={"render_postcompile": True, "literal_binds": True}))
+        assert "'ongoing'" in compiled
+        assert "'cron'" in compiled
+        assert "active" in compiled
+        assert "deleted_at" in compiled
+
+    @pytest.mark.asyncio
+    async def test_cron_trip_notifies_without_deactivating(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default cron (decision A of FAR-1387): a claimed trip NOTIFIES and
+        counts as ``tripped`` — the deactivation UPDATE is NEVER issued, so the
+        trigger stays active."""
+        _patch_env(monkeypatch)
+        cron = _cron_sweep_trigger()
+        with (
+            patch.object(ts, "_streak_deactivate_enabled", return_value=True),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[cron]),
+            patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
+            patch.object(
+                ts, "_claim_cron_streak_alert", new_callable=AsyncMock, return_value=_claimed_cron_trip()
+            ) as claim,
+            patch.object(ts, "_deactivate_trigger_on_no_delivery_streak", new_callable=AsyncMock) as deactivate,
+            patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="p"),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True) as notify,
+            patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
+            patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+        assert summary["tripped"] == 1
+        assert summary["deactivated"] == 0
+        claim.assert_awaited_once()
+        deactivate.assert_not_awaited()  # a default cron trip must never auto-deactivate
+        notify.assert_awaited_once()
+        sent = notify.await_args.kwargs["data"]
+        assert sent["trigger_type"] == "cron"
+        assert sent["auto_deactivated"] is False
+
+    @pytest.mark.asyncio
+    async def test_cron_unclaimed_trip_is_silent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Below threshold / inside the window / already latched → the claim
+        returns None: no notify, no count, nothing."""
+        _patch_env(monkeypatch)
+        cron = _cron_sweep_trigger()
+        with (
+            patch.object(ts, "_streak_deactivate_enabled", return_value=True),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[cron]),
+            patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
+            patch.object(ts, "_claim_cron_streak_alert", new_callable=AsyncMock, return_value=None),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
+            patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+        assert summary["tripped"] == 0
+        notify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cron_config_opt_in_deactivates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Decision B of FAR-1387: ``no_delivery_auto_deactivate: true`` puts a
+        cron on the SAME guarded deactivation path as ongoing (cap included),
+        with trigger_type 'cron' threaded through."""
+        _patch_env(monkeypatch)
+        cron = _cron_sweep_trigger(config={ts.STREAK_AUTO_DEACTIVATE_CONFIG_KEY: True})
+        with (
+            patch.object(ts, "_streak_deactivate_enabled", return_value=True),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[cron]),
+            patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
+            patch.object(ts, "_claim_cron_streak_alert", new_callable=AsyncMock) as claim,
+            patch.object(
+                ts,
+                "_deactivate_trigger_on_no_delivery_streak",
+                new_callable=AsyncMock,
+                return_value=_deactivated_data(trigger_type="cron"),
+            ) as deactivate,
+            patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="p"),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True),
+            patch.object(ts, "_maybe_alert_mass_cascade", new_callable=AsyncMock, return_value=False),
+            patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+        assert summary["deactivated"] == 1
+        assert summary["tripped"] == 0
+        claim.assert_not_awaited(), "the opt-in path deactivates; it never latches a notify-only trip"
+        assert deactivate.await_args.kwargs["trigger_type"] == "cron"
+
+    @pytest.mark.asyncio
+    async def test_cron_trip_ignores_the_deactivation_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The per-org per-hour cap budgets DEACTIVATIONS. A notify-only cron
+        trip is not one, so an org already at the cap still gets its cron
+        alert (its storm guards are the notify budget + the latch)."""
+        _patch_env(monkeypatch)
+        cron = _cron_sweep_trigger()
+        with (
+            patch.object(ts, "_streak_deactivate_enabled", return_value=True),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[cron]),
+            patch.object(
+                ts,
+                "_count_recent_streak_deactivations",
+                new_callable=AsyncMock,
+                return_value=ts.ONGOING_STREAK_DEACTIVATE_MAX_PER_ORG_PER_HOUR,
+            ),
+            patch.object(ts, "_claim_cron_streak_alert", new_callable=AsyncMock, return_value=_claimed_cron_trip()),
+            patch.object(ts, "_pipeline_name", new_callable=AsyncMock, return_value="p"),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True),
+            patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+        assert summary["tripped"] == 1
+        assert summary["capped"] == 0
+
+    @pytest.mark.asyncio
+    async def test_cron_claim_failure_is_isolated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A claim failure for one cron is swallowed (WARNING + errors) and
+        never breaks the enclosing sweep."""
+        _patch_env(monkeypatch)
+        cron = _cron_sweep_trigger()
+
+        async def _boom(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("claim boom")
+
+        with (
+            patch.object(ts, "_streak_deactivate_enabled", return_value=True),
+            patch.object(ts, "_select_active_streak_triggers", new_callable=AsyncMock, return_value=[cron]),
+            patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=0),
+            patch.object(ts, "_claim_cron_streak_alert", new_callable=AsyncMock, side_effect=_boom),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
+            patch.object(ts, "_retry_pending_streak_notifications", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ts.enforce_no_delivery_streaks(org_ids=[ORG], redis_client=AsyncMock())
+        assert summary["errors"] == 1
+        assert summary["tripped"] == 0
+        notify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cron_claim_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A cancellation while claiming a cron trip is re-raised, never
+        swallowed as an isolated per-trigger error — a cancelled sweep must
+        actually stop, not report a clean tick."""
+        _patch_env(monkeypatch)
+        cron = _cron_sweep_trigger()
+        delta: dict[str, Any] = dict.fromkeys(ts._SWEEP_SUMMARY_KEYS, 0)
+
+        async def _cancel(*args: Any, **kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        with (
+            patch.object(ts, "_claim_cron_streak_alert", new_callable=AsyncMock, side_effect=_cancel),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await ts._handle_cron_notify_trip(
+                MagicMock(),
+                ORG,
+                cron,
+                delta=delta,
+                notify_budget=ts._STREAK_NOTIFY_MAX_PER_TICK,
+                redis_client=AsyncMock(),
+            )
+        assert delta["errors"] == 0
+
+
+class TestCronAuditStreams:
+    """FAR-1387: cron records land on cron_* event types, never the
+    ongoing_trigger.* stream (append-only, both directions)."""
+
+    @pytest.mark.asyncio
+    async def test_deactivation_lifecycle_event_type_per_trigger_type(self) -> None:
+        session = _RoutedSession()
+        with (
+            patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            await ts.record_ongoing_deactivation_lifecycle(
+                session,
+                org_id=ORG,
+                trigger_id=TRIGGER_ID,
+                streak=5,
+                threshold=5,
+                reason="no_delivery",
+                trigger_type="cron",
+            )
+        assert append.await_args.kwargs["event_type"] == ts.CRON_STREAK_DEACTIVATION_EVENT_TYPE
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["trigger_type"] == "cron"
+        assert payload["summary"].startswith("Cron trigger")
+
+        # The ongoing default is byte-identical to the pre-FAR-1387 stream.
+        with (
+            patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            await ts.record_ongoing_deactivation_lifecycle(
+                session, org_id=ORG, trigger_id=TRIGGER_ID, streak=5, threshold=5, reason="no_delivery"
+            )
+        assert append.await_args.kwargs["event_type"] == ts.STREAK_DEACTIVATION_EVENT_TYPE
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["trigger_type"] == "ongoing"
+        assert payload["summary"].startswith("Ongoing trigger")
+
+    @pytest.mark.asyncio
+    async def test_notify_failed_event_type_follows_data(self) -> None:
+        factory = MagicMock(return_value=_RoutedSession())
+        for data, expected in (
+            ({"id": TRIGGER_ID, "trigger_type": "cron"}, ts.CRON_STREAK_NOTIFY_FAILED_EVENT_TYPE),
+            ({"id": TRIGGER_ID}, ts.STREAK_NOTIFY_FAILED_EVENT_TYPE),
+        ):
+            with (
+                patch.object(ch, "_open_factory", return_value=factory),
+                patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+                patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+            ):
+                await ts._record_streak_notify_failed(ORG, data=data, threshold=5, reason="no_delivery")
+            assert append.await_args.kwargs["event_type"] == expected
+
+    @pytest.mark.asyncio
+    async def test_mass_cascade_event_type_per_trigger_type(self) -> None:
+        factory = MagicMock(return_value=_RoutedSession())
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as append,
+        ):
+            await ts._record_streak_mass_cascade(ORG, 6, trigger_type="cron")
+        assert append.await_args.kwargs["event_type"] == ts.CRON_STREAK_MASS_CASCADE_EVENT_TYPE
+        assert append.await_args.kwargs["payload_json"]["trigger_type"] == "cron"
+        assert "6 cron triggers" in append.await_args.kwargs["payload_json"]["summary"]
+
+    @pytest.mark.asyncio
+    async def test_mass_cascade_check_is_per_type(self) -> None:
+        """The cascade count, dedup and record all run against the CRON
+        stream when a cron deactivation trips the guard."""
+        factory = MagicMock()
+        with (
+            patch.object(ts, "_count_recent_streak_deactivations", new_callable=AsyncMock, return_value=5) as count,
+            patch.object(ts, "_streak_mass_cascade_alerted_this_window", new_callable=AsyncMock, return_value=False),
+            patch.object(ts, "_record_streak_mass_cascade", new_callable=AsyncMock) as record,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
+        ):
+            alerted = await ts._maybe_alert_mass_cascade(factory, ORG, trigger_type="cron")
+        assert alerted is True
+        assert count.await_args.kwargs.get("trigger_type") == "cron"
+        record.assert_awaited_once_with(ORG, 5, trigger_type="cron")
+
+
+class TestCronNotifyPayload:
+    """The notifier payload carries the cron identity (structured consumers)
+    and the auto_deactivated flag."""
+
+    async def _dispatch(self, data: dict[str, Any]) -> dict[str, Any]:
+        dispatched: dict[str, Any] = {}
+
+        class _FakeNotifier:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            async def dispatch_event(self, org_id: Any, event_type: Any, payload: Any, **kwargs: Any) -> list[Any]:
+                dispatched["event_type"] = event_type
+                dispatched["payload"] = payload
+                return []
+
+        with (
+            patch.object(ch, "_get_engine", return_value=MagicMock()),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.notifier.Notifier", _FakeNotifier),
+        ):
+            ok = await ts._notify_streak_deactivation(
+                ORG,
+                data=data,
+                threshold=5,
+                reason="no_work",
+                pipeline_name="p",
+                redis_client=AsyncMock(),
+            )
+        assert ok is True
+        return dispatched
+
+    @pytest.mark.asyncio
+    async def test_cron_notify_only_payload(self) -> None:
+        dispatched = await self._dispatch(_claimed_cron_trip())
+        payload = dispatched["payload"]
+        assert dispatched["event_type"] == "trigger_deactivated"
+        assert payload["trigger_type"] == "cron"
+        assert payload["auto_deactivated"] is False
+        assert payload["streak"] == 5
+
+    @pytest.mark.asyncio
+    async def test_ongoing_payload_defaults_unchanged(self) -> None:
+        dispatched = await self._dispatch(_deactivated_data())
+        payload = dispatched["payload"]
+        assert payload["trigger_type"] == "ongoing"
+        assert payload["auto_deactivated"] is True
+
+    @pytest.mark.asyncio
+    async def test_retry_dispatches_notify_only_member_despite_active_trigger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cron notify-only pending member's trigger is active BY design —
+        the active-state re-check (which exists to drop stale deactivation
+        notices after re-enable) must skip it and dispatch."""
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        member = ts._streak_pending_member(_claimed_cron_trip(), threshold=5, pipeline_name="p")
+        redis_client.smembers.return_value = {member}
+        with (
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock) as active_state,
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True) as notify,
+        ):
+            retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
+        assert retried == 1
+        active_state.assert_not_awaited()
+        notify.assert_awaited_once()

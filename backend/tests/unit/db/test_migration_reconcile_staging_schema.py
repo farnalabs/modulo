@@ -101,9 +101,12 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0267_notification_hot_query_indexes chains off 0266,
 # 0268_webhook_lookup_expiry_indexes chains off 0267,
 # 0269_webhook_dedup_check_constraints chains off 0268,
-# 0270_pipeline_snapshots_max_autonomy_ge_default chains off 0269, and
-# 0271_org_api_keys_revocation_sweep_indexes chains off 0270 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0271_org_api_keys_revocation_sweep_indexes"
+# 0270_pipeline_snapshots_max_autonomy_ge_default chains off 0269,
+# 0271_org_api_keys_revocation_sweep_indexes chains off 0270,
+# 0272_oauth_client_revoke_lookup_indexes chains off 0271,
+# 0273_runs_dispatch_phase chains off 0272, and
+# 0274_policy_gate_pin_fingerprint_operator_control chains off 0273 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0274_policy_gate_pin_fingerprint_operator_control"
 
 
 def _source(name: str) -> str:

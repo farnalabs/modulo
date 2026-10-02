@@ -10,6 +10,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.core.graph_validator import GraphValidator, ValidationResult
+from modulo.core.graph_validator.mask_sentinel import MASK_SENTINEL_ISSUE_CODE
+from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 
 
 def _codes(result: ValidationResult) -> set[str]:
@@ -220,3 +222,34 @@ async def test_sandbox_sub_node_unpinned_git_content_ref_is_error() -> None:
     result2 = await _run_for_sub_graph(sub_graph)
     assert "GIT_CONTENT_REF_UNPINNED" not in _codes(result2)
     assert "GIT_CONTENT_REF_INVALID" not in _codes(result2)
+
+
+async def test_mask_sentinel_in_sub_node_is_error_naming_sub_node_and_key() -> None:
+    """FAR-1374: a sub-node still holding the read-mask sentinel is a config
+    error on the save-time validation surface, under the shared code, naming
+    the sub-node and the env key the author must re-enter."""
+    sub_graph = {
+        "nodes": [
+            {
+                "id": "gh-node",
+                "node_type": "sandbox_agent",
+                "template_id": "opencode",
+                "agent_commands": ["opencode run"],
+                "env_vars": {"GITHUB_TOKEN": SENSITIVE_VALUE_MASK},
+            }
+        ],
+        "edges": [],
+    }
+    result = await _run_for_sub_graph(sub_graph)
+
+    assert MASK_SENTINEL_ISSUE_CODE in _codes(result)
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == MASK_SENTINEL_ISSUE_CODE)
+    assert "sub-node 'gh-node'" in issue.message
+    assert "GITHUB_TOKEN" in issue.message
+
+    # The positive control: a real (fake) credential value is not a finding.
+    sub_graph["nodes"][0]["env_vars"] = {"GITHUB_TOKEN": "FAKE_CREDENTIAL_FOR_TEST"}
+    clean_result = await _run_for_sub_graph(sub_graph)
+    assert MASK_SENTINEL_ISSUE_CODE not in _codes(clean_result)
+    assert clean_result.is_valid

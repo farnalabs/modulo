@@ -31,6 +31,10 @@ from modulo.core.graph_validator._types import (
     try_parse_uuids,
 )
 from modulo.core.graph_validator.category_validator import validate_node_categories
+from modulo.core.graph_validator.mask_sentinel import (
+    MASK_SENTINEL_ISSUE_CODE,
+    find_mask_sentinel_values,
+)
 from modulo.db.models.agent import Agent
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -441,6 +445,18 @@ def _check_composite_sub_nodes(
                 node_id=node_id,
             )
         sub_ids.add(sid)
+        # FAR-1374: a sub-node whose credential-bearing field still holds the
+        # read-mask sentinel (pre-fix row or direct-DB write) is a config error
+        # the author must repair by re-entering the real value - surfaced with
+        # the shared issue code so the same condition reads identically on the
+        # save-time validation, the write-entry 422, and the expansion failure.
+        for finding in find_mask_sentinel_values([sub]):
+            result.error(
+                MASK_SENTINEL_ISSUE_CODE,
+                f"Node '{node_id}': CompositeTemplate '{template.id}' {finding.describe()} holds the "
+                "credential mask sentinel - re-enter the real credential value in the composite editor",
+                node_id=node_id,
+            )
         node_type = sub.get("node_type", "agent")
         if node_type not in ("agent", "manual", "composite", "sandbox_agent"):
             result.error(

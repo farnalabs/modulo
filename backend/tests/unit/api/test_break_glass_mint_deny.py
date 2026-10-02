@@ -87,6 +87,9 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
         "create_policy_gate",
         "update_policy_gate",
         "delete_policy_gate",
+        # FAR-967 F2: toggling `enabled` turns enforcement OFF — a
+        # break-glass account must never flip it.
+        "toggle_policy_gate",
     },
     # guardrail config-as-code admin surface (FAR-309 PR B per-scope invariant):
     # the elevated read + propose/apply/import/reject carry the break-glass deny.

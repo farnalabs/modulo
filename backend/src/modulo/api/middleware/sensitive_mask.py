@@ -20,6 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session, require_system_or_org_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import SecretStorageError, decode_stored_secret_scoped
+from modulo.core.graph_validator.mask_sentinel import (
+    GRAPH_NODE_SECRET_FIELDS,
+    MASK_SENTINEL_ISSUE_CODE,
+    find_mask_sentinel_values,
+    find_unresolved_mask_sentinels,
+    format_mask_sentinel_detail,
+)
 from modulo.core.secret_patterns import (
     SENSITIVE_VALUE_MASK,
     is_sensitive_env_key,
@@ -40,6 +47,7 @@ __all__ = [
     "merge_masked_config",
     "merge_masked_config_json",
     "merge_masked_graph_nodes",
+    "resolve_and_reject_mask_sentinels",
 ]
 
 _log = logging.getLogger(__name__)
@@ -364,12 +372,10 @@ async def reveal_sensitive_value(
 # Pipeline graph node masking (FAR-1181)
 # ---------------------------------------------------------------------------
 
-_GRAPH_NODE_SECRET_FIELDS: tuple[str, ...] = (
-    "env_vars",
-    "context_files",
-    "composite_parameter_values",
-    "parameter_overrides",
-)
+# The four credential-bearing node fields are owned by the shared detector
+# (core.graph_validator.mask_sentinel) so the masker, the FAR-1374 write gates,
+# the expander, and the housekeeping sweep scan the SAME field set.
+_GRAPH_NODE_SECRET_FIELDS: tuple[str, ...] = GRAPH_NODE_SECRET_FIELDS
 
 
 def mask_pipeline_graph_node(node: dict[str, Any]) -> dict[str, Any]:
@@ -484,4 +490,55 @@ def merge_masked_graph_nodes(
                 updated[field] = merge_masked_config_json(base, incoming)
             # else: echo-free — keep the caller's value wholesale.
         resolved.append(updated)
+    return resolved
+
+
+def resolve_and_reject_mask_sentinels(
+    incoming_nodes: list[dict[str, Any]],
+    stored_nodes: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Resolve masked echoes against the stored graph, then fail closed on a
+    sentinel the resolve could not map to a stored value (FAR-1374).
+
+    Ordering is load-bearing: :func:`merge_masked_graph_nodes` runs FIRST, so
+    a round-trip of a masked read passes (each echo resolves to the stored raw
+    value) while a freshly client-supplied sentinel — one with no stored
+    counterpart — is refused with 422 instead of being silently dropped.
+
+    Two detection passes, one shared substring rule
+    (:func:`modulo.core.graph_validator.mask_sentinel.find_mask_sentinel_values`,
+    the ``SENSITIVE_VALUE_MASK in value`` primitive):
+
+    - the RESOLVED graph is scanned for sentinels that SURVIVED the merge
+      (non-conforming shapes the merge passes through, and degraded stored rows
+      whose sentinel the merge restores);
+    - the INCOMING graph is scanned for sentinels the merge could not resolve
+      (no stored counterpart — merge drops the key, this rejects the request).
+
+    Returns the resolved nodes for the caller to persist. Raises
+    HTTP 422 naming each offending sub-node, field, and key.
+
+    Used by every composite-template write entry: ``POST /composite-templates``,
+    ``PATCH``, the editor ``PUT``, and ``save-as-composite``.
+    """
+    resolved = merge_masked_graph_nodes(incoming_nodes, stored_nodes)
+
+    findings = find_mask_sentinel_values(resolved)
+    seen = {(f.node_id, f.field, f.path) for f in findings}
+    for finding in find_unresolved_mask_sentinels(incoming_nodes, stored_nodes):
+        key = (finding.node_id, finding.field, finding.path)
+        if key not in seen:
+            findings.append(finding)
+            seen.add(key)
+
+    if findings:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Masked credential placeholder rejected ({MASK_SENTINEL_ISSUE_CODE}): "
+                f"{format_mask_sentinel_detail(findings)}. The mask sentinel is a read-side "
+                "rendering only and is never stored — re-enter the real credential value "
+                "before saving."
+            ),
+        )
     return resolved

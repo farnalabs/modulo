@@ -452,6 +452,7 @@ _GUARDED_SITES: set[tuple[str, str]] = {
 _UNGUARDED_SITES: set[tuple[str, str]] = {
     ("core/cost_controller/finalize.py", "_write_empty_terminal"),
     ("core/pipeline_engine/executor.py", "_check_capacity"),
+    ("core/pipeline_engine/executor.py", "_check_policy_gate_pin"),
     ("core/pipeline_engine/executor.py", "_check_spend_ceiling_gate"),
     ("core/pipeline_engine/executor.py", "_claim_run_and_audit"),
     ("core/pipeline_engine/executor.py", "resume"),

@@ -154,6 +154,69 @@
                     }}
                   </p>
 
+                  <!-- Operator enable/disable toggle (CO-5) -->
+                  <div v-if="policyGate.exists" class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      :aria-checked="policyGate.enabled"
+                      :aria-label="$t('views.EvalEditorView.policyGate.toggleAriaLabel')"
+                      data-test-id="policy-gate-toggle"
+                      class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors"
+                      :class="policyGate.enabled ? 'bg-primary' : 'bg-input'"
+                      :disabled="gateToggleBusy"
+                      @click="requestToggleGate"
+                    >
+                      <span
+                        class="pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform"
+                        :class="policyGate.enabled ? 'translate-x-4' : 'translate-x-0.5'"
+                        aria-hidden="true"
+                      />
+                    </button>
+                    <span class="text-xs text-muted-foreground">
+                      {{ policyGate.enabled
+                        ? $t('views.EvalEditorView.policyGate.enabledDescription')
+                        : $t('views.EvalEditorView.policyGate.disabledDescription')
+                      }}
+                    </span>
+                  </div>
+
+                  <!-- Toggle disable confirmation (mirrors delete-confirmation pattern) -->
+                  <div
+                    v-if="gateToggleConfirming"
+                    ref="gateToggleDialogRef"
+                    role="dialog"
+                    aria-modal="true"
+                    :aria-label="$t('views.EvalEditorView.policyGate.toggleDisableConfirm')"
+                    data-test-id="policy-gate-toggle-confirm-dialog"
+                    class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
+                    @keydown="onGateToggleDialogKeydown"
+                  >
+                    <span>
+                      {{ $t('views.EvalEditorView.policyGate.toggleDisableConfirm') }}
+                      <template v-if="policyGate.action === 'block'">
+                        {{ $t('views.EvalEditorView.policyGate.toggleDisableBlockWarning') }}
+                      </template>
+                    </span>
+                    <button
+                      type="button"
+                      data-test-id="policy-gate-confirm-toggle-disable"
+                      class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+                      @click="confirmToggleGate"
+                      ref="gateToggleConfirmBtnRef"
+                    >
+                      {{ $t('views.EvalEditorView.policyGate.toggleConfirmDisable') }}
+                    </button>
+                    <button
+                      type="button"
+                      data-test-id="policy-gate-cancel-toggle-disable"
+                      class="rounded px-2 py-0.5 text-xs font-medium hover:bg-accent"
+                      @click="cancelToggleGate"
+                    >
+                      {{ $t('common.no') }}
+                    </button>
+                  </div>
+
                   <!-- Delete gate button -->
                   <div v-if="policyGate.exists" class="flex items-center gap-2">
                     <template v-if="!gateDeleteConfirming">
@@ -455,6 +518,9 @@ const policyGate = reactive({
   exists: false,
   id: null as string | null,
   version: 1,
+  enabled: true as boolean,
+  enabledAt: null as string | null,
+  disabledAt: null as string | null,
 })
 const gateSnapshot = reactive({
   action: 'warn' as 'warn' | 'block',
@@ -468,6 +534,12 @@ const gateDeleteBtnRef = ref<HTMLElement | null>(null)
 const gateDeleteConfirmBtnRef = ref<HTMLElement | null>(null)
 const gateDialogRef = ref<HTMLElement | null>(null)
 const evalGateActions = ref<Record<string, string>>({})
+
+// Operator enable/disable toggle state (CO-5)
+const gateToggleBusy = ref(false)
+const gateToggleConfirming = ref(false)
+const gateToggleDialogRef = ref<HTMLElement | null>(null)
+const gateToggleConfirmBtnRef = ref<HTMLElement | null>(null)
 
 // §3.2 dirty-gate confirm dialog state
 const dirtyConfirmVisible = ref(false)
@@ -516,12 +588,18 @@ function resetForm() {
   policyGate.exists = false
   policyGate.id = null
   policyGate.version = 1
+  policyGate.enabled = true
+  policyGate.enabledAt = null
+  policyGate.disabledAt = null
   gateSnapshot.action = 'warn'
   gateError.value = false
   gateDeleteConfirming.value = false
   gateDeleteBtnRef.value = null
   gateDialogRef.value = null
   gatePendingEvalId.value = null
+  gateToggleBusy.value = false
+  gateToggleConfirming.value = false
+  gateToggleDialogRef.value = null
   // Reset dirty-gate confirm dialog (§3.2)
   dirtyConfirmVisible.value = false
   if (dirtyConfirmResolve) {
@@ -605,14 +683,14 @@ async function loadGateBadges() {
 async function fetchPolicyGate(evalId: string) {
   gateError.value = false
   gatePendingEvalId.value = null
-  let gate: { action?: string; id?: string; version?: number } | null = null
+  let gate: { action?: string; id?: string; version?: number; enabled?: boolean; enabled_at?: string | null; disabled_at?: string | null } | null = null
   try {
     const res = await api.GET('/api/v1/evals/{eval_id}/policy-gate', {
       params: { path: { eval_id: evalId } },
     })
     // openapi-fetch resolves non-2xx as { data: undefined, error } — it never
     // throws, so the envelope error (404 etc.) must be handled here, not in a catch.
-    gate = (res.data as { action?: string; id?: string; version?: number } | null) ?? null
+    gate = (res.data as { action?: string; id?: string; version?: number; enabled?: boolean; enabled_at?: string | null; disabled_at?: string | null } | null) ?? null
   } catch {
     // Network-level failure only — treat as "no gate known".
     gate = null
@@ -622,6 +700,9 @@ async function fetchPolicyGate(evalId: string) {
     policyGate.exists = true
     policyGate.id = gate.id ?? null
     policyGate.version = gate.version ?? 1
+    policyGate.enabled = gate.enabled ?? true
+    policyGate.enabledAt = gate.enabled_at ?? null
+    policyGate.disabledAt = gate.disabled_at ?? null
     gateSnapshot.action = gate.action as 'warn' | 'block'
   } else {
     // 404 / no gate exists — reset to defaults so a previously viewed eval's
@@ -630,6 +711,9 @@ async function fetchPolicyGate(evalId: string) {
     policyGate.exists = false
     policyGate.id = null
     policyGate.version = 1
+    policyGate.enabled = true
+    policyGate.enabledAt = null
+    policyGate.disabledAt = null
     gateSnapshot.action = 'warn'
   }
 }
@@ -906,6 +990,9 @@ async function deletePolicyGate() {
     policyGate.id = null
     policyGate.action = 'warn'
     policyGate.version = 1
+    policyGate.enabled = true
+    policyGate.enabledAt = null
+    policyGate.disabledAt = null
     gateSnapshot.action = 'warn'
     gateError.value = false
     // Refresh badges
@@ -918,12 +1005,100 @@ async function deletePolicyGate() {
       policyGate.id = null
       policyGate.action = 'warn'
       policyGate.version = 1
+      policyGate.enabled = true
+      policyGate.enabledAt = null
+      policyGate.disabledAt = null
       gateSnapshot.action = 'warn'
     } else {
       formError.value = errMsg
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Operator enable/disable toggle (CO-5)
+// ---------------------------------------------------------------------------
+
+function requestToggleGate() {
+  if (!policyGate.exists || gateToggleBusy.value) return
+  // Enabling: toggle immediately. Disabling a block gate: confirm first.
+  if (!policyGate.enabled) {
+    doToggleGate(true)
+  } else if (policyGate.action === 'block') {
+    gateToggleConfirming.value = true
+  } else {
+    doToggleGate(false)
+  }
+}
+
+async function doToggleGate(enabled: boolean) {
+  if (!editingEvalId.value || !policyGate.id) return
+  gateToggleConfirming.value = false
+  gateToggleBusy.value = true
+  try {
+    const res = await api.PATCH('/api/v1/evals/{eval_id}/policy-gate/toggle', {
+      params: { path: { eval_id: editingEvalId.value } },
+      body: { enabled },
+    })
+    if (res.error || !res.data) {
+      formError.value = t('views.EvalEditorView.policyGate.toggleError')
+      return
+    }
+    const d = res.data as { enabled?: boolean; enabled_at?: string | null; disabled_at?: string | null }
+    policyGate.enabled = d.enabled ?? enabled
+    policyGate.enabledAt = d.enabled_at ?? null
+    policyGate.disabledAt = d.disabled_at ?? null
+  } catch {
+    formError.value = t('views.EvalEditorView.policyGate.toggleError')
+  } finally {
+    gateToggleBusy.value = false
+  }
+}
+
+function confirmToggleGate() {
+  gateToggleConfirming.value = false
+  doToggleGate(false)
+}
+
+function cancelToggleGate() {
+  gateToggleConfirming.value = false
+  nextTick(() => {
+    gateToggleConfirmBtnRef.value?.focus()
+  })
+}
+
+function onGateToggleDialogKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    cancelToggleGate()
+    return
+  }
+  if (e.key === 'Tab' && gateToggleDialogRef.value) {
+    const focusable = gateToggleDialogRef.value.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+  }
+}
+
+// Auto-focus the confirm button when the toggle-disable dialog opens
+watch(gateToggleConfirming, (confirming) => {
+  if (confirming) {
+    nextTick(() => gateToggleConfirmBtnRef.value?.focus())
+  }
+})
 
 async function retryPolicyGate() {
   // Retry target: the eval being edited, or — after a failed gate create on
@@ -945,6 +1120,9 @@ async function retryPolicyGate() {
     policyGate.id = d.id ?? policyGate.id
     policyGate.exists = true
     policyGate.version = d.version ?? policyGate.version + 1
+    policyGate.enabled = d.enabled ?? policyGate.enabled
+    policyGate.enabledAt = d.enabled_at ?? policyGate.enabledAt
+    policyGate.disabledAt = d.disabled_at ?? policyGate.disabledAt
     gateSnapshot.action = policyGate.action
     gateError.value = false
     gatePendingEvalId.value = null

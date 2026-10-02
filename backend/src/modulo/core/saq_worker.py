@@ -414,6 +414,7 @@ async def execute_run(
         PHASE_LOADING_SETUP,
         PHASE_SETUP_COMPLETE,
         DispatchPhaseTracker,
+        DispatchPhaseWriter,
         claim_run_async,
         fail_run_terminal,
         load_and_setup,
@@ -442,6 +443,18 @@ async def execute_run(
         run_id,
         org_id,
         str(claim_token)[:8] if claim_token else None,
+    )
+
+    # FAR-1088 (W2): durable best-effort writer for post-claim phase entries,
+    # bound to (engine, run_id, org_id, claim_token). Attaching it to the
+    # tracker wires PHASE_LOADING_SETUP / PHASE_SETUP_COMPLETE below and the
+    # executor's ``streaming`` transition (via DISPATCH_TRACKER_ATTR) through
+    # enter_phase(). Single-flight, bounded, fail-soft — see DispatchPhaseWriter.
+    tracker.durable_writer = DispatchPhaseWriter(
+        aeng,
+        run_id=run_id,
+        org_id=org_id,
+        claim_token=claim_token,
     )
 
     # Stamp the claim token into the job hash so the after_process task_failure
@@ -531,6 +544,11 @@ async def execute_run(
             claim_token=claim_token,
         ),
     )
+
+    # FAR-1088 (W2): drain any still-in-flight phase write (bounded + fail-soft)
+    # so the final phase lands before the job finishes.
+    if tracker.durable_writer is not None:
+        await tracker.durable_writer.flush()
 
     # Honest outcomes (A2): ``mark_complete`` runs ONLY on a genuine
     # completion. After a failure/awaiting_human/supersession it is a no-op

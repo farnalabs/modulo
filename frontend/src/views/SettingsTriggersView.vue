@@ -163,6 +163,13 @@
                       <span :class="outcomeBadgeClass(o.classification)" class="rounded-full px-2 py-0.5 font-medium">
                         {{ outcomeLabel(o.classification) }}
                       </span>
+                      <span
+                        v-if="isAgentReportedDeliveryClaim(o)"
+                        role="note"
+                        class="outcome-confidence rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
+                        :title="agentReportedConfidenceDetail"
+                        :aria-label="agentReportedConfidenceDetail"
+                      >{{ $t('views.SettingsTriggersView.outcome_confidence_agent_reported') }}</span>
                       <span class="text-muted-foreground">{{ o.reason || '—' }}</span>
                       <span class="ml-auto text-muted-foreground">{{ formatTimestamp(o.completed_at ?? null) }}</span>
                     </li>
@@ -545,11 +552,36 @@ async function togglePauseAll() {
   }
 }
 
+// FAR-1373 — the `delivery_confidence` vocabulary. These wire values are
+// FROZEN identifiers owned by the backend's `runs.run_classification` record.
+// The backend constant lives in a different service and is NOT reachable from
+// this bundle, so the union below is the frontend-local mirror of that
+// vocabulary — a documented closed union, not a loose string. Absent/null (the
+// pre-FAR-1336 six-key rows) and any value outside the union are unknown, and
+// an unknown confidence must never read as verified.
+//
+// FAR-1388 renamed the value `self_reported` -> `agent_reported` (the report
+// comes from the AGENT, and `self_reported` already names an unrelated
+// vocabulary — cost provenance). Records persisted BEFORE the rename carry the
+// old value and are NOT backfilled, so the deprecated alias below stays inside
+// the union and `isAgentReportedDeliveryClaim` accepts EITHER spelling: dropping
+// it would silently hide the qualifier chip on every pre-rename row, which is
+// the silent-loss failure this vocabulary exists to prevent.
+// DEPRECATED (FAR-1388): the pre-rename spelling of `agent_reported`, kept only
+// so stored pre-rename rows still type-check and still render the chip.
+const CONFIDENCE_AGENT_REPORTED_LEGACY = 'self_reported'
+type DeliveryConfidence = 'agent_reported' | typeof CONFIDENCE_AGENT_REPORTED_LEGACY | 'verified'
+
 interface StreakOutcome {
   run_id?: string | null
   classification?: string | null
   reason?: string | null
   completed_at?: string | null
+  // FAR-1373: a frozen wire identifier owned by the backend record (see the
+  // DeliveryConfidence union). Absent/null on legacy (pre-FAR-1336) records —
+  // an unknown confidence must never read as verified, so no qualifier
+  // renders for it.
+  delivery_confidence?: DeliveryConfidence | null
 }
 
 interface StreakStatus {
@@ -756,20 +788,61 @@ function toggleOutcomes(id: string): void {
   expandedOutcomes.value = next
 }
 
+// FAR-1373 — the positive delivered verdict, a frozen wire identifier owned by
+// the backend classification record (its constant lives in a different service
+// and is not reachable from this bundle). Single-sourced here so the badge
+// class, the label and the qualifier gate can never drift apart.
+const OUTCOME_DELIVERED = 'delivered'
+// FAR-1373 — frozen wire identifier for the agent-reported confidence (renamed
+// by FAR-1388); see the DeliveryConfidence union above, which also carries the
+// deprecated pre-rename alias this helper must still accept.
+const CONFIDENCE_AGENT_REPORTED: DeliveryConfidence = 'agent_reported'
+
+// FAR-1373 — the qualifier detail, resolved ONCE so `title` and `aria-label`
+// bind the same string and cannot drift apart. The chip's `role="note"` is what
+// makes the aria-label reach assistive tech: a bare span has the implicit
+// `generic` role, whose author-provided name is ignored. The chip is static
+// content behind a user-initiated disclosure, so it deliberately carries no
+// aria-live / role="status".
+const agentReportedConfidenceDetail = computed(() =>
+  t('views.SettingsTriggersView.outcome_confidence_agent_reported_detail'),
+)
+
 function outcomeBadgeClass(classification: string | null | undefined): string {
-  if (classification === 'delivered') return 'bg-success/10 text-success'
+  if (classification === OUTCOME_DELIVERED) return 'bg-success/10 text-success'
   if (classification === 'no_delivery') return 'bg-amber-500/10 text-amber-600'
   return 'bg-muted text-muted-foreground'
 }
 
 function outcomeLabel(classification: string | null | undefined): string {
   const labels: Record<string, string> = {
-    delivered: t('views.SettingsTriggersView.outcome_delivered'),
+    [OUTCOME_DELIVERED]: t('views.SettingsTriggersView.outcome_delivered'),
     no_delivery: t('views.SettingsTriggersView.outcome_no_delivery'),
     excluded: t('views.SettingsTriggersView.outcome_excluded'),
     unclassified: t('views.SettingsTriggersView.outcome_unclassified'),
   }
   return classification ? labels[classification] || classification : '\u2014'
+}
+
+// FAR-1373 — the ONE place expressing "is this an unqualified agent-reported
+// delivery claim". Both conditions must hold:
+//   1. the classification is the positive delivered verdict (the same frozen
+//      wire value outcomeLabel renders as "Delivered"), and
+//   2. delivery_confidence is agent_reported — OR its deprecated pre-rename
+//      alias (FAR-1388): stored rows written before the rename carry the old
+//      spelling and are never backfilled, so treating only `agent_reported` as
+//      the agent-reported case would silently drop the chip on exactly those
+//      rows.
+// A no_delivery / excluded / unclassified row makes no positive claim about the
+// world — the record defaults delivery_confidence to agent_reported on EVERY
+// row, so an "Agent-reported" chip beside "No delivery" would be nonsense. An
+// absent/null/unknown confidence returns false: unknown never reads as verified.
+function isAgentReportedDeliveryClaim(o: StreakOutcome): boolean {
+  return (
+    o.classification === OUTCOME_DELIVERED &&
+    (o.delivery_confidence === CONFIDENCE_AGENT_REPORTED ||
+      o.delivery_confidence === CONFIDENCE_AGENT_REPORTED_LEGACY)
+  )
 }
 
 function resetForm() {

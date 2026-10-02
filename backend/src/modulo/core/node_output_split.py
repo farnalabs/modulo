@@ -38,6 +38,7 @@ __all__ = [
     "NODE_TYPE_GATE",
     "SPLITTABLE_NODE_TYPES",
     "extend_node_type_map_from_edges",
+    "has_telemetry_entry",
     "node_return",
     "node_stderr_artifact",
     "node_stdout_artifact",
@@ -223,6 +224,19 @@ def node_return(outputs_json: Any, _telemetry_json: Any, node_id: str) -> Any:
     return outputs_json.get(node_id)
 
 
+def has_telemetry_entry(telemetry_json: Any, node_id: str) -> bool:
+    """True when *telemetry_json* carries a REAL telemetry entry for *node_id*.
+
+    This is the SINGLE source of truth for ``node_telemetry``'s dispatch: when
+    True the accessor returns ``telemetry_json[node_id]`` verbatim (a P1+ row);
+    when False it returns the legacy inner ``output`` of ``outputs_json``
+    instead -- i.e. the value is DERIVED FROM the node's structured return, not
+    from telemetry (FAR-1376: readers that attribute a value to its source use
+    this predicate rather than re-deriving the dispatch rule).
+    """
+    return isinstance(telemetry_json, dict) and node_id in telemetry_json
+
+
 def node_telemetry(telemetry_json: Any, outputs_json: Any, node_id: str) -> Any:
     """The exhaustive telemetry for *node_id* -- legacy-safe.
 
@@ -231,7 +245,7 @@ def node_telemetry(telemetry_json: Any, outputs_json: Any, node_id: str) -> Any:
     from the mixed value (mirroring ``finalize._node_output_dict`` exactly), so
     the value matches what today's cost readers extract.
     """
-    if isinstance(telemetry_json, dict) and node_id in telemetry_json:
+    if has_telemetry_entry(telemetry_json, node_id):
         return telemetry_json[node_id]
     return _legacy_inner_output(outputs_json, node_id)
 
