@@ -1,3 +1,3 @@
 # Modulo Backend
 
-The FastAPI backend for Modulo — an agent governance platform for agentic SDLC pipelines.
+The FastAPI backend for Modulo — an Agentic Delivery Governance platform for agentic SDLC pipelines.

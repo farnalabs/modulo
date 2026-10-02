@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <em>Modulo is a self-hosted agent governance platform for building governed,
-  repeatable AI-assisted software delivery pipelines.</em>
+  <em>Modulo is a self-hosted Agentic Delivery Governance platform for building
+  governed, repeatable AI-assisted software delivery pipelines.</em>
 </p>
 
 <p align="center">
