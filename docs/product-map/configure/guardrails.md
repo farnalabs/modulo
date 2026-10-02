@@ -37,8 +37,8 @@ status: covered
 
 Structured-credential boundary data-safety at the run's ingestion edge. A
 guardrail is an `EvalDefinition` row with `eval_type="guardrail"` whose
-detection is deterministic and pure — only `regex` and `json_schema` eval
-types may be bound as guardrails — and which acts on a run with one of four
+detection is deterministic and pure – only `regex` and `json_schema` eval
+types may be bound as guardrails – and which acts on a run with one of four
 actions: **observe**, **warn**, **block**, or **redact**. Guardrails wrap the
 configuration surface under `/settings/guardrails`, the git-style config-as-code
 workflow, the sandbox agent-loop interception bridge, run-termination
@@ -48,20 +48,20 @@ compensation, and single-node self-correction. Built on the eval engine
 ## Behaviours
 
 - [x] A guardrail is bound as an `EvalDefinition` with `eval_type="guardrail"`;
-      detection is DETERMINISTIC and PURE — only the `regex` and `json_schema`
+      detection is DETERMINISTIC and PURE – only the `regex` and `json_schema`
       eval types are usable, and the engine raises on a `llm_judge` /
       `custom_function` guardrail misrouting
 - [x] Four actions with distinct semantics: `observe` computes + validates +
       discards + logs a would-block result (shadow mode); `warn` logs the
       violation and the run continues; `block` transitions the run to the
       TERMINAL `eval_failed` state; `redact` masks-only field-scoped redaction
-      at the ingestion edge — `failure_behaviour='retry'` was never expressible
+      at the ingestion edge – `failure_behaviour='retry'` was never expressible
       on a guardrail row (block semantics are guardrail-owned, not eval-owned)
 - [x] The interception pass runs at run-creation BEFORE `input_payload` is
       persisted, in two phases: evaluate ALL bound guardrails against an
       immutable pre-act copy of the payload, then apply redaction masks in
       deterministic order; a block outcome raises `GuardrailBlockedError` which
-      the interception seam maps to a terminal `eval_failed` run — persisted
+      the interception seam maps to a terminal `eval_failed` run – persisted
       state is post-redaction
 - [x] Redaction is masks-only with a fixed mask token never derived from payload
       content; field paths are STATIC author config resolved with EXACT/ANCHOR
@@ -78,7 +78,7 @@ compensation, and single-node self-correction. Built on the eval engine
       `POST propose` (validate + hash + diff), `POST apply` (approve/merge),
       `POST reject` (discard), `GET drift` (recompute vs applied pin,
       read-only), `POST drift/check` (persist the clean<->drift transition +
-      audit, admin-gated) — every state-changing step is admin-gated and emits
+      audit, admin-gated) – every state-changing step is admin-gated and emits
       an audit event with summary
       payloads only (never raw config content); GET /drift is side-effect
       free so viewer-scoped callers cannot mutate the pin or generate audit
@@ -88,10 +88,10 @@ compensation, and single-node self-correction. Built on the eval engine
 - [x] Agent-loop interior interception (FAR-211 T3): a Modulo-hosted bridge
       inside `sandbox_agent` loops reports each tool invocation before execution
       and each tool result before it re-enters model context, REUSING the T1
-      guardrail rows + engine — detection is never reimplemented
+      guardrail rows + engine – detection is never reimplemented
 - [x] The bridge handoff is newline-safe (FAR-664): the rendered agent command
       is written to a command FILE (`/home/user/.modulo_bridge_cmd.sh`) and the
-      wrapped command invokes `bash <file>` after `--` — never the command
+      wrapped command invokes `bash <file>` after `--` – never the command
       inline, which the outer bash word-splits so only the first line would
       reach the bridge argv and post-heredoc statements would escape
       interception; uniform for single-line and multi-line commands, and a
@@ -103,19 +103,19 @@ compensation, and single-node self-correction. Built on the eval engine
       best-effort with failure isolation (e.g. GitHub closes an opened PR), a
       `blocked_partial` run summary records executed nodes / publish status /
       output references (never duplicated raw payloads), audit events record
-      the compensation — the hook never raises into terminalization
+      the compensation – the hook never raises into terminalization
 - [x] Single-node self-correction (FAR-210 T2b): a bounded, single-node recovery
       rewrites a guardrail-violating node input through a RESTRICTED model
       backend (which never receives guardrail config or vault secrets, and sees
       PRE-REDACTED input) and re-validates the produced output with a
-      DIFFERENT-FAMILY detector within a single retry budget — no pipeline
+      DIFFERENT-FAMILY detector within a single retry budget – no pipeline
       re-execution, no connector/vault access
 - [x] Packs ship as versioned policy packs (e.g. SOC2 pack, policy pack) that
       bundle pre-authored guardrail definitions
 - [x] Cross-org inheritance ships via the config-as-code import surface:
       `POST /api/v1/guardrails/config/import` (admin-gated like apply/reject)
-      applies a config YAML — e.g. the unmasked elevated export
-      (`GET /elevated`) of ANOTHER organisation — directly as the org's APPLIED
+      applies a config YAML – e.g. the unmasked elevated export
+      (`GET /elevated`) of ANOTHER organisation – directly as the org's APPLIED
       state in one step, without a propose/review round-trip (the source org
       already reviewed the policy). The transport is YAML-only so RLS isolation
       is preserved (no cross-org row is ever read); invalid configs fail 422, a
@@ -129,7 +129,7 @@ compensation, and single-node self-correction. Built on the eval engine
 - [x] The in-page Import control ships on `/settings/guardrails`: an
       admin-gated "Import Config" control opens a dialog that pastes a config
       YAML (e.g. the elevated export of another org) and applies it directly as
-      the org's applied state — `POST /api/v1/guardrails/config/import` with
+      the org's applied state – `POST /api/v1/guardrails/config/import` with
       `{ config_yaml }`, surfaced through an in-dialog error channel for
       invalid (422) / colliding (409) / forbidden (403) responses and a success
       summary (change count + applied hash) followed by a guardrail-list
@@ -139,15 +139,15 @@ compensation, and single-node self-correction. Built on the eval engine
 
 ## Known Gaps
 
-- **Correction is bounded single-node only** — the whole-pipeline feedback
+- **Correction is bounded single-node only** – the whole-pipeline feedback
   correction (`spawn_correction_run`) is a separate surface; this module never
   re-runs the pipeline.
-- **Loop-interception covers Modulo-hosted sandbox agent loops only** — the
+- **Loop-interception covers Modulo-hosted sandbox agent loops only** – the
   pre-execution/post-result bridge does not intercept tool calls issued inside
   external/unmediated runtimes.
 
 ## QA History
-- 2026-10-01: **Improve Architecture product-map walk** — shipped the last
+- 2026-10-01: **Improve Architecture product-map walk** – shipped the last
   tracked `feat-guardrails` deferral: the `/settings/guardrails` page now
   offers an admin-gated Import control wired to the existing
   `POST /api/v1/guardrails/config/import` surface (dialog + in-dialog error
@@ -156,35 +156,35 @@ compensation, and single-node self-correction. Built on the eval engine
   both move to `status: covered`; the known-gap bullet about the missing
   in-page Import control is removed. The remaining known gaps (single-node
   correction, hosted-sandbox-only loop interception) stay acknowledged.
-- 2026-09-29: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-29: **Improve Architecture product-map walk** – reconciled the
   tracker frontmatter `status:` with the manifest `feat-guardrails` registry:
   the entry now reads `status: partial` (matching the manifest's still-unchecked
-  in-page Import-control deferral — cross-org inheritance itself now ships via
+  in-page Import-control deferral – cross-org inheritance itself now ships via
   the config-as-code import API, see 2026-09-28 below) instead of `covered`. The
-  two layers previously disagreed on the same feature's coverage — a reader of
+  two layers previously disagreed on the same feature's coverage – a reader of
   the graph got the opposite answer from the machine layer Assistant reads from
   the manifest.
-- 2026-09-28: **Improve Architecture product-map walk** — shipped the
+- 2026-09-28: **Improve Architecture product-map walk** – shipped the
   previously-deferred cross-org inheritance gap: added
   `POST /api/v1/guardrails/config/import` (admin-gated direct apply of an
-  imported config YAML — e.g. another org's elevated export — stored as a
+  imported config YAML – e.g. another org's elevated export – stored as a
   clean applied snapshot), with integration tests (cross-org inheritance flow,
   idempotent re-import, replace-applied-directly, node-bound collision 409,
   permission gates) and four new BDD scenarios in `guardrail_config.feature`.
   The manifest `feat-guardrails` entry ticks the cross-org behavior; the
   remaining unchecked item / known gap is the missing in-page Import control
   on `/settings/guardrails`. Status stays `partial`.
-- 2026-09-26: **Improve Architecture product-map walk** — sharpened the manifest
+- 2026-09-26: **Improve Architecture product-map walk** – sharpened the manifest
   `feat-guardrails` registry entry: the previously-vague "policy templates and
   cross-org inheritance are partially wired" gap is now split into what actually
   ships versus what is deferred. Policy templates ship as versioned policy packs
   (FAR-216): the `PolicyPack` / `PolicyControl` framework with fail-closed
   instantiation, the CI gate and warn-mode-first rollout (`core/guardrails/policy_pack.py`)
   plus the shipped SOC2 pack content (`core/guardrails/packs/soc2.py`), tested by
-  `test_guardrail_policy_pack.py` / `test_guardrail_soc2_pack.py` — ticked. Cross-org
-  guardrail inheritance remains unshipped — tracked as the unchecked deferral.
+  `test_guardrail_policy_pack.py` / `test_guardrail_soc2_pack.py` – ticked. Cross-org
+  guardrail inheritance remains unshipped – tracked as the unchecked deferral.
   Status stays `partial`.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/guardrails`
   and wired the two components into the reverse testid-coverage guard
@@ -192,7 +192,7 @@ compensation, and single-node self-correction. Built on the eval engine
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/guardrails`: the whole-page view(s) `SettingsGuardrailsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -200,7 +200,7 @@ compensation, and single-node self-correction. Built on the eval engine
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-08: **product-map review pass** — added the FAR-664
+- 2026-09-08: **product-map review pass** – added the FAR-664
   newline-safe bridge handoff behaviour + citation: the loop-intercept bridge
   receives the rendered agent command via a command file (`bash <file>` after
   `--`) instead of inline interpolation, so multi-line / post-heredoc
@@ -209,7 +209,7 @@ compensation, and single-node self-correction. Built on the eval engine
   Verified in `core/guardrails/loop_intercept.py` +
   `core/pipeline_engine/node_runner.py` and unit-covered in
   `tests/unit/pipeline_engine/test_node_runner_residual.py`.
-- 2026-08-30: **product-map review pass** — new behaviour
+- 2026-08-30: **product-map review pass** – new behaviour
   tracker for the registered `feat-guardrails` manifest feature (route
   `/settings/guardrails`, previously absent from the feature graph and invisible
   to Assistant's docs indexer). Behaviours verified against

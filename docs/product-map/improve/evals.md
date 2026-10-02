@@ -50,7 +50,7 @@ with regression alerting, pipeline coverage gap analysis, leaderboards, and the
 eval-proposals queue. An eval is a typed definition (`llm_judge`, `regex`,
 `json_schema`, `custom_function`, or `human_set`) carrying an engine-internal
 `failure_behaviour` of `warn` or `block` (retired from the public REST/MCP
-surface + generated types on 2026-09-26 — FAR-1103 chunk 5a; it is no longer
+surface + generated types on 2026-09-26 – FAR-1103 chunk 5a; it is no longer
 writable/readable through the API or the generated frontend types); blocked
 evals raise `EvalBlockedError` and are the mechanism engine-side guardrails
 build on (`feat-guardrails` depends on this engine).
@@ -61,7 +61,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 - [x] Five eval types: `llm_judge` (LLM-as-judge via ModelBackendHub),
       `regex` (pattern match against an output field), `json_schema` (validate
       output against JSON Schema), `custom_function` (user-defined function),
-      and `human_set` (registered, versioned, human-authored eval sets — the
+      and `human_set` (registered, versioned, human-authored eval sets – the
       deterministic trustworthy path)
 - [x] Eval outputs are evaluated against delimited `---BEGIN/END EVALUATED
       CONTENT---` framing with a data-not-instructions guard instruction, a
@@ -89,7 +89,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       author a definition from run data
 - [x] Policy-gate binding (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`)
       runs the FAR-957 advisory author-warning checks for the eval's
-      `evidence_key` (`no_producer` / `temporal_ordering` / `recent_undefined` —
+      `evidence_key` (`no_producer` / `temporal_ordering` / `recent_undefined` –
       the evidence store substrate tracked under `feat-core-evidence-store`) and
       the `PolicyGateResponse` carries the non-blocking `warnings` list
       (`core/eval_engine/author_warnings.py`,
@@ -104,7 +104,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 - [x] Suite orchestration resolves an immutable baseline snapshot and a
       deterministic "latest completed same-tuple prior run" baseline, persists
       per-case outcomes into `eval_results` with a `suite_run_id` FK, and
-      aggregates pass-rate per `eval_type` — never cross-combining raw scores
+      aggregates pass-rate per `eval_type` – never cross-combining raw scores
       across differing eval types (type-incorrect refusal)
 - [x] Suite regression detection delegates to `detect_regressions` and routes
       comparison postings through the existing Notifier
@@ -113,7 +113,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 - [x] Proposal queue: eval-gap feedback records are listed as eval proposals
       (`GET /api/v1/feedback/proposals`) and a proposal can be published into a
       real eval definition (`POST /api/v1/feedback/proposals/{record_id}/
-      publish`) — a non-eval-gap feedback record is refused — while the
+      publish`) – a non-eval-gap feedback record is refused – while the
       `/evals/proposals` view supports publish / dismiss
 - [x] The `/evals/editor` view authors evals against a pipeline + node with a
       type selector, JSON config editor, and pass threshold, save / edit /
@@ -121,14 +121,14 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 
 ## Known Gaps
 
-- **`llm_judge` is a soft signal, injection-prone by design** — the guarded
+- **`llm_judge` is a soft signal, injection-prone by design** – the guarded
   delimiters reduce prompt-injection risk but the trustworthy path for
   deterministic gating is `human_set` / regex / json_schema.
-- **No long-horizon eval-run scheduler in this surface** — suite execution is
+- **No long-horizon eval-run scheduler in this surface** – suite execution is
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
-- 2026-09-30: **Improve Architecture product-map walk** — ticked the FAR-957
+- 2026-09-30: **Improve Architecture product-map walk** – ticked the FAR-957
   advisory author-warning surface: policy-gate binding
   (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) runs
   `check_author_warnings` for the eval's `evidence_key` and the
@@ -139,12 +139,12 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   manifest `feat-evals` registry behaviour line. The append-only evidence store
   and the FAR-961 retention policy + purge sweep it sits on are tracked under
   the new `feat-core-evidence-store` tracker (`core/evidence-store.md`).
-- 2026-09-28: **Improve Architecture product-map walk** — archived the stale
+- 2026-09-28: **Improve Architecture product-map walk** – archived the stale
   `ui/eval_dashboard.feature` UI-journey BDD draft (pinned `@awaiting-implementation`
   since 2026-08, never ran). Its steps referenced testids that exist nowhere in the
   frontend (`eval-result-item`, `eval-results-list`, `filter-failed`,
   `compare-run-checkbox`, `compare-button`, `eval-comparison`, `empty-state`,
-  `theme-toggle`, `node-output`, `canvas-node`, `approval-banner`, ... — verified
+  `theme-toggle`, `node-output`, `canvas-node`, `approval-banner`, ... – verified
   0 hits across `frontend/src`), navigated to fictional run ids, and described a
   surface the product maps to different real testids. The executing BDD citations
   (`eval/` + `evals/` features) and the real UI-journey Playwright coverage
@@ -152,7 +152,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   `journeys/eval-journey.spec.ts`) are unaffected; this tracker now cites only
   executing BDD features (guarded by
   `test_no_bdd_citations_for_fully_deselected_features`).
-- 2026-09-26: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-26: **Improve Architecture product-map walk** – reconciled the
   tracker with the FAR-1103 chunk 5a retirement: `failure_behaviour` was
   removed from the public surface (REST payloads + MCP params + generated
   frontend types) and is now engine-internal only (verified against
@@ -162,14 +162,14 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   UI had removed along with the `eval-editor-failure-*` elements. Tracked the
   FAR-1102/1060 `PolicyGateDecision` surface (write + purge + delete-block)
   that shipped without a product-map home.
-- 2026-09-25: **Improve Architecture product-map walk** — closed the stale
+- 2026-09-25: **Improve Architecture product-map walk** – closed the stale
   `feat-evals` registry gap: manifest now `status: covered` and ticks the
-  comparison surface that #972 had left unchecked — `GET /api/v1/runs/{run_id}/evals`
+  comparison surface that #972 had left unchecked – `GET /api/v1/runs/{run_id}/evals`
   + `POST /api/v1/evals/compare` (verified against `test_evals_compare.py`) and the
   variant eval-score/prompt-diff/coverage comparison surfaces owned by
   `feat-variants`. The genuinely missing per-token breakdown sub-surface stays
   tracked under `feat-variants`.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/evals/editor`, `/evals/proposals`
   and wired the two components into the reverse testid-coverage guard
@@ -177,7 +177,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/evals/proposals`: the whole-page view(s) `EvalProposalsQueueView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -185,7 +185,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/evals/editor`: the whole-page view(s) `EvalEditorView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -193,7 +193,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-30: **product-map review pass** — closed the
+- 2026-08-30: **product-map review pass** – closed the
   "no executing BDD surface for the `llm_judge` / `regex` scorer types" gap:
   `evals/eval_llm_judge.feature` and `evals/eval_regex.feature` now execute
   through the new step module `tests/bdd/steps/test_eval_scorer_gates.py`
@@ -206,7 +206,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   judge `model_backend_id`, and the guarded rubric prompt with the
   data-not-instructions delimiter wrapping.
 
-- 2026-08-30: **product-map review pass** — new behaviour
+- 2026-08-30: **product-map review pass** – new behaviour
   tracker for the registered `feat-evals` manifest feature (routes `/evals/editor`,
   `/evals/proposals`, previously absent from the feature graph). Behaviours
   verified against `api/routes/evals.py` + `feedback.py`, `core/eval_engine/*`

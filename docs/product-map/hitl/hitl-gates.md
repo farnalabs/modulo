@@ -63,7 +63,7 @@ reviewer claims, approves, rejects, or delivers manual output at the gate, and
 the run resumes through the decided path. Gates surface on per-run and
 org-wide pending queues (`/settings/hitl-review`), claims carry short-lived
 tokens so reviews are exclusive and safe, and every decision is audited.
-`human_only` and team-scoped gates constrain who — or what (MCP/automation) —
+`human_only` and team-scoped gates constrain who – or what (MCP/automation) –
 may decide.
 
 ## Behaviours
@@ -74,13 +74,13 @@ may decide.
       and `GET /api/v1/hitl/pending` (org-wide), gated by the `hitl.list`
       permission. The org-wide queue joins `runs` and lists only undecided
       gates whose run is in `awaiting_human`, `claimed`, or `hitl_parked` status
-      — undecided
+      – undecided
       gates on terminal runs are data rot, not pending work, and are excluded
       (FAR-612); the MCP `list_pending_hitl` tool applies the same
       actionable-status filter. The review UI renders a gate held by another
       session as read-only (claimed by \<user\> at \<time\>) and shows
       approve/reject only to the session holding that gate's claim token
-- [x] Claim is atomic — `claim()` issues a short-lived (15-minute) JWT
+- [x] Claim is atomic – `claim()` issues a short-lived (15-minute) JWT
       `claim_token` scoped to run + gate + client; expired/invalid claim
       tokens are rejected. The three claim conflicts each return 409 with a
       distinct machine-readable problem type the frontend discriminates on by
@@ -89,7 +89,7 @@ may decide.
       → `urn:problem:modulo:hitl_review_already_decided` (previously a generic
       500), and a run that is not claimable →
       `urn:problem:modulo:hitl_run_not_awaiting`. The run-status guard uses
-      `HITL_CLAIMABLE_RUN_STATUSES` (`awaiting_human` or `hitl_parked` — a
+      `HITL_CLAIMABLE_RUN_STATUSES` (`awaiting_human` or `hitl_parked` – a
       parked run's gate stays OPEN AND CLAIMABLE, park != decide, FAR-604 D2)
       and is enforced atomically with the claim UPDATE via a `runs` EXISTS
       predicate, so a run that goes terminal between the pre-check and the
@@ -99,12 +99,12 @@ may decide.
       (claim.feature, `test_hitl_manager`, `test_hitl_jwt`)
 - [x] Same-account re-claim (FAR-686 token recovery): a reviewer who reloaded
       the page may re-claim a gate they already hold, including during the
-      claimed-but-undecided window when the run status itself is `claimed` —
+      claimed-but-undecided window when the run status itself is `claimed` –
       the EXISTS predicate carries a same-account `claimed` arm alongside the
       `HITL_CLAIMABLE_RUN_STATUSES` base, so the atomic guard and the
       pre-check cannot drift. Fresh and cross-account claims keep the strict
       data-rot guard (`test_hitl_manager` same-account re-claim cases)
-- [x] Approve resumes the run (`action: approved`, optional notes) — gated by
+- [x] Approve resumes the run (`action: approved`, optional notes) – gated by
       `hitl.approve`; a claimed-by-other caller cannot approve
 - [x] Reject records the decision and resumes the graph through a router on
       the rejected path rather than leaving a non-terminal state
@@ -130,51 +130,51 @@ may decide.
 - [x] Deliver-manual / submit-manual validates reviewer-supplied output and
       passes it to the pipeline; manual output delivery is audited
       (deliver_manual.feature, `test_output_delivery_audit`)
-- [x] `human_only` gates refuse automation/MCP clients entirely — and every
+- [x] `human_only` gates refuse automation/MCP clients entirely – and every
       gate DEFAULTS to `human_only: true` (FAR-609): a gate config that omits
       the flag is human-only (fail-safe, not only the high-risk paths);
       opting out requires an explicit `human_only: false` write, which the
-      gate-removal guard flags as a weakening change — for BOTH gate shapes:
+      gate-removal guard flags as a weakening change – for BOTH gate shapes:
       edge-level `hitl_review_config` AND FAR-402 node-level `hitl_config`
       (hitl nodes are matched by node id on graph save / snapshot rollback;
       a removed hitl node or an explicit `human_only: false` write on one is
       denied for non-privileged callers and audited for operator+). Legacy
       stored gates whose config lacks the flag become human-only under the
       default.
-      Claim is human_only too — a non-browser credential can neither CLAIM
+      Claim is human_only too – a non-browser credential can neither CLAIM
       nor decide a human_only gate (REST claim route + MCP `review_hitl`
       claim action both enforce it), and reject is NOT an agent escape
       hatch: reject requires a claim_token, so a non-browser principal
-      cannot reach reject on a default-human_only gate either — only a
+      cannot reach reject on a default-human_only gate either – only a
       principal already holding a claim (e.g. claimed before the policy
       change) can reject, and agent-only runs on default gates require
       browser-human intervention (intended policy) (team_hitl_review.feature,
       `test_mcp_security`, `test_mcp_runtime_tools`,
       `test_node_runner_hitl`). REST enforcement keys on the credential
       class: a principal is denied when it is an API key OR its JWT
-      `client_kind` claim is not `browser` (FAR-634 — every access/refresh
+      `client_kind` claim is not `browser` (FAR-634 – every access/refresh
       token carries `client_kind` stamped at mint time; legacy tokens without
       the claim decode as `browser`). MCP denies outright regardless of
       credential class. Every denial (REST + MCP) emits a warning log and the
       `hitl.human_only_denied` audit event, failure-isolated so an audit
       failure never changes the denial outcome. Honest limitation: agent
       sessions hold the admin password, so a password-minted JWT is
-      indistinguishable from a browser login at issuance — the credential
+      indistinguishable from a browser login at issuance – the credential
       class is defense-in-depth, and the FAR-611 sweep alarm is the detective
       control (`test_hitl_resilience`, `test_mcp_runtime_tools`)
-- [x] The fired gate's config is stamped on the claim row at fire time — the
+- [x] The fired gate's config is stamped on the claim row at fire time – the
       executor's interrupt handler resolves the gate's `hitl_review_config` and
       writes it to `hitl_claims.gate_config_json` (migration 0195) inside the
       interrupt savepoint; a stamp failure is failure-isolated and the gate
       still fires with a NULL config (FAR-634). The human_only resolver reads
-      the stamp FIRST — one claim-row lookup instead of walking snapshot
-      edges → node configs → live edges — so gate policy is the graph state
+      the stamp FIRST – one claim-row lookup instead of walking snapshot
+      edges → node configs → live edges – so gate policy is the graph state
       at fire time even if the pipeline is edited afterwards; the walk stays
       as the fallback for legacy rows (fired before the column existed) and
       never-fired gates, with the fail-closed unresolved semantics intact
       (`test_hitl_review_config`, `test_executor`)
 - [x] Team-scoped gates restrict claiming to members whose team role is
-      `runner`/`operator` — otherwise `NotTeamMemberError` (`_TEAM_CLAIM_ROLES`)
+      `runner`/`operator` – otherwise `NotTeamMemberError` (`_TEAM_CLAIM_ROLES`)
 - [x] Stale gates warn their owners and expired claims are reset to unclaimed
       (`test_overdue_warning`, `test_claim_expiry_job`, `overdue_warning.py`,
       `expiry_job.py`)
@@ -208,9 +208,9 @@ may decide.
 - [x] Fire-time decision briefing: a fired gate captures a bounded, redacted
       context bundle on the claim row (`context_json`): the gate description,
       the JMESPath condition, the MATCHED condition value as PRIMARY evidence
-      (FAR-688 — threaded from the gate node's interrupt payload; the
+      (FAR-688 – threaded from the gate node's interrupt payload; the
       regex-extracted artifact excerpts stay supplementary), the trigger kind
-      (`condition` / `node` / `unknown` — never guessed when the snapshot
+      (`condition` / `node` / `unknown` – never guessed when the snapshot
       cannot resolve the config), source node + label, bounded artifact
       summaries (marked when truncated), and the pipeline name. The review
       UI renders the bundle (`HitlBriefing.vue`), and every briefing surface
@@ -221,7 +221,7 @@ may decide.
 - [x] The pipeline editor surfaces legacy gates whose descriptions predate
       the minimum in a dismissible banner (graph reads never hard-fail on
       them; the editor scans the loaded graph client-side and lists the
-      offending edges/nodes) — and the MCP graph-write path keeps its narrow
+      offending edges/nodes) – and the MCP graph-write path keeps its narrow
       HITL-description check while deferring full validation (FAR-688;
       PipelineEditorView.spec.ts)
 - [x] Decisions and deliveries are audited (`hitl.output_delivered`,
@@ -230,7 +230,7 @@ may decide.
       decision/rejection/approval-time aggregates)
 - [x] Decision endpoints enforce per-action permissions
       (`hitl.claim`/`hitl.approve`/`hitl.reject`/`hitl.deliver_manual`/
-      `hitl.list`) — a caller without the grant gets 403
+      `hitl.list`) – a caller without the grant gets 403
       (`test_rate_limit_hitl_review`, `test_hitl_resilience`)
 - [x] Audit events carry the caller's client type when known (FAR-611):
       `hitl_claimed` / `hitl.output_delivered` / `hitl.output_modified` /
@@ -241,26 +241,26 @@ may decide.
       (`test_client_type_audit`)
 - [x] Approve-sweep anomaly alarm (FAR-611): when one actor's committed
       decisions exceed 5 within 60 seconds AND span more than one pipeline,
-      the decision path emits `hitl_approve_sweep_suspected` — an audit
+      the decision path emits `hitl_approve_sweep_suspected` – an audit
       event and a fire-and-forget webhook dispatch whose `dispatch_event`
       also creates the in-app admin notification (hitl_overdue sibling
-      pattern — the alarm writes the notification once, never twice)
+      pattern – the alarm writes the notification once, never twice)
       (`sweep_alarm.py`, `test_sweep_alarm`). Detection counts BOTH decision
-      surfaces — `hitl.output_delivered` (approve) AND `hitl.manual_delivery`
+      surfaces – `hitl.output_delivered` (approve) AND `hitl.manual_delivery`
       (a manual delivery resumes the run past the gate with caller-supplied
-      output, the same sweep signal as an approve) — and keys off the audit
-      chain (the only per-actor decision record — `hitl_claims.account_id` is
+      output, the same sweep signal as an approve) – and keys off the audit
+      chain (the only per-actor decision record – `hitl_claims.account_id` is
       NULLed at decision time), is failure-isolated (a broken alarm never
-      fails the human's decision — the detection SELECT and the emission
+      fails the human's decision – the detection SELECT and the emission
       write each run inside a savepoint), and self-suppresses to at most one
       alarm per (org, actor) per hour via a bounded in-process marker (a
       multi-replica deployment may therefore emit up to one alarm per replica
-      per hour — bounded duplicates, the correct envelope for an anomaly page)
+      per hour – bounded duplicates, the correct envelope for an anomaly page)
 - [x] HITL review actions are rate limited at 20/min per identity,
-      AGGREGATE across runs, gates, actions, and both surfaces — the
+      AGGREGATE across runs, gates, actions, and both surfaces – the
       `/hitl/` review routes AND the approve-capable
       `/runs/{run_id}/manual/{review_id}/submit` route share one budget
-      (FAR-611) — the bucket key normalizes the whole variable path tail,
+      (FAR-611) – the bucket key normalizes the whole variable path tail,
       so the 2026-09-05 bulk sweep's per-gate bucket rotation cannot recur
       (`test_rate_limit_hitl_review` aggregate/throttle cases,
       `test_middleware_internals`)
@@ -268,15 +268,15 @@ may decide.
 ## Known Gaps
 
 - **`human_only` is enforced at the API/ViewModel layer, not in the HITL
-  manager** — `HITLManager` records decisions without re-checking the flag, so
+  manager** – `HITLManager` records decisions without re-checking the flag, so
   a mislabelled caller outside the API boundary is the trust boundary.
-- **Claim expiry runs on the SAQ worker cadence** — a held claim that expires
+- **Claim expiry runs on the SAQ worker cadence** – a held claim that expires
   between ticks stays claimed until the next `claim_expiry` sweep
   (`expiry_job.py`).
 
 ## QA History
 
-- 2026-09-29: **product-map review pass** — reconciled this tracker with the
+- 2026-09-29: **product-map review pass** – reconciled this tracker with the
   manifest `feat-hitl` behaviours: the configurable review window (FAR-1257 /
   FAR-1269: three-level resolution stamped once as `hitl_claims.terminalize_at`,
   `hitl_timeout` cancel reason, org control on every tier) and the
@@ -286,7 +286,7 @@ may decide.
   dropped a duplicate `hitl_review_config.py` frontmatter entry. Status:
   covered.
 
-- 2026-09-17: **product-map review pass** — closed the "No
+- 2026-09-17: **product-map review pass** – closed the "No
   executing BDD surface for modify-then-approve, `human_only` refusal, or
   overdue warnings" Known Gap: registered the new `gate_policies.feature`
   (scenarios in `test_hitl_review_policies.py`) into the executing BDD suite,
@@ -298,14 +298,14 @@ may decide.
   `_ORPHANED_BDD_FEATURES` stays empty; the three behaviours are now
   BDD-covered as well as unit-covered. Status: covered.
 
-- 2026-09-11: **product-map review pass** — registered the shared
+- 2026-09-11: **product-map review pass** – registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/settings/hitl-review`
   manifest `elements:` inventory and wired the component into the reverse
   testid-coverage guard, so the HITL review search control the page ships stays
   visible to Assistant's docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — closed the
+- 2026-09-11: **product-map review pass** – closed the
   `/settings/hitl-review` element-inventory drift for the shared gate-card
   surface: the page renders `hitl/HitlReviewCard.vue` (whose `hitl-gate-foreign-claim`
   state was never registered here) and the `HitlBriefing.vue` briefing embedded in
@@ -314,20 +314,20 @@ may decide.
   `test_mapped_route_elements_cover_owning_view_testids` maps the route to the view
   plus `HitlReviewCard.vue` / `HitlBriefing.vue`, so a newly shipped gate/briefing
   testid can no longer drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-29: **product-map review pass** — new behaviour
+- 2026-08-29: **product-map review pass** – new behaviour
   tracker for the registered `feat-hitl` manifest feature (route
   `/settings/hitl-review`, previously absent from the feature graph).
   Behaviours verified against `api/routes/hitl.py`, `core/hitl_manager/*`,
   `core/run_context/autonomy.py`, and the HITL unit/BDD suites. Status:
   covered.
-- 2026-08-30: **duplicate-entry reconciliation** — a parallel product-map walk
+- 2026-08-30: **duplicate-entry reconciliation** – a parallel product-map walk
   had added a second `feat-hitl` tracker at `configure/hitl.md`, breaking the
   one-entry-per-feature invariant. This entry is the superset and is retained.
   The duplicate's only unique citation (`hitl/approval_gate.feature`) was *not*
   folded into `bdd:` here: that feature file ships but no step module registers
   it via `scenarios(...)`, so citing it would claim BDD coverage for scenarios
   that never execute. Status: covered.
-- 2026-09-08: **product-map review pass** — registered the
+- 2026-09-08: **product-map review pass** – registered the
   FAR-727 HITL review queue testids (`hitl-review-column-headers`,
   `hitl-review-node-name`, `hitl-review-pipeline-name`) in the manifest
   `/settings/hitl-review` `elements` list. They shipped in the view
@@ -335,7 +335,7 @@ may decide.
   element-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`);
   the elements list now covers the owning view's testids exactly. Status:
   covered.
-- 2026-09-07: **product-map review pass** — closed the stale-BDD
+- 2026-09-07: **product-map review pass** – closed the stale-BDD
   drift: removed the never-executed, superseded feature files
   (`hitl/approval_gate.feature` marked `@deprecated`, `hitl/human_only_gate.feature`,
   `hitl/modify_then_approve.feature`, `hitl/overdue_warning.feature`) and the
@@ -344,7 +344,7 @@ may decide.
   unchanged; the architecture suite now guards against new orphaned `.feature`
   files (see `backend/tests/architecture/test_product_map_feature_gaps.py`).
   Status: covered.
-- 2026-09-09: **FAR-688 (briefing follow-ups)** — the gate node now stamps the
+- 2026-09-09: **FAR-688 (briefing follow-ups)** – the gate node now stamps the
   matched condition value into the interrupt payload and the briefing stores
   it as PRIMARY evidence (`condition_result`: expression, serialised redacted
   value, evaluated-at node); trigger inference never guesses `condition` for

@@ -48,8 +48,8 @@ applications. Built on the auth + model-backend core.
 ## Behaviours
 
 - [x] The remote MCP server mounts at `/mcp` (FastMCP over Starlette, SSE
-      streaming) and exposes the registered tool stack — run, pipeline, schema,
-      library, connector, trigger, secret, runtime and viewmodel tools — as a
+      streaming) and exposes the registered tool stack – run, pipeline, schema,
+      library, connector, trigger, secret, runtime and viewmodel tools – as a
       thin adapter over the ViewModel API with per-tool definitions emitted via
       `mcp_tool_registry.build_tool_registry`
 - [x] Authentication is API-key bearer (`Authorization: Bearer mk_<key>`):
@@ -59,8 +59,8 @@ applications. Built on the auth + model-backend core.
       per-event on SSE streams
 - [x] Dual-layer scope enforcement: the middleware gate is re-checked at the
       viewmodel layer by `core/mcp/scope_validator.py` against the centralized
-      permission registry (ADR 047) — a bypass of the middleware cannot widen a
-      tool's effective role — and team-bound tools enforce the caller's team
+      permission registry (ADR 047) – a bypass of the middleware cannot widen a
+      tool's effective role – and team-bound tools enforce the caller's team
       binding
 - [x] OAuth 2.0 client management (browser-authenticated): register/list/delete
       OAuth clients (`POST/GET/DELETE /api/v1/mcp/oauth/clients`) and approve
@@ -72,33 +72,33 @@ applications. Built on the auth + model-backend core.
       key on the target model backend, and completes the setup flow
 - [x] The `/settings/mcp` view lists the MCP URL, creates API keys with a
       selectable role (`settings-mcp-create-key`), revokes keys, and shows the
-      generated key value for copying — the configured key is what external
+      generated key value for copying – the configured key is what external
       agents authenticate with
 - [x] The MCP API-keys card distinguishes a **revoked** key from an
       **expired** one by observed facts, not the derived `is_active` flag
       (FAR-1296 / FAR-1299): the key serializer
-      (`auth/api_key._serialize_key`) emits `revoked_at` — ISO-8601 when set,
+      (`auth/api_key._serialize_key`) emits `revoked_at` – ISO-8601 when set,
       else `null`, "the revocation FACT, not an inference from `is_active`"
-      — alongside `lookup_prefix` / `role` / `scope` / `last_used_at` /
+      – alongside `lookup_prefix` / `role` / `scope` / `last_used_at` /
       `expires_at`, and revocation is a `DELETE /api/v1/api-keys/{key_id}`
       (`api_keys.py` route; the earlier PUT that silently dropped was fixed
       by FAR-1291). The `/settings/mcp` table renders a per-key status badge
       (`settings-mcp-key-status`) computed from the two facts: `revoked`
-      (`revoked_at` set — an operator's action, checked first), `expired`
-      (`revoked_at` null and the expiry elapsed — nobody revoked it), or
-      `active` — with the revoke button shown only for `is_active` keys
+      (`revoked_at` set – an operator's action, checked first), `expired`
+      (`revoked_at` null and the expiry elapsed – nobody revoked it), or
+      `active` – with the revoke button shown only for `is_active` keys
       (`frontend/src/views/SettingsMcpView.vue`,
       `frontend/src/__tests__/SettingsMcpView.spec.ts`,
       `backend/tests/unit/api/test_api_keys_endpoint.py`)
 - [x] MCP OAuth client registration UI (2026-09-28, FAR-1251): the
       "Registered OAuth Clients" card on `/settings/mcp`
       (`components/settings/McpOauthClientsCard.vue`) lists the org's clients
-      — name, client id, scopes, redirect URIs, created — and drives
+      – name, client id, scopes, redirect URIs, created – and drives
       registration and revocation through `POST/GET/DELETE
       /api/v1/mcp/oauth/clients`. Registering takes a required name, one or
       more redirect URIs (tokenised on ANY whitespace so the backend's
       space-joined storage round-trips losslessly, every entry an absolute
-      `http://`/`https://` URI — localhost and 127.0.0.1 stay valid for local
+      `http://`/`https://` URI – localhost and 127.0.0.1 stay valid for local
       development, duplicates de-duplicated, invalid entries named in an
       inline error) and at least one of the three valid scopes `trigger:run` /
       `hitl:review` / `library:browse` (the backend's `VALID_SCOPES`; an
@@ -111,10 +111,10 @@ applications. Built on the auth + model-backend core.
       self-hosted origin, no `navigator.clipboard`) renders a visible
       copy-failed message rather than losing the credential silently. Revoke
       confirms by name, then `DELETE`s the client by id (404 when already
-      gone). All three endpoints require org role `admin` or `operator` — a
+      gone). All three endpoints require org role `admin` or `operator` – a
       viewer gets 403 on list/register/delete alike and the card renders a
       restricted state instead of the table (the list call's 403 is the
-      fallback for a stale/downgraded JWT) — and registration refuses with
+      fallback for a stale/downgraded JWT) – and registration refuses with
       500 while `MODULO_PUBLIC_URL` is unset or still the
       `http://localhost:8000` default, because the authorize / token / refresh
       protocol endpoints need a real public issuer
@@ -135,7 +135,7 @@ applications. Built on the auth + model-backend core.
       itself is not exercised)
 - [x] MCP HITL review (2026-09-24): the `review_hitl` unified gate tool (claim /
       approve / reject / deliver_manual) drives the REAL parse guard, scope gate
-      and decision dispatch — `approve`/`reject` require a claim token
+      and decision dispatch – `approve`/`reject` require a claim token
       (`claim_token_required` otherwise), the `_check_agent_tool_scope`
       role-hierarchy chokepoint denies a `runner` `hitl:review` actions with the
       pinned `insufficient_scope` error shape, and a successful decision reports
@@ -147,7 +147,7 @@ applications. Built on the auth + model-backend core.
       `@awaiting-implementation` draft under the review surface
 - [x] MCP human-only gate enforcement (2026-09-24): the REAL `review_hitl`
       policy hook `_check_human_only_gate` denies an API-key/MCP principal every
-      decision action (claim/approve/deliver_manual) on a `human_only` gate —
+      decision action (claim/approve/deliver_manual) on a `human_only` gate –
       the shared `human_only_denial` verdict returns the pinned
       `{"error": "human_only_gate", "detail": ...}` error shape (fail-closed
       even when the config is unresolvable but the gate fired) and every denial
@@ -155,17 +155,17 @@ applications. Built on the auth + model-backend core.
       an escape hatch because `claim` is itself denied, so an agent can neither
       claim nor decide such a gate. `list_pending_hitl` additionally surfaces a
       per-gate `human_only` flag via the shared batched flag resolver
-      (`db/crud/hitl_review_config.resolve_gate_human_only_map` — claim-stamped
+      (`db/crud/hitl_review_config.resolve_gate_human_only_map` – claim-stamped
       fire-time config preferred, snapshot-config fallback, fail-safe
       `DEFAULT_HUMAN_ONLY` default) so an MCP client can SEE which pending gates
       require a browser human before attempting an action. The three
       `mcp/human_only.feature` scenarios execute in CI against these real
-      handler + policy seams — the denial path (`review_hitl` approve on a
+      handler + policy seams – the denial path (`review_hitl` approve on a
       seeded `{"human_only": true}` gate), the list path (gate listed with
       `human_only: true`), and the FAR-611 decision-audit attribution
       (`client_type` `browser` for a REST browser principal via
       `hitl._client_type` vs `mcp` stamped by the MCP `_dispatch_hitl_action`)
-      — with only the auth re-validation and DB / config-resolution /
+      – with only the auth re-validation and DB / config-resolution /
       HITLManager seams patched
 - [x] Every API key carries an immutable caller scope (`org` | `user`,
       ADR 030/FAR-620): user-scoped keys act as their creator and are
@@ -178,8 +178,8 @@ applications. Built on the auth + model-backend core.
       pagination over org / Native / community primitives). It stays on the
       read-only allowlist (pinned at the `resource.read_only` viewer floor) in
       the centralized scope
-      gate (`core/mcp/scope_validator.py`) and — following the
-      `copy_library_primitive` (library.copy @ runner) precedent — is now
+      gate (`core/mcp/scope_validator.py`) and – following the
+      `copy_library_primitive` (library.copy @ runner) precedent – is now
       gated at the handler by the real `_check_agent_tool_scope` chokepoint:
       an authenticated caller at or above viewer browses, and a node-level
       `capability_scope.allowed_tools` that excludes `search_library` (a
@@ -201,14 +201,14 @@ applications. Built on the auth + model-backend core.
 
 ## Known Gaps
 
-- **OAuth protocol endpoints are `aiohttp`/session-bearing** — refresh/consent
+- **OAuth protocol endpoints are `aiohttp`/session-bearing** – refresh/consent
   flows depend on the MCP sub-app lifetime; a separate process restart clears
   in-flight browser consent sessions.
-- **SSE is the only transport exposed** — the streamable-HTTP transport is not
+- **SSE is the only transport exposed** – the streamable-HTTP transport is not
   published as a distinct surface here.
 
 ## QA History
-- 2026-09-30: **Improve Architecture product-map walk** — closed the
+- 2026-09-30: **Improve Architecture product-map walk** – closed the
   `feat-mcp` API-key sub-surface gap for FAR-1291 / FAR-1296 / FAR-1299: the
   key card's revoked-vs-expired status distinction (why `is_active: false`
   cannot say WHY a key stopped working) shipped 2026-09-29/30 (DELETE
@@ -219,7 +219,7 @@ applications. Built on the auth + model-backend core.
   citing `auth/api_key._serialize_key`, `api_keys.py`, `SettingsMcpView.vue`
   and `SettingsMcpView.spec.ts` / `test_api_keys_endpoint.py`.
   `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-25: **product-map review pass** — closed the last pinned MCP
+- 2026-09-25: **product-map review pass** – closed the last pinned MCP
   legacy-`/mcp/tools/call` draft: the four `mcp/library_browse.feature`
   scenarios previously targeted the dead HTTP surface and never ran. They are
   rewritten (the `trigger.feature` / `review_hitl.feature` re-anchor pattern)
@@ -227,7 +227,7 @@ applications. Built on the auth + model-backend core.
   hydrated by hand): the list surface (`id`/`name`/`type` wire items), the text
   search passthrough (the `search` term reaches the real `list_primitives`
   seam), the read-only posture (the tool is on the READ_ONLY_TOOLS allowlist
-  and the only library seam it can touch is the read — `copy_library_primitive`
+  and the only library seam it can touch is the read – `copy_library_primitive`
   is never invoked), and the scope-gate denial (a node-level
   `capability_scope.allowed_tools` that excludes `search_library` is denied the
   pinned `insufficient_scope` error by the real `_check_agent_tool_scope`
@@ -241,7 +241,7 @@ applications. Built on the auth + model-backend core.
   `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
   `_ORPHANED_BDD_FEATURES` stays empty. No `@awaiting-implementation`
   scenarios remain under `feat-mcp`.
-- 2026-09-24: **product-map review pass** — closed the MCP HITL-review
+- 2026-09-24: **product-map review pass** – closed the MCP HITL-review
   `@awaiting-implementation` gap: the five `mcp/review_hitl.feature` scenarios
   previously targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned
   since 2026-08) and never ran. They are rewritten to drive the REAL
@@ -252,12 +252,12 @@ applications. Built on the auth + model-backend core.
   `insufficient_scope`), the real `_check_human_only_gate` policy hook and the
   real HITLManager approve/reject decision dispatch (`approved` / `rejected` +
   `review_id`), plus the real pending-gate serialisation with the shared gate
-  description resolver — network-free and DB-free with only the auth
+  description resolver – network-free and DB-free with only the auth
   re-validation and DB/HITLManager seams patched. Removed the five scenarios
   from `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
   `_ORPHANED_BDD_FEATURES` stays empty. The `library_browse` / `human_only`
   legacy-`/mcp/tools/call` drafts remain pinned as acknowledged gaps.
-- 2026-09-24: **product-map review pass** — closed the `human_only` half of the
+- 2026-09-24: **product-map review pass** – closed the `human_only` half of the
   remaining MCP gap: the three `mcp/human_only.feature` scenarios previously
   targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned since
   2026-08) and never ran. Following the `trigger.feature` / `review_hitl.feature`
@@ -277,23 +277,23 @@ applications. Built on the auth + model-backend core.
   Removed the three scenarios from `PINNED_AWAITING_IMPLEMENTATION`;
   `_ORPHANED_BDD_FEATURES` stays empty. `library_browse` remains pinned as an
   acknowledged gap.
-- 2026-09-22: **product-map review pass** — closed the "no executing BDD for
+- 2026-09-22: **product-map review pass** – closed the "no executing BDD for
   the trigger tool" gap: the five `mcp/trigger.feature` scenarios previously
   targeted the dead legacy `/mcp/tools/call` HTTP surface (pinned
   `@awaiting-implementation`) and never ran. They are rewritten to drive the
   REAL shipped contract by calling the `trigger_pipeline` / `review_hitl`
-  handler functions directly (request ContextVars hydrated by hand) — exercising
+  handler functions directly (request ContextVars hydrated by hand) – exercising
   the real `_check_agent_tool_scope` scope-gate chokepoint (manual run with
   `trigger_type manual` and the caller's account, `input_payload` passthrough,
   unknown-pipeline `pipeline_not_found` refusal), the real `McpAuthMiddleware`
   401 gate for unauthenticated requests, and the real role-hierarchy scope
   denial (a `runner` key triggers but cannot `review_hitl` `approve` →
-  `insufficient_scope`) — network-free and DB-free with only the auth
+  `insufficient_scope`) – network-free and DB-free with only the auth
   re-validation and DB/dispatch seams patched. The FastMCP invoke/dispatch layer
   itself is not exercised by these steps. Removed the five scenarios
   from `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
   `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/mcp`
   and wired the two components into the reverse testid-coverage guard
@@ -301,7 +301,7 @@ applications. Built on the auth + model-backend core.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-09: **product-map review pass** — closed the
+- 2026-09-09: **product-map review pass** – closed the
   "no executing BDD surface for MCP onboarding" gap. `mcp/onboarding.feature`
   is now registered by `tests/bdd/steps/test_mcp_onboarding_steps.py` and
   executes against the shipped contracts: the discoverable tool inventory
@@ -312,7 +312,7 @@ applications. Built on the auth + model-backend core.
   server (its middleware rejects unauthenticated introspection fail-closed),
   so it was rewritten to describe the real contract and dropped from the
   tracked orphaned-BDD debt list.
-- 2026-08-30: **product-map review pass** — new behaviour
+- 2026-08-30: **product-map review pass** – new behaviour
   tracker for the registered `feat-mcp` manifest feature (route `/settings/mcp`,
   previously absent from the feature graph). Behaviours verified against
   `api/mcp_server.py`, `api/mcp_tool_registry.py`, `core/mcp/scope_validator.py`,

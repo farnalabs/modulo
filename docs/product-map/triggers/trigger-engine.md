@@ -67,7 +67,7 @@ rate-limited by the `TriggerEngine`.
       run carrying caller-supplied `run_context`
 - [x] Webhook delivery (`POST /api/v1/triggers/{id}/webhook`): HMAC-SHA256
       signature and `X-Modulo-Timestamp` freshness (±300s replay window) are
-      required — missing/invalid HMAC or stale timestamp → 401, unknown trigger
+      required – missing/invalid HMAC or stale timestamp → 401, unknown trigger
       → 404, accepted → 202
 - [x] Flood protection: a duplicate payload hash → 400 and rapid duplicates are
       rate-limited → 429
@@ -101,35 +101,35 @@ rate-limited by the `TriggerEngine`.
       FAR-1388): `last_outcomes` entries carry
       `delivery_confidence` (`agent_reported` on post-FAR-1336 records,
       including the pre-rename `self_reported` alias which stored rows still
-      carry and which is never backfilled — readers treat either spelling as
-      agent-reported; `None` —
-      never "verified" — on pre-FAR-1336 six-key rows), and
+      carry and which is never backfilled – readers treat either spelling as
+      agent-reported; `None` –
+      never "verified" – on pre-FAR-1336 six-key rows), and
       `SettingsTriggersView` renders an "Agent-reported" confidence qualifier chip
       ONLY on a `delivered` outcome whose confidence is `agent_reported` or that
-      deprecated alias — a
+      deprecated alias – a
       no_delivery / excluded / unclassified row, a non-agent-reported confidence,
       or an unknown/absent key renders no qualifier
       (`test_trigger_streak_engine.py`, `SettingsTriggersView.spec.ts`)
 
 ## Known Gaps
 
-- **Trigger config secrets use a single fernet key** — at-rest encryption
+- **Trigger config secrets use a single fernet key** – at-rest encryption
   depends on the environment `FERNET_KEY`; key rotation is handled as a domain
   operation (audited), not per-trigger.
 
 ## QA History
-- 2026-10-01: **Improve Architecture product-map walk** — closed the
+- 2026-10-01: **Improve Architecture product-map walk** – closed the
   sub-surface gap left by FAR-1373 (merged as the streak-outcome confidence
   qualifier): the streak/outcomes readout's per-outcome `delivery_confidence`
   wire surface and the `SettingsTriggersView` "Agent-reported" qualifier chip
   (vocabulary renamed from `self_reported` by FAR-1388)
-  shipped with no product-map home — the manifest registry only mentioned the
+  shipped with no product-map home – the manifest registry only mentioned the
   streak UI and the tracker not at all. Added the checked behaviour line plus
   the `core/trigger_streak.py` code and `test_trigger_streak_engine.py` /
   `SettingsTriggersView.spec.ts` unit-test citations. The run-outcome
   classification record the streak derives from is tracked under `feat-runs`.
   `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-27: **Improve Architecture product-map walk** — closed the
+- 2026-09-27: **Improve Architecture product-map walk** – closed the
   reverse-coverage guard gap for the org-wide trigger event log page
   (`/admin/trigger-events`, FAR-1255): the route's whole-page view
   `SettingsTriggerEventLogView.vue` was the last manifest route not mapped in
@@ -139,7 +139,7 @@ rate-limited by the `TriggerEngine`.
   owning view, making the reverse-coverage guard complete across every manifest
   route (a newly shipped testid on the page can no longer silently stay
   invisible to Assistant's docs indexer / `/api/v1/manifest`).
-- 2026-09-23: **product-map review pass** — absorbed the last two
+- 2026-09-23: **product-map review pass** – absorbed the last two
   `@awaiting-implementation` trigger drafts that lived under the pipelines
   directory. `pipelines/webhook_trigger.feature` (deleted) duplicated this
   entry's executing `triggers/webhook_hmac.feature` / `triggers/flood_protection.feature`
@@ -149,21 +149,21 @@ rate-limited by the `TriggerEngine`.
   (`TimestampExpiredError` → 400, ±300s replay window) remains unit-pinned by
   `test_trigger_engine.py`. All trigger-delivery behaviour stays cited from this
   entry; `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-17: **product-map review pass** — closed the
+- 2026-09-17: **product-map review pass** – closed the
   "Slack app-mention triggering is unit-tested only" gap: registered
   ``triggers/slack_app_mention.feature`` into the executing BDD suite from the
   new ``steps/test_slack_app_mention_triggers.py``, driving the real
-  ``slack_app_mention.py`` seams — signed-request verification
+  ``slack_app_mention.py`` seams – signed-request verification
   (``X-Slack-Signature`` HMAC-SHA256 + ±300s ``X-Slack-Request-Timestamp``
   replay window, wrong-secret and expired-timestamp refusals), the
   ``url_verification`` challenge echo, envelope parsing / payload mapping,
   Slack ``event_id`` deduplication, concurrency-queuing, pipeline rate
-  limiting, and the advisory-lock busy refusal — each delivery audited to a
+  limiting, and the advisory-lock busy refusal – each delivery audited to a
   TriggerEvent result (``accepted`` / ``hmac_failed`` / ``deduplicated`` /
   ``event_type_not_accepted`` / ``parse_failed`` /
   ``concurrency_limit_reached`` / ``rate_limited``).
   ``_ORPHANED_BDD_FEATURES`` stays empty.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/triggers`
   and wired the two components into the reverse testid-coverage guard
@@ -171,7 +171,7 @@ rate-limited by the `TriggerEngine`.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/triggers`: the whole-page view(s) `SettingsTriggersView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -179,13 +179,13 @@ rate-limited by the `TriggerEngine`.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-29: **product-map review pass** — new behaviour
+- 2026-08-29: **product-map review pass** – new behaviour
   tracker for the registered `feat-triggers` manifest feature (route
   `/settings/triggers`, previously absent from the feature graph). Behaviours
   verified against `api/routes/triggers.py`, `api/routes/webhooks.py`, the
   `core/trigger_engine/*` package, `core/cron_helpers.py`, and the trigger
   unit/BDD suites. Status: covered.
-- 2026-08-30: **duplicate-entry reconciliation** — a parallel product-map walk
+- 2026-08-30: **duplicate-entry reconciliation** – a parallel product-map walk
   had added a second `feat-triggers` tracker at `configure/triggers.md`, breaking
   the one-entry-per-feature invariant. This entry is the superset and is
   retained; the duplicate's unique citations (`api/routes/slack.py`, the polling

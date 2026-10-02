@@ -183,7 +183,7 @@ and per-destination rate limiting.
       binding to a missing instance is rejected (`CONNECTOR_NOT_FOUND`), a
       binding whose instance lacks a required operation is rejected
       (`CONNECTOR_MISSING_OPERATIONS`), and an active instance covering the
-      required operations passes — BDD-exercised against the real
+      required operations passes – BDD-exercised against the real
       `extract_connector_bindings` + `GraphValidator.validate_definition`
       surfaces (`swappable_binding.feature`,
       `steps/test_pipeline_connector_binding.py`)
@@ -202,23 +202,23 @@ and per-destination rate limiting.
   OTel spans shipped in v1).
 
 ## QA History
-- 2026-09-20: **product-map review pass** — closed the last
+- 2026-09-20: **product-map review pass** – closed the last
   `feat-connectors` BDD gap, "No BDD for connector CRUD lifecycle
   (create/update/delete via admin API)". Registered the new
   `connectors/connector_crud.feature` into the executing BDD suite from the new
   `steps/test_connector_crud.py`, driving the real `/api/v1/connectors`
   create / get / list / PATCH / delete routes with only the DB CRUD + RLS
   seams patched (the TestClient + mock-org-session pattern of the
-  `test_connectors_endpoint.py` unit suite): 9 scenarios — create (201) with
+  `test_connectors_endpoint.py` unit suite): 9 scenarios – create (201) with
   credentials Fernet-encrypted at rest and never echoed (the captured
   ciphertext round-trips to the exact credential), malformed REST credentials
   (422) and invalid REST `on_unknown` config (422) rejected at the boundary,
   individual retrieval (200, redacted) and list (200, paginated + redacted),
   foreign-org fetch 404, PATCH re-encrypting fresh REST credentials into an
   appended ciphertext (200), and DELETE removing the instance (204) with a
-  foreign-org delete 404 — all collect and execute. `_ORPHANED_BDD_FEATURES`
+  foreign-org delete 404 – all collect and execute. `_ORPHANED_BDD_FEATURES`
   stays empty.
-- 2026-09-16: **product-map review pass** — closed the last
+- 2026-09-16: **product-map review pass** – closed the last
   connector BDD orphan, `connectors/swappable_binding.feature` (a stale
   placeholder draft whose steps did not exist). It was rewritten into an
   accurate connector-binding spec and wired into the executing suite from the
@@ -227,65 +227,65 @@ and per-destination rate limiting.
   (pure swap/extraction semantics) and
   `GraphValidator.validate_definition` → `_check_connector_bindings` with a
   mocked session (the DB-free pattern of `tests/unit/graph_validator`): 5
-  scenarios — swap binding (exactly one binding, old one gone), unbound node
+  scenarios – swap binding (exactly one binding, old one gone), unbound node
   extracts nothing, missing instance → `CONNECTOR_NOT_FOUND`, missing required
-  operation → `CONNECTOR_MISSING_OPERATIONS`, valid active binding → pass —
+  operation → `CONNECTOR_MISSING_OPERATIONS`, valid active binding → pass –
   all collect and pass. `_ORPHANED_BDD_FEATURES` shrinks to zero.
-- 2026-09-16: **product-map review pass** — closed the
+- 2026-09-16: **product-map review pass** – closed the
   `azure_repos.feature`, `discord.feature`, `microsoft_teams.feature` and
   `sharepoint.feature` orphan gaps: all four features shipped under
   `tests/bdd/features/connectors/` but no step module registered them via
   `scenarios(...)`, so they never executed. Each is now wired from its own step
   module that drives the REAL connector against a respx-mocked API (mirroring
-  the unit suites): `steps/test_azure_repos_connector.py` (7 scenarios — 401
+  the unit suites): `steps/test_azure_repos_connector.py` (7 scenarios – 401
   profile health, list repos / file / pull requests / commits, write a file via
   a push, create a pull request), `steps/test_discord_connector.py` (11
-  scenarios — `/users/@me` health 200/401, list guilds / channels / messages /
+  scenarios – `/users/@me` health 200/401, list guilds / channels / messages /
   members / roles, get guild, send message, add reaction, create channel),
-  `steps/test_microsoft_teams_connector.py` (12 scenarios — `/users` health
+  `steps/test_microsoft_teams_connector.py` (12 scenarios – `/users` health
   200/401, list teams / channels / messages / members / users / groups, get
   team / channel, send message, create channel) and
-  `steps/test_sharepoint_connector.py` (6 scenarios — `/sites/root` health
+  `steps/test_sharepoint_connector.py` (6 scenarios – `/sites/root` health
   200/401, list sites / list items, create list item, read file).
   36 scenarios now collect and execute. `_ORPHANED_BDD_FEATURES` shrinks by
   four; the remaining orphans (`swappable_binding`, `pipeline_config_validation`,
   `validation`) still await step modules.
-- 2026-09-16: **product-map review pass** — closed the
+- 2026-09-16: **product-map review pass** – closed the
   `azure_key_vault.feature` and `azure_pipelines.feature` orphan gaps: both
   features shipped under `tests/bdd/features/connectors/` but no step module
   registered them via `scenarios(...)`, so they never executed. Each is now
   wired from its own step module that drives the REAL connector against a
   respx-mocked API (mirroring the unit suites):
-  `steps/test_azure_key_vault_connector.py` (10 scenarios — `/secrets` health
+  `steps/test_azure_key_vault_connector.py` (10 scenarios – `/secrets` health
   200/401, list secrets/keys/certificates, get secret/key/certificate, create a
   secret, soft-delete a secret) and `steps/test_azure_pipelines_connector.py`
-  (7 scenarios — query projects/pipelines/runs/releases, trigger a pipeline run
+  (7 scenarios – query projects/pipelines/runs/releases, trigger a pipeline run
   and a release, fail closed on an unsupported resource).
   `_ORPHANED_BDD_FEATURES` shrinks by two; the remaining connector orphans
   (`azure_repos`, `discord`, `dropbox_paper`, `microsoft_teams`, `sharepoint`,
   `swappable_binding`) and the two pipeline-validation orphans still await step
   modules.
-- 2026-09-15: **product-map review pass** — closed the
+- 2026-09-15: **product-map review pass** – closed the
   `circleci.feature`, `jenkins.feature`, `teamcity_connector.feature` and
   `opsgenie_connector.feature` orphan gaps: the features shipped under
   `tests/bdd/features/connectors/` but no step module registered them via
   `scenarios(...)`, so they never executed. Each is now wired from its own
   step module that drives the REAL connector against a respx-mocked API
   (mirroring the unit suites): `steps/test_circleci_connector.py` (5 scenarios
-  — `/me` health 200/401, trigger pipeline on a branch, get pipeline status,
+  – `/me` health 200/401, trigger pipeline on a branch, get pipeline status,
   list recent runs, workflow+job logs), `steps/test_jenkins_connector.py`
-  (7 scenarios — `/api/json` health 200/401, plain + parameterised build
+  (7 scenarios – `/api/json` health 200/401, plain + parameterised build
   trigger, build status, list builds, console logs),
-  `steps/test_teamcity_connector.py` (6 scenarios — query projects /
+  `steps/test_teamcity_connector.py` (6 scenarios – query projects /
   buildTypes / agents, trigger build, create build type, fail closed on an
-  unsupported resource) and `steps/test_opsgenie_connector.py` (16 scenarios —
+  unsupported resource) and `steps/test_opsgenie_connector.py` (16 scenarios –
   list alerts/teams/schedules/escalations, alert-by-id / notes / logs,
   on-calls, the create-acknowledge-close-note-snooze write family, and API-key
   health). `_ORPHANED_BDD_FEATURES` shrinks by four; the remaining connector
   orphans (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `discord`,
   `dropbox_paper`, `microsoft_teams`, `sharepoint`, `swappable_binding`) and
   the two pipeline-validation orphans still await step modules.
-- 2026-09-16: **product-map review pass** — closed the
+- 2026-09-16: **product-map review pass** – closed the
   `dropbox_paper.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via
   `scenarios(...)`, so it never executed. The feature is now wired from the new
@@ -300,7 +300,7 @@ and per-destination rate limiting.
   orphans (`azure_key_vault`, `azure_pipelines`, `azure_repos`, `discord`,
   `microsoft_teams`, `sharepoint`, `swappable_binding`) and the two
   pipeline-validation orphans still await step modules.
-- 2026-09-14: **product-map review pass** — closed the
+- 2026-09-14: **product-map review pass** – closed the
   `buildkite.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via
   `scenarios(...)`, so it never executed. The feature is now wired from the new
@@ -315,7 +315,7 @@ and per-destination rate limiting.
   `discord`, `dropbox_paper`, `jenkins`, `microsoft_teams`, `opsgenie`,
   `sharepoint`, `swappable_binding`, `teamcity`) and the two pipeline-validation
   orphans still await step modules.
-- 2026-09-14: **product-map review pass** — closed the
+- 2026-09-14: **product-map review pass** – closed the
   `grafana.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via
   `scenarios(...)`, so it never executed. The feature is now wired from the new
@@ -329,7 +329,7 @@ and per-destination rate limiting.
   `discord`, `dropbox_paper`, `jenkins`, `microsoft_teams`, `opsgenie`,
   `sharepoint`, `swappable_binding`, `teamcity`) and the two pipeline-validation
   orphans still await step modules.
-- 2026-09-14: **product-map review pass** — closed the
+- 2026-09-14: **product-map review pass** – closed the
   `pagerduty.feature` orphan gap: the feature shipped under
   `tests/bdd/features/connectors/` but no step module registered it via
   `scenarios(...)`, so it never executed. The feature is now wired from the new
@@ -342,7 +342,7 @@ and per-destination rate limiting.
   `azure_repos`, `buildkite`, `circleci`, `discord`, `dropbox_paper`, `grafana`,
   `jenkins`, `microsoft_teams`, `opsgenie`, `sharepoint`, `swappable_binding`,
   `teamcity`) and the two pipeline-validation orphans still await step modules.
-- 2026-09-14: **product-map review pass** — closed the `sentry.feature`
+- 2026-09-14: **product-map review pass** – closed the `sentry.feature`
   orphan gap: the feature shipped under `tests/bdd/features/connectors/` but no step
   module registered it via `scenarios(...)`, so it never executed. The feature is now
   wired from the new `steps/test_sentry_connector.py`, which drives the REAL
@@ -351,7 +351,7 @@ and per-destination rate limiting.
   (200/401), list issues/projects, issue-status update and release creation all collect
   and execute. `_ORPHANED_BDD_FEATURES` shrinks by one; the remaining connector orphans
   still await step modules.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/connectors`
   and wired the two components into the reverse testid-coverage guard
@@ -359,7 +359,7 @@ and per-destination rate limiting.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-10: **product-map review pass** — registered the
+- 2026-09-10: **product-map review pass** – registered the
   `RestConnectorConfigForm.vue` static testids (`rest-connector-base-url`,
   `rest-connector-method`, `rest-connector-timeout`, `rest-connector-verify-tls`,
   `rest-connector-on-unknown`, `rest-connector-records-path`,
@@ -369,10 +369,10 @@ and per-destination rate limiting.
   `rest-connector-header-name`, `rest-connector-query-param`,
   `rest-connector-advanced-json`) in the `/admin/connectors` manifest `elements:`
   inventory and added `AdminConnectorsView.vue` to the reverse testid-coverage
-  guard (`test_mapped_route_elements_cover_owning_view_testids`) — the structured
+  guard (`test_mapped_route_elements_cover_owning_view_testids`) – the structured
   Generic REST connector form shipped on the page was previously invisible to
   Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-07: **product-map review pass** — added this
+- 2026-09-07: **product-map review pass** – added this
   behaviour-tracker for `feat-connectors`, which previously had behaviours only
   in `manifest.yaml` inline. Behaviours verified against `routes/connectors.py`,
   `connector_hub/`, `connectors/rest/`, and the connector unit+BDD suites.

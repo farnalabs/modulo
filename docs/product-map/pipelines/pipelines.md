@@ -59,19 +59,19 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       configs; duplicate names are refused (409) (`create.feature`)
 - [x] Pipeline CRUD is team/org scoped and versioned, with copy errors surfaced
       (`crud.feature`, `test_pipeline_copy_errors.py`, `test_pipeline_patch_updated_at.py`)
-- [x] Folder security model (ADR 038): `PipelineFolder` is org-scoped only — no
+- [x] Folder security model (ADR 038): `PipelineFolder` is org-scoped only – no
       `owner_team_id`, no `visibility`, no security cascade. Pipeline ownership
       is explicit on the pipeline; folders are a UI organisation concept. Any
       future proposal for folder-level security must address ADR 038's rationale
       for rejecting folders-as-security.
-- [x] Node types — standard agent, manual (pauses to `awaiting_human`), HITL gate
-      (`waiting_for_approval`) — are authorable and execute per type (`node_types.feature`)
+- [x] Node types – standard agent, manual (pauses to `awaiting_human`), HITL gate
+      (`waiting_for_approval`) – are authorable and execute per type (`node_types.feature`)
 - [x] Conditional transitions and parallel fan-out route state between nodes
       (`conditional_transitions.feature`)
 - [x] Concurrency and error-recovery guard the authored graph
       (`error_recovery.feature`; concurrency admission is unit-covered in
       `tests/unit/pipeline_engine` and surface-tested by the 429
-      `max_concurrent_runs` refusal in `run_sequential.feature`) — graph/config
+      `max_concurrent_runs` refusal in `run_sequential.feature`) – graph/config
       validation is unit-covered (`tests/unit/graph_validator`, `test_pipelines_endpoint.py`)
 - [x] Scheduling and webhook triggers start runs from the authored graph
       (owned by `feat-triggers`: cron CRUD is BDD-exercised here in
@@ -79,7 +79,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       run under `triggers/cron.feature`, `triggers/polling.feature`,
       `triggers/webhook_hmac.feature` and `triggers/flood_protection.feature`);
       checkpoint/resume replays a
-      failed run from its last checkpoint — now BDD-exercised end to end
+      failed run from its last checkpoint – now BDD-exercised end to end
       (`checkpoint_resume.feature`) and unit-covered
       (`tests/unit/pipeline_engine` recovery suite)
 - [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending
@@ -87,7 +87,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       `completed` with a `final_state`, an unhandled node exception lands on `failed`
       with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`,
       no further nodes schedule). A node that returns `None` output is a normal empty
-      result — the run continues to the next node with no error — and sequential
+      result – the run continues to the next node with no error – and sequential
       pipelines complete nodes strictly in order (`run_lifecycle.feature`,
       `run_sequential.feature`); a trigger refused by `max_concurrent_runs` while a
       pending run is already active surfaces 429 through the typed
@@ -100,14 +100,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       (`test_pipeline_execution.py`, `test_pipeline_node_conversion.py`)
 - [x] Sandbox `agent_commands` LIST items ending with a heredoc terminator are
       rejected at save time with code `SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM`
-      — list items are joined with `commands_concatenation_string`, so a
+      – list items are joined with `commands_concatenation_string`, so a
       terminated item would corrupt into `PY && <next>` (unterminated heredoc)
       or a line-leading `&&` that no join fix can repair without changing
-      operator semantics (reject, never clamp — same precedent as FAR-511); a
+      operator semantics (reject, never clamp – same precedent as FAR-511); a
       scalar `agent_command` is unaffected because there is no join
       (FAR-664, `backend/tests/unit/graph_validator/test_edges_and_sandbox_validation.py`)
 - [x] Save-time graph validation is BDD-exercised against the real
-      `GraphValidator.validate_definition` surface (mocked session — the same
+      `GraphValidator.validate_definition` surface (mocked session – the same
       DB-free pattern as `tests/unit/graph_validator`): a graph with no nodes or
       an omitted `nodes` field is rejected (`TOPOLOGY_NO_NODES`), a circular
       dependency is rejected (`TOPOLOGY_CYCLE`), an edge referencing an unknown
@@ -118,13 +118,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 ## Known Gaps
 
 - **Run-level execution, history and output diff semantics are tracked under `feat-runs`**
-  (and `feat-pipelines-pipeline-diff-rollback`) — this entry covers authoring,
+  (and `feat-pipelines-pipeline-diff-rollback`) – this entry covers authoring,
   management, validation and the graph layer, not the run-detail surfaces.
 - **`run_context.feature` / `run_variants.feature`** live under the pipelines BDD
-  directory but describe run-time behaviour and are registered for execution — by
-  `steps/test_run_context.py` and `steps/test_pipelines.py` respectively — so they are
+  directory but describe run-time behaviour and are registered for execution – by
+  `steps/test_run_context.py` and `steps/test_pipelines.py` respectively – so they are
   not re-listed here to keep the run surfaces owned by `feat-runs` / `feat-variants`.
-- **No BDD for authoring the graph through a real create/edit endpoint** — the graph
+- **No BDD for authoring the graph through a real create/edit endpoint** – the graph
   save path is DB-backed (the graph PATCH route), so the `validation.feature`
   scenarios exercise the real `GraphValidator.validate_definition` save-time
   surface directly against a mocked session (topology + connector binding
@@ -133,62 +133,62 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   covers the DB-backed pre-run checks.
 
 ## QA History
-- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-25: **Improve Architecture product-map walk** – reconciled the
   manifest `feat-pipelines` registry entry with this tracker (both now
   `status: covered`): the "'run recovery and retry' partially wired" unchecked item
-  from #972 is closed — recovery/retry ships across the run surface (checkpoint/resume
+  from #972 is closed – recovery/retry ships across the run surface (checkpoint/resume
   BDD below, `POST /api/v1/runs/{run_id}/rerun` and per-node recover under `feat-runs`);
   the absence of a pipeline-level batch recovery endpoint is kept as a deferral.
-- 2026-09-23: **product-map review pass** — resolved the last four
+- 2026-09-23: **product-map review pass** – resolved the last four
   `@awaiting-implementation` BDD gaps tracked under the pipelines directory.
   All of them were stale placeholder drafts whose behaviour is already shipped
   and covered by the executing `feat-triggers` suite plus unit coverage, so the
   duplicates were archived rather than re-wired:
-  - `pipelines/webhook_trigger.feature` (deleted) — the five HMAC webhook
+  - `pipelines/webhook_trigger.feature` (deleted) – the five HMAC webhook
     scenarios duplicate `triggers/webhook_hmac.feature` (valid → 202, invalid →
     401) and `triggers/flood_protection.feature` (duplicate → 400, rapid → 429);
     the expired-timestamp → 400 path is unit-covered by
     `test_trigger_engine.py` (`verify_timestamp` / `timestamp_expired`) and the
     route gate is exercised by the sibling Slack signed-request BDD.
-  - `pipelines/scheduling.feature` — the cron-fire and three polling scenarios
+  - `pipelines/scheduling.feature` – the cron-fire and three polling scenarios
     (cron fire, poll met / not-met, connector-failure poll_error) duplicate
     `triggers/cron.feature` and `triggers/polling.feature`; they were removed
     and the file now keeps only its executing cron-CRUD scenarios (create /
     invalid-expression / toggle / preview, also unit-covered by
     `test_triggers_endpoint.py`).
-  - `pipelines/concurrency.feature` (deleted) — five scenarios targeted the dead
+  - `pipelines/concurrency.feature` (deleted) – five scenarios targeted the dead
     per-pipeline runs endpoint `POST /api/pipelines/{id}/runs` (removed when run
     triggering moved to `POST /api/v1/runs`); concurrency admission is shipped
     inside `create_run`/dispatch and is covered by the `max_concurrent_runs` 429
     path in `run_sequential.feature` plus the `tests/unit/pipeline_engine`
     admission suite.
-  - `pipelines/run_variants.feature` — the "Coverage gaps are reported for a
+  - `pipelines/run_variants.feature` – the "Coverage gaps are reported for a
     variant group" scenario duplicated the real `get_coverage_gaps` seam already
     BDD-covered by `variants/variant_groups.feature`; removed. The dead step
     definitions for all four drafts were dropped from `steps/test_pipelines.py` /
     `steps/test_alpha_pipelines.py`, and `PINNED_AWAITING_IMPLEMENTATION`
     shrank by four entries (the feature did not ship a wire shape the drafts
     promised). `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-16: **product-map review pass** — closed the last BDD
+- 2026-09-16: **product-map review pass** – closed the last BDD
   graph/config-validation gap. `pipelines/validation.feature` (a stale
   placeholder draft asserting graph semantics against the create endpoint,
   which only accepts `PipelineCreate`) was rewritten into an accurate save-time
   graph-validation spec and wired into the executing suite from the new
   `steps/test_pipeline_graph_validation.py`, which drives the REAL
   `GraphValidator.validate_definition` with a mocked session (the DB-free
-  pattern of `tests/unit/graph_validator`): 5 scenarios — no-nodes /
+  pattern of `tests/unit/graph_validator`): 5 scenarios – no-nodes /
   omitted-`nodes` → `TOPOLOGY_NO_NODES`, circular dependency →
   `TOPOLOGY_CYCLE`, dangling edge → `TOPOLOGY_UNKNOWN_TARGET`, minimal graph →
-  valid — all collect and pass. The redundant duplicate
+  valid – all collect and pass. The redundant duplicate
   `pipelines/pipeline_config_validation.feature` (the same four scenarios only
   reworded) was deleted. `_ORPHANED_BDD_FEATURES` shrinks to zero.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/pipelines`, which
   renders the header's `#right` action slot, and wired the component into the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) so the
   header action surface stays visible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass** – registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/node-categories`
   and wired the two components into the reverse testid-coverage guard
@@ -196,13 +196,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-12: **product-map review pass** — extended the reverse
+- 2026-09-12: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/composites/:id/editor`: the whole-page view `pipeline/CompositeEditorView.vue`
   now maps to its owning view so a newly shipped testid on the composite editor can
   no longer silently stay invisible to Assistant's docs indexer / `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/node-categories`: the whole-page view(s) `AdminNodeCategoriesView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -210,14 +210,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the shared
+- 2026-09-11: **product-map review pass** – registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/pipelines` and
   `/pipelines/copy` manifest `elements:` inventory and wired the component into the
   reverse testid-coverage guard, so the pipeline search control both pages ship
   stays visible to Assistant's docs indexer and `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass** – extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/pipelines/copy`: the whole-page view(s) `CopyPipelineWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -225,7 +225,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the
+- 2026-09-11: **product-map review pass** – registered the
   pipeline folder tree (`pipelines/FolderTree.vue` static testids `folder-tree`,
   `folder-tree-new`, `folder-tree-all-pipelines`) in the `/pipelines` manifest
   `elements:` inventory: the page already documented the folder row/toggle
@@ -233,7 +233,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   actions were the remaining drift. `test_mapped_route_elements_cover_owning_view_testids`
   now maps `/pipelines` to `PipelineListView.vue` + `FolderTree.vue` so the folder
   surface cannot ship invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-11: **product-map review pass** — registered the
+- 2026-09-11: **product-map review pass** – registered the
   editor's command-management editor (`pipeline/SandboxCommandsEditor.vue`) static
   testids (`pipeline-editor-node-commands-editor`,
   `pipeline-editor-node-command-{add,empty,joiner,preview,scalar}`) in the
@@ -241,13 +241,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   `test_mapped_route_elements_cover_owning_view_testids` to map that route to the
   owning component, so the command surface can no longer ship controls invisible
   to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **product-map review pass** — registered the
+- 2026-09-10: **product-map review pass** – registered the
   editor's runner-binding (`AgentRunnerBindings.vue`) and snapshot-timeline
   (`PipelineSnapshotTimeline.vue`) static testids (`pipeline-editor-runner-binding-*`,
   `pipeline-editor-runner-bindings*`, `snapshot-timeline-*`) in the
   `/pipelines/:id/editor` manifest `elements:` inventory, so those two panels no
   longer ship controls invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-08: **product-map review pass** — closed the
+- 2026-09-08: **product-map review pass** – closed the
   "no executing BDD surface for `run_lifecycle.feature` / `run_sequential.feature`"
   gap: both files are now registered in `steps/test_pipelines.py` and the missing
   step definitions are written (`a running pipeline with a node that returns None
@@ -257,28 +257,28 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   admission (a capped pipeline with a pending run refuses the extra trigger with
   a typed `RateLimitConflictError` → 429). 12 scenarios collect and pass. The
   graph/config-validation BDD gap remains for `validation.feature` /
-  `pipeline_config_validation.feature` — their steps are awaiting a dedicated
+  `pipeline_config_validation.feature` – their steps are awaiting a dedicated
   graph-validation create/edit surface.
-- 2026-09-08: **product-map review pass** — added the FAR-664
+- 2026-09-08: **product-map review pass** – added the FAR-664
   sandbox save-time validation behaviour to the graph layer: `agent_commands`
   list items terminated by a heredoc terminator are rejected at save time
   (`SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM`) while a scalar `agent_command` is
   unaffected (`graph_validator/__init__.py`
   `_check_sandbox_heredoc_list_item`, unit-covered in
   `test_edges_and_sandbox_validation.py`).
-- 2026-09-08: **product-map review pass** — corrected a stale coverage
+- 2026-09-08: **product-map review pass** – corrected a stale coverage
   claim in Known Gaps: `run_lifecycle.feature` / `run_sequential.feature` were described
   as "exercised by the same step suite", but no step module registers them via
   `scenarios(...)` (verified across `backend/tests/bdd/steps/`). The claim now splits the
   registered run files (`run_context.feature`, `run_variants.feature`) from the two
   never-executing ones, and the latter are listed as a genuine no-executing BDD gap.
-- 2026-09-07: **product-map review pass** — registered
+- 2026-09-07: **product-map review pass** – registered
   `checkpoint_resume.feature` in `steps/test_pipelines.py` (previously shipped but never
   executed) and aligned the resume step so a `Given a run that failed at node N` derives
   the restart node from the failure point. The three checkpoint/resume scenarios now
   collect and pass; the graph/config-validation BDD gap remains for
   `validation.feature` / `pipeline_config_validation.feature`.
-- 2026-08-27: **product-map review pass** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass** – added this behaviour-tracker
   for the registered manifest feature `feat-pipelines`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/pipelines.py`,
   `core/pipeline_engine` and the pipelines/graph-validator BDD+unit suites.
