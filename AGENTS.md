@@ -84,7 +84,7 @@ Rules:
 
 ### Reconstructing a historical value? Copy the consumer's WHOLE precedence chain, not just its first source (2026-10-02)
 
-`POST /runs/{run_id}/nodes/{node_id}/prompt/reveal` built the revealed prompt from the live `Agent` row's `prompt_template`, so editing an agent after a run changed what the endpoint showed for that run. The first fix moved the read to the run's frozen snapshot node. A qa-iterate pass then found — independently, across four lenses — that **dispatch layers a second source on top of that node**: the run's frozen variant override (`_run_overrides["prompt_templates"][agent_id]`, seeded only from `run.variant_config_snapshot`). Reading one source still produced an attestation that was wrong for every A/B `prompt_version` run — the same defect class, one source deeper.
+`POST /runs/{run_id}/nodes/{node_id}/prompt/reveal` built the revealed prompt from the live `Agent` row's `prompt_template`, so editing an agent after a run changed what the endpoint showed for that run. The first fix moved the read to the run's frozen snapshot node. An independent multi-lens quality pass then found — independently, across four lenses — that **dispatch layers a second source on top of that node**: the run's frozen variant override (`_run_overrides["prompt_templates"][agent_id]`, seeded only from `run.variant_config_snapshot`). Reading one source still produced an attestation that was wrong for every A/B `prompt_version` run — the same defect class, one source deeper.
 
 Rules:
 
