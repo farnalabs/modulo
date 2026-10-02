@@ -1836,3 +1836,39 @@ async def test_far844_stall_cleanup_failure_logs(tmp_path):
     marker = _single_marker(row)
     assert marker["status"] == "failed"
     assert marker.get("stdout_artifact") is not None
+
+
+async def test_far879_exc_path_over_cap_stderr_emits_pointer(tmp_path):
+    """FAR-879 / FAR-1315 coverage: on the generic exception path with over-cap
+    stderr, the stderr artifact pointer is persisted — the stderr parity of the
+    stdout exception-path arm."""
+    import modulo.core.pipeline_engine.node_runner as _nr
+    from modulo.core.artifacts.store import LocalArtifactStore
+
+    store = LocalArtifactStore(tmp_path)
+    cap = 2048
+    big_stderr = "e" * 700_000
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="ok")
+    # The command result carries the over-cap stderr the exception path persists.
+    sandbox.commands.run.return_value.wait.return_value.stderr = big_stderr
+    row = _FakeRunRow()
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=lambda: _RetentionSession(row))
+
+    def _boom(output_json):
+        raise RuntimeError("injected generic exception on success path")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch.object(_nr, "_is_sandbox_session_lost_echo", _boom),
+    ):
+        result = await fn(_run_state())
+
+    output = result["artifacts"][0]["output"]
+    assert output["status"] == "failed"
+    pointer = output.get("stderr_artifact")
+    assert pointer is not None, "over-cap stderr on the exc path must attach a stderr_artifact pointer"
+    assert pointer["stream"] == "stderr"
+    assert pointer["size_bytes"] == len(big_stderr)
+    assert pointer["redacted"] is True

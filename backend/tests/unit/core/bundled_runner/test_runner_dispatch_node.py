@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
 import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -187,6 +188,7 @@ class _FakeProvider:
         self.created = []
         self.destroyed = []
         self.closed = False
+        self.exec_calls: list[list[str]] = []
         self._workspaces = {"ws-1": "container-1"}
 
     async def create_workspace(self, spec):
@@ -194,6 +196,7 @@ class _FakeProvider:
         return "ws-1"
 
     async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+        self.exec_calls.append(list(cmd))
         return self._exec_result
 
     async def exec_command_stream(self, ref, cmd, *, environment=None):
@@ -957,3 +960,504 @@ async def test_under_cap_stdout_stays_inline_no_artifact(patch_node_runner, monk
     # from the real envelope, defaulting to None in the FakeOutput).
     assert output.stdout_artifact is nrm._UNSET
     assert not call_log  # _persist_full_stdout_artifact was never invoked
+
+
+# --- FAR-1315: the one-PR guard on the Bundled Runner (runner_docker) tier --
+
+
+def _flagged_config() -> SimpleNamespace:
+    return _config(node_def={"capability_scope": {}, "single_pr_per_run": True})
+
+
+def _guard_scripts(provider: _FakeProvider) -> list[str]:
+    """Every guard-install script this provider was asked to run."""
+    return [cmd[-1] for cmd in provider.exec_calls if cmd and ".modulo-real" in cmd[-1]]
+
+
+async def test_flagged_node_installs_run_scoped_guard_on_runner_docker(patch_node_runner) -> None:
+    """FAR-1315 tier gap: a flagged node on the ``runner_docker`` tier installs
+    the run-scoped ``gh`` shim through the provider's exec primitive — this
+    dispatch branch returns before the engine's E2B-only sandbox-policy step,
+    so WITHOUT the install the guard would be silently absent. After the node
+    finishes with no observed claim, its ledger hold is released."""
+    from modulo.core.pipeline_engine.sandbox_policy import (
+        acquire_run_pr_guard,
+        gh_pr_guard_marker_path,
+        reset_run_pr_guard_claims,
+    )
+
+    reset_run_pr_guard_claims()
+    provider = _FakeProvider()
+    run_id = str(uuid.uuid4())
+    state = _state()
+    state["_run_id"] = run_id
+
+    out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+    assert out["envelope"] is True
+
+    scripts = _guard_scripts(provider)
+    assert scripts, "the flagged node must install the gh guard shim via exec"
+    assert gh_pr_guard_marker_path(run_id) in scripts[0], "the shim must carry this run's marker path"
+
+    # The node finished WITHOUT an observed claim, so its hold was released —
+    # another node of the same run may still claim the slot (a stuck hold here
+    # would deny every later flagged node of the run).
+    assert acquire_run_pr_guard(run_id, "other-node") == "acquired"
+
+
+async def test_flagged_node_surfaces_guard_absence_loudly_naming_the_tier(patch_node_runner, caplog) -> None:
+    """FAR-1315 (b): a flagged node whose guard could NOT be installed must be
+    surfaced LOUDLY at dispatch, naming the tier — never silently — while the
+    run itself keeps its best-effort semantics (the install never wedges the
+    dispatch)."""
+
+    class _GuardFailingProvider(_FakeProvider):
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and ".modulo-real" in cmd[-1]:
+                return _ExecResult(
+                    exit_code=1,
+                    stderr="modulo: gh guard: FAILED - a gh exists on PATH but none could be guarded",
+                )
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _GuardFailingProvider()
+    state = _state()
+    state["_run_id"] = str(uuid.uuid4())
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.bundled_runner.runner_dispatch"):
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+    assert out["envelope"] is True, "a failed guard install is best-effort and never wedges the run"
+
+    warnings = [record.getMessage() for record in caplog.records if "gh_pr_guard_unavailable" in record.getMessage()]
+    assert warnings, "an unguarded flagged run must be surfaced loudly at dispatch"
+    assert "tier=runner_docker" in warnings[0], "the warning must name the tier"
+    assert "failed" in warnings[0], "the warning must carry the install status"
+
+
+async def test_unflagged_node_never_installs_the_guard(patch_node_runner) -> None:
+    """Regression: a node WITHOUT ``single_pr_per_run`` installs no guard —
+    the FAR-1315 install is gated by the explicit flag alone."""
+    provider = _FakeProvider()
+    await runner_dispatch.run_bundled_runner_node(_state(), _config(), _route(provider))
+    assert not _guard_scripts(provider)
+
+
+# --- FAR-1315 gate hardening: the observation channel end to end (runner tier)
+#
+# These drive the REAL settle_run_pr_guard in run_bundled_runner_node's
+# finally with real spend evidence. Fail-without-fix for this block: moving
+# the settle out of the finally (or passing None streams) makes every
+# assertion below fail.
+
+
+class _HarvestReplyProvider(_FakeProvider):
+    """A provider whose claim-receipt harvest probe answers a fixed reply,
+    while every other exec (guard install, file reads) behaves as the default
+    fake does."""
+
+    def __init__(self, *, harvest_reply: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._harvest_reply = harvest_reply
+
+    async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+        if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+            self.exec_calls.append(list(cmd))
+            return _ExecResult(exit_code=0, stdout=self._harvest_reply, stderr="")
+        return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+
+def _fresh_flagged_state() -> tuple[str, dict]:
+    """A flagged run's state with a fresh run id and an EMPTY ledger (so each
+    test's acquire/spend/release assertions start from a known state)."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    reset_run_pr_guard_claims()
+    run_id = str(uuid.uuid4())
+    state = _state()
+    state["_run_id"] = run_id
+    return run_id, state
+
+
+async def test_flagged_node_observes_shim_produced_output_and_spends_the_run_claim(
+    patch_node_runner,
+    tmp_path,
+) -> None:
+    """The observation channel, end to end on the ``runner_docker`` tier:
+    stdout produced by the REAL shim's successful create flows through the
+    dispatch stream capture into the REAL settle in the ``finally`` — the
+    run's claim is SPENT. The harvest probe yields no token here (the default
+    fake reply), i.e. the sentinel FALLBACK arm."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
+
+    run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider(stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))])
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_spends_from_the_harvested_receipt_without_a_sentinel(patch_node_runner) -> None:
+    """MAJOR 1 on the runner tier: no sentinel in the captured stream (lost or
+    never emitted there), but the platform-side receipt harvest confirms the
+    create — the run must be SPENT, not released."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    run_id, state = _fresh_flagged_state()
+    provider = _HarvestReplyProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_PRESENT",
+        stream_chunks=[("stdout", "post-create agent noise\n")],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_node_shim_read_transcript_never_spends_on_the_runner_tier(patch_node_runner, tmp_path) -> None:
+    """MAJOR 2 on the runner tier: the sentinel IS in the captured stream (the
+    agent read the shim), but the harvest confirms no receipt — the hold is
+    RELEASED and the run is NOT spent, so a later flagged node still gets its
+    chance at the one PR."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
+
+    run_id, state = _fresh_flagged_state()
+    provider = _HarvestReplyProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """FAILURE-path settlement on the runner tier: a flagged node that dies
+    (unparseable output.json) must release its hold in the ``finally`` so the
+    run's slot is free for a later node. Fail-without-fix: moving the settle
+    out of the ``finally`` leaves the entry ``held`` and the assertion below
+    reads ``held`` instead of ``acquired``."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value="not valid json {"))
+    run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        with pytest.raises(_FakeError):
+            await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
+    finally:
+        reset_run_pr_guard_claims()
+
+
+# --- FAR-1315 re-gate: the findings, proven on the runner tier too ----------
+
+
+async def test_pr_url_never_outranks_a_definitive_receipt_false_on_the_runner_tier(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """RE-GATE MAJOR 2(a) on the runner tier: the agent-authored ``pr_url``
+    (also echoed in the captured stdout, so the corroboration arm is
+    satisfied) must NOT outrank a definitive ``receipt=False`` from a LIVE
+    install — the hold is released, not spent.
+
+    Fail-without-fix: the pre-fix precedence spent here, pre-planting every
+    later flagged node of the run."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+
+    url = "https://github.com/org/repo/pull/42"
+    monkeypatch.setattr(
+        runner_dispatch,
+        "_read_file_via_exec",
+        AsyncMock(return_value=f'{{"summary":"done","pr_url":"{url}"}}'),
+    )
+    run_id, state = _fresh_flagged_state()
+    provider = _HarvestReplyProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        stream_chunks=[("stdout", f"attempted create, reporting {url}\n")],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", (
+            "a definitive receipt=False from a LIVE install must release the hold, "
+            "never be outranked by an agent-authored pr_url"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_absent_install_leaves_the_receipt_meaningless_on_the_runner_tier(
+    patch_node_runner,
+    tmp_path,
+) -> None:
+    """RE-GATE MAJOR 2(b) on the runner tier: the shipped runner image has no
+    ``gh``, so the guard install reports ``absent`` — the receipt probe then
+    runs against a path no shim ever wrote and answers ABSENT. That must be
+    UNKNOWN, not "confirmed no create": the sentinel fallback still spends.
+
+    Fail-without-fix: the pre-fix settle read it as definitive and RELEASED
+    (``acquired``) — a genuinely unguarded create produced no second-PR block."""
+    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
+
+    run_id, state = _fresh_flagged_state()
+
+    class _AbsentInstallProvider(_HarvestReplyProvider):
+        """Guard install reports 'no gh on PATH' (the shipped image shape)."""
+
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and ".modulo-real" in cmd[-1]:
+                self.exec_calls.append(list(cmd))
+                return _ExecResult(
+                    exit_code=0,
+                    stdout="",
+                    stderr=(
+                        "modulo: gh guard: WARNING no gh on PATH; nothing to guard\n"
+                        "modulo: gh guard: flagged run is NOT platform-guarded (prompt-level only)"
+                    ),
+                )
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _AbsentInstallProvider(
+        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))],
+    )
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent", (
+            "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
+        )
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_cancel_during_the_claim_harvest_still_tears_down_on_the_runner_tier(
+    patch_node_runner,
+) -> None:
+    """RE-GATE MAJOR 1 on the runner tier: the harvest is the FIRST await in
+    ``run_bundled_runner_node``'s ``finally``. A cancellation landing there
+    must NOT skip ``_teardown_and_clear`` (workspace destroy, client close,
+    fenced dispatch-marker clear) — the cancellation is recorded, teardown
+    runs, then the cancellation is re-raised.
+
+    Fail-without-fix: with the old ``wait_for(shield(...))`` form the
+    CancelledError escapes the ``except Exception`` handlers and unwinds the
+    ``finally`` before ``_teardown_and_clear`` — the provider is never
+    destroyed/closed and the dispatch marker is never cleared."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    _run_id, state = _fresh_flagged_state()
+    harvest_started = asyncio.Event()
+
+    class _BlockingHarvestProvider(_FakeProvider):
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+                harvest_started.set()
+                await asyncio.Event().wait()  # parks until the probe is cancelled
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _BlockingHarvestProvider()
+    clear_mock = nrm._sandbox_clear_dispatch_marker
+    assert isinstance(clear_mock, AsyncMock), "patch_node_runner must stub the marker clear"
+
+    task = asyncio.ensure_future(runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider)))
+    await asyncio.wait_for(harvest_started.wait(), timeout=10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert provider.destroyed, (
+        f"the workspace must still be destroyed after a cancel during the harvest: {provider.destroyed}"
+    )
+    assert provider.closed, "the provider must still be closed after a cancel during the harvest"
+    assert clear_mock.await_count >= 1, (
+        "the fenced dispatch marker must still be cleared after a cancel during the harvest"
+    )
+
+
+# --- FAR-1315 coverage hardening: the dispatch finally's defensive arms -----
+
+
+async def test_flagged_dispatch_logs_a_pre_planted_refusal_when_the_run_is_already_spent(
+    patch_node_runner,
+    caplog,
+) -> None:
+    """A flagged node arriving after its run's one-PR slot was already SPENT
+    gets a pre-planted refusal, and the dispatch logs it loudly (naming the
+    tier) rather than silently installing a live guard that could open a
+    second PR."""
+    from modulo.core.pipeline_engine.sandbox_policy import (
+        acquire_run_pr_guard,
+        reset_run_pr_guard_claims,
+        settle_run_pr_guard,
+    )
+
+    reset_run_pr_guard_claims()
+    run_id = str(uuid.uuid4())
+    state = _state()
+    state["_run_id"] = run_id
+    assert acquire_run_pr_guard(run_id, "node-0") == "acquired"
+    assert settle_run_pr_guard(run_id, "node-0", None, claim_receipt=True) == "spent"
+
+    provider = _FakeProvider()
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.core.bundled_runner.runner_dispatch"):
+            out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        denied = [r.getMessage() for r in caplog.records if "gh_guard_run_claim_denied" in r.getMessage()]
+        assert denied, "a pre-planted refusal must be logged loudly at dispatch"
+        assert "pre-planted refusal" in denied[0]
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_skips_the_harvest_when_the_provider_ref_is_empty(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """With an armed guard but no provider ref to probe, the dispatch skips the
+    receipt harvest entirely and settles from the weaker evidence — the
+    ``_harvest_ref`` guard's false arm."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    monkeypatch.setattr(
+        runner_dispatch,
+        "_provision_workspace",
+        AsyncMock(return_value=SimpleNamespace(attempt_key="attempt-key", provider_ref="")),
+    )
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_survives_a_harvest_transport_error(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """A harvest that raises a generic exception (not just returns None) is
+    swallowed: the receipt is unknown and the dispatch still settles and tears
+    down rather than letting the finally fall over."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("harvest transport down")
+
+    monkeypatch.setattr(sandbox_policy, "harvest_gh_pr_claim_bounded", _boom)
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_survives_a_settle_failure(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """A generic exception from ``settle_run_pr_guard`` (it is synchronous and
+    runs in a ``finally``) is logged and swallowed; the node's own outcome is
+    unaffected."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("settle exploded")
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _boom)
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """Defence in depth: if ``settle_run_pr_guard`` itself raises
+    ``CancelledError`` the dispatch records it, still tears down, then re-raises
+    — a cancellation must never skip ``_teardown_and_clear``."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    def _cancel_settle(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+    assert provider.destroyed, "teardown must run even when settle raises CancelledError"
+    assert provider.closed, "the provider must be closed even when settle raises CancelledError"
+
+
+async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also_cancels(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """When the harvest already recorded a cancellation AND settle then raises
+    another, the dispatch keeps the FIRST one (the ``_gh_settle_cancelled is
+    None`` guard's false arm) and still tears down before re-raising."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    def _cancel_settle(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    _run_id, state = _fresh_flagged_state()
+    harvest_started = asyncio.Event()
+
+    class _BlockingHarvestProvider(_FakeProvider):
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+                harvest_started.set()
+                await asyncio.Event().wait()  # parks until the probe is cancelled
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _BlockingHarvestProvider()
+    try:
+        task = asyncio.ensure_future(
+            runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        )
+        await asyncio.wait_for(harvest_started.wait(), timeout=10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+    assert provider.destroyed, "teardown must still run when both harvest and settle are cancelled"
+    assert provider.closed, "the provider must still be closed when both harvest and settle are cancelled"
