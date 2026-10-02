@@ -1,8 +1,12 @@
 """FAR-967 chunk 10: policy-gate pin fingerprint + operator enabled/disabled control.
 
-Revision ID: 0273_policy_gate_pin_fingerprint_operator_control
-Revises: 0272_oauth_client_revoke_lookup_indexes
+Revision ID: 0274_policy_gate_pin_fingerprint_operator_control
+Revises: 0273_runs_dispatch_phase
 Create Date: 2026-09-30
+
+Renumbered 0273 -> 0274 when 0273_runs_dispatch_phase (FAR-1088) landed first
+on the same base; this migration now chains onto it so the graph stays a
+single linear head.
 
 Two additive schema changes shipped in one migration (§6.2):
 
@@ -32,8 +36,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0273_policy_gate_pin_fingerprint_operator_control"
-down_revision: str | None = "0272_oauth_client_revoke_lookup_indexes"
+revision: str = "0274_policy_gate_pin_fingerprint_operator_control"
+down_revision: str | None = "0273_runs_dispatch_phase"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

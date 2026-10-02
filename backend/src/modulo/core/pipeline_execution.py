@@ -69,6 +69,191 @@ PHASE_FIRST_NODE_DISPATCHED = "first_node_dispatched"
 DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
 
 
+# ---------------------------------------------------------------------------
+# FAR-1088 (W2): durable post-claim phase writer.
+# ---------------------------------------------------------------------------
+
+# Phases recorded durably AFTER the claim. The claim's own
+# ``dispatch_phase='claimed'`` stamp (see ``_CLAIM_UPDATE_SQL`` below) is the
+# guaranteed floor and resets on every re-claim; these later entries are
+# best-effort instrumentation layered on top. ``PHASE_CLAIMED`` is
+# deliberately excluded — re-writing it here would duplicate the floor.
+DURABLE_PHASES: frozenset[str] = frozenset(
+    {
+        PHASE_LOADING_SETUP,
+        PHASE_SETUP_COMPLETE,
+        PHASE_STREAMING,
+    }
+)
+
+# Bound on a single durable phase write. The instrumentation is best-effort:
+# a write that exceeds this is abandoned (connection cancelled back to the
+# pool) rather than ever delaying the run.
+PHASE_WRITE_TIMEOUT_SECONDS = 2.0
+
+# FAR-1088 (W2): the single guarded UPDATE for a post-claim phase entry.
+#
+# * ``claim_token=:tok`` fences superseded attempts: a successor re-claim
+#   rotates the token, so a replaced attempt's write matches zero rows.
+# * The monotonic guard
+#   ``dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <= now()``
+#   makes an out-of-order commit a no-op: a statement whose transaction
+#   started BEFORE the stored entry time cannot move the phase backwards.
+# * Both the SET value and the guard use the DB clock (``now()``), the same
+#   clock the claim's floor stamp used — so client/DB clock skew can never
+#   reject a legitimate forward entry.
+_PHASE_UPDATE_SQL = text(
+    "UPDATE runs SET dispatch_phase=:phase, dispatch_phase_entered_at=now() "
+    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok "
+    "AND (dispatch_phase_entered_at IS NULL OR dispatch_phase_entered_at <= now()) "
+    "RETURNING id"
+)
+
+
+class DispatchPhaseWriter:
+    """Durable, best-effort writer for post-claim dispatch-phase entries.
+
+    FAR-1088 (W2). Four load-bearing properties (a previous design violated
+    the middle two and was rejected):
+
+    1. **Single-flight + coalescing** — at most ONE write is in flight per
+       run. A phase entry arriving while a write is in flight overwrites the
+       pending phase (latest wins) instead of spawning another task, so the
+       shared pool (floor ``concurrency*3+5``, ``max_overflow=0``) is never
+       fanned out per transition.
+    2. **Bounded + fail-soft** — each write is bounded by
+       ``PHASE_WRITE_TIMEOUT_SECONDS`` (2 s) and every failure (timeout, DB
+       error, no event loop) is logged and dropped. A write can NEVER raise
+       into the run: the ``claimed`` floor comes from the claim itself.
+    3. **Monotonic** — the UPDATE carries the entry-time guard and the claim
+       token fence (see ``_PHASE_UPDATE_SQL``).
+    4. **No clearing** — nothing here resets the columns; only a re-claim
+       does (and the columns are internal, not API-projected).
+    """
+
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        run_id: str,
+        org_id: str,
+        claim_token: str,
+        timeout_seconds: float = PHASE_WRITE_TIMEOUT_SECONDS,
+    ) -> None:
+        self._engine = engine
+        self._run_id = run_id
+        self._org_id = org_id
+        self._claim_token = claim_token
+        self._timeout_seconds = timeout_seconds
+        self._pending: str | None = None
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def claim_token(self) -> str:
+        """The claim token every write is fenced on."""
+        return self._claim_token
+
+    @property
+    def run_id(self) -> str:
+        """The run this writer is bound to."""
+        return self._run_id
+
+    @property
+    def org_id(self) -> str:
+        """The organisation this writer is bound to."""
+        return self._org_id
+
+    def record(self, phase: str) -> None:
+        """Schedule a durable write of *phase*. Never raises (fail-soft).
+
+        Single-flight: a new drain task starts only when no write is in
+        flight; otherwise the phase is merely swapped into the pending slot
+        (coalescing — the latest phase wins).
+        """
+        self._pending = phase
+        try:
+            # Resolve the loop BEFORE building the coroutine so a no-loop
+            # record never orphans an un-awaited ``_drain()`` coroutine.
+            loop = asyncio.get_running_loop()
+            task = self._task
+            if task is None or task.done():
+                self._task = loop.create_task(self._drain())
+        except RuntimeError:
+            # No running loop (or closed loop): drop it. Best-effort only.
+            _log.debug(
+                "dispatch_phase.record scheduling failed run=%s phase=%s (no running loop)",
+                self._run_id,
+                phase,
+            )
+        except Exception:
+            _log.debug(
+                "dispatch_phase.record scheduling failed run=%s phase=%s",
+                self._run_id,
+                phase,
+                exc_info=True,
+            )
+
+    async def flush(self) -> None:
+        """Await any in-flight/coalesced write (bounded, fail-soft).
+
+        Drains before the job finishes so the last phase lands; a no-op when
+        nothing is pending. Never raises a write failure into the caller.
+        """
+        while True:
+            task = self._task
+            if task is None:
+                return
+            with contextlib.suppress(Exception):
+                await task
+            if self._task is task and self._pending is None:
+                return
+
+    async def _drain(self) -> None:
+        """Write the pending phase, then any phase coalesced in the meanwhile."""
+        while True:
+            phase = self._pending
+            self._pending = None
+            if phase is None:
+                return
+            try:
+                await asyncio.wait_for(self._write(phase), timeout=self._timeout_seconds)
+            except asyncio.CancelledError:
+                # Worker/job shutdown — not ours to swallow.
+                raise
+            except TimeoutError:
+                _log.warning(
+                    "dispatch_phase.write_timeout run=%s phase=%s timeout=%.1fs (dropped)",
+                    self._run_id,
+                    phase,
+                    self._timeout_seconds,
+                )
+            except Exception:
+                _log.warning(
+                    "dispatch_phase.write_failed run=%s phase=%s (dropped)",
+                    self._run_id,
+                    phase,
+                    exc_info=True,
+                )
+
+    async def _write(self, phase: str) -> None:
+        async with self._engine.connect() as c:
+            # RLS org context — the runs policy matches zero rows without it.
+            await c.execute(
+                text(_SQL_SET_ORG_ID),
+                {"val": self._org_id},
+            )
+            await c.execute(
+                _PHASE_UPDATE_SQL,
+                {
+                    "phase": phase,
+                    "rid": self._run_id,
+                    "oid": self._org_id,
+                    "tok": self._claim_token,
+                },
+            )
+            await c.commit()
+
+
 @dataclass
 class DispatchPhaseTracker:
     """Track the executor's progress through the claim→first-node-dispatch path.
@@ -83,11 +268,26 @@ class DispatchPhaseTracker:
     phase_entered_at: float | None = None
     run_id: str = ""
     org_id: str = ""
+    # FAR-1088 (W2): optional durable writer for post-claim phase entries,
+    # attached once the claim token is known — by ``saq_worker.execute_run``
+    # and by ``resume_run`` (the resume claim stamps its own 'claimed' floor;
+    # the writer owns the later phases).
+    # When present, entering a phase in ``DURABLE_PHASES`` also records it
+    # durably on ``runs.dispatch_phase`` (best-effort, fail-soft).
+    durable_writer: DispatchPhaseWriter | None = None
 
     def enter_phase(self, phase: str) -> None:
-        """Transition to a new phase, recording the monotonic entry time."""
+        """Transition to a new phase, recording the monotonic entry time.
+
+        Also records the phase durably (FAR-1088) when a ``durable_writer``
+        is attached and the phase is in ``DURABLE_PHASES``.
+        """
         self.phase = phase
         self.phase_entered_at = time.monotonic()
+        writer = self.durable_writer
+        if writer is not None and phase in DURABLE_PHASES:
+            # record() never raises (fail-soft) — property 2 of the writer.
+            writer.record(phase)
 
     def elapsed_in_phase(self) -> float:
         """Seconds since the current phase was entered."""
@@ -254,8 +454,18 @@ def _resolve_claim_cap(claim_cap: int | None) -> int:
     return int(get_settings().saq_run_claim_cap)
 
 
+# FAR-1088: ALL FOUR claim statements — the two execute variants below and the
+# two resume variants (``_RESUME_CLAIM_UPDATE_SQL`` /
+# ``_RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN``) — stamp ``dispatch_phase='claimed'``
+# (and its entry timestamp) in the SAME UPDATE that claims the row. Deliberate:
+# the claim is the one write we know succeeds, so the phase lands atomically
+# with it (correctly ordered by construction, no extra connection) — and because
+# it is written on EVERY claim (execute re-dispatch/re-claim AND the HITL
+# resume claim), a re-claim resets the phase, so a re-woken run can never
+# report a previous attempt's stale phase. Every claim site stamps.
 _CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
     "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
@@ -264,7 +474,8 @@ _CLAIM_UPDATE_SQL = text(
 )
 
 _CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
     "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
@@ -297,6 +508,10 @@ def build_claim_update(
     When *claim_token* is given the claim also rotates ``runs.claim_token`` to a
     FRESH per-claim value (plan F3a) — each re-claim gets a distinct token so a
     superseded original's heartbeat/E2B fence can detect it was replaced.
+
+    Every claim also stamps ``dispatch_phase='claimed'`` + its entry timestamp
+    in this same statement (FAR-1088) — see the note above
+    ``_CLAIM_UPDATE_SQL``.
 
     Callers pass the full parameter dict (rid / oid / stale_seconds / claim_cap)
     at execute time.
@@ -836,11 +1051,12 @@ def _watchdog_retry_enabled_for_job(job: Any) -> bool:
 
 
 async def _maybe_watchdog_retry(
-    retry_hook: Callable[[str, str], Awaitable[Any]] | None,
+    retry_hook: Callable[..., Awaitable[Any]] | None,
     run_id: str,
     *,
     final_status: str,
     error_code: str,
+    zero_node: bool = False,
 ) -> bool:
     """Consult the shared watchdog-retry hook (FAR-690 / FAR-693); fail closed.
 
@@ -849,10 +1065,17 @@ async def _maybe_watchdog_retry(
     re-raises ``RunRetryPolicyError`` so SAQ re-dispatches the job). Any hook
     failure stands down to today's terminal fail: a retry decision must never
     prevent a run from reaching a terminal state.
+
+    ``zero_node`` (FAR-1088) opts the caller into the zero-node failure
+    carve-out and is forwarded ONLY when set, so hooks without the parameter
+    keep the exact two-argument call shape. Only the zombie watchdog passes it
+    (zero nodes by construction — it fires pre-first-progress).
     """
     if retry_hook is None:
         return False
     try:
+        if zero_node:
+            return bool(await retry_hook(final_status, error_code, zero_node=True))
         return bool(await retry_hook(final_status, error_code))
     except asyncio.CancelledError:
         raise
@@ -898,7 +1121,11 @@ async def zombie_watchdog(
     policy with budget remaining re-dispatches the run (fenced pending-reset
     + ``RunRetryPolicyError`` re-raise → SAQ job retry) instead of
     terminal-failing it. No coverage / exhausted budget / any hook failure
-    keeps today's unconditional terminal fail.
+    keeps today's unconditional terminal fail. FAR-1088: because this watchdog
+    fires ONLY pre-first-progress (zero nodes executed by construction), the
+    consult additionally opts into the zero-node failure carve-out — a
+    ``failure``-covered policy re-dispatches a zero-node death here exactly as
+    the cron path does (see the ``zero_node=True`` call below).
 
     FAR-893: *dispatch_tracker* (optional) reports the executor's progress
     through the claim→first-node-dispatch phases.  When the grace period
@@ -954,7 +1181,20 @@ async def zombie_watchdog(
     exec_task.cancel()
     if stall_requested is not None:
         stall_requested.set()
-    if await _maybe_watchdog_retry(retry_hook, run_id, final_status="stalled", error_code=EXECUTOR_STALLED_ERROR_CODE):
+    # FAR-1088: this kill fires ONLY pre-first-progress (the watchdog waits for
+    # ``first_progress`` above and only reaches here on timeout), so the run
+    # executed ZERO nodes by construction — pass ``zero_node=True`` so a
+    # failure-covered policy re-dispatches this zero-node death exactly like
+    # the dispatcher_reconcile cron path's carve-out would. The FAR-369
+    # node-deadline watchdog's kill (``_fail_overdue_node``) does NOT pass the
+    # flag — nodes may have executed there.
+    if await _maybe_watchdog_retry(
+        retry_hook,
+        run_id,
+        final_status="stalled",
+        error_code=EXECUTOR_STALLED_ERROR_CODE,
+        zero_node=True,
+    ):
         return
     await fail_run_terminal(
         aeng,
@@ -2099,7 +2339,8 @@ async def stale_run_recovery_sweep(
 # claimer moves the row to 'running', a concurrent claimer then sees a fresh
 # heartbeat and loses.
 _RESUME_CLAIM_UPDATE_SQL = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
     "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
@@ -2108,7 +2349,8 @@ _RESUME_CLAIM_UPDATE_SQL = text(
 )
 
 _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
-    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok "
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now() "
     "WHERE id=:rid AND organisation_id=:oid "
     "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
@@ -2151,6 +2393,13 @@ def build_resume_claim_update(
 
     When *claim_token* is given the claim rotates ``runs.claim_token`` to a
     fresh per-claim value (plan F3a).
+
+    FAR-1088: both resume claim variants stamp ``dispatch_phase='claimed'`` +
+    its entry timestamp in this same statement, exactly like the execute
+    claim variants (``build_claim_update``) — a resumed run's phase floor is
+    written atomically with the resume claim, so every claim site stamps and
+    a re-claim always resets the phase (see the note above
+    ``_CLAIM_UPDATE_SQL``).
     """
     if claim_token is not None:
         return _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN
@@ -2258,6 +2507,21 @@ async def resume_run(
         _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
         return {"status": "not_claimed"}
 
+    # FAR-1088: mirror saq_worker.execute_run — attach the same bounded,
+    # fail-soft durable phase writer (bound to THIS claim's fresh token) so the
+    # phases AFTER the claim are recorded durably on a resume too. The resume
+    # claim itself stamped 'claimed' inside its own UPDATE (see
+    # _RESUME_CLAIM_UPDATE_SQL), so the writer only owns the later entries;
+    # every write is token-fenced and monotonic (DispatchPhaseWriter).
+    tracker = DispatchPhaseTracker(run_id=str(rid), org_id=str(oid))
+    tracker.enter_phase(PHASE_CLAIMED)
+    tracker.durable_writer = DispatchPhaseWriter(
+        async_engine,
+        run_id=str(rid),
+        org_id=str(oid),
+        claim_token=claim_token,
+    )
+
     # Stamp the claim token into the job hash so the after_process task_failure
     # hook can fence its terminal write (dist/runtime-core A1).
     if job is not None:
@@ -2270,6 +2534,7 @@ async def resume_run(
         except Exception:
             _log.warning("resume_run: job kwargs stamp failed for run %s", rid, exc_info=True)
 
+    tracker.enter_phase(PHASE_LOADING_SETUP)
     try:
         run, executor = await load_and_setup(async_engine, rid, oid)
     except asyncio.CancelledError:
@@ -2287,6 +2552,11 @@ async def resume_run(
     if run is None:
         return {"status": "missing"}
 
+    tracker.enter_phase(PHASE_SETUP_COMPLETE)
+    # Wire the tracker onto the executor so its streaming transition reports
+    # through enter_phase() exactly as on the execute path.
+    setattr(executor, DISPATCH_TRACKER_ATTR, tracker)
+
     outcome = await run_executor_with_watchdog(
         async_engine,
         run_id=str(rid),
@@ -2294,6 +2564,7 @@ async def resume_run(
         executor=executor,
         job=job,
         claim_token=claim_token,
+        dispatch_tracker=tracker,
         execute_fn=lambda: executor.resume(
             run_id=rid,
             org_id=oid,
@@ -2301,6 +2572,10 @@ async def resume_run(
             claim_token=claim_token,
         ),
     )
+    # FAR-1088: drain any still-in-flight phase write (bounded + fail-soft) so
+    # the final phase lands before the job finishes — same as execute_run.
+    if tracker.durable_writer is not None:
+        await tracker.durable_writer.flush()
     if outcome.get("status") == "complete":
         await mark_complete(async_engine, str(rid), str(oid), claim_token=claim_token)
     return outcome

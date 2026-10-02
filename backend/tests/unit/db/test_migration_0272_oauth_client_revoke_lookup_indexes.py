@@ -5,8 +5,9 @@ database, and pin model/migration parity for the two new OAuth
 client-revoke lookup indexes:
 
 * the chain is pinned (0272 -> ``0271_org_api_keys_revocation_sweep_indexes``)
-  and it is the single linear head, so the pre-commit check-migration-heads
-  hook and every ``test_single_head_*`` pin cannot be ambushed by a renumber;
+  with ``0273_runs_dispatch_phase`` the single linear head, so the
+  pre-commit check-migration-heads hook and every ``test_single_head_*``
+  pin cannot be ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
   the client-revoke DELETEs rely on (``auth/oauth.py::delete_oauth_client``
   against ``oauth_authorization_codes`` and ``oauth_token_families``), each
@@ -105,11 +106,12 @@ def _model_indexes(model: type) -> dict[str, Index]:
 
 
 class TestChain:
-    def test_single_head_is_now_0273(self) -> None:
+    def test_single_head_is_0274(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        # 0273_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10)
-        # now chains onto this migration, so the single head moved up one.
-        assert heads == ["0273_policy_gate_pin_fingerprint_operator_control"], f"expected a single head, got {heads}"
+        # 0273_runs_dispatch_phase (FAR-1088), then
+        # 0274_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10),
+        # now chain onto this migration, so the single head moved up two.
+        assert heads == ["0274_policy_gate_pin_fingerprint_operator_control"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
