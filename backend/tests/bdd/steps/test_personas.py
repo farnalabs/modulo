@@ -6,6 +6,7 @@ import hmac
 import json
 import sqlite3 as _sqlite3
 import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -666,9 +667,32 @@ async def _marcus_offboard_mint(request) -> None:
         token_sequence=0,
         client_kind="browser",
     )
-    request.node._offboard_principal = decode_principal(
-        request.node._offboard_access_token, _MARCUS_OFFBOARD_SECRET
-    )
+    request.node._offboard_principal = decode_principal(request.node._offboard_access_token, _MARCUS_OFFBOARD_SECRET)
+
+
+def _marcus_as_uuid(value):
+    return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+
+
+@contextmanager
+def _marcus_uuid_bound_role_read():
+    """Normalise the ``str`` ids the JWT paths pass to ``resolve_role_from_membership``.
+
+    On Postgres asyncpg coerces a ``str`` id against a ``Uuid()`` column; the
+    SQLite test engine's ``Uuid()`` bind processor instead calls ``value.hex``
+    and rejects a ``str``. The role lookup is still the REAL query (only the
+    bound id type is normalised), so the ADR 047 ``deactivated_at IS NULL``
+    filter and its deny semantics are unchanged.
+    """
+    from modulo.db.crud import org_membership as _org_membership
+
+    real_resolve = _org_membership.resolve_role_from_membership
+
+    async def _resolve(session, account_id, organisation_id):
+        return await real_resolve(session, _marcus_as_uuid(account_id), _marcus_as_uuid(organisation_id))
+
+    with patch.object(_org_membership, "resolve_role_from_membership", _resolve):
+        yield
 
 
 async def _marcus_resolve_offboard(request, coro_factory) -> object:
@@ -685,6 +709,7 @@ async def _marcus_resolve_offboard(request, coro_factory) -> object:
             "modulo.api.dependencies.get_or_create_session_factory",
             return_value=request.node._offboard_factory,
         ),
+        _marcus_uuid_bound_role_read(),
     ):
         return await coro_factory()
 
@@ -740,9 +765,7 @@ def marcus_bob_jwt_invalidated(request):
     )
 
     async def _attempt() -> None:
-        await _marcus_resolve_offboard(
-            request, lambda: get_current_tenant_user(request.node._offboard_principal)
-        )
+        await _marcus_resolve_offboard(request, lambda: get_current_tenant_user(request.node._offboard_principal))
 
     with pytest.raises(OrganisationMembershipNotFound) as exc_info:
         asyncio.run(_attempt())
@@ -791,9 +814,10 @@ def marcus_bob_refresh_revoked(request):
     async def _attempt() -> None:
         settings = _marcus_offboard_settings()
         claims = _parse_refresh_token(request.node._offboard_refresh_token, settings)
-        async with request.node._offboard_factory() as session:
-            with pytest.raises(FastAPIHTTPException) as exc_info:
-                await _advance_refresh_sequence(session, claims, settings)
+        with _marcus_uuid_bound_role_read():
+            async with request.node._offboard_factory() as session:
+                with pytest.raises(FastAPIHTTPException) as exc_info:
+                    await _advance_refresh_sequence(session, claims, settings)
         assert exc_info.value.status_code == 401
         assert "no longer has access" in exc_info.value.detail
         # A removed member's refresh is refused BEFORE the family sequence
@@ -802,9 +826,7 @@ def marcus_bob_refresh_revoked(request):
         async with request.node._offboard_factory() as session:
             row = (
                 await session.execute(
-                    select(TokenFamily).where(
-                        TokenFamily.family_id == request.node._offboard_family_id
-                    )
+                    select(TokenFamily).where(TokenFamily.family_id == request.node._offboard_family_id)
                 )
             ).scalar_one()
         assert row.max_sequence == 0
