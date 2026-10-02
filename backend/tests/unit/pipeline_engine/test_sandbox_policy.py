@@ -1738,6 +1738,16 @@ def test_is_valid_delivered_pr_url_rejects_a_url_that_fails_to_parse() -> None:
         "N/A",  # scheme-less token
         "http://[::1",  # malformed authority -> urlsplit raises
     ],
+    ids=[
+        "valid-https-url",
+        "valid-http-short",
+        "empty-netloc",
+        "unsupported-scheme",
+        "blank",
+        "whitespace-only",
+        "scheme-less-token",
+        "malformed-authority",
+    ],
 )
 def test_is_valid_delivered_pr_url_is_pinned_to_the_classifier_spec(url: str) -> None:
     """The delivered-``pr_url`` validity mirror agrees with the classifier spec.
