@@ -573,9 +573,11 @@ export async function waitForRunCompletionWithHitlRecovery(
   const pollMs = opts.pollMs ?? 5_000
   let status = ''
   let lastError: unknown
-  // The first attempt always runs, even if the deadline has already elapsed —
-  // a caller that sized the budget conservatively must still observe the run
-  // once rather than fail without polling.
+  // Attempt 0 never re-issues the decision (only attempt > 0 does). If the
+  // deadline has already elapsed, the in-loop poll is skipped (remaining clamps
+  // to 0) and the single observation happens via the last-chance re-observe
+  // after the loop — so a caller that sized the budget conservatively still
+  // observes the run once rather than failing without a poll.
   for (let attempt = 0; ; attempt++) {
     if (attempt > 0) {
       // Re-issue the decision through the API (see reissueApproveBestEffort).
