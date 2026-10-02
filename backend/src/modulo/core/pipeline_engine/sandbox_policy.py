@@ -1219,7 +1219,7 @@ async def _cancel_and_drain_harvest(task: asyncio.Future[bool | None]) -> None:
         task.cancel()
     try:
         await asyncio.wait({task}, timeout=_HARVEST_DRAIN_TIMEOUT)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError:  # NOSONAR S7497
         # A second cancellation landed while draining: the probe is already
         # cancelled, so nothing is left to wait for. The caller re-raises its
         # own recorded cancellation after teardown.

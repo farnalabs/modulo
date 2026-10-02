@@ -1211,3 +1211,111 @@ async def test_cancel_during_the_claim_harvest_still_tears_down(
     assert clear_mock.await_count >= 1, (
         "the fenced dispatch marker must still be cleared after a cancel during the harvest"
     )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 coverage hardening: the E2B dispatch finally's defensive arms
+# ---------------------------------------------------------------------------
+
+
+async def test_flagged_dispatch_skips_the_harvest_without_a_sandbox_id(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """With an armed guard but no sandbox id (the dispatch lost its provider ref
+    after create), the receipt harvest is skipped and the settle runs on the
+    weaker evidence — the ``_sandbox_id`` guard's false arm."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    _patch_isolation_builder(monkeypatch, _ClaimingIsolationProvider())
+    # An empty dispatch ref makes ``_sandbox_id`` stay unset (None).
+    install_fake_dispatch(monkeypatch, ref="")
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    try:
+        result = await fn(state)
+    finally:
+        reset_run_pr_guard_claims()
+    assert result["artifacts"][0]["output"]["status"] == "failed"
+
+
+async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """Defence in depth: if ``settle_run_pr_guard`` itself raises
+    ``CancelledError`` the dispatch records it, still tears the sandbox down,
+    then re-raises — a cancellation must never skip the teardown."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    def _cancel_settle(*args: Any, **kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-cancel-settle")
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-cancel-settle")
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    try:
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await fn(state)
+    finally:
+        reset_run_pr_guard_claims()
+    assert "destroy_by_ref" in dispatch.events, (
+        f"the sandbox must still be destroyed when settle raises CancelledError: {dispatch.events}"
+    )
+    assert "close" in dispatch.events, "the provider must still be closed when settle raises CancelledError"
+
+
+async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_file_io,
+) -> None:
+    """When the harvest already recorded a cancellation AND settle then raises
+    another, the dispatch keeps the FIRST one (the ``_gh_settle_cancelled is
+    None`` guard's false arm) and still tears down before re-raising."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    def _cancel_settle(*args: Any, **kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    reset_run_pr_guard_claims()
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    provider = _ClaimingIsolationProvider()
+    _patch_isolation_builder(monkeypatch, provider)
+    dispatch = _BlockingHarvestDispatch(ref="sbx-double-cancel")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_dispatch_provider",
+        AsyncMock(return_value=dispatch),
+    )
+    fn = make_sandbox_agent_fn(_base_node_def(read_only=False, single_pr_per_run=True))
+    sandbox = await _completed_no_output_sandbox("sbx-double-cancel")
+    state = _run_state()
+    state["_run_id"] = str(uuid.uuid4())
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            task = asyncio.ensure_future(fn(state))
+            await asyncio.wait_for(dispatch.harvest_started.wait(), timeout=10)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    finally:
+        reset_run_pr_guard_claims()
+    assert "destroy_by_ref" in dispatch.events, (
+        f"the sandbox must still be destroyed when both harvest and settle cancel: {dispatch.events}"
+    )
+    assert "close" in dispatch.events, "the provider must still be closed when both harvest and settle cancel"

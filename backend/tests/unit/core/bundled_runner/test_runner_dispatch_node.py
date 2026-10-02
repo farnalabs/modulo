@@ -1288,3 +1288,176 @@ async def test_cancel_during_the_claim_harvest_still_tears_down_on_the_runner_ti
     assert clear_mock.await_count >= 1, (
         "the fenced dispatch marker must still be cleared after a cancel during the harvest"
     )
+
+
+# --- FAR-1315 coverage hardening: the dispatch finally's defensive arms -----
+
+
+async def test_flagged_dispatch_logs_a_pre_planted_refusal_when_the_run_is_already_spent(
+    patch_node_runner,
+    caplog,
+) -> None:
+    """A flagged node arriving after its run's one-PR slot was already SPENT
+    gets a pre-planted refusal, and the dispatch logs it loudly (naming the
+    tier) rather than silently installing a live guard that could open a
+    second PR."""
+    from modulo.core.pipeline_engine.sandbox_policy import (
+        acquire_run_pr_guard,
+        reset_run_pr_guard_claims,
+        settle_run_pr_guard,
+    )
+
+    reset_run_pr_guard_claims()
+    run_id = str(uuid.uuid4())
+    state = _state()
+    state["_run_id"] = run_id
+    assert acquire_run_pr_guard(run_id, "node-0") == "acquired"
+    assert settle_run_pr_guard(run_id, "node-0", None, claim_receipt=True) == "spent"
+
+    provider = _FakeProvider()
+    try:
+        with caplog.at_level(logging.WARNING, logger="modulo.core.bundled_runner.runner_dispatch"):
+            out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+        denied = [r.getMessage() for r in caplog.records if "gh_guard_run_claim_denied" in r.getMessage()]
+        assert denied, "a pre-planted refusal must be logged loudly at dispatch"
+        assert "pre-planted refusal" in denied[0]
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_skips_the_harvest_when_the_provider_ref_is_empty(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """With an armed guard but no provider ref to probe, the dispatch skips the
+    receipt harvest entirely and settles from the weaker evidence — the
+    ``_harvest_ref`` guard's false arm."""
+    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+    monkeypatch.setattr(
+        runner_dispatch,
+        "_provision_workspace",
+        AsyncMock(return_value=SimpleNamespace(attempt_key="attempt-key", provider_ref="")),
+    )
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+    finally:
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_survives_a_harvest_transport_error(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """A harvest that raises a generic exception (not just returns None) is
+    swallowed: the receipt is unknown and the dispatch still settles and tears
+    down rather than letting the finally fall over."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("harvest transport down")
+
+    monkeypatch.setattr(sandbox_policy, "harvest_gh_pr_claim_bounded", _boom)
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_survives_a_settle_failure(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """A generic exception from ``settle_run_pr_guard`` (it is synchronous and
+    runs in a ``finally``) is logged and swallowed; the node's own outcome is
+    unaffected."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("settle exploded")
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _boom)
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        assert out["envelope"] is True
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+
+
+async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """Defence in depth: if ``settle_run_pr_guard`` itself raises
+    ``CancelledError`` the dispatch records it, still tears down, then re-raises
+    — a cancellation must never skip ``_teardown_and_clear``."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    def _cancel_settle(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    _run_id, state = _fresh_flagged_state()
+    provider = _FakeProvider()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+    assert provider.destroyed, "teardown must run even when settle raises CancelledError"
+    assert provider.closed, "the provider must be closed even when settle raises CancelledError"
+
+
+async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also_cancels(
+    patch_node_runner,
+    monkeypatch,
+) -> None:
+    """When the harvest already recorded a cancellation AND settle then raises
+    another, the dispatch keeps the FIRST one (the ``_gh_settle_cancelled is
+    None`` guard's false arm) and still tears down before re-raising."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    def _cancel_settle(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(sandbox_policy, "settle_run_pr_guard", _cancel_settle)
+    _run_id, state = _fresh_flagged_state()
+    harvest_started = asyncio.Event()
+
+    class _BlockingHarvestProvider(_FakeProvider):
+        async def exec_command(self, ref, cmd, *, cmd_timeout=None):
+            if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+                harvest_started.set()
+                await asyncio.Event().wait()  # parks until the probe is cancelled
+            return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
+
+    provider = _BlockingHarvestProvider()
+    try:
+        task = asyncio.ensure_future(
+            runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
+        )
+        await asyncio.wait_for(harvest_started.wait(), timeout=10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+
+        reset_run_pr_guard_claims()
+    assert provider.destroyed, "teardown must still run when both harvest and settle are cancelled"
+    assert provider.closed, "the provider must still be closed when both harvest and settle are cancelled"

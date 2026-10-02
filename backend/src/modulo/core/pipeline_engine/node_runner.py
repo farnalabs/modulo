@@ -10451,7 +10451,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             run_scope=run_id,
                             timeout=20.0,
                         )
-                    except asyncio.CancelledError as _cancel_exc:
+                    # Cancellation is RECORDED, not re-raised here: the dispatch
+                    # re-raises it only after the sandbox kill / provider close /
+                    # marker clear below run (FAR-1315 re-gate MAJOR 1).
+                    except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
                         _claim_receipt = None
                         _gh_settle_cancelled = _cancel_exc
                     except Exception:
@@ -10471,7 +10474,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     # definitive receipt=False mean "confirmed no create".
                     guard_install_status=_gh_guard_install_status,
                 )
-            except asyncio.CancelledError as _cancel_exc:
+            except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
                 # Defence in depth: settle itself is synchronous, but never
                 # let a cancellation skip the teardown below either.
                 if _gh_settle_cancelled is None:

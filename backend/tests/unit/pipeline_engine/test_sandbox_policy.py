@@ -10,6 +10,7 @@ derivable from validated + enforced config).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -1668,3 +1669,201 @@ async def test_harvest_bounded_cancellation_is_reraised_after_the_probe_is_drain
     # cancelled and drained inside the wrapper.
     await asyncio.wait_for(drained.wait(), timeout=5)
     assert task.done()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1315 coverage hardening: the guard helpers' edge / defensive branches.
+#
+# These drive the small private helpers directly (and through ``settle`` where
+# a public surface exists) for the cases the end-to-end dispatch tests do not
+# reach: an absent scope, ledger-bound eviction on the settle path, a
+# non-parsing URL, empty streams, and every outcome of the bounded-harvest
+# drain (done / nested-cancel / stubborn / cancelled / BaseException).
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_scope_uuid_returns_none_for_an_absent_scope() -> None:
+    """An empty / absent scope canonicalises to ``None``: no run id means no
+    cross-node sharing, so the key builder short-circuits before parsing."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    assert sandbox_policy._canonical_scope_uuid(None) is None
+    assert sandbox_policy._canonical_scope_uuid("") is None
+
+
+def test_settle_run_pr_guard_is_a_noop_without_a_usable_run_scope() -> None:
+    """A settle with no usable scope is a noop — it runs in a dispatch
+    ``finally`` and must never raise nor create a hold out of thin air."""
+    assert settle_run_pr_guard(None, "node-1", "created the PR") == "noop"
+    assert settle_run_pr_guard("", "node-1", "created the PR") == "noop"
+
+
+def test_settle_spend_without_an_entry_still_honours_the_ledger_bound() -> None:
+    """Spend evidence for a scope with no ledger entry records SPENT, and that
+    insertion is still bounded — a long-lived engine process cannot grow the
+    ledger without limit through settles alone."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    reset_run_pr_guard_claims()
+    cap = sandbox_policy._MAX_RUN_PR_GUARD_CLAIMS
+    try:
+        for i in range(cap):
+            assert acquire_run_pr_guard(f"pytest-settle-bound-{i}", "node-1") == "acquired"
+        # No prior entry for the new scope -> the settle inserts then evicts.
+        assert settle_run_pr_guard("pytest-settle-bound-new", "node-1", None, claim_receipt=True) == "spent"
+        assert len(sandbox_policy._RUN_PR_GUARD_CLAIMS) <= cap
+    finally:
+        reset_run_pr_guard_claims()
+
+
+def test_is_valid_delivered_pr_url_rejects_a_url_that_fails_to_parse() -> None:
+    """A ``pr_url`` that makes ``urlsplit`` raise is never a spend signal: the
+    parse guard fail-closes to ``False`` instead of propagating."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    assert sandbox_policy._is_valid_delivered_pr_url("http://[::1") is False
+    assert sandbox_policy._is_valid_delivered_pr_url("N/A") is False
+    assert sandbox_policy._is_valid_delivered_pr_url("https://github.com/org/repo/pull/1") is True
+
+
+def test_pr_url_corroboration_skips_empty_streams_and_non_matching_urls() -> None:
+    """The stream scan skips falsy streams and keeps scanning past a
+    non-matching PR URL until the reported one is found (and rejects a missing
+    or blank ``pr_url`` outright)."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    target = "https://github.com/org/repo/pull/1"
+    assert (
+        sandbox_policy._pr_url_seen_in_streams(
+            target,
+            (None, "", f"first saw https://github.com/org/repo/pull/7 then {target}"),
+        )
+        is True
+    )
+    assert sandbox_policy._pr_url_seen_in_streams(None, (target,)) is False
+    assert sandbox_policy._pr_url_seen_in_streams("   ", (target,)) is False
+
+
+async def test_cancel_and_drain_harvest_skips_an_already_done_probe() -> None:
+    """A probe that finished before the drain was asked to cancel it is left
+    alone — there is nothing to cancel and the wait returns immediately."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    probe: asyncio.Future[bool | None] = asyncio.ensure_future(asyncio.sleep(0, result=True))
+    await probe
+    await sandbox_policy._cancel_and_drain_harvest(probe)
+    assert probe.done()
+
+
+async def test_cancel_and_drain_harvest_swallows_a_nested_cancellation() -> None:
+    """A cancellation landing while the drain itself waits is swallowed: the
+    probe is already cancelled, and the caller re-raises its OWN recorded
+    cancellation after teardown."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    released = asyncio.Event()
+
+    async def _probe() -> bool | None:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            released.set()
+            raise
+        return None  # pragma: no cover - the sleep never returns normally
+
+    probe: asyncio.Future[bool | None] = asyncio.ensure_future(_probe())
+    driver = asyncio.ensure_future(sandbox_policy._cancel_and_drain_harvest(probe))
+    await asyncio.sleep(0)  # let the drain start waiting on the probe
+    driver.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await driver
+    await asyncio.wait_for(released.wait(), timeout=5)
+    assert probe.done()
+
+
+async def test_cancel_and_drain_harvest_consumes_a_probe_that_outlives_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A probe that ignores its cancellation and outlives the drain bound gets
+    a done-callback that consumes its later outcome — a late failure is never
+    surfaced as asyncio's 'exception was never retrieved'."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    monkeypatch.setattr(sandbox_policy, "_HARVEST_DRAIN_TIMEOUT", 0.05)
+    finished = asyncio.Event()
+
+    async def _stubborn() -> bool | None:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            # Acknowledge the cancellation but keep running: this models a
+            # probe that ignores its cancel long enough to outlive the bound.
+            current = asyncio.current_task()
+            if current is not None:
+                current.uncancel()
+        await asyncio.sleep(0.05)
+        finished.set()
+        raise RuntimeError("probe failed after the drain bound")
+
+    probe: asyncio.Future[bool | None] = asyncio.ensure_future(_stubborn())
+    await asyncio.sleep(0)  # let the probe reach its first await before we cancel it
+    await sandbox_policy._cancel_and_drain_harvest(probe)
+    assert not probe.done(), "the stubborn probe must still be running when the bound expires"
+    await asyncio.wait_for(finished.wait(), timeout=5)
+    await asyncio.sleep(0)  # let the done-callback run
+    assert probe.done()
+    # The callback retrieved it, so this call does not raise/consume anything new.
+    assert isinstance(probe.exception(), RuntimeError)
+
+
+async def test_consume_harvest_probe_outcome_handles_every_terminal_state() -> None:
+    """The done-callback is total: a cancelled probe is a no-op, a clean probe
+    is a no-op, and a failed probe's exception is retrieved (never leaked)."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    cancelled: asyncio.Future[bool | None] = asyncio.ensure_future(asyncio.sleep(3600))
+    cancelled.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await cancelled
+    sandbox_policy._consume_harvest_probe_outcome(cancelled)
+
+    clean: asyncio.Future[bool | None] = asyncio.ensure_future(asyncio.sleep(0, result=True))
+    await clean
+    sandbox_policy._consume_harvest_probe_outcome(clean)
+    assert clean.exception() is None
+
+    async def _boom() -> bool | None:
+        raise RuntimeError("late probe failure")
+
+    failed: asyncio.Future[bool | None] = asyncio.ensure_future(_boom())
+    with contextlib.suppress(RuntimeError):
+        await failed
+    sandbox_policy._consume_harvest_probe_outcome(failed)
+    assert isinstance(failed.exception(), RuntimeError)
+
+
+async def test_harvest_bounded_reports_unknown_when_the_probe_is_cancelled() -> None:
+    """A probe coroutine that raises ``CancelledError`` itself leaves its task
+    cancelled; the wrapper reports the receipt as unknown (``None``) instead of
+    propagating the cancellation into the caller's teardown forensics."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    async def _cancelled(command: list[str]) -> SimpleNamespace:
+        raise asyncio.CancelledError
+
+    assert await sandbox_policy.harvest_gh_pr_claim_bounded(_cancelled, run_scope=str(uuid.uuid4())) is None
+
+
+async def test_harvest_bounded_reports_unknown_on_a_base_exception() -> None:
+    """Even a non-``Exception`` BaseException from the probe becomes an unknown
+    receipt (``None``): the finally caller must never see an unexpected failure
+    escape the best-effort harvest."""
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    class _ProbeExploded(BaseException):
+        pass
+
+    async def _explode(command: list[str]) -> SimpleNamespace:
+        raise _ProbeExploded("probe blew up")
+
+    assert await sandbox_policy.harvest_gh_pr_claim_bounded(_explode, run_scope=str(uuid.uuid4())) is None
