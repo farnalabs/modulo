@@ -930,12 +930,13 @@ jobs:
           # any subprocess.
           # FAR-1427: with no frontend change the frontend job produced no lcov
           # (and the download above is skipped), so the JavaScript leg has no
-          # report and no changed lines. Tolerate that missing report ONLY
-          # then; the Python report comes from the (always-downloaded) backend
-          # artifact, so its absence would already have failed the download.
+          # report and no changed lines. Tolerate that missing JS report ONLY
+          # then, via the NARROW --allow-missing-js-report flag: the Python leg
+          # stays strict (the global --allow-missing-reports must never be
+          # passed in CI).
           EXTRA_ARGS=()
           if [ "$FRONTEND_CHANGED" != "true" ]; then
-            EXTRA_ARGS+=(--allow-missing-reports)
+            EXTRA_ARGS+=(--allow-missing-js-report)
           fi
           .venv/bin/python ../scripts/run_coverage_gate.py \
             --compare-branch "origin/$BASE_REF" \
@@ -1157,7 +1158,7 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1530,7 +1531,7 @@ jobs:
     # reports success on pull_request events; the "only dispatch when all
     # needed checks are green" logic lives on the webhook step below.
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       contents: read
