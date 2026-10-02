@@ -405,6 +405,7 @@ async def _resolve_credential_scripts_for_input(
         CredentialResolutionError,
         resolve_clone_credential,
     )
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     # --- Tenancy check (FAR-801) ---
     # Validate the connector instance belongs to the same org as the run.
@@ -450,6 +451,20 @@ async def _resolve_credential_scripts_for_input(
     # --- Credential resolution ---
     try:
         async with session_factory() as session, session.begin():
+            # FAR-1409: scope THIS transaction to the run's org before the
+            # secrets-backend read.  FernetSecretsBackend.get_secret() resolves
+            # the org from the session (current_setting('app.organisation_id')
+            # / session.info, both written by set_rls_org) and raises when it
+            # is unset — which silently degraded the documented canonical
+            # production path to the legacy credentials_ciphertext fallback.
+            # Mirrors node_runner._read_org_vault_secret.
+            #
+            # The org id threads through this module as the run's string
+            # identity (the same value the tenancy check above filters on);
+            # set_rls_org stringifies it for set_config() and stores it
+            # verbatim in session.info, and FernetSecretsBackend re-parses it.
+            await set_rls_org(session, org_id)  # type: ignore[arg-type]
+            await set_rls_execution_context(session)
             cred = await resolve_clone_credential(
                 session,
                 connector_instance_id=connector_instance_id,

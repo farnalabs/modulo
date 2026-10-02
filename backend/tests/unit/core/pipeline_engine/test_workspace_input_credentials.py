@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import shutil
@@ -403,6 +404,71 @@ class TestDecryptConnectorCreds:
             creds = await _decrypt_connector_creds(ci, session=session)
 
         assert creds == {"token": "sk-fallback"}
+
+    @pytest.mark.asyncio
+    async def test_secrets_backend_generic_error_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A genuine secrets-backend failure (e.g. the unset RLS org context of
+        FAR-1409) is logged at WARNING — never buried at DEBUG — while the
+        ciphertext fallback still runs (control flow unchanged)."""
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=_encrypt('{"token": "sk-fallback"}'))
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = RuntimeError("RLS organisation context not set")
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            caplog.at_level(
+                logging.WARNING,
+                logger="modulo.core.pipeline_engine.workspace_input_credentials",
+            ),
+        ):
+            creds = await _decrypt_connector_creds(ci, session=session)
+
+        assert creds == {"token": "sk-fallback"}
+        warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "Secrets backend lookup failed" in warnings[0].getMessage()
+        assert "RLS organisation context not set" in warnings[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_secrets_backend_keyerror_logs_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """KeyError means "not in the vault" — the legitimate fallback — so it
+        must NOT be reported as a failure (only real errors widen to WARNING)."""
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=_encrypt('{"token": "sk-fallback"}'))
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = KeyError
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            caplog.at_level(
+                logging.WARNING,
+                logger="modulo.core.pipeline_engine.workspace_input_credentials",
+            ),
+        ):
+            creds = await _decrypt_connector_creds(ci, session=session)
+
+        assert creds == {"token": "sk-fallback"}
+        warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert not warnings
 
     @pytest.mark.asyncio
     async def test_secrets_backend_returns_non_dict_raises(self) -> None:

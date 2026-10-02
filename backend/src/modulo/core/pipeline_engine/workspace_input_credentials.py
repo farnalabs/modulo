@@ -150,9 +150,18 @@ async def _decrypt_connector_creds(
         raise CredentialResolutionError(f"Connector {ci.id} credentials are not valid JSON") from exc
     except CredentialResolutionError:
         raise
-    except Exception:
-        # Fall through to ciphertext fallback.
-        logger.debug("Secrets backend lookup failed for connector %s, falling back to ciphertext", ci.id)
+    except Exception as exc:
+        # Fall through to ciphertext fallback — but do NOT bury a genuine
+        # RLS-context/configuration failure at DEBUG (FAR-1409): the canonical
+        # secrets-backend path was silently degraded for exactly this reason
+        # (an unset RLS org context raised, was logged at DEBUG, and every
+        # read quietly took the legacy ciphertext branch).  WARNING keeps the
+        # fallback behaviour unchanged while making the cause visible.
+        logger.warning(
+            "Secrets backend lookup failed for connector %s, falling back to ciphertext: %r",
+            ci.id,
+            exc,
+        )
 
     # Fallback: decrypt credentials_ciphertext via Fernet.
     ciphertext = getattr(ci, "credentials_ciphertext", None)
