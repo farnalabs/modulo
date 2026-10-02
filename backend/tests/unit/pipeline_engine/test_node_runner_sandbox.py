@@ -25,6 +25,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _MAX_ARTIFACT_LOG,
     SandboxNodeFailedError,
     _compute_sandbox_cost,
+    _configure_stall_detector,
     _delta_ratio,
     _persist_full_stderr_artifact,
     _persist_full_stdout_artifact,
@@ -2505,30 +2506,32 @@ def test_heartbeat_disabled_but_agent_output_keeps_run_alive():
 
 
 def test_heartbeat_enabled_default_silent_connected_agent_does_not_stall():
-    """With the default enable_heartbeat=True, a connected-but-silent agent does
-    NOT stall — the drain probe's successful get_info keeps the heartbeat fresh
-    (the safe default that never false-kills).
+    """With the default enable_heartbeat=True, a connected-but-silent node that
+    has produced NO output yet does NOT stall: the drain probe's successful
+    get_info refreshes the dedicated `connection` channel (FAR-1088), which
+    ``last_activity()`` counts until the run's first real output. A healthy
+    connection therefore keeps a quiet-start node alive (bounded only by the
+    node's total ``timeout_seconds``) instead of stalling it unconditionally.
 
-    Asserted via detector semantics: with heartbeat enabled, refreshing it on a
-    successful get_info (without any output growth) keeps ``last_activity()``
-    fresh, so the watchdog never treats the run as stalled.
+    Asserted through the REAL ``_configure_stall_detector`` wiring: probe ticks
+    only advance `connection`, and the pre-FAR-1088 wiring (no connection
+    channel — probe success touched `heartbeat`) would leave ``last_activity()``
+    frozen at the enable-time seed and fail the assertions below.
     """
     now: list[float] = [0.0]
+    with patch("modulo.core.pipeline_engine.node_runner.time.monotonic", new=lambda: now[0]):
+        detector = _configure_stall_detector(
+            enable_heartbeat=True, watch_log_path=None, stdout_percentage_delta=None, watch_globs=[]
+        )
+    assert "connection" in detector.enabled  # FAR-1088: where probe liveness moved
 
-    def _clock() -> float:
-        return now[0]
-
-    detector = _StallDetector(now=_clock)
-    detector.enable("output")
-    detector.enable("heartbeat")
-    assert "heartbeat" in detector.enabled  # default enabled
-
-    # Simulate many silent drain ticks that only refresh the heartbeat (get_info
-    # success, no output growth).
+    # Simulate many silent drain ticks that only refresh liveness on a
+    # successful get_info (probe success, no output growth). The detector's
+    # clock stays bound to `now`, so last_activity() tracks the probe ticks
+    # exactly — connection liveness keeps a never-output node alive.
     for _ in range(50):
         now[0] += 1.0
-        detector.touch("heartbeat")
-        # last_activity() is the max across enabled channels and stays fresh.
+        detector.touch("connection")
         assert detector.last_activity() == now[0]
 
 

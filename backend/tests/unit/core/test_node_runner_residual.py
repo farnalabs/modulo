@@ -2309,7 +2309,10 @@ def test_configure_stall_detector_default_heartbeat_only():
     stall = nr._configure_stall_detector(
         enable_heartbeat=True, watch_log_path=None, stdout_percentage_delta=None, watch_globs=[]
     )
-    assert stall.enabled == {"output", "heartbeat"}
+    # FAR-1088: probe-success liveness moved onto its own `connection` channel
+    # (enabled with the heartbeat; dropped in strict mode — see the sibling
+    # opt-in test for the enable_heartbeat=False set).
+    assert stall.enabled == {"output", "heartbeat", "connection"}
 
 
 @pytest.mark.parametrize(

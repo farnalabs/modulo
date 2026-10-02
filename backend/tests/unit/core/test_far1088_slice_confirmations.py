@@ -16,11 +16,12 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -264,6 +265,115 @@ class TestClaimResetsDispatchPhase:
 
         assert "dispatch_phase='claimed'" in sql
         assert "dispatch_phase_entered_at=now()" in sql
+        assert "claim_count=claim_count+1" in sql
         # The raw (uncompiled) template carries the named bind — the compiled
         # postgres dialect renders it as a pyformat param.
         assert "claim_token=:tok" in str(stmt)
+
+
+# ---------------------------------------------------------------------------
+# W-B: a run with a LIVE sandbox_dispatch_state marker is NOT a zero-node
+# nodeless zombie — the backstop leaves it to the node-deadline watchdog until
+# the safety floor passes, then catches it again.
+# ---------------------------------------------------------------------------
+
+
+class TestInFlightDispatchExcludedFromNodelessBackstop:
+    """FAR-1088 W-B: the nodeless predicate and row recheck carry an in-flight leg.
+
+    A live dispatch marker is written when a node dispatches and cleared fenced
+    when it completes, so a row carrying one has dispatched a node: claiming it
+    at the 35-minute window boundary (the Branch Fixer dispatcher_reconcile
+    kill) superseded a legitimately in-flight executor. The leg excludes such
+    rows until the safety floor (``_NODELESS_IN_FLIGHT_FLOOR_SECONDS`` — the
+    worst-case node deadline from ``started_at``), so nothing can hang forever
+    if the FAR-369 node-deadline watchdog itself has failed.
+    """
+
+    @staticmethod
+    def _inflight_row(*, started_minutes_ago: float) -> SimpleNamespace:
+        """A zero-node row (no token usage, no ``__final__`` row, no
+        checkpoints) carrying a LIVE dispatch marker — dispatched, no
+        super-step completed yet."""
+        row = _progressing_row(
+            node_token_usage=None,
+            outputs_absent=True,
+            checkpoints_absent=True,
+            started_minutes_ago=started_minutes_ago,
+            heartbeat_minutes_ago=0.5,  # executor alive — only the nodeless branch matches
+        )
+        row.sandbox_dispatch_state = json.dumps(
+            {"state": "dispatching", "attempt_key": "att-1", "provider": "e2b"},
+        )
+        return row
+
+    def test_live_marker_row_is_not_a_nodeless_zombie(self) -> None:
+        """A live marker row past the 35-min nodeless window is NOT a
+        zero-node zombie (Fails without W-B: it returned True)."""
+        row = self._inflight_row(started_minutes_ago=40)
+
+        assert ch._is_nodeless_zombie_row(row, 35) is False
+
+    async def test_live_marker_row_falls_through_the_nodeless_repair(self) -> None:
+        """``_reconcile_nodeless_repair`` returns ``None`` (row continues down
+        the normal path) for an in-flight row: no terminal-fail, no skip, no
+        re-dispatch. Fails without W-B: the row check passed and the branch
+        handled the row (throttled skip -> returns the counter, not ``None``).
+        """
+        row = self._inflight_row(started_minutes_ago=40)
+        summary = {"nodeless_failed": 0, "nodeless_redispatched": 0, "nodeless_capped": 0, "skipped": 0}
+
+        with patch.object(ch, "get_settings", return_value=MagicMock(saq_nodeless_redispatch_budget=4)):
+            handled = await ch._reconcile_nodeless_repair(
+                AsyncMock(),
+                MagicMock(),
+                uuid.uuid4(),
+                row,
+                35,
+                0,
+                summary,
+                [],
+            )
+
+        assert handled is None
+        assert summary["nodeless_failed"] == 0
+        assert summary["nodeless_redispatched"] == 0
+        assert summary["skipped"] == 0
+
+    def test_live_marker_row_catchable_past_the_safety_floor(self) -> None:
+        """Past the in-flight floor (70 min > 3900 s) the marker no longer
+        shields: the row is catchable again, so a dead node-deadline watchdog
+        can never strand the run forever."""
+        row = self._inflight_row(started_minutes_ago=70)
+
+        assert ch._NODELESS_IN_FLIGHT_FLOOR_SECONDS == 3900
+        assert ch._is_nodeless_zombie_row(row, 35) is True
+
+    def test_hitl_tombstone_row_is_not_shielded(self) -> None:
+        """The ``cleared_at_hitl`` tombstone records only a PAST dispatch (the
+        marker was cleared) — it is not a live marker, so it takes no
+        in-flight shield: pre-W-B behaviour preserved."""
+        row = self._inflight_row(started_minutes_ago=40)
+        row.sandbox_dispatch_state = json.dumps({"state": "cleared_at_hitl", "written_at": "2026-10-01T00:00:00+00:00"})
+
+        assert ch._is_nodeless_zombie_row(row, 35) is True
+
+    def test_sql_predicate_carries_the_marker_leg_and_floor(self) -> None:
+        """The SQL predicate (not just the row recheck) carries the in-flight
+        leg: a NULL-or-tombstone marker OR age past the 3900 s floor. Fails
+        without W-B: neither the marker disjunct nor the floor bind exists."""
+        compiled = sa.select(Run.id).where(ch._nodeless_zombie_predicate(35)).compile()
+        sql = str(compiled)
+
+        assert "runs.sandbox_dispatch_state IS NULL" in sql
+        assert '"state": "cleared_at_hitl"' in sql
+
+        literal = (
+            sa.select(Run.id)
+            .where(ch._nodeless_zombie_predicate(35))
+            .compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        assert f"now() - {ch._NODELESS_IN_FLIGHT_FLOOR_SECONDS} * interval" in str(literal)

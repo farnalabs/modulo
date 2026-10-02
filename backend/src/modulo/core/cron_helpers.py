@@ -4063,6 +4063,73 @@ def _checkpoint_absent_expr() -> Any:
     )
 
 
+# FAR-1088 W-B safety floor for the in-flight marker shield: worst-case node
+# deadline measured from runs.started_at =
+#   SAQ_SETUP_GRACE_SECONDS (600 default — time-to-first-dispatch, the event
+#   that writes the marker) + 3300s (GraphValidator's save-time cap on a
+#   node's timeout_seconds; also the E2B parity bound) = 3900s (65 min).
+# See _nodeless_in_flight_floor_seconds().
+_NODELESS_IN_FLIGHT_FLOOR_SECONDS = 3900
+
+# FAR-1088 W-B: the IN-FLIGHT leg of the nodeless predicate. A run carrying a
+# LIVE ``sandbox_dispatch_state`` marker has dispatched a node (the marker is
+# written at dispatch, cleared fenced when the node completes), so it is NOT a
+# zero-node nodeless zombie: the nodeless repair must leave it alone and the
+# FAR-369 node-deadline watchdog owns it. "Live" = non-NULL and not the HITL
+# tombstone (``{"state": "cleared_at_hitl", ...}`` — the dispatch-CLEARED state
+# that only records a past dispatch). The state literal mirrors
+# ``runner_capacity.MARKER_STATE_CLEARED_AT_HITL`` and is repeated, not
+# imported: cron_helpers must not import runner_capacity at module load
+# (runner_capacity imports this module lazily — see its
+# ``_sweep_recoverability_predicate``). Matching the JSON ``state`` field
+# PRECISELY (never a bare ``%cleared_at_hitl%`` substring) follows
+# ``db.crud.run.RUNNER_TOMBSTONE_EXCLUSION_SQL`` (qa F13).
+_NODELESS_NO_LIVE_MARKER_SQL = (
+    'runs.sandbox_dispatch_state IS NULL OR runs.sandbox_dispatch_state LIKE \'%"state": "cleared_at_hitl"%\''
+)
+
+
+def _nodeless_in_flight_floor_seconds() -> int:
+    """Safety floor: how long a live in-flight marker shields a run from the
+    nodeless backstop (FAR-1088 W-B), in seconds past ``runs.started_at``.
+
+    The FAR-369 node-deadline watchdog fires at ``node_start +
+    timeout_seconds``; ``node_start`` is bounded by the SAQ setup grace (the
+    in-process zombie watchdog stands down at first dispatch — the event that
+    writes the marker) and ``timeout_seconds`` is capped at 3300s by the
+    GraphValidator. The worst-case node deadline measured from
+    ``runs.started_at`` is therefore ``SAQ_SETUP_GRACE_SECONDS`` (600 default)
+    + 3300s = 3900s (65 min) — the bound this constant encodes. Past that age
+    the marker no longer shields: the row becomes catchable again, so a run
+    can never hang forever when the node-deadline watchdog itself has failed.
+    The floor stays well below the B4 mid-graph wedge backstop (~135 min with
+    default settings).
+
+    A plain constant (not ``get_settings()``) because this value binds into
+    the SQL predicate, which is compiled in unit tests and in contexts where
+    the full Settings model is not loadable. A deployment that raises
+    ``SAQ_SETUP_GRACE_SECONDS`` past its 600s default must widen this floor
+    in step.
+    """
+    return _NODELESS_IN_FLIGHT_FLOOR_SECONDS
+
+
+def _has_live_dispatch_marker(row: Any) -> bool:
+    """Row-side in-flight leg (FAR-1088 W-B): the row carries a LIVE dispatch marker.
+
+    Mirrors the SQL ``_NODELESS_NO_LIVE_MARKER_SQL`` disjunct (non-NULL, not
+    the HITL tombstone). A row source without the attribute — or a NULL
+    marker — has no evidence of a dispatch and returns False, preserving the
+    pre-FAR-1088 behaviour for rows that never dispatched a node.
+    """
+    from modulo.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL
+
+    marker = getattr(row, "sandbox_dispatch_state", None)
+    if not isinstance(marker, str) or not marker:
+        return False
+    return f'"state": "{MARKER_STATE_CLEARED_AT_HITL}"' not in marker
+
+
 def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     """Match a claimed-but-never-executed SAQ zombie.
 
@@ -4071,7 +4138,12 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     ``__final__`` row for the run in ``run_node_outputs``, the FAR-583 store
     the finalisation writes since PR A) + started more than *age_minutes* ago
     + ZERO LangGraph checkpoints for the run's thread (checkpoints are written
-    when a node COMPLETES a super-step).
+    when a node COMPLETES a super-step) + NO live in-flight dispatch marker
+    (FAR-1088 W-B: a run whose ``sandbox_dispatch_state`` still carries a live
+    marker has dispatched a node and is owned by the node-deadline watchdog —
+    excluded until the safety floor, so the backstop can never claim a
+    legitimately in-flight run at the window boundary, yet still catches it
+    once the node deadline has provably passed).
 
     FAR-583 B1: the legacy ``runs.outputs_json IS NULL`` leg is GONE (the
     column's ORM mapping is cut) — the ``NOT EXISTS(run_node_outputs
@@ -4081,7 +4153,8 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     leg (LangGraph writes a checkpoint when a node COMPLETES a super-step) — the NOT-EXISTS
     leg is the wedge backstop for a run that produced neither before stalling
     (marker-only runs remain re-dispatch-eligible — markers never produce
-    ``__final__`` rows).
+    ``__final__`` rows; the live-marker shield below defers them past the node
+    deadline rather than excluding them forever).
 
     The age gate MUST exceed the pipeline's max node timeout: a legitimate
     long-running first node writes its first checkpoint only after it finishes,
@@ -4115,6 +4188,16 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
         Run.dispatcher == "saq",
         Run.node_token_usage.is_(None),
         Run.started_at < func_now_minus(age_minutes * 60),
+        # FAR-1088 W-B in-flight leg: no live dispatch marker, OR the row is
+        # already past the safety floor (the node deadline has provably
+        # passed — catchable again so nothing hangs forever if the
+        # node-deadline watchdog failed). Resolved through
+        # _nodeless_in_flight_floor_seconds() so the SQL and row-level legs
+        # share ONE bound.
+        or_(
+            text(_NODELESS_NO_LIVE_MARKER_SQL),
+            Run.started_at < func_now_minus(_nodeless_in_flight_floor_seconds()),
+        ),
         _checkpoint_absent_expr(),
         _final_row_absent_expr(),
     )
@@ -4146,6 +4229,15 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     WITHOUT the attribute fails closed (not zero-node — no repair, no
     carve-out), so a future row source that forgets the column can never
     re-dispatch a possibly-executed run.
+
+    FAR-1088 W-B: the SAME in-flight leg the SQL predicate carries is
+    re-checked here (the combined predicate is an OR, so a marker-carrying row
+    could be selected via another branch): a row with a LIVE
+    ``sandbox_dispatch_state`` marker is excluded until its age passes the
+    safety floor (:func:`_nodeless_in_flight_floor_seconds`), then becomes
+    catchable again. Both ``_reconcile_nodeless_repair`` and the FAR-873
+    early-detect branch gate on this function, so the failure-coverage
+    carve-out still only ever sees genuinely zero-node, not-in-flight rows.
     """
     if row.status != "running":
         return False
@@ -4153,7 +4245,10 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
         return False
     if row.started_at is None:
         return False
-    if (datetime.now(UTC) - row.started_at).total_seconds() <= age_minutes * 60:
+    age_seconds = (datetime.now(UTC) - row.started_at).total_seconds()
+    if age_seconds <= age_minutes * 60:
+        return False
+    if age_seconds <= _nodeless_in_flight_floor_seconds() and _has_live_dispatch_marker(row):
         return False
     # Checkpoint leg LAST so the specific legs above stay the rejecting reason
     # for rows that carry them (keeps the per-leg tests discriminating).
@@ -4201,6 +4296,11 @@ def _nodeless_early_detect_predicate(
     means the SAQ worker is alive (or wedged with a live heartbeat); the early
     detect catches the wedged-worker case BEFORE the full nodeless window
     elapses, reducing exposure from ~35 min to ~15 min.
+
+    The base predicate carries the FAR-1088 W-B in-flight leg, so this early
+    branch inherits it: a run whose node has DISPATCHED (live dispatch marker,
+    no checkpoint yet) is never claimed at the early window either — it is
+    owned by the node-deadline watchdog until the safety floor passes.
 
     The throttle uses the FULL saq_claimed_nodeless_minutes window (not the
     early-detect window) so at most one early re-dispatch happens per full
@@ -6035,6 +6135,10 @@ async def _reconcile_org(
                         Run.started_at,
                         Run.claim_count,
                         Run.dispatcher,
+                        # FAR-1088 W-B: consumed by the row-level nodeless
+                        # recheck (_is_nodeless_zombie_row) — a live dispatch
+                        # marker shields the row from the nodeless repair
+                        # until the in-flight safety floor passes.
                         Run.sandbox_dispatch_state,
                         text("runs.enqueue_failed_at AS enqueue_failed_at"),
                         Pipeline.retry_policy,
