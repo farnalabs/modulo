@@ -411,6 +411,20 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
       ...over,
     })
 
+  // FAR-1405: the streak engine also covers `cron` (backend STREAK_TRIGGER_TYPES
+  // = ("ongoing", "cron")), so the badge must render for it too.
+  const cron = (over: Record<string, unknown> = {}) => ({
+    id: 'trig-cron-1',
+    pipeline_id: 'p1',
+    trigger_type: 'cron',
+    active: true,
+    cron_expression: '0 * * * *',
+    cron_timezone: 'UTC',
+    config_json: {},
+    streak_status: streakStatus(),
+    ...over,
+  })
+
   it('shows the x/N streak badge for an enabled ongoing trigger', async () => {
     const wrapper = mountView(fakeJwt('admin'), { ...baseListData, items: [ongoing()] })
     await flush()
@@ -420,10 +434,87 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(badge.text()).toContain('3/5')
   })
 
-  it('does not show a streak badge for non-ongoing triggers or disabled engines', async () => {
+  it('FAR-1405: shows the x/N streak badge for an enabled cron trigger, with no deactivated wording', async () => {
+    // FAR-1387: the backend returns REAL streak_status for cron. A cron trip
+    // notifies — it does NOT auto-deactivate by default — so the payload is
+    // state 'ok' / deactivated_reason null and the badge must read
+    // "No-delivery streak x/N" with no "Deactivated" badge and no re-enable.
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [cron({ streak_status: streakStatus({ streak: 3, threshold: 5, state: 'ok', deactivated_reason: null }) })],
+    })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-streak"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('No-delivery streak 3/5')
+    // The badge conveys dynamic status, so it is a status region (WCAG 4.1.3).
+    expect(badge.attributes('role')).toBe('status')
+    expect(badge.attributes('aria-live')).toBe('polite')
+    // "Deactivated" is state-driven: a notify-only cron trip never says it.
+    expect(wrapper.find('[data-testid="settings-triggers-deactivated-badge"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-triggers-reenable"]').exists()).toBe(false)
+  })
+
+  it('FAR-1405: a cron streak AT threshold stays active — red tier, still no deactivated wording', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [cron({ streak_status: streakStatus({ streak: 5, threshold: 5, state: 'ok', deactivated_reason: null }) })],
+    })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-streak"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('No-delivery streak 5/5')
+    expect(badge.classes()).toContain('text-destructive')
+    expect(wrapper.find('[data-testid="settings-triggers-deactivated-badge"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-triggers-reenable"]').exists()).toBe(false)
+  })
+
+  it('FAR-1405: an opt-in auto-deactivated cron DOES show the deactivated badge + re-enable (state, not type)', async () => {
+    // Cron auto-deactivation is opt-in (config_json no_delivery_auto_deactivate);
+    // when it happens the backend reports state 'deactivated' + a reason, and
+    // the state-driven badge/re-enable must appear for cron exactly as for ongoing.
     const wrapper = mountView(fakeJwt('admin'), {
       ...baseListData,
       items: [
+        cron({
+          active: false,
+          streak_status: streakStatus({ streak: 5, state: 'deactivated', deactivated_reason: 'no_delivery_streak' }),
+        }),
+      ],
+    })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-deactivated-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('aria-live')).toBe('polite')
+    expect(badge.text()).toContain('Deactivated')
+    expect(wrapper.find('[data-testid="settings-triggers-reenable"]').exists()).toBe(true)
+    // The streak badge still renders alongside it (it still shows the streak).
+    expect(wrapper.find('[data-testid="settings-triggers-streak"]').exists()).toBe(true)
+  })
+
+  it('FAR-1405: the covered-set gate keeps the badge off an uncovered trigger type', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        { id: 't-webhook', pipeline_id: 'p1', trigger_type: 'webhook', active: true, config_json: {}, streak_status: streakStatus() },
+        { id: 't-polling', pipeline_id: 'p1', trigger_type: 'polling', active: true, config_json: {}, streak_status: streakStatus() },
+      ],
+    })
+    await flush()
+
+    expect(wrapper.findAll('[data-testid="settings-triggers-streak"]')).toHaveLength(0)
+  })
+
+  it('does not show a streak badge when the payload has no streak_status (legacy row) or the engine is disabled', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        // A cron row from a pre-FAR-1387 cached/stale payload: no streak_status
+        // key at all. Covered type + enabled engine is what renders the badge,
+        // so an absent status must not (and must not crash).
         { id: 't-cron', pipeline_id: 'p1', trigger_type: 'cron', active: true, config_json: {} },
         ongoing({ streak_status: { enabled: false, streak: 0, threshold: 5, state: 'unconfigured', deactivated_reason: null, last_outcomes: [] } }),
       ],
