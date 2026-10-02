@@ -2521,7 +2521,11 @@ def test_heartbeat_enabled_default_silent_connected_agent_does_not_stall():
     now: list[float] = [0.0]
     with patch("modulo.core.pipeline_engine.node_runner.time.monotonic", new=lambda: now[0]):
         detector = _configure_stall_detector(
-            enable_heartbeat=True, watch_log_path=None, stdout_percentage_delta=None, watch_globs=[]
+            enable_heartbeat=True,
+            watch_log_path=None,
+            stdout_percentage_delta=None,
+            watch_globs=[],
+            sandbox_mode="llm",
         )
     assert "connection" in detector.enabled  # FAR-1088: where probe liveness moved
 

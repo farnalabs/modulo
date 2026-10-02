@@ -124,6 +124,7 @@ def _watchdog(
         watch_log_path=watch_log_path,
         stdout_percentage_delta=None,
         watch_globs=watch_globs or [],
+        sandbox_mode="llm",
     )
     return nr._SandboxWatchdog(
         sandbox=sandbox,

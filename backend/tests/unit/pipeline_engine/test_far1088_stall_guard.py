@@ -16,30 +16,44 @@ detector. Each test here FAILS without the FAR-1088 change:
    (it does not stall "unconditionally"): probe touches are a no-op on the
    disabled channel (unchanged FAR-306 behaviour) and the stall fires only
    once the 600s output-silence window has elapsed.
+4. (F1) That tight rule is SCOPED to STREAMING nodes: a script-mode node
+   (``sandbox_mode == "script"``) keeps connection liveness after its first
+   output too, so a block-buffered, legitimately-quiet child is never
+   hard-killed by the 600s window (the false-stall regression).
+5. (F5) A streaming node that NEVER emits output stays alive on the
+   connection fallback for its whole life — bounded only by the node's total
+   ``timeout_seconds``, never by the silence window. That limitation is
+   intended, so it is asserted rather than implied.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import modulo.core.pipeline_engine.node_runner as nr
 from modulo.core.pipeline_engine.node_runner import (
     _configure_stall_detector,
     _SandboxWatchdog,
     _StallDetector,
+    _wait_command_with_exec_process,
     _WatchdogWallClock,
 )
 
 
-def _detector_with_clock(*, enable_heartbeat: bool, clock: list[float]) -> _StallDetector:
+def _detector_with_clock(*, enable_heartbeat: bool, clock: list[float], sandbox_mode: str = "llm") -> _StallDetector:
     """Build the REAL default/strict detector bound to a fake monotonic clock.
 
     ``_configure_stall_detector`` constructs its ``_StallDetector`` with
     ``time.monotonic`` captured at construction time, so patching the module
     attribute for the duration of the call wires the fake clock in — the
     enabled-channel set comes from production code, never from a re-declared
-    test copy.
+    test copy. ``sandbox_mode`` is the FAR-1088 F1 discriminator: ``"llm"``
+    (streaming, the default) vs ``"script"`` (quiet, connection stays live).
     """
     with patch("modulo.core.pipeline_engine.node_runner.time.monotonic", new=lambda: clock[0]):
         return _configure_stall_detector(
@@ -47,6 +61,7 @@ def _detector_with_clock(*, enable_heartbeat: bool, clock: list[float]) -> _Stal
             watch_log_path=None,
             stdout_percentage_delta=None,
             watch_globs=[],
+            sandbox_mode=sandbox_mode,
         )
 
 
@@ -171,3 +186,125 @@ def test_default_detector_wires_the_connection_channel() -> None:
     # Backstop: a hand-built detector with every channel disabled never stalls.
     never = _StallDetector(now=lambda: 1.0)
     assert never.last_activity() == 1.0
+
+
+# ---------------------------------------------------------------------------
+# F1 — the tight output-silence kill is scoped to nodes whose output is
+# EXPECTED TO STREAM; a legitimately quiet script-mode workload keeps
+# connection-liveness (pre-FAR-1088 behaviour), bounded by its node deadline.
+# ---------------------------------------------------------------------------
+
+
+def test_script_mode_keeps_connection_liveness_after_first_output() -> None:
+    """F1: ``sandbox_mode == "script"`` does NOT take the streaming rule.
+
+    A script-mode command redirects stdout to ``agent.log``, so only log growth
+    feeds output-liveness — a block-buffered child (``docker pull``,
+    ``pnpm``/``uv install``, a buffered test run) can legitimately be silent
+    for far longer than 600s. Without the F1 scoping it would be HARD-KILLED
+    and retried by the idle watchdog (a false-stall regression): output was
+    observed once, so ``connection`` was excluded and the flat log tripped the
+    window. Here the same sequence never stalls on a script node — while the
+    identical sequence on a streaming (``llm``) node does, proving the
+    discriminator, not a weakened window, is what changed.
+    """
+    # Script node: first output observed, then 1500s (2.5 windows) of output
+    # silence with a healthy probe every 300s -> alive throughout.
+    clock: list[float] = [1000.0]
+    script = _detector_with_clock(enable_heartbeat=True, clock=clock, sandbox_mode="script")
+    script.touch("output")  # the log grew once
+    assert script._output_seen is True  # the flag flips in BOTH modes...
+    for _ in range(5):
+        clock[0] += 300.0
+        script.touch("connection")  # probes keep succeeding, log stays flat
+        assert clock[0] - script.last_activity() < nr._SANDBOX_IDLE_TIMEOUT, (
+            "a quiet script node must stay alive on connection liveness, "
+            "not be hard-killed at the output-silence window"
+        )
+
+    # Control: the SAME sequence on a streaming node IS stalled past the window.
+    llm_clock: list[float] = [1000.0]
+    streaming = _detector_with_clock(enable_heartbeat=True, clock=llm_clock, sandbox_mode="llm")
+    streaming.touch("output")
+    llm_clock[0] = 1000.0 + nr._SANDBOX_IDLE_TIMEOUT + 1.0
+    streaming.touch("connection")  # a probe succeeding mid-window must not save it
+    assert llm_clock[0] - streaming.last_activity() >= nr._SANDBOX_IDLE_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# F5 — stated and covered: a streaming node that NEVER emits output is held
+# alive by the connection fallback and bounded ONLY by its node deadline.
+# ---------------------------------------------------------------------------
+
+
+def test_never_output_streaming_node_is_held_alive_by_connection_liveness() -> None:
+    """F5(a): output NEVER seen (``_output_seen`` stays False) — the
+    ``connection`` fallback keeps ``last_activity()`` tracking the probe for
+    the node's whole life, so the silence window cannot fire no matter how much
+    wall time passes. The limitation: this node is bounded by its total
+    ``timeout_seconds`` only, NOT by ``stall_timeout_seconds``."""
+    clock: list[float] = [0.0]
+    stall = _detector_with_clock(enable_heartbeat=True, clock=clock, sandbox_mode="llm")
+    assert stall.enabled == {"output", "heartbeat", "connection"}
+
+    for _ in range(20):
+        clock[0] += nr._SANDBOX_IDLE_TIMEOUT + 1.0  # 12020s of total silence
+        stall.touch("connection")  # probe succeeds; the log never grows
+        assert stall._output_seen is False  # still never produced output
+        assert stall.last_activity() == clock[0]  # liveness tracks the probe...
+        assert clock[0] - stall.last_activity() < nr._SANDBOX_IDLE_TIMEOUT  # ...so never stalled
+
+
+async def test_never_output_node_dies_by_total_timeout_not_by_the_silence_window() -> None:
+    """F5(b): through the REAL wait loop, a never-output streaming node whose
+    probe refreshes liveness on every tick outlives a silence window (0.5s)
+    that is never fed by output, and dies only when the node's total
+    ``timeout_seconds`` fires — proving the node deadline, not the silence
+    window, is its bound.
+
+    Timing margins (the FAR-306 lesson, >=50x tick-to-window): the window is
+    0.5s against a 0.01s tick, so a single delayed iteration cannot be
+    mistaken for a stall under a loaded event loop; the total timeout (2s)
+    outlasts the window 4x so the deadline path is what actually fires.
+    """
+    from modulo.core.runtime_provider import ExecProcess
+
+    process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
+    killed: list[str] = []
+
+    async def _kill() -> None:
+        killed.append("killed")
+
+    process._kill = _kill  # type: ignore[attr-defined]
+
+    async def _chunks():
+        # Never completes: only a bound below can end the wait.
+        guard_deadline = time.monotonic() + 3600.0
+        while time.monotonic() < guard_deadline:
+            await asyncio.sleep(3600)
+            yield ""  # pragma: no cover
+
+    process.chunks = _chunks()
+
+    clock: list[float] = [0.0]
+    stall = _detector_with_clock(enable_heartbeat=True, clock=clock, sandbox_mode="llm")
+
+    async def _probe_tick() -> None:
+        # Each tick: get_info succeeded (the drain probe), the log did not
+        # grow. The detector's fake clock follows wall time so the touch
+        # timestamps stay comparable to the loop's real monotonic reads.
+        clock[0] = time.monotonic()
+        stall.touch("connection")
+
+    with pytest.raises(TimeoutError, match="total timeout"):
+        await _wait_command_with_exec_process(
+            process,
+            total_timeout=2.0,
+            idle_timeout=0.5,  # a silence window the node outlives only via connection liveness
+            last_activity=stall.last_activity,
+            on_tick=_probe_tick,
+            tick_interval=0.01,
+        )
+
+    assert killed == [], "the node must die at the deadline, never at the silence window"
+    assert stall._output_seen is False

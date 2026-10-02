@@ -19,6 +19,17 @@ _POSTGRES_ASYNC_PREFIX = "postgresql+asyncpg://"
 # Minimum length for each operator secret (MODULO_BREAK_GLASS_SECRET /
 # _STANDBY_SECRET). Validated unconditionally when set (break-glass plan §3).
 _MIN_BREAK_GLASS_SECRET_LEN = 24
+# GraphValidator's save-time cap on a node's ``timeout_seconds`` (graph_validator
+# rejects anything above it: E2B's 1-hour sandbox cap leaves provisioning
+# headroom — the same 3300s parity bound runner_dispatch mirrors). The largest
+# node deadline a run's in-flight dispatch marker can legitimately cover, and
+# therefore half of the nodeless in-flight safety floor (FAR-1088 W-B).
+MAX_NODE_TIMEOUT_SECONDS = 3300
+# Default for ``saq_setup_grace_seconds`` — named so the nodeless in-flight
+# floor's default-config derivation (cron_helpers
+# ``_NODELESS_IN_FLIGHT_FLOOR_SECONDS``) can share the literal instead of
+# repeating it (FAR-1088 W-B).
+SAQ_SETUP_GRACE_DEFAULT_SECONDS = 600
 # Known placeholder values that operators paste from docs without changing.
 _BLOCKED_SECRET_KEYS = frozenset({"changeme", "secret", "your-secret-key", "development", "test", "insecure"})
 
@@ -27,6 +38,8 @@ _BLOCKED_SECRET_KEYS = frozenset({"changeme", "secret", "your-secret-key", "deve
 # entry (FAR-671) — listing it here keeps the intended API explicit and marks
 # it used for the vulture dead-code gate.
 __all__ = [
+    "MAX_NODE_TIMEOUT_SECONDS",
+    "SAQ_SETUP_GRACE_DEFAULT_SECONDS",
     "Settings",
     "break_glass_boot_findings",
     "get_settings",
@@ -518,7 +531,19 @@ class Settings(BaseSettings):
     # super-step. MUST exceed any legitimate pre-first-node setup but stay well
     # below the run_claim_stale_seconds claim fence so the watchdog wins before
     # a stale-heartbeat re-claim can double-execute the hung run.
-    saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    saq_setup_grace_seconds: int = Field(
+        default=SAQ_SETUP_GRACE_DEFAULT_SECONDS, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600
+    )
+    # FAR-1088 W-B: how long a LIVE ``sandbox_dispatch_state`` marker shields a
+    # run from the nodeless backstop, measured from the PER-ATTEMPT anchor
+    # ``max(runs.started_at, runs.dispatched_at)``. UNSET (the default) DERIVES
+    # it at load time as ``saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS``
+    # (600 + 3300 = 3900s at the shipped defaults), so raising
+    # SAQ_SETUP_GRACE_SECONDS widens the floor instead of silently re-opening
+    # the claim-a-live-attempt bug the hard-coded 3900 had. An EXPLICIT value is
+    # validated by ``_nodeless_in_flight_floor_invariant`` below: it must still
+    # cover grace + max node timeout, or Settings refuses to load.
+    nodeless_in_flight_floor_seconds: int | None = Field(default=None, alias="NODELESS_IN_FLIGHT_FLOOR_SECONDS", ge=60)
     # FAR-819 refresh-token reuse grace window. A refresh token presented with a
     # stale family sequence within this window after the most recent rotation
     # (``rotated_at``) is treated as a benign retry/replay rather than a theft
@@ -1050,6 +1075,41 @@ class Settings(BaseSettings):
                     "saq_setup_grace_seconds": self.saq_setup_grace_seconds,
                     "run_claim_stale_seconds": self.run_claim_stale_seconds,
                 },
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _nodeless_in_flight_floor_invariant(self) -> "Settings":
+        """FAIL (never warn): the in-flight floor must cover grace + max node timeout.
+
+        FAR-1088 W-B: a live ``sandbox_dispatch_state`` marker shields a run from
+        the nodeless backstop until the safety floor passes, so the floor must
+        reach the worst-case node deadline — ``saq_setup_grace_seconds`` (time to
+        first dispatch, the event that writes the marker) + the GraphValidator
+        cap on a node's ``timeout_seconds`` (``MAX_NODE_TIMEOUT_SECONDS``). A
+        floor below that lets the backstop claim an attempt whose node deadline
+        has NOT provably passed (duplicate execution of a live node) — a silent
+        correctness bug, so this raises at load instead of warning like
+        ``_warn_saq_setup_grace_ge_claim_stale`` (whose failure mode is only a
+        double-execution race, and whose deployed config intentionally warns).
+
+        * **Unset (default):** the floor is DERIVED here from the configured
+          grace, so raising ``SAQ_SETUP_GRACE_SECONDS`` (60..3600) widens the
+          floor with it — the coupling cannot silently break.
+        * **Explicit:** validated against the same requirement; a stale pin
+          (e.g. the shipped 3900 left behind after a grace raise) is rejected
+          with the arithmetic, telling the operator to raise it or unset it.
+        """
+        required = self.saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS
+        if self.nodeless_in_flight_floor_seconds is None:
+            self.nodeless_in_flight_floor_seconds = required
+        elif self.nodeless_in_flight_floor_seconds < required:
+            raise ValueError(
+                f"NODELESS_IN_FLIGHT_FLOOR_SECONDS={self.nodeless_in_flight_floor_seconds} does not cover "
+                f"SAQ_SETUP_GRACE_SECONDS ({self.saq_setup_grace_seconds}) + max node timeout "
+                f"({MAX_NODE_TIMEOUT_SECONDS}) = {required}s: the FAR-1088 in-flight shield would expire "
+                "before the node deadline, letting the nodeless backstop claim a live attempt. "
+                f"Raise it to >= {required}, or unset it to derive from the grace."
             )
         return self
 

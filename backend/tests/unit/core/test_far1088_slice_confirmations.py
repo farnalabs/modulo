@@ -35,6 +35,7 @@ from modulo.api.routes.runs import (
 from modulo.core import cron_helpers as ch
 from modulo.core import pipeline_execution as pe
 from modulo.db.models.run import Run
+from modulo.settings import Settings
 
 _RUN_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
@@ -285,22 +286,32 @@ class TestInFlightDispatchExcludedFromNodelessBackstop:
     when it completes, so a row carrying one has dispatched a node: claiming it
     at the 35-minute window boundary (the Branch Fixer dispatcher_reconcile
     kill) superseded a legitimately in-flight executor. The leg excludes such
-    rows until the safety floor (``_NODELESS_IN_FLIGHT_FLOOR_SECONDS`` — the
-    worst-case node deadline from ``started_at``), so nothing can hang forever
-    if the FAR-369 node-deadline watchdog itself has failed.
+    rows until the safety floor (``_nodeless_in_flight_floor_seconds`` — the
+    worst-case node deadline measured from the PER-ATTEMPT anchor
+    ``max(started_at, dispatched_at)``), so nothing can hang forever if the
+    FAR-369 node-deadline watchdog itself has failed.
     """
 
     @staticmethod
-    def _inflight_row(*, started_minutes_ago: float) -> SimpleNamespace:
+    def _inflight_row(*, started_minutes_ago: float, dispatched_minutes_ago: float | None = None) -> SimpleNamespace:
         """A zero-node row (no token usage, no ``__final__`` row, no
         checkpoints) carrying a LIVE dispatch marker — dispatched, no
-        super-step completed yet."""
+        super-step completed yet.
+
+        ``dispatched_minutes_ago`` defaults to ``started_minutes_ago`` (a
+        first-attempt run dispatched when it started); pass a SMALLER value to
+        model attempt >= 2 — ``started_at`` is never refreshed on re-dispatch
+        while ``dispatched_at`` is (FAR-1088 F3).
+        """
         row = _progressing_row(
             node_token_usage=None,
             outputs_absent=True,
             checkpoints_absent=True,
             started_minutes_ago=started_minutes_ago,
             heartbeat_minutes_ago=0.5,  # executor alive — only the nodeless branch matches
+        )
+        row.dispatched_at = datetime.now(UTC) - timedelta(
+            minutes=started_minutes_ago if dispatched_minutes_ago is None else dispatched_minutes_ago
         )
         row.sandbox_dispatch_state = json.dumps(
             {"state": "dispatching", "attempt_key": "att-1", "provider": "e2b"},
@@ -341,13 +352,29 @@ class TestInFlightDispatchExcludedFromNodelessBackstop:
         assert summary["skipped"] == 0
 
     def test_live_marker_row_catchable_past_the_safety_floor(self) -> None:
-        """Past the in-flight floor (70 min > 3900 s) the marker no longer
-        shields: the row is catchable again, so a dead node-deadline watchdog
-        can never strand the run forever."""
-        row = self._inflight_row(started_minutes_ago=70)
+        """Past the in-flight floor (70 min > 3900 s, measured from the last
+        DISPATCH) the marker no longer shields: the row is catchable again, so
+        a dead node-deadline watchdog can never strand the run forever."""
+        row = self._inflight_row(started_minutes_ago=70)  # dispatched 70 min ago
 
         assert ch._NODELESS_IN_FLIGHT_FLOOR_SECONDS == 3900
         assert ch._is_nodeless_zombie_row(row, 35) is True
+
+    def test_attempt_two_is_shielded_from_its_own_dispatch_not_from_started_at(self) -> None:
+        """FAR-1088 F3: the shield is anchored PER-ATTEMPT.
+
+        ``runs.started_at`` is stamped at the FIRST claim and never refreshed,
+        so attempt 2 can be 70 minutes old by ``started_at`` while its own
+        dispatch (and therefore its node deadline) is only 5 minutes old. The
+        floor must be measured from ``max(started_at, dispatched_at)`` —
+        otherwise this row is catchable and the backstop claims a LIVE attempt.
+
+        Fails without F3: the floor leg compared ``started_at``-age (70 min >
+        3900 s) and returned True (catchable).
+        """
+        row = self._inflight_row(started_minutes_ago=70, dispatched_minutes_ago=5)
+
+        assert ch._is_nodeless_zombie_row(row, 35) is False
 
     def test_hitl_tombstone_row_is_not_shielded(self) -> None:
         """The ``cleared_at_hitl`` tombstone records only a PAST dispatch (the
@@ -360,13 +387,21 @@ class TestInFlightDispatchExcludedFromNodelessBackstop:
 
     def test_sql_predicate_carries_the_marker_leg_and_floor(self) -> None:
         """The SQL predicate (not just the row recheck) carries the in-flight
-        leg: a NULL-or-tombstone marker OR age past the 3900 s floor. Fails
-        without W-B: neither the marker disjunct nor the floor bind exists."""
+        leg: a NULL-or-tombstone marker OR age past the floor. Fails without
+        W-B: neither the marker disjunct nor the floor bind exists."""
         compiled = sa.select(Run.id).where(ch._nodeless_zombie_predicate(35)).compile()
         sql = str(compiled)
 
         assert "runs.sandbox_dispatch_state IS NULL" in sql
-        assert '"state": "cleared_at_hitl"' in sql
+        # FAR-1088 F4: the tombstone literal is DERIVED from
+        # runner_capacity.MARKER_STATE_CLEARED_AT_HITL (see
+        # _nodeless_no_live_marker_sql), so this assertion pins the two legs
+        # together — it fails if the SQL ever goes back to a hand-written
+        # literal that a constant rename would silently orphan.
+        from modulo.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL
+
+        assert f'"state": "{MARKER_STATE_CLEARED_AT_HITL}"' in sql
+        assert '"state": "cleared_at_hitl"' in sql  # the constant's shipped value
 
         literal = (
             sa.select(Run.id)
@@ -377,3 +412,44 @@ class TestInFlightDispatchExcludedFromNodelessBackstop:
             )
         )
         assert f"now() - {ch._NODELESS_IN_FLIGHT_FLOOR_SECONDS} * interval" in str(literal)
+
+    def test_sql_floor_leg_is_anchored_per_attempt(self) -> None:
+        """FAR-1088 F3 (SQL side): the floor comparison reads
+        ``greatest(started_at, coalesce(dispatched_at, started_at))``, the same
+        per-attempt anchor the row leg uses — ``started_at`` alone would let
+        the shield expire while attempt >= 2 is still inside its node deadline.
+
+        Fails without F3: the leg compared ``runs.started_at`` directly.
+        """
+        sql = str(
+            sa.select(Run.id)
+            .where(ch._nodeless_zombie_predicate(35))
+            .compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+        )
+
+        assert "greatest(runs.started_at, coalesce(runs.dispatched_at, runs.started_at))" in sql
+
+
+class TestInFlightFloorDerivesFromSettings:
+    """FAR-1088 F2: the safety floor is DERIVED from settings, and the
+    grace/floor coupling is enforced structurally (a Settings validator),
+    not by prose next to a hard-coded 3900."""
+
+    def test_default_grace_derives_the_shipped_3900_floor(self) -> None:
+        with patch.object(ch, "get_settings", return_value=Settings()):
+            assert ch._nodeless_in_flight_floor_seconds() == 3900
+            assert ch._nodeless_in_flight_floor_seconds() == ch._NODELESS_IN_FLIGHT_FLOOR_SECONDS
+
+    def test_raising_saq_setup_grace_widens_the_floor(self) -> None:
+        """Fails without F2: the floor stayed 3900 regardless of the grace, so
+        a deployment at SAQ_SETUP_GRACE_SECONDS=900 (deadline at 900+3300 =
+        4200 s) would have its in-flight shield expire 300 s early and its
+        live attempt claimed by the backstop."""
+        with patch.object(ch, "get_settings", return_value=Settings(SAQ_SETUP_GRACE_SECONDS="900")):
+            assert ch._nodeless_in_flight_floor_seconds() == 4200
+
+    def test_settings_double_without_the_field_falls_back_to_the_default_floor(self) -> None:
+        """A settings DOUBLE standing in for get_settings (no field) keeps the
+        default-config derivation — the value the shipped defaults encode."""
+        with patch.object(ch, "get_settings", return_value=MagicMock()):
+            assert ch._nodeless_in_flight_floor_seconds() == 3900

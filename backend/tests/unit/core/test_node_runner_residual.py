@@ -1843,6 +1843,7 @@ def _watchdog(
         watch_log_path=watch_log_path,
         stdout_percentage_delta=stdout_ratio,
         watch_globs=watch_globs or [],
+        sandbox_mode=sandbox_mode,
     )
     effective_sandbox = sandbox if (sandbox is not None or not require_sandbox) else MagicMock()
     # FAR-1050 R6: the watchdog reads through the RuntimeProvider ABC, so the
@@ -2301,13 +2302,18 @@ def test_configure_stall_detector_enables_opt_in_channels():
         watch_log_path="/home/user/out.json",
         stdout_percentage_delta=0.2,
         watch_globs=["*.log"],
+        sandbox_mode="llm",
     )
     assert stall.enabled == {"output", "log_growth", "stdout", "filesystem"}
 
 
 def test_configure_stall_detector_default_heartbeat_only():
     stall = nr._configure_stall_detector(
-        enable_heartbeat=True, watch_log_path=None, stdout_percentage_delta=None, watch_globs=[]
+        enable_heartbeat=True,
+        watch_log_path=None,
+        stdout_percentage_delta=None,
+        watch_globs=[],
+        sandbox_mode="llm",
     )
     # FAR-1088: probe-success liveness moved onto its own `connection` channel
     # (enabled with the heartbeat; dropped in strict mode — see the sibling

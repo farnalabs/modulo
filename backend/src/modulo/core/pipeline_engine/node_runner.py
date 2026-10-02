@@ -605,6 +605,16 @@ _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 # channel, so the bound is a genuine output-silence window; 600s sits at 2.2x
 # the measured max inter-output gap across Branch Fixer runs (268.8s). Must
 # stay comfortably below the node `timeout_seconds` cap (3300s).
+#
+# FAR-1088 scope: this window is a KILL bound only for STREAMING nodes
+# (``sandbox_mode != "script"``) — the 600s figure was measured on
+# LLM-agent runs, whose output is expected to stream. A script-mode node
+# keeps ``connection`` in ``last_activity()`` unconditionally (see
+# ``_StallDetector.expect_streaming``), so for a healthy-but-quiet script
+# (docker pull, pnpm/uv install, buffered builds/tests redirecting stdout to
+# agent.log) the effective bound is the node's own total ``timeout_seconds``;
+# this window applies to script mode only once the probes themselves die —
+# never as a false-stall kill of a legitimately silent buffered child.
 _SANDBOX_IDLE_TIMEOUT = 600.0
 _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
 # FAR-97 pipe-buffer fix: the agent command's stdout/stderr are redirected to a
@@ -6081,7 +6091,9 @@ class _StallDetector:
 
     ``last_activity()`` returns the most recent activity across all enabled
     channels, which is what the idle watchdog compares against the stall
-    window — with ONE mode switch (FAR-1088):
+    window — with ONE mode switch (FAR-1088), scoped to STREAMING nodes
+    (``expect_streaming=True``, the ``sandbox_mode != "script"`` default —
+    see :func:`_configure_stall_detector` for the discriminator):
 
     - **Connection fallback (no output seen yet):** while the run has never
       produced real output, the probe-success ``connection`` channel
@@ -6093,10 +6105,32 @@ class _StallDetector:
       ``stall_timeout_seconds`` keeps its semantics: it still bounds
       connection-death silence exactly as it bounded the pre-FAR-1088
       heartbeat.
-    - **Output-exclusivity (output seen):** the first recorded touch of any
-      non-``connection`` channel flips the mode. From then on ``connection``
-      is EXCLUDED from ``last_activity()``, so a successful probe can no
-      longer mask genuine output silence — the FAR-1088 stall-detector kill.
+    - **Output-exclusivity (output seen, STREAMING nodes only):** the first
+      recorded touch of any non-``connection`` channel flips the mode. From
+      then on ``connection`` is EXCLUDED from ``last_activity()``, so a
+      successful probe can no longer mask genuine output silence — the
+      FAR-1088 stall-detector kill. This is the behaviour the 600s window was
+      measured for (LLM-agent runs whose output is EXPECTED to stream).
+
+    **Script mode (``expect_streaming=False``) keeps the connection channel
+    unconditionally**, before AND after first output (FAR-1088 scope fix): a
+    script-mode command redirects its stdout to ``agent.log``, so only log
+    growth refreshes output-liveness and a block-buffered child
+    (``docker pull``, ``pnpm``/``uv install``, a buffered test run) can be
+    silent far longer than any output window. For those workloads the
+    pre-FAR-1088 rule stands — connection liveness participates in
+    ``last_activity()`` at all times, so a healthy-but-quiet script node is
+    bounded by its node's own total ``timeout_seconds``, never by the silence
+    window (the 600s window only bites once probes themselves die).
+
+    **Never-output streaming node (F5, intended):** a streaming node that
+    NEVER emits a single output event is held alive by the ``connection``
+    fallback for its whole life — the silence window cannot fire while
+    probes succeed. Its ONLY bound is the node's total ``timeout_seconds``
+    (the wall-clock/total-timeout raise in the wait loop), not
+    ``stall_timeout_seconds``. That is deliberate: "output never started" is
+    indistinguishable from "slow start", and killing it early would be a
+    false stall; the node deadline is the honest backstop.
 
     With ``enable_heartbeat=False`` (strict) the ``connection`` channel is
     never enabled, so behaviour is exactly the pre-FAR-1088 strict contract:
@@ -6108,11 +6142,15 @@ class _StallDetector:
     otherwise break the all-channels-silent rule for a default run).
     """
 
-    def __init__(self, now: Callable[[], float] | None = None) -> None:
+    def __init__(self, now: Callable[[], float] | None = None, *, expect_streaming: bool = True) -> None:
         self._now: Callable[[], float] = now or time.monotonic
         self._activity: dict[str, float] = {}
         self._enabled: set[str] = set()
         self._output_seen = False
+        # FAR-1088 scope: only a STREAMING workload (``sandbox_mode !=
+        # "script"``) drops ``connection`` after first output; a quiet
+        # script-mode workload keeps connection liveness permanently.
+        self._expect_streaming = expect_streaming
 
     def enable(self, channel: str) -> None:
         """Mark a channel as active. Enabling seeds its baseline so a brand-new
@@ -6135,7 +6173,9 @@ class _StallDetector:
             self._activity[channel] = self._now()
             if channel != "connection":
                 # FAR-1088: the first REAL output event (log growth, stream
-                # chunk, opt-in detector) ends the connection-fallback mode.
+                # chunk, opt-in detector) ends the connection-fallback mode —
+                # for STREAMING nodes only; the flag is consulted only when
+                # ``expect_streaming`` (see last_activity()).
                 self._output_seen = True
 
     def last_activity(self) -> float:
@@ -6143,8 +6183,11 @@ class _StallDetector:
 
         Before the run's first real output the ``connection`` channel counts
         (see the class docstring — a never-output node must not be stalled
-        unconditionally). Once output has been seen, ``connection`` is
-        excluded: output-liveness governs exclusively.
+        unconditionally). Once output has been seen on a STREAMING node
+        (``expect_streaming=True``), ``connection`` is excluded:
+        output-liveness governs exclusively. Script mode
+        (``expect_streaming=False``) never excludes it — a quiet, block-buffered
+        script stays alive on connection liveness alone, pre-FAR-1088 style.
 
         With no enabled channels there is nothing to stall on — return ``now``
         so the watchdog never fires (belt-and-braces against a misconfigured
@@ -6152,7 +6195,7 @@ class _StallDetector:
         """
         if not self._enabled:
             return self._now()
-        if self._output_seen:
+        if self._expect_streaming and self._output_seen:
             return max(self._activity[channel] for channel in self._enabled if channel != "connection")
         return max(self._activity[channel] for channel in self._enabled)
 
@@ -7671,6 +7714,7 @@ def _configure_stall_detector(
     watch_log_path: str | None,
     stdout_percentage_delta: float | None,
     watch_globs: list[str],
+    sandbox_mode: str,
 ) -> _StallDetector:
     """Build the per-run stall detector for the idle watchdog (FAR-306 / FAR-1088).
 
@@ -7680,17 +7724,33 @@ def _configure_stall_detector(
     with the heartbeat (dropped in strict mode — ``enable_heartbeat=False``
     keeps the pre-FAR-306 output-only contract). Opt-in detectors (log-growth,
     stdout-delta, filesystem) are enabled only when their config is present.
-    ``_StallDetector`` counts ``connection`` only until the run's first real
-    output; after that it is excluded (FAR-1088).
+
+    ``sandbox_mode`` (FAR-1088 scope discriminator) is the node's validated
+    mode from :func:`sandbox_mode._validate_sandbox_mode_config` — ``"llm"``
+    (an LLM agent whose output is EXPECTED to stream) or ``"script"`` (a
+    verbatim shell command whose stdout is redirected to ``agent.log`` and can
+    legitimately be silent for minutes under a block-buffered child). It is
+    REQUIRED so no caller can silently fall back to the streaming contract:
+
+    - ``"llm"`` (streaming): ``_StallDetector`` counts ``connection`` only
+      until the run's first real output; after that it is excluded (the
+      FAR-1088 stall-detector kill the 600s window was measured for).
+    - ``"script"`` (quiet): ``connection`` participates unconditionally —
+      pre-FAR-1088 liveness, bounded by the node's total ``timeout_seconds``
+      rather than by the silence window.
+
+    An explicit per-node ``stall_timeout_seconds`` still overrides the window
+    itself in both modes (resolved by the caller before this build).
     """
-    _stall = _StallDetector()
+    _stall = _StallDetector(expect_streaming=sandbox_mode != "script")
     _stall.enable("output")
     _stall.enable("heartbeat")
     if enable_heartbeat:
         # FAR-1088: probe-success liveness on its OWN channel — the probe no
         # longer touches `heartbeat` (which real output also refreshes), so a
-        # healthy connection cannot keep a silent node alive once output has
-        # been observed.
+        # healthy connection cannot keep a silent STREAMING node alive once
+        # output has been observed (script mode keeps it always — see
+        # _StallDetector.expect_streaming).
         _stall.enable("connection")
     else:
         _stall.disable("heartbeat")
@@ -9112,16 +9172,21 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # channel is refreshed only by REAL output callbacks (stream
             # chunks / log growth); probe-success liveness sits on the
             # separate `connection` channel (enabled with the heartbeat,
-            # dropped in strict mode) and counts only until the run's first
-            # output. The opt-in detectors (log-growth, stdout-delta,
-            # filesystem) add extra channels that must ALL be silent before
-            # the watchdog fires. ``_activity`` remains the
-            # stream-buffer/throttle dict (not a liveness source).
+            # dropped in strict mode) and — for a STREAMING node only —
+            # counts until the run's first output. `sandbox_mode` scopes that
+            # exclusion: script mode keeps connection liveness unconditionally
+            # (its stdout is redirected to agent.log and a block-buffered
+            # child can be quiet for far longer than the silence window).
+            # The opt-in detectors (log-growth, stdout-delta, filesystem) add
+            # extra channels that must ALL be silent before the watchdog
+            # fires. ``_activity`` remains the stream-buffer/throttle dict
+            # (not a liveness source).
             _stall = _configure_stall_detector(
                 enable_heartbeat=enable_heartbeat,
                 watch_log_path=watch_log_path,
                 stdout_percentage_delta=stdout_percentage_delta,
                 watch_globs=watch_globs,
+                sandbox_mode=sandbox_mode,
             )
             # Track the last time the agent emitted output so the idle
             # watchdog can fail fast on stalls (FAR-97). The callbacks run
