@@ -409,6 +409,82 @@ jobs:
             DESC="The deploy watchdog workflow failed at ${TS}. Check the GitHub Actions run for details. This is FAR-910."
           fi
 
+          # FAR-1407: dedupe KEY = the condition title itself. The three
+          # watchdog titles are static (no run-specific figures), so each
+          # condition has its own key: gave-up / dispatch-failed / failed
+          # dedupe INDEPENDENTLY - one open ticket per condition, plus
+          # appended comments, not one ticket per cron run.
+          MARKER="$TITLE"
+          # Latest figures: appended to an existing open ticket instead of
+          # creating a duplicate (FAR-1407).
+          UPDATE=$(printf 'Watchdog escalation still active at %s.\nCondition: %s\nProd SHA: %s\nMain HEAD: %s\nSHA source: %s\nAppended by the deploy watchdog instead of opening a duplicate ticket (FAR-1407: dedupe on the condition, not the run).' "$TS" "$TITLE" "${PROD_SHA:-unknown}" "${MAIN_SHA:-unknown}" "${SHA_SOURCE:-unknown}")
+
+          # ---- FAR-1407: dedupe on the CONDITION, not the run ----
+          # Search Linear for an existing OPEN ticket for this condition
+          # (team + title marker + state type in backlog/unstarted/started =
+          # Backlog / Todo / In Progress). Done ("completed") and Canceled
+          # ("canceled") are excluded BY the server-side filter, so a closed
+          # tracker never suppresses a later recurrence: once the condition
+          # clears and the ticket is closed, the next occurrence's search
+          # comes back empty and a fresh ticket is created.
+          # FAIL OPEN BY CONSTRUCTION: the create below is skipped only when
+          # the search returns a well-formed issue UUID. A transport failure,
+          # an API error, or a malformed response all leave EXISTING_ID empty
+          # and fall through to create - the alert is never silently dropped.
+          SEARCH_BODY=$(jq -n \
+            --arg marker "$MARKER" \
+            '{
+              query: "query($m: String!){ issues(filter:{ team:{ id:{ eq:\"ae855baf-6439-4980-97fb-38da80129485\" } }, title:{ contains:$m }, state:{ type:{ in:[\"backlog\",\"unstarted\",\"started\"] } } }, first:1){ nodes { id identifier state { name } } } }",
+              variables: { m: $marker }
+            }')
+          SEARCH_RESULT=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$SEARCH_BODY" 2>&1) || SEARCH_RESULT=""
+          EXISTING_ID=""
+          EXISTING_REF=""
+          SEARCH_OK=""
+          if [ -n "$SEARCH_RESULT" ]; then
+            if echo "$SEARCH_RESULT" | jq -e '.data.issues' >/dev/null 2>&1; then
+              SEARCH_OK="true"
+            fi
+            EXISTING_ID=$(echo "$SEARCH_RESULT" | jq -r '.data.issues.nodes[0].id // ""' 2>/dev/null) || EXISTING_ID=""
+            EXISTING_REF=$(echo "$SEARCH_RESULT" | jq -r '.data.issues.nodes[0].identifier // ""' 2>/dev/null) || EXISTING_REF=""
+          fi
+          # Accept only a well-formed UUID; anything else counts as "search
+          # yielded nothing" and fails open to the create below.
+          if ! printf '%s' "$EXISTING_ID" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            EXISTING_ID=""
+          fi
+
+          if [ "$SEARCH_OK" = "true" ] && [ -n "$EXISTING_ID" ]; then
+            # Open ticket exists for this condition - append the latest
+            # figures, do NOT create a duplicate.
+            COMMENT_BODY=$(jq -n \
+              --arg i "$EXISTING_ID" \
+              --arg b "$UPDATE" \
+              '{
+                query: "mutation($i: String!, $b: String!){ commentCreate(input:{ issueId:$i, body:$b }){ success comment { id } } }",
+                variables: { i: $i, b: $b }
+              }')
+            CRES=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -d "$COMMENT_BODY" 2>&1) || CRES=""
+            if echo "$CRES" | grep -q '"success":true'; then
+              echo "Deduplicated (FAR-1407): appended the latest figures to open ticket $EXISTING_REF - no new ticket created."
+            else
+              echo "::warning::Open ticket $EXISTING_REF exists but appending the update failed: $CRES - no duplicate created; the next run retries the comment."
+            fi
+            exit 0
+          fi
+
+          if [ "$SEARCH_OK" != "true" ]; then
+            # Fail OPEN LOUDLY: search/API failure must never read as
+            # "no ticket needed" - warn and create anyway.
+            echo "::warning::Linear dedup search failed or returned an unexpected response - failing OPEN: creating a fresh ticket anyway (FAR-1407: never suppress the escalation). Response: ${SEARCH_RESULT:-<empty>}"
+          fi
+
           BODY=$(jq -n \
             --arg title "$TITLE" \
             --arg desc "$DESC" \
