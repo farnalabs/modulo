@@ -1726,6 +1726,37 @@ def test_is_valid_delivered_pr_url_rejects_a_url_that_fails_to_parse() -> None:
     assert sandbox_policy._is_valid_delivered_pr_url("https://github.com/org/repo/pull/1") is True
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/org/repo/pull/1",  # valid http(s) with a netloc
+        "http://x",
+        "https://",  # empty netloc
+        "ftp://x",  # unsupported scheme
+        "",  # blank
+        "   ",  # whitespace-only
+        "N/A",  # scheme-less token
+        "http://[::1",  # malformed authority -> urlsplit raises
+    ],
+)
+def test_is_valid_delivered_pr_url_is_pinned_to_the_classifier_spec(url: str) -> None:
+    """The delivered-``pr_url`` validity mirror agrees with the classifier spec.
+
+    ``sandbox_policy`` cannot import ``classify`` (it must stay dependency-free),
+    so ``_is_valid_delivered_pr_url`` MIRRORS ``classify._is_valid_pr_url``.
+    Settle's ``pr_url`` arm gates spend on the mirror, so an isolated edit to
+    either copy would silently change spend/release outcomes with no other
+    failing test. Pin both truth tables together so drift fails here — the same
+    protection ``test_corroboration_pr_url_regex_is_pinned_to_node_runners_extraction``
+    gives the ``_GH_PR_URL_RE`` mirror."""
+    import modulo.core.pipeline_engine.classify as classify
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    assert sandbox_policy._is_valid_delivered_pr_url(url) is classify._is_valid_pr_url(url), (
+        f"the delivered-pr_url mirror must agree with the classifier spec on {url!r}"
+    )
+
+
 def test_pr_url_corroboration_skips_empty_streams_and_non_matching_urls() -> None:
     """The stream scan skips falsy streams and keeps scanning past a
     non-matching PR URL until the reported one is found (and rejects a missing
