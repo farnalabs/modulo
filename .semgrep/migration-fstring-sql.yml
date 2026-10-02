@@ -19,10 +19,14 @@
 # file currently present in versions/ is still covered by the exclude globs —
 # it fails when the cutoff window needs extending.
 #
-# Pattern note: f-string structural patterns (``op.execute(text(f"$SQL"))``)
-# do NOT match in this semgrep version (verified empirically against a probe
-# file: structural f-string metavariables never fire) — a line-scoped
-# pattern-regex is used instead, which does fire.
+# Pattern note: structural f-string metavariables match only in the ``{$X}``
+# brace form — ``op.execute(text(f"...{$X}..."))`` fires in this semgrep
+# version (verified empirically in 1.175.0: the earlier "never fires" claim
+# came from a probe using the bare ``$SQL`` no-brace form, which genuinely
+# does not match — a metavariable inside a string literal is not an AST node).
+# The line-scoped pattern-regex is still used because it additionally covers
+# shapes the structural pair misses: ``sa.text(...)``/``sqlalchemy.text(...)``
+# and a non-``op`` receiver combined with ``text(...)``.
 rules:
   - id: migration-fstring-sql
     pattern-either:
