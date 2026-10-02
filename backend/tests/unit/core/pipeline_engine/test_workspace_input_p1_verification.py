@@ -313,7 +313,7 @@ class TestMultiHostTokenIsolation:
                     "connector_instance_id": str(_CONNECTOR_B),
                 },
             ],
-            org_id="org-1",
+            org_id=str(uuid.uuid4()),
             session_factory=_fake_session_factory(),
         )
 

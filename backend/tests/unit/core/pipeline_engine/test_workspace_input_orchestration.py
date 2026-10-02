@@ -12,11 +12,13 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 
 from modulo.core.pipeline_engine.workspace_input_orchestration import (
     DriftResult,
@@ -31,6 +33,8 @@ from modulo.core.pipeline_engine.workspace_input_orchestration import (
     provision_workspace_inputs_in_sandbox,
     resolve_managed_inputs_host_side,
 )
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.secret import Secret
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -62,6 +66,14 @@ _FAKE_LS_REMOTE_OUTPUT = (
     "111222333444555666777888999000aaabbbccc\trefs/tags/v1.0\n"
     "222333444555666777888999000aaabbbcccddd\trefs/tags/v1.0^{}\n"
 )
+
+# FAR-1409: _resolve_credential_scripts_for_input converts org_id to
+# uuid.UUID before calling set_rls_org, so any test that REACHES the
+# credential-resolution block must pass a real UUID org id or it would now
+# raise ValueError.  Tests whose input fails BEFORE that block (URL
+# derivation, ref resolution, no session_factory) keep the free-form
+# "org-1" id on purpose — they never parse it.
+_CRED_ORG = str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +628,16 @@ class _FakeBegin:
         return False
 
 
+class _SqliteDialect:
+    """Non-Postgres dialect: set_rls_* takes the ``session.info`` branch."""
+
+    name = "sqlite"
+
+
+class _SqliteBind:
+    dialect = _SqliteDialect()
+
+
 class _FakeResultTenancy:
     """Minimal result proxy for the tenancy check execute()."""
 
@@ -624,8 +646,17 @@ class _FakeResultTenancy:
 
 
 class _FakeSession:
+    def __init__(self) -> None:
+        self.info: dict[str, Any] = {}
+
     def begin(self) -> _FakeBegin:
         return _FakeBegin()
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> Any:
+        return _SqliteBind()
 
     async def execute(self, _stmt: object) -> _FakeResultTenancy:
         return _FakeResultTenancy()
@@ -671,7 +702,7 @@ async def test_resolve_managed_inputs_connector_credential_resolution(monkeypatc
     factory = _make_factory
     resolved = await resolve_managed_inputs_host_side(
         [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert len(resolved) == 1
@@ -700,7 +731,7 @@ async def test_resolve_managed_inputs_credential_resolution_error_permanent(monk
     with pytest.raises(ProvisioningError) as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
@@ -725,7 +756,7 @@ async def test_resolve_managed_inputs_credential_transient_error_retryable(monke
     with pytest.raises(ProvisioningError) as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
@@ -751,7 +782,7 @@ async def test_resolve_managed_inputs_credential_unexpected_error_permanent(monk
     with pytest.raises(ProvisioningError) as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
@@ -783,12 +814,19 @@ class _FakeResult:
 class _FakeSessionForUrl:
     def __init__(self, ci: _FakeCi | None) -> None:
         self._ci = ci
+        self.info: dict[str, Any] = {}
 
     async def execute(self, _stmt: Any) -> _FakeResult:
         return _FakeResult(self._ci)
 
     def begin(self) -> _FakeBegin:
         return _FakeBegin()
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> Any:
+        return _SqliteBind()
 
 
 class _FakeSessionCtxForUrl:
@@ -837,7 +875,7 @@ async def test_connector_backed_input_derives_url_from_github_config(
                 "ref": {"kind": "branch", "value": "main"},
             }
         ],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert len(resolved) == 1
@@ -866,7 +904,7 @@ async def test_connector_backed_input_strips_trailing_slash(
                 "ref": {"kind": "branch", "value": "main"},
             }
         ],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert resolved[0].url == "https://github.com/org/repo.git"
@@ -960,7 +998,7 @@ async def test_connector_backed_input_derives_url_ghe_base_url(
                 "ref": {"kind": "branch", "value": "main"},
             }
         ],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert resolved[0].url == "https://ghe.acme.com/acme/widgets.git"
@@ -1023,7 +1061,7 @@ async def test_read_only_credential_assertion_called_when_http_client_provided(
     factory = _make_factory
     resolved = await resolve_managed_inputs_host_side(
         [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
         http_client=fake_http,
     )
@@ -1056,7 +1094,7 @@ async def test_read_only_credential_assertion_skipped_without_http_client(
     factory = _make_factory
     resolved = await resolve_managed_inputs_host_side(
         [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
         http_client=None,
     )
@@ -1091,7 +1129,7 @@ async def test_read_only_credential_assertion_failure_raises(
     with pytest.raises(ProvisioningError, match="credential is not read-only") as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
             http_client=MagicMock(),
         )
@@ -1107,7 +1145,12 @@ async def test_read_only_credential_assertion_failure_raises(
 from sqlalchemy import Column  # noqa: E402
 from sqlalchemy.sql.visitors import iterate  # noqa: E402
 
-_REQUEST_ORG = "org-request"
+# A UUID, because the same-org tenancy test continues into the
+# credential-resolution block, which converts org_id with uuid.UUID before
+# set_rls_org (FAR-1409).  The cross-org test shares this constant and stops
+# at the tenancy check, so it never parses it — its assertion (a DIFFERENT
+# connector org) is unaffected either way.
+_REQUEST_ORG = str(uuid.uuid4())
 
 
 def _where_has_org_column(stmt: object) -> bool:
@@ -1137,9 +1180,16 @@ class _TenancySession:
     def __init__(self, connector_org: str, request_org: str) -> None:
         self._connector_org = connector_org
         self._request_org = request_org
+        self.info: dict[str, Any] = {}
 
     def begin(self) -> _FakeBegin:
         return _FakeBegin()
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> Any:
+        return _SqliteBind()
 
     async def execute(self, stmt: object) -> _TenancyResult:
         # The tenancy check is the ONLY query that filters on organisation_id;
@@ -1226,3 +1276,204 @@ async def test_connector_tenancy_allows_same_org_connector(monkeypatch: pytest.M
     )
     assert len(resolved) == 1
     assert resolved[0].url == "https://github.com/org/repo.git"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1409: RLS org context on the credential-resolution session
+# ---------------------------------------------------------------------------
+
+_RLS_ORG = str(uuid.uuid4())
+_VAULT_TOKEN = "ghp_far1409_vault_token_abc123"
+_VAULT_FERNET_KEY = Fernet.generate_key().decode("utf-8")
+_VAULT_SHA = "a" * 40
+
+
+class _PgDialect:
+    name = "postgresql"
+
+
+class _PgBind:
+    dialect = _PgDialect()
+
+
+class _VaultResult:
+    """Result proxy covering both ``scalar()`` and ``scalar_one_or_none()``."""
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def scalar(self) -> Any:
+        return self._value
+
+    def scalar_one_or_none(self) -> Any:
+        return self._value
+
+
+def _vault_connector() -> MagicMock:
+    """A connector whose ONLY credential copy lives in the secrets backend."""
+    ci = MagicMock()
+    ci.id = uuid.uuid4()
+    ci.connector_type_id = "github"
+    ci.credentials_ciphertext = None
+    return ci
+
+
+def _vault_encrypted_credentials() -> bytes:
+    """Encrypt the credential payload the way the secrets backend stores it."""
+    payload = json.dumps({"token": _VAULT_TOKEN})
+    return Fernet(_VAULT_FERNET_KEY.encode()).encrypt(payload.encode())
+
+
+class _PgVaultSession:
+    """Postgres-faithful session fake for the vault credential path.
+
+    Emulates the GUC traffic the production path generates: ``set_rls_org``
+    writes ``app.organisation_id`` through ``set_config(..., :oid, true)`` and
+    ``FernetSecretsBackend`` reads it back through
+    ``current_setting('app.organisation_id', true)`` — which yields NULL while
+    the GUC is unset, exactly as Postgres does when ``set_rls_org`` was never
+    called.  ConnectorInstance / Secret SELECTs resolve to the fixtures.
+    """
+
+    def __init__(self, ci: Any, encrypted: bytes) -> None:
+        self.info: dict[str, Any] = {}
+        self._ci = ci
+        self._encrypted = encrypted
+        self._guc: dict[str, str] = {}
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin()
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> Any:
+        return _PgBind()
+
+    async def execute(self, stmt: Any, params: Any = None) -> _VaultResult:
+        if hasattr(stmt, "column_descriptions"):
+            entity = stmt.column_descriptions[0]["entity"]
+            if entity is Secret:
+                row = MagicMock()
+                row.encrypted_value = self._encrypted
+                return _VaultResult(row)
+            if entity is ConnectorInstance:
+                return _VaultResult(self._ci)
+            raise AssertionError(f"unexpected ORM statement entity: {entity!r}")
+
+        sql = str(stmt)
+        if params is not None and "oid" in params:
+            # set_rls_org -> SELECT set_config('app.organisation_id', :oid, true)
+            self._guc["app.organisation_id"] = str(params["oid"])
+            return _VaultResult(None)
+        if "current_setting" in sql:
+            # Unset GUC reads back NULL — same as Postgres with missing_ok=true.
+            return _VaultResult(self._guc.get("app.organisation_id"))
+        if "set_config" in sql:
+            # set_rls_execution_context -> set_config('app.execution_context', ...)
+            return _VaultResult(None)
+        raise AssertionError(f"unexpected session statement: {sql}")
+
+
+class _PgVaultSessionFactory:
+    """Session factory handing out one fresh GUC-scoped session per block."""
+
+    def __init__(self, ci: Any, encrypted: bytes) -> None:
+        self._ci = ci
+        self._encrypted = encrypted
+
+    def __call__(self) -> _PgVaultSession:
+        return _PgVaultSession(self._ci, self._encrypted)
+
+
+async def test_credential_resolves_from_secrets_backend_under_rls_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1409 regression: the credential-resolution transaction carries the
+    run's RLS org context, so the secrets backend can resolve the org.
+
+    The connector has NO ``credentials_ciphertext`` (None), so the legacy
+    fallback has nothing to fall back to: resolving a credential at all proves
+    the read came from the secrets backend.  Without ``set_rls_org`` on that
+    session the backend raises "RLS organisation context not set", the swallow
+    falls through to the empty ciphertext and ``resolve_clone_credential``
+    raises CredentialResolutionError → ProvisioningError — this test then fails.
+    """
+    ci = _vault_connector()
+    monkeypatch.setenv("MODULO_SECRETS_BACKEND", "fernet")
+    settings = MagicMock()
+    settings.fernet_key = _VAULT_FERNET_KEY
+
+    with patch(
+        "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+        return_value=settings,
+    ):
+        resolved = await resolve_managed_inputs_host_side(
+            [
+                {
+                    "url": "https://github.com/o/r.git",
+                    "dest": "/home/user/r",
+                    "ref": {"kind": "sha", "value": _VAULT_SHA},
+                    "connector_instance_id": str(ci.id),
+                }
+            ],
+            org_id=_RLS_ORG,
+            session_factory=_PgVaultSessionFactory(ci, _vault_encrypted_credentials()),
+        )
+
+    assert _VAULT_TOKEN in resolved[0].credential_setup_script
+
+
+async def test_set_rls_org_awaited_on_session_before_clone_credential_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1409 wiring: ``set_rls_org`` (then ``set_rls_execution_context``) is
+    awaited on the SAME session, with the run's org id, BEFORE
+    ``resolve_clone_credential`` reads the connector credential."""
+    org = str(uuid.uuid4())
+    sequence: list[str] = []
+    rls_calls: list[tuple[Any, Any]] = []
+    resolve_sessions: list[Any] = []
+
+    async def _spy_set_rls_org(session: Any, org_id: Any) -> None:
+        rls_calls.append((session, org_id))
+        sequence.append("set_rls_org")
+
+    async def _spy_set_rls_execution_context(session: Any) -> None:
+        sequence.append("set_rls_execution_context")
+
+    async def _spy_resolve(session: Any, **kwargs: Any) -> None:
+        resolve_sessions.append(session)
+        sequence.append("resolve_clone_credential")
+
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", _spy_set_rls_org)
+    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", _spy_set_rls_execution_context)
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        _spy_resolve,
+    )
+
+    await resolve_managed_inputs_host_side(
+        [
+            {
+                "url": "https://github.com/o/r.git",
+                "dest": "/home/user/r",
+                "ref": {"kind": "sha", "value": _VAULT_SHA},
+                "connector_instance_id": str(uuid.uuid4()),
+            }
+        ],
+        org_id=org,
+        session_factory=_make_factory,
+    )
+
+    assert sequence == ["set_rls_org", "set_rls_execution_context", "resolve_clone_credential"]
+    # set_rls_org is typed ``uuid.UUID | None``; the call site converts the
+    # module's string org id at the boundary, so compare canonical forms.
+    assert str(rls_calls[0][1]) == org
+    assert rls_calls[0][0] is resolve_sessions[0]
