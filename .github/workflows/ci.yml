@@ -733,6 +733,13 @@ jobs:
     # well inside backend-test (~25 min), so this adds no wall-clock.
     needs: [backend-test, frontend, changes]
     runs-on: ubicloud-standard-2
+    # A job-level block REPLACES the workflow default. actions: read is needed
+    # by `gh run download` (Actions artifacts REST API) in the frontend-coverage
+    # step; contents: read is for checkout. The scan authenticates with
+    # SONAR_TOKEN and posts nothing to GitHub, so no other scope is needed.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         if: needs.changes.outputs.sonar == 'true'
@@ -772,11 +779,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
           REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           if gh run download "$RUN_ID" --repo "$REPO" --name frontend-coverage --dir frontend/coverage; then
             ls -l frontend/coverage/lcov.info
           else
-            echo "::warning::frontend-coverage artifact unavailable (frontend job failed before producing coverage, or was cancelled); Sonar will import no JS coverage for this run."
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "::warning::frontend-coverage artifact unavailable (frontend job failed before producing coverage, or was cancelled); Sonar will import no JS coverage for this run."
+            else
+              # push to main / dispatch: frontend=true, so the artifact must
+              # exist. Loud, but do not fail the scan (it still reports).
+              echo "::error::frontend-coverage artifact unavailable on ${EVENT_NAME}; Sonar will import NO JS coverage for this run (main coverage measure and badge will dip). Check the frontend job and this step's permissions."
+            fi
           fi
       - name: Install SonarScanner CLI
         if: needs.changes.outputs.sonar == 'true'
