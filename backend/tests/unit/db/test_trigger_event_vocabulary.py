@@ -137,11 +137,12 @@ _MIGRATION_PATH = (
 # 0270_pipeline_snapshots_max_autonomy_ge_default chained onto 0269,
 # 0271_org_api_keys_revocation_sweep_indexes chained onto 0270,
 # 0272_oauth_client_revoke_lookup_indexes chained onto 0271,
-# 0273_runs_dispatch_phase chained onto 0272, and
-# 0274_policy_gate_pin_fingerprint_operator_control chained onto 0273 as the chain head.
+# 0273_runs_dispatch_phase chained onto 0272,
+# 0274_policy_gate_pin_fingerprint_operator_control chained onto 0273, and
+# 0275_run_cancel_reason_vocabulary chained onto 0274 as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0274_policy_gate_pin_fingerprint_operator_control"
+_CHAIN_HEAD_MIGRATION_NAME = "0275_run_cancel_reason_vocabulary"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
