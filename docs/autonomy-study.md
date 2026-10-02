@@ -25,7 +25,7 @@ Modulo lets each pipeline choose a default **autonomy level** for its HITL revie
 Each pipeline also carries an optional **ceiling** (`max_autonomy_level`). At
 every HITL review, a context-setter's `autonomy_recommendation` may *lower* the
 level freely, but may *raise* it only up to that ceiling. When no ceiling is
-configured, the effective ceiling is the pipeline's own default level — so a
+configured, the effective ceiling is the pipeline's own default level, so a
 recommendation can only lower autonomy, never escalate a `manual_approval`
 pipeline toward `fully_autonomous`. Every clamp is recorded as a
 `run.autonomy_recommendation_clamped` audit event carrying `review_id`,

@@ -18,14 +18,22 @@ Design:
 - "All workers dead" = no live worker on ANY configured queue (runs AND
   system), sustained for ``watchdog_worker_stale_seconds`` (default 180s =
   2x the 90s worker_info TTL).
-- Edge-triggered alerting: ONE alert email when worker-liveness
-  conditions first appear, ONE recovery ("all clear") email when conditions
-  FULLY clear, and nothing in between — no repeated alerts during a
-  sustained incident. Multi-machine safe: the alert edge is claimed
-  atomically with ``SET key NX`` and the recovery edge with ``GETDEL``, so
-  whichever app machine ticks first wins and the others stay silent. The
-  alert state lives in Redis (``_ALERT_STATE_KEY``) so it survives app
-  restarts.
+- Edge-triggered AND sustained alerting: BOTH liveness conditions (the
+  SAQ-worker condition AND the system-cron heartbeat condition) must look
+  bad continuously for ``watchdog_worker_stale_seconds`` before any alert
+  is raised — a single stale tick never alerts. Then ONE alert email is
+  sent when the conditions first appear, ONE recovery ("all clear") email
+  when conditions FULLY clear, and nothing in between — no repeated
+  alerts during a sustained incident. Multi-machine safe: the alert edge
+  is claimed atomically with ``SET key NX`` and the recovery edge with
+  ``GETDEL``, so whichever app machine ticks first wins and the others
+  stay silent. The alert state lives in Redis (``_ALERT_STATE_KEY``) so
+  it survives app restarts.
+- Boot grace: for the first ``_WATCHDOG_BOOT_GRACE_SECONDS`` (120s)
+  after the loop starts, neither alerts nor recoveries are evaluated —
+  a freshly-started watchdog must not raise (or clear) an alert before
+  it has observed the fleet for that long, e.g. while a deploy's worker
+  fleet is still coming up.
 - On alert: fan out to EVERY configured channel — generic webhook
   (``alert_webhook_url``, Slack-compatible ``{"text": ...}``), Microsoft
   Teams webhook (``alert_teams_webhook_url``, MessageCard), and/or email
@@ -45,6 +53,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -91,6 +100,31 @@ _CRON_STALE_SECONDS = 2 * _CRON_CADENCE_SECONDS
 
 # Webhook POST timeout — a hung webhook must never stall the watchdog loop.
 _WEBHOOK_TIMEOUT_SECONDS = 10.0
+
+# Boot grace (mirrors health._FLEET_BOOT_GRACE_SECONDS, a core module must not
+# import from api): a freshly-started watchdog must not raise a liveness alert
+# before it has observed the fleet for this long — during a deploy the worker
+# fleet may still be coming up.
+_WATCHDOG_BOOT_GRACE_SECONDS = 120
+
+_STARTED_AT: float | None = None  # set by run_worker_liveness_watchdog at loop entry
+
+
+def _in_boot_grace(now: float) -> bool:
+    """True while the watchdog is within its post-start boot grace window.
+
+    ``_STARTED_AT`` is None when the loop has never run (e.g. direct
+    ``_evaluate_once`` unit tests) — then there is no grace.
+    """
+    return _STARTED_AT is not None and (now - _STARTED_AT) < _WATCHDOG_BOOT_GRACE_SECONDS
+
+
+@dataclass
+class _LivenessState:
+    """Debounce state owned by the watchdog loop and threaded through _evaluate_once."""
+
+    all_dead_since: float | None = None
+    cron_stale_since: float | None = None
 
 
 def _hostname() -> str:
@@ -449,13 +483,16 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
 async def _evaluate_once(
     settings: Settings,
     redis: aioredis.Redis,
-    all_dead_since: float | None,
-) -> float | None:
-    """One watchdog tick; returns the updated ``all_dead_since`` timestamp.
+    state: _LivenessState,
+) -> _LivenessState:
+    """One watchdog tick; returns the updated ``_LivenessState``.
 
-    ``all_dead_since`` is ``None`` while at least one worker is live, else the
-    wall-clock time the fleet first looked fully dead. An alert fires only
-    when the fleet has been continuously dead for the stale threshold.
+    ``state.all_dead_since`` is ``None`` while at least one worker is live,
+    else the wall-clock time the fleet first looked fully dead. Likewise
+    ``state.cron_stale_since`` is ``None`` while the system-cron heartbeat is
+    fresh (or unreadable), else when it first looked stale fleet-wide. Each
+    condition fires an alert only once its own timer has run continuously for
+    the stale threshold — a single bad tick never alerts.
 
     Fail-open: any Redis read error returns the state unchanged — death cannot
     be confirmed, so we neither alert nor lose progress on a transient blip.
@@ -473,15 +510,15 @@ async def _evaluate_once(
         raise
     except Exception as exc:
         _log.warning("watchdog.worker_read_failed: %s", exc)
-        return all_dead_since
+        return state
 
     conditions: list[str] = []
     if any_live:
-        all_dead_since = None
+        state.all_dead_since = None
     else:
-        if all_dead_since is None:
-            all_dead_since = now
-        dead_for = now - all_dead_since
+        if state.all_dead_since is None:
+            state.all_dead_since = now
+        dead_for = now - state.all_dead_since
         if dead_for >= settings.watchdog_worker_stale_seconds:
             conditions.append(
                 f"no live SAQ worker on any queue for {dead_for:.0f}s "
@@ -491,17 +528,42 @@ async def _evaluate_once(
             _log.info("watchdog.workers_dead_detected dead_for=%.0fs", dead_for)
 
     # 2. System-cron liveness — fire_due_triggers heartbeat fresh anywhere?
+    #    Sustained/debounced (tri-state): a single stale tick must not alert.
+    cron_fresh: bool | None
     try:
-        if not await _cron_heartbeat_fresh(redis):
-            conditions.append("system-cron (fire_due_triggers) heartbeat stale fleet-wide")
+        cron_fresh = await _cron_heartbeat_fresh(redis)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         _log.warning("watchdog.cron_read_failed: %s", exc)
+        cron_fresh = None  # undeterminable: fail-open, leave the timer unchanged
+
+    if cron_fresh is True:
+        state.cron_stale_since = None
+    elif cron_fresh is False:
+        if state.cron_stale_since is None:
+            state.cron_stale_since = now
+        cron_stale_for = now - state.cron_stale_since
+        if cron_stale_for >= settings.watchdog_worker_stale_seconds:
+            conditions.append(
+                f"system-cron (fire_due_triggers) heartbeat stale fleet-wide for "
+                f"{cron_stale_for:.0f}s (stale threshold {settings.watchdog_worker_stale_seconds}s)"
+            )
+        else:
+            _log.info("watchdog.cron_stale_detected stale_for=%.0fs", cron_stale_for)
+    # cron_fresh is None -> undeterminable: append nothing, leave the timer as-is.
+
+    # Boot grace: suppress BOTH the alert and the recovery edge for the first
+    # _WATCHDOG_BOOT_GRACE_SECONDS after loop start. Suppressing _maybe_alert
+    # entirely is intentional: it must not emit a spurious RECOVERY for an
+    # incident another machine owns.
+    if _in_boot_grace(now):
+        if conditions:
+            _log.info("watchdog.boot_grace_suppressed conditions=%s", "; ".join(conditions))
+        return state  # no alert AND no recovery edge is evaluated during boot grace
 
     await _maybe_alert(settings, redis, conditions)
-
-    return all_dead_since
+    return state
 
 
 async def run_worker_liveness_watchdog(settings: Settings | None = None) -> None:
@@ -511,14 +573,17 @@ async def run_worker_liveness_watchdog(settings: Settings | None = None) -> None
     routed through the system-worker cron path. If the workers are down, the
     cron path is down, so the alert must not depend on it.
     """
+    global _STARTED_AT
+
     settings = settings or get_settings()
-    all_dead_since: float | None = None
+    _STARTED_AT = time.time()
+    state = _LivenessState()
     while True:
         redis: aioredis.Redis | None = None
         try:
             redis = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
             await _write_watchdog_heartbeat(redis)
-            all_dead_since = await _evaluate_once(settings, redis, all_dead_since)
+            state = await _evaluate_once(settings, redis, state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

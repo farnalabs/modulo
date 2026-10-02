@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +23,20 @@ import pytest
 from modulo.core.email_service import EmailSendingError
 from modulo.core.watchdog import worker_liveness as wl
 from modulo.settings import Settings
+
+
+@pytest.fixture(autouse=True)
+def _no_boot_grace_in_tests() -> Iterator[None]:
+    """Force ``_STARTED_AT`` to None around every test.
+
+    Direct ``_evaluate_once`` tests must never land inside the boot-grace
+    window by accident: the loop stamps ``_STARTED_AT`` when it runs, and a
+    leaked value would silently suppress alerts in later tests.
+    """
+    saved = wl._STARTED_AT
+    wl._STARTED_AT = None
+    yield
+    wl._STARTED_AT = saved
 
 
 def _make_settings(**overrides: Any) -> Settings:
@@ -185,9 +199,9 @@ class TestWorkerLivenessWatchdog:
 
         post = AsyncMock()
         with patch.object(wl, "_send_alerts", post):
-            state = await wl._evaluate_once(settings, fake, dead_since)
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
 
-        assert state == dead_since  # still dead, timer keeps running
+        assert state.all_dead_since == dead_since  # still dead, timer keeps running
         post.assert_awaited_once()
         assert wl._ALERT_STATE_KEY in fake._data
         # The stored state carries the conditions for the recovery email.
@@ -201,7 +215,7 @@ class TestWorkerLivenessWatchdog:
         with patch.object(wl, "_send_alerts", post2):
             state2 = await wl._evaluate_once(settings, fake, state)
         post2.assert_not_awaited()
-        assert state2 == state
+        assert state2.all_dead_since == dead_since
         assert wl._ALERT_STATE_KEY in fake._data  # state persists until recovery
 
     async def test_redis_read_failure_fails_open_and_loop_continues(self) -> None:
@@ -264,10 +278,10 @@ class TestWorkerLivenessWatchdog:
 
         send_alerts = AsyncMock()
         with patch.object(wl, "_send_alerts", send_alerts):
-            state = await wl._evaluate_once(settings, fake, dead_since)
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
 
         send_alerts.assert_not_awaited()
-        assert state is not None  # still tracking the dead state
+        assert state.all_dead_since is not None  # still tracking the dead state
         assert wl._ALERT_STATE_KEY not in fake._data
 
     async def test_channel_configured_via_teams_or_email_fires_alert(self) -> None:
@@ -279,7 +293,7 @@ class TestWorkerLivenessWatchdog:
         ):
             send_alerts = AsyncMock()
             with patch.object(wl, "_send_alerts", send_alerts):
-                await wl._evaluate_once(settings, fake, time.time() - 200)
+                await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=time.time() - 200))
             send_alerts.assert_awaited_once()
             assert wl._ALERT_STATE_KEY in fake._data
             fake._data.pop(wl._ALERT_STATE_KEY, None)
@@ -291,7 +305,7 @@ class TestWorkerLivenessWatchdog:
         # 1. Alert fires while the fleet is dead past the threshold.
         post = AsyncMock()
         with patch.object(wl, "_send_alerts", post):
-            dead_state = await wl._evaluate_once(settings, fake, time.time() - 200)
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=time.time() - 200))
         post.assert_awaited_once()
         assert wl._ALERT_STATE_KEY in fake._data
 
@@ -301,8 +315,8 @@ class TestWorkerLivenessWatchdog:
         fake.set_cron_heartbeat()
         post2 = AsyncMock()
         with patch.object(wl, "_send_alerts", post2):
-            recovered = await wl._evaluate_once(settings, fake, dead_state)
-        assert recovered is None
+            recovered = await wl._evaluate_once(settings, fake, state)
+        assert recovered.all_dead_since is None
         post2.assert_awaited_once()
         # The recovery fan-out carried the prior incident state.
         assert post2.await_args.kwargs["recovery_state"] is not None
@@ -312,9 +326,9 @@ class TestWorkerLivenessWatchdog:
         # 3. Still healthy on the next tick: no repeat recovery email.
         post3 = AsyncMock()
         with patch.object(wl, "_send_alerts", post3):
-            still_healthy = await wl._evaluate_once(settings, fake, None)
+            still_healthy = await wl._evaluate_once(settings, fake, recovered)
         post3.assert_not_awaited()
-        assert still_healthy is None
+        assert still_healthy.all_dead_since is None
 
         # 4. A NEW incident (second death) fires a fresh alert again.
         fake.clear_workers("runs")
@@ -322,12 +336,13 @@ class TestWorkerLivenessWatchdog:
         fake.set_cron_heartbeat(age_seconds=600)
         post4 = AsyncMock()
         with patch.object(wl, "_send_alerts", post4):
-            state2 = await wl._evaluate_once(settings, fake, time.time() - 200)
+            state2 = await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=time.time() - 200))
         post4.assert_awaited_once()
-        assert state2 is not None
+        assert state2.all_dead_since is not None
         assert wl._ALERT_STATE_KEY in fake._data
 
     async def test_cron_stale_alone_triggers_alert(self) -> None:
+        """Cron-stale alone alerts ONLY once the staleness is sustained (FAR-1390)."""
         fake = _FakeWatchdogRedis()
         fake.add_live_worker("runs")
         fake.add_live_worker("system")
@@ -336,10 +351,101 @@ class TestWorkerLivenessWatchdog:
 
         post = AsyncMock()
         with patch.object(wl, "_send_alerts", post):
-            state = await wl._evaluate_once(settings, fake, None)
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState(cron_stale_since=time.time() - 200))
 
         post.assert_awaited_once()
-        assert state is None  # workers never looked dead
+        assert state.all_dead_since is None  # workers were never dead
+        assert wl._ALERT_STATE_KEY in fake._data
+        stored = json.loads(fake._data[wl._ALERT_STATE_KEY])
+        assert "system-cron (fire_due_triggers) heartbeat stale fleet-wide" in stored["conditions"][0]
+
+    async def test_cron_stale_single_tick_does_not_alert(self) -> None:
+        """Regression (FAR-1390): the FIRST stale cron tick starts the timer,
+        it does not alert — no prior cron_stale_since means sustained_for=0."""
+        fake = _FakeWatchdogRedis()
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat(age_seconds=600)  # workers alive, cron dead
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+        post = AsyncMock()
+        with patch.object(wl, "_send_alerts", post):
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState())
+
+        post.assert_not_awaited()
+        assert state.cron_stale_since is not None  # the debounce timer started
+        assert state.all_dead_since is None
+        assert wl._ALERT_STATE_KEY not in fake._data
+
+    async def test_cron_stale_requires_sustained_window(self) -> None:
+        """Cron staleness below the sustained window does not alert; past it does."""
+        fake = _FakeWatchdogRedis()
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat(age_seconds=600)
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+        # Stale for 10s — far below the 180s window.
+        post = AsyncMock()
+        with patch.object(wl, "_send_alerts", post):
+            below = await wl._evaluate_once(settings, fake, wl._LivenessState(cron_stale_since=time.time() - 10))
+        post.assert_not_awaited()
+        assert below.cron_stale_since is not None  # timer keeps running
+
+        # Stale for 200s — past the window: alert fires exactly once.
+        post2 = AsyncMock()
+        with patch.object(wl, "_send_alerts", post2):
+            past = await wl._evaluate_once(settings, fake, wl._LivenessState(cron_stale_since=time.time() - 200))
+        post2.assert_awaited_once()
+        assert past.all_dead_since is None  # workers stayed live throughout
+        stored = json.loads(fake._data[wl._ALERT_STATE_KEY])
+        assert "heartbeat stale fleet-wide for" in stored["conditions"][0]
+
+    async def test_cron_stale_timer_resets_when_heartbeat_recovers(self) -> None:
+        """A fresh heartbeat clears the cron debounce timer."""
+        fake = _FakeWatchdogRedis()
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat(age_seconds=5)  # recovered
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+        post = AsyncMock()
+        with patch.object(wl, "_send_alerts", post):
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState(cron_stale_since=time.time() - 100))
+
+        assert state.cron_stale_since is None
+        post.assert_not_awaited()
+
+    async def test_boot_grace_suppresses_alert(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Inside the boot grace window neither alert nor recovery fires."""
+        wl._STARTED_AT = time.time()  # just started -> within grace
+        fake = _FakeWatchdogRedis()  # no live workers, no cron heartbeat
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+        post = AsyncMock()
+        with (
+            patch.object(wl, "_send_alerts", post),
+            caplog.at_level(logging.INFO, logger="modulo.watchdog"),
+        ):
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=time.time() - 200))
+
+        post.assert_not_awaited()
+        assert wl._ALERT_STATE_KEY not in fake._data
+        assert state.all_dead_since is not None  # timers keep running during grace
+        assert "watchdog.boot_grace_suppressed" in caplog.text
+
+    async def test_boot_grace_expired_allows_alert(self) -> None:
+        """Once the grace window has elapsed, the sustained alert fires normally."""
+        wl._STARTED_AT = time.time() - (wl._WATCHDOG_BOOT_GRACE_SECONDS + 5)
+        fake = _FakeWatchdogRedis()  # no live workers, no cron heartbeat
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+        post = AsyncMock()
+        with patch.object(wl, "_send_alerts", post):
+            await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=time.time() - 200))
+
+        post.assert_awaited_once()
+        assert wl._ALERT_STATE_KEY in fake._data
 
     def test_configured_queues_are_prefix_aware(self) -> None:
         settings = _make_settings(SAQ_RUNS_QUEUE="staging-runs")
@@ -415,9 +521,10 @@ async def test_cron_read_failure_fails_open_without_alert() -> None:
         patch.object(fake, "scan_iter", side_effect=RuntimeError("redis down")),
         patch.object(wl, "_send_alerts", post),
     ):
-        state = await wl._evaluate_once(settings, fake, None)
+        state = await wl._evaluate_once(settings, fake, wl._LivenessState())
 
-    assert state is None  # workers were live the whole time
+    assert state.all_dead_since is None  # workers were live the whole time
+    assert state.cron_stale_since is None  # undeterminable read leaves the timer untouched
     post.assert_not_awaited()
 
 
@@ -430,9 +537,9 @@ async def test_workers_dead_below_stale_threshold_does_not_alert() -> None:
     dead_since = time.time() - 10  # far below the 180s stale threshold
 
     with patch.object(wl, "_send_alerts", post):
-        state = await wl._evaluate_once(settings, fake, dead_since)
+        state = await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
 
-    assert state == dead_since  # still tracking the dead window
+    assert state.all_dead_since == dead_since  # still tracking the dead window
     post.assert_not_awaited()
 
 
@@ -707,10 +814,10 @@ class TestEdgeTriggeredAlertRecovery:
 
         post = AsyncMock()
         with patch.object(wl, "_send_alerts", post):
-            state = await wl._evaluate_once(settings, fake, None)
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState())
 
         post.assert_not_awaited()
-        assert state is None
+        assert state.all_dead_since is None
         assert wl._ALERT_STATE_KEY not in fake._data
 
     async def test_multiple_machines_send_exactly_one_alert_and_one_recovery(self) -> None:
@@ -732,11 +839,11 @@ class TestEdgeTriggeredAlertRecovery:
         with (
             patch.object(wl, "_send_alerts", post_a),
         ):
-            await wl._evaluate_once(settings, fake_a, dead_since)
+            await wl._evaluate_once(settings, fake_a, wl._LivenessState(all_dead_since=dead_since))
         with (
             patch.object(wl, "_send_alerts", post_b),
         ):
-            await wl._evaluate_once(settings, fake_b, dead_since)
+            await wl._evaluate_once(settings, fake_b, wl._LivenessState(all_dead_since=dead_since))
 
         # Exactly one alert email across both machines.
         assert post_a.await_count + post_b.await_count == 1
@@ -749,9 +856,9 @@ class TestEdgeTriggeredAlertRecovery:
         post_a2 = AsyncMock()
         post_b2 = AsyncMock()
         with patch.object(wl, "_send_alerts", post_a2):
-            await wl._evaluate_once(settings, fake_a, dead_since)
+            await wl._evaluate_once(settings, fake_a, wl._LivenessState(all_dead_since=dead_since))
         with patch.object(wl, "_send_alerts", post_b2):
-            await wl._evaluate_once(settings, fake_b, dead_since)
+            await wl._evaluate_once(settings, fake_b, wl._LivenessState(all_dead_since=dead_since))
 
         assert post_a2.await_count + post_b2.await_count == 1
         assert wl._ALERT_STATE_KEY not in shared._data
@@ -1017,9 +1124,9 @@ class TestAdditionalFailOpenPaths:
             patch.object(wl, "_send_alerts", post),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
-            state = await wl._evaluate_once(settings, fake, None)
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState())
 
-        assert state is None  # workers were live the whole time
+        assert state.all_dead_since is None  # workers were live the whole time
         post.assert_not_awaited()
         assert "watchdog.worker_read_failed" in caplog.text
 
@@ -1031,9 +1138,9 @@ class TestAdditionalFailOpenPaths:
         post = AsyncMock()
 
         with patch.object(wl, "_send_alerts", post):
-            state = await wl._evaluate_once(settings, fake, None)
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState())
 
-        assert state is not None  # all_dead_since now set, below the stale threshold
+        assert state.all_dead_since is not None  # timer started, below the stale threshold
         post.assert_not_awaited()
 
     async def test_worker_read_cancelled_error_propagates(self) -> None:
@@ -1043,7 +1150,7 @@ class TestAdditionalFailOpenPaths:
             patch.object(fake, "zrangebyscore", side_effect=asyncio.CancelledError()),
             pytest.raises(asyncio.CancelledError),
         ):
-            await wl._evaluate_once(settings, fake, None)
+            await wl._evaluate_once(settings, fake, wl._LivenessState())
 
     async def test_cron_read_cancelled_error_propagates(self) -> None:
         fake = _FakeWatchdogRedis()
@@ -1053,7 +1160,7 @@ class TestAdditionalFailOpenPaths:
             patch.object(fake, "scan_iter", side_effect=asyncio.CancelledError()),
             pytest.raises(asyncio.CancelledError),
         ):
-            await wl._evaluate_once(settings, fake, None)
+            await wl._evaluate_once(settings, fake, wl._LivenessState())
 
     async def test_watchdog_tick_failure_logs_and_continues(self, caplog: pytest.LogCaptureFixture) -> None:
         fake = _FakeWatchdogRedis()

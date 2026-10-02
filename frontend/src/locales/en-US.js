@@ -3138,8 +3138,8 @@ export default {
       "outcome_no_delivery": "No delivery",
       "outcome_excluded": "Excluded",
       "outcome_unclassified": "Unclassified",
-      "outcome_confidence_self_reported": "Self-reported",
-      "outcome_confidence_self_reported_detail": "This delivery verdict is self-reported by the run's own output. It has not been verified against a source of truth."
+      "outcome_confidence_agent_reported": "Agent-reported",
+      "outcome_confidence_agent_reported_detail": "This delivery verdict is agent-reported from the run's own output. It has not been verified against a source of truth."
     },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",
@@ -3443,7 +3443,15 @@ export default {
       "regex_requires_pattern": "Regex detection requires a pattern.",
       "schema_requires_json": "JSON schema detection requires valid JSON schema.",
       "created_success": "Guardrail created.",
-      "kill_switch_read_error": "Could not read kill-switch state."
+      "kill_switch_read_error": "Could not read kill-switch state.",
+      "import_guardrail": "Import Config",
+      "import_guardrail_description": "Apply a guardrail config YAML directly as the applied state — e.g. the elevated export from another organisation. No propose/review round-trip: the imported set replaces the applied guardrails in one step.",
+      "import_action": "Import",
+      "import_config_yaml": "Config YAML",
+      "import_placeholder": "Paste the guardrail config YAML to import…",
+      "import_hint": "Admin-only. The imported set becomes this org's applied guardrail policies immediately. Existing guardrails not present in the imported config are removed.",
+      "import_failed": "Import failed: {detail}",
+      "import_success": "Imported config as the applied guardrail state ({count} change(s), hash {hash})."
     },
     "RunDetailGuardrailSummary": {
       "guardrail_summary_title": "Guardrail Summary",

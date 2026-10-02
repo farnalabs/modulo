@@ -106,7 +106,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-model-backends** - Model backend management and setup - routes: `/admin/model-backends`, `/setup/model-backend/:id`
 - **feat-assistant** - Modulo assistant configuration and skills - routes: `/admin/assistant`, `/settings/assistant`, `/assistant`
 - **feat-mcp** - Model Context Protocol tool configuration - routes: `/settings/mcp`
-- **feat-guardrails** - Guardrail policies - routes: `/settings/guardrails`
+- **feat-guardrails** - Guardrail policies (in-page Import control ships on `/settings/guardrails`) - routes: `/settings/guardrails`
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`
 - **feat-environments** - Environment profiles and run environments (canonical UI is the Runners page; the `/environment-profiles*` and `/admin/environments` deep links redirect there — FAR-591 D5) - routes: `/admin/runners/profiles`, `/admin/runners/profiles/new`, `/admin/runners/profiles/:id/edit`, `/admin/runners/concurrency`
 - **feat-triggers** - Manual, webhook, and scheduled triggers - routes: `/settings/triggers`, `/admin/trigger-events`
@@ -899,7 +899,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 >
 > **Closed this walk (2026-10-01):** closed the sub-surface gap left by
 > FAR-1336 (delivery-signal provenance/confidence, `#1154`) and FAR-1373
-> (self-reported streak-outcome qualifier, `#1158`) — shipped behaviour neither
+> (agent-reported streak-outcome qualifier, `#1158`; vocabulary renamed from
+> `self_reported` by FAR-1388) — shipped behaviour neither
 > product-map layer described. The run-outcome delivery signal had no home at
 > all: the terminal `run_classification` record (value/reason/`delivered_pr_urls`
 > + FAR-1336 `pr_url_provenance` + `delivery_confidence`), the fail-closed
@@ -909,10 +910,23 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `pipeline_engine/classify.py` / `test_run_classification.py` /
 > `test_runs_endpoint.py`. `feat-triggers` (`triggers/trigger-engine.md` +
 > manifest registry) gained the streak/outcomes `delivery_confidence` wire
-> surface and the `SettingsTriggersView` "Self-reported" qualifier chip (only on
-> a delivered self-reported outcome; unknown/legacy/absent never reads as
-> verified) citing `core/trigger_streak.py` / `test_trigger_streak_engine.py` /
+> surface and the `SettingsTriggersView` "Agent-reported" qualifier chip (only on
+> a delivered agent-reported outcome, including the pre-rename `self_reported`
+> alias that stored rows still carry and never get backfilled; unknown/legacy/
+> absent never reads as verified) citing `core/trigger_streak.py` /
+> `test_trigger_streak_engine.py` /
 > `SettingsTriggersView.spec.ts`. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-01):** closed `feat-guardrails`'s last tracked
+> deferral — the missing in-page Import control on `/settings/guardrails`
+> (`configure/guardrails.md`). The page now ships an admin-gated "Import
+> Config" control wired to the existing
+> `POST /api/v1/guardrails/config/import` surface (dialog + in-dialog error
+> channel for 403/409/422 + success summary with change count/hash + guardrail
+> list refresh), with vitest coverage in `SettingsGuardrailsView.spec.ts`. The
+> manifest registry and tracker both move `feat-guardrails` to
+> `status: covered`; the deferral and known-gap bullet are removed.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

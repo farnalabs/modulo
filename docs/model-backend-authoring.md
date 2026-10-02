@@ -19,6 +19,7 @@ class ModelBackendBase(ABC):
     """Abstract base for all model backends (real + stub)."""
 
     supports_tools: bool = False
+    supports_native_structured_output: bool = False
 
     @property
     @abstractmethod
@@ -30,15 +31,22 @@ class ModelBackendBase(ABC):
     async def invoke(
         self,
         messages: list[BaseMessage],
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> BaseMessage:
-        """Send a messages list and return a single response."""
+        """Send a messages list and return a single response.
+
+        When `output_schema` is supplied and `supports_native_structured_output`
+        is True, the backend uses the provider's native structured-output
+        decoding (e.g. OpenAI `response_format`); otherwise the schema is
+        ignored and behaviour is unchanged."""
 
     @abstractmethod
     def stream(
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]] | None = None,
+        output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         """Return an async iterator that yields token chunks."""
@@ -123,11 +131,21 @@ plaintext. The `ModelBackendHub` decrypts credentials at initialisation/load tim
 
 ## Registration
 
-Via entry points in `pyproject.toml`:
+Via entry points in `pyproject.toml` (the entry point must reference a
+**builder function**, not the class directly; see [Plugin API](./plugin-api.md)):
 
 ```toml
 [project.entry-points."modulo.model_backends"]
-my_backend = "my_package.backend:MyCustomBackend"
+my_backend = "my_package.backend:build_my_backend"
+```
+
+```python
+# my_package/backend.py
+from modulo.model_backends.base import ModelBackendBase
+
+
+def build_my_backend(api_key: str, model_id: str, **params) -> ModelBackendBase:
+    return MyCustomBackend(api_key=api_key, model_id=model_id, **params)
 ```
 
 Or programmatically:
@@ -144,7 +162,7 @@ manifest = PluginManifest(
 )
 
 registry = get_plugin_registry()
-registry.register_model_backend("custom", MyCustomBackend, manifest)
+registry.register_model_backend("custom", build_my_backend, manifest)
 ```
 
 `register_model_backend(provider, builder, manifest)` always takes a

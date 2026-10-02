@@ -386,10 +386,12 @@ class Run(OrgScoped):
     # `run_node_outputs` store (see the mapping note above). FAR-189 run-outcome
     # shape {value, reason, delivered_pr_urls, computed_at, work_intact,
     # declared_success_nodes, pr_url_provenance, delivery_confidence}.
-    # delivered_pr_urls are self-reported by the run's own output and
+    # delivered_pr_urls are agent-reported by the run's own output and
     # UNVERIFIED against an SCM; pr_url_provenance records how each URL was
-    # harvested and delivery_confidence states that plainly (self_reported,
-    # FAR-1336). The eight-key shape is forward-only: rows written before
+    # harvested and delivery_confidence states that plainly (agent_reported,
+    # FAR-1336/FAR-1388 — rows written before the FAR-1388 rename carry the
+    # deprecated pre-rename spelling, are never backfilled, and readers
+    # tolerate both). The eight-key shape is forward-only: rows written before
     # FAR-1336 are six-key and are never backfilled, so readers must treat an
     # absent pr_url_provenance/delivery_confidence key as legacy/unknown, not
     # an error. UNIQUE(run_id) is the runs PK; the record is
