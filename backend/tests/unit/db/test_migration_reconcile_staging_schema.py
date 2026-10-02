@@ -104,9 +104,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0270_pipeline_snapshots_max_autonomy_ge_default chains off 0269,
 # 0271_org_api_keys_revocation_sweep_indexes chains off 0270,
 # 0272_oauth_client_revoke_lookup_indexes chains off 0271,
-# 0273_runs_dispatch_phase chains off 0272, and
-# 0274_policy_gate_pin_fingerprint_operator_control chains off 0273 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0274_policy_gate_pin_fingerprint_operator_control"
+# 0273_runs_dispatch_phase chains off 0272,
+# 0274_policy_gate_pin_fingerprint_operator_control chains off 0273, and
+# 0275_run_cancel_reason_vocabulary chains off 0274 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0275_run_cancel_reason_vocabulary"
 
 
 def _source(name: str) -> str:

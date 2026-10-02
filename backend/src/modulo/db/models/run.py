@@ -72,16 +72,19 @@ ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 # FAR-1233 — WHY a run was cancelled. The CLOSED vocabulary behind
 # ``runs.cancel_reason``, enforced at the DB by ``ck_runs_cancel_reason``
-# (migration 0260).
+# (created by migration 0260; the constraint text is maintained by migration
+# 0275_run_cancel_reason_vocabulary, which reconciled it to this vocabulary
+# after FAR-1104 renamed the values).
 #
 # ``NULL`` is a first-class value: every run cancelled BEFORE 0260 has no
 # reason recorded and the run detail page renders a neutral
 # "reason not recorded" fallback rather than guessing.
 #
-# Adding a cause means adding the constant here, the CHECK value in
-# ``ck_runs_cancel_reason`` (migration 0260 — migration-owned, per the repo
-# parity rule: the DB-side vocabulary backstop is not duplicated in the ORM),
-# and the write site — together, never as a follow-up.
+# Adding a cause means adding the constant here, widening the CHECK value in
+# ``ck_runs_cancel_reason`` via a NEW migration (the constraint text ships in
+# migration 0275 — never edit a shipped migration; migration-owned, per the
+# repo parity rule: the DB-side vocabulary backstop is not duplicated in the
+# ORM), and the write site — together, never as a follow-up.
 # ---------------------------------------------------------------------------
 CANCEL_REASON_USER_REQUESTED: Final[str] = "user_requested"
 CANCEL_REASON_AGENT_REQUESTED: Final[str] = "agent_requested"
@@ -287,7 +290,8 @@ class Run(OrgScoped):
     cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # FAR-1233 cancellation transparency: WHY and WHO. ``cancel_reason`` is one
     # of CANCEL_REASON_VALUES (DB backstop ``ck_runs_cancel_reason``, migration
-    # 0260); NULL for every run cancelled before 0260 — the API serves NULL
+    # 0260, vocabulary text maintained by 0275); NULL for every run cancelled
+    # before 0260 — the API serves NULL
     # as-is and the UI renders a neutral "reason not recorded" fallback.
     # ``cancelled_by`` is the acting account id (text) or CANCELLED_BY_SYSTEM.
     # Nullable and additive: existing rows and existing API consumers are

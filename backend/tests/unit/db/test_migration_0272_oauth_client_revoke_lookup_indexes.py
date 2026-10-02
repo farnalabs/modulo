@@ -106,12 +106,13 @@ def _model_indexes(model: type) -> dict[str, Index]:
 
 
 class TestChain:
-    def test_single_head_is_0274(self) -> None:
+    def test_single_head_is_0275(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         # 0273_runs_dispatch_phase (FAR-1088), then
-        # 0274_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10),
-        # now chain onto this migration, so the single head moved up two.
-        assert heads == ["0274_policy_gate_pin_fingerprint_operator_control"], f"expected a single head, got {heads}"
+        # 0274_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10), then
+        # 0275_run_cancel_reason_vocabulary (FAR-1406),
+        # now chain onto this migration, so the single head moved up three.
+        assert heads == ["0275_run_cancel_reason_vocabulary"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
