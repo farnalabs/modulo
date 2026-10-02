@@ -93,6 +93,8 @@ _EXPECTED_MAPPING = {
     "eval_regression": ("warning", "org", "eval.regression", "any_scope", True, 336),
     "eval_blocked": ("error", "org", "eval.blocked", "any_scope", True, 168),
     "feedback_pending": ("info", "user", "feedback.pending", "user_only", False, 336),
+    "trigger_deactivated": ("warning", "org", "triggers.auto_deactivated", "org_admin", True, 168),
+    "trigger_streak_alert": ("warning", "org", "triggers.streak_alert", "org_admin", True, 168),
     "guardrail_enforcement_gap": ("error", "admin", "guardrails.enforcement_gap", "org_admin", True, 168),
     "guardrail_kill_switch": ("warning", "admin", "guardrails.kill_switch", "org_admin", True, 168),
     "guardrail_unexpected_skip": ("error", "admin", "guardrails.unexpected_skip", "org_admin", True, 168),
@@ -308,6 +310,68 @@ async def test_guardrail_unexpected_skip_templates_resolved(mapper: Notification
         "a soft-deleted pinned guardrail. See the run for details."
     )
     assert kwargs["action_url"] == f"/runs/{run_id}"
+
+
+# ---------------------------------------------------------------------------
+# Trigger streak events (FAR-1410 — payload-driven, type-accurate copy)
+# ---------------------------------------------------------------------------
+
+
+async def test_trigger_deactivated_ongoing_copy_unchanged(mapper: NotificationEventMapper) -> None:
+    """FAR-1410 — an ongoing deactivation keeps its FAR-190 copy verbatim (the
+    payload-driven override only fires for trigger_type == "cron")."""
+    payload = {**_PAYLOAD, "streak": 5, "threshold": 5, "trigger_type": "ongoing", "auto_deactivated": True}
+    _, mock_create = await _call(mapper, "trigger_deactivated", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Ongoing trigger auto-deactivated — my-pipeline"
+    assert kwargs["body"] == (
+        'Ongoing trigger "my-pipeline" was auto-deactivated after 5 consecutive no-delivery runs (threshold 5).'
+    )
+    assert kwargs["action_url"] is None
+
+
+async def test_trigger_deactivated_missing_trigger_type_keeps_ongoing_copy(
+    mapper: NotificationEventMapper,
+) -> None:
+    """A payload with no trigger_type (legacy / hand-built) must not crash and
+    must fall back to the base ongoing copy."""
+    payload = {**_PAYLOAD, "streak": 5, "threshold": 5}
+    _, mock_create = await _call(mapper, "trigger_deactivated", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Ongoing trigger auto-deactivated — my-pipeline"
+
+
+async def test_trigger_deactivated_cron_copy_is_type_accurate(mapper: NotificationEventMapper) -> None:
+    """FAR-1410 — a CRON that opted in to auto-deactivation must not be called
+    an 'Ongoing trigger'; the opt-in flag is named so the operator knows why
+    this cron behaved differently from the default."""
+    payload = {**_PAYLOAD, "streak": 5, "threshold": 5, "trigger_type": "cron", "auto_deactivated": True}
+    _, mock_create = await _call(mapper, "trigger_deactivated", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Cron trigger auto-deactivated — my-pipeline"
+    assert kwargs["body"] == (
+        'Cron trigger "my-pipeline" was auto-deactivated after 5 consecutive no-delivery runs (threshold 5). '
+        "Auto-deactivation was enabled for this trigger via no_delivery_auto_deactivate."
+    )
+    assert kwargs["action_url"] is None
+
+
+async def test_trigger_streak_alert_copy_claims_no_deactivation(mapper: NotificationEventMapper) -> None:
+    """FAR-1410 — a notify-only cron trip's rendered copy must state that a
+    streak was detected, that NO action was taken, and that auto-deactivation
+    is opt-in — and must never claim the trigger was deactivated."""
+    payload = {**_PAYLOAD, "streak": 5, "threshold": 5, "trigger_type": "cron", "auto_deactivated": False}
+    _, mock_create = await _call(mapper, "trigger_streak_alert", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    title = kwargs["title"]
+    body = kwargs["body"]
+    assert title == "No-delivery streak detected — my-pipeline"
+    assert "deactivated" not in title
+    assert "was auto-deactivated" not in body
+    assert "No action was taken" in body
+    assert "no_delivery_auto_deactivate" in body
+    assert "5 consecutive no-delivery runs" in body
+    assert kwargs["action_url"] == "/settings/triggers"
 
 
 # ---------------------------------------------------------------------------
