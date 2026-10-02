@@ -3060,6 +3060,39 @@ elements:
       - testid: pipeline-list-action-menu
         type: button
         dynamic_testid: false
+      - testid: pipeline-list-breadcrumb-root
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-move-error-close
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-move-folder-option
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-move-folder-none
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-move-cancel
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-move-save
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-rename-name
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-list-rename-cancel
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-rename-save
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-list-delete-confirm
+        type: button
+        dynamic_testid: false
       - testid: filter-bar-search
         type: input
         dynamic_testid: false
