@@ -80,16 +80,24 @@
               </td>
               <td class="px-4 py-3">
                 <div class="flex flex-col items-start gap-1">
+                  <!-- FAR-1405: rendered for every trigger type the streak
+                       engine covers (ongoing AND cron — the mirrored
+                       STREAK_COVERED_TRIGGER_TYPES constant), not just ongoing.
+                       role="status" + aria-live mark it as a status region
+                       (ux-conformance A11Y / WCAG 4.1.3), mirroring the
+                       deactivated badge below. -->
                   <span
-                    v-if="t.trigger_type === 'ongoing' && t.streak_status?.enabled"
+                    v-if="isStreakCovered(t) && t.streak_status?.enabled"
                     data-testid="settings-triggers-streak"
+                    role="status"
+                    aria-live="polite"
                     :class="streakBadgeClass(t)"
                     class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium"
                   >
                     {{ $t('views.SettingsTriggersView.streak_display', { streak: t.streak_status.streak ?? 0, threshold: t.streak_status.threshold ?? 0 }) }}
                   </span>
                   <div
-                    v-if="isDeactivatedOngoing(t)"
+                    v-if="isStreakDeactivated(t)"
                     data-testid="settings-triggers-deactivated-badge"
                     aria-live="polite"
                     :aria-label="$t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) })"
@@ -112,7 +120,7 @@
                       />
                       {{ triggerToggling[t.id] ? $t('views.SettingsTriggersView.toggling') : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
                     </button>
-                    <Button v-if="isDeactivatedOngoing(t) && isOrgOperator" data-testid="settings-triggers-reenable" size="small" severity="secondary" outlined :disabled="triggerToggling[t.id]" @click="toggleActive(t)">
+                    <Button v-if="isStreakDeactivated(t) && isOrgOperator" data-testid="settings-triggers-reenable" size="small" severity="secondary" outlined :disabled="triggerToggling[t.id]" @click="toggleActive(t)">
                       {{ $t('views.SettingsTriggersView.re_enable') }}
                     </Button>
                   </div>
@@ -752,8 +760,33 @@ function pipelineName(id: string): string {
   return p ? p.name : shortId(id)
 }
 
-function isDeactivatedOngoing(trigger: TriggerItem): boolean {
-  return trigger.trigger_type === 'ongoing' && trigger.streak_status?.state === 'deactivated'
+// FAR-1405 — the trigger types the no-delivery streak engine covers, mirrored
+// in ONE place from the backend's single source of truth:
+//     STREAK_TRIGGER_TYPES = ("ongoing", "cron")
+//     backend/src/modulo/core/trigger_streak.py
+// The badge conditions read this constant, never a literal in the template, so
+// widening the backend set is a one-line change here (grep STREAK_TRIGGER_TYPES
+// across both trees to find the pair).
+const STREAK_COVERED_TRIGGER_TYPES: readonly string[] = ['ongoing', 'cron']
+
+function isStreakCovered(trigger: TriggerItem): boolean {
+  return STREAK_COVERED_TRIGGER_TYPES.includes(trigger.trigger_type)
+}
+
+// FAR-1405 — the deactivated badge and the re-enable action are driven by the
+// ACTUAL state the backend reports, never by the trigger type. A cron trip does
+// NOT auto-deactivate by default (FAR-1387: it notifies and surfaces), so it
+// reports state 'ok' with deactivated_reason null and shows ONLY the streak
+// badge ("No-delivery streak x/N") — no "Deactivated" wording. 'Deactivated'
+// appears solely when streak_status.state === 'deactivated' (deactivated_reason
+// set; the one null-reason case is an inactive trigger whose reason read failed,
+// where the backend deliberately reports state 'deactivated' with the reason
+// unknown rather than collapsing to 'unconfigured'). No trigger-type gate here:
+// the backend only ever reports 'deactivated' for a covered type (an uncovered
+// type is always the 'unconfigured' base), and gating on type would hide a real
+// deactivation whenever this file's mirror constant lagged behind the backend.
+function isStreakDeactivated(trigger: TriggerItem): boolean {
+  return trigger.streak_status?.state === 'deactivated'
 }
 
 function streakBadgeClass(trigger: TriggerItem): string {
@@ -761,9 +794,12 @@ function streakBadgeClass(trigger: TriggerItem): string {
   if (!s) return 'bg-muted text-muted-foreground'
   const streak = s.streak ?? 0
   const threshold = s.threshold ?? 0
-  // Approaching deactivation. Guard with streak > 0 so a threshold=1 fresh
-  // trigger (0/1) is never permanently amber; a streak AT/OVER the threshold
-  // gets the red tier (a deactivation is eligible/imminent).
+  // Approaching the trip threshold. Guard with streak > 0 so a threshold=1
+  // fresh trigger (0/1) is never permanently amber; a streak AT/OVER the
+  // threshold gets the red tier. For an ongoing trigger a deactivation is
+  // imminent; a notify-only cron (FAR-1387) stays ACTIVE at the threshold, so
+  // the tier reads as "tripped / needs attention". Colour only — no copy here
+  // claims deactivation; that wording lives on the state-driven badge above.
   if (s.enabled && threshold > 0 && streak > 0 && streak >= threshold - 1) {
     if (streak >= threshold) return 'bg-destructive/10 text-destructive'
     return 'bg-amber-500/10 text-amber-600'
