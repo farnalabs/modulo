@@ -134,6 +134,14 @@ class TestFindUnauditedMerges:
         unaudited = find_unaudited_merges([], [])
         assert unaudited == []
 
+    def test_comment_at_exact_merge_time_does_not_count(self) -> None:
+        """Only comments *strictly after* the merge count — same-instant
+        comments are the pre-merge review and are not an audit."""
+        merges = [Merge("abc123", 100, _MERGE_TIME)]
+        comments = [Comment("modulo-reviewbot", _MERGE_TIME, 100)]
+        unaudited = find_unaudited_merges(merges, comments)
+        assert len(unaudited) == 1, "A comment at the exact merge instant must not count"
+
 
 # ---------------------------------------------------------------------------
 # CLI (main)
@@ -202,3 +210,85 @@ class TestMain:
             ]
         )
         assert rc == 2
+
+
+class TestMainNaiveTimestamps:
+    """tz-naive JSON timestamps must be treated as UTC (``_parse_dt``)."""
+
+    def test_naive_merge_with_aware_comment_counts(self) -> None:
+        """A naive merge timestamp + an aware (Z) comment never raises
+        TypeError and is audited — proving naive values are normalised
+        to UTC before comparison."""
+        merges = [{"commit": "abc", "pr_number": 1, "merged_at": "2026-09-22T12:00:00"}]
+        comments = [{"author": "modulo-reviewbot", "created_at": "2026-09-22T13:00:00Z", "pr_number": 1}]
+        rc = audit_main(
+            [
+                "--merges-json",
+                json.dumps(merges),
+                "--comments-json",
+                json.dumps(comments),
+            ]
+        )
+        assert rc == 0, "a naive merge time (UTC) must compare cleanly with an aware comment"
+
+    def test_aware_merge_with_naive_comment_counts(self) -> None:
+        """A naive comment timestamp is normalised to UTC as well."""
+        merges = [{"commit": "abc", "pr_number": 1, "merged_at": "2026-09-22T12:00:00Z"}]
+        comments = [{"author": "modulo-reviewbot", "created_at": "2026-09-22T13:00:00", "pr_number": 1}]
+        rc = audit_main(
+            [
+                "--merges-json",
+                json.dumps(merges),
+                "--comments-json",
+                json.dumps(comments),
+            ]
+        )
+        assert rc == 0
+
+    def test_two_naive_timestamps_count(self) -> None:
+        """Both timestamps naive and within the window: audited."""
+        merges = [{"commit": "abc", "pr_number": 1, "merged_at": "2026-09-22T12:00:00"}]
+        comments = [{"author": "modulo-reviewbot", "created_at": "2026-09-22T13:00:00", "pr_number": 1}]
+        rc = audit_main(
+            [
+                "--merges-json",
+                json.dumps(merges),
+                "--comments-json",
+                json.dumps(comments),
+            ]
+        )
+        assert rc == 0
+
+
+class TestMainWindowHoursFlag:
+    """The ``--window-hours`` CLI flag must reach the decision logic."""
+
+    def test_out_of_window_comment_with_default_window(self) -> None:
+        """A +30h comment is outside the default 24h window → unaudited."""
+        merges = [{"commit": "abc", "pr_number": 1, "merged_at": "2026-09-22T12:00:00Z"}]
+        comments = [{"author": "modulo-reviewbot", "created_at": "2026-09-23T18:00:00Z", "pr_number": 1}]
+        rc = audit_main(
+            [
+                "--merges-json",
+                json.dumps(merges),
+                "--comments-json",
+                json.dumps(comments),
+            ]
+        )
+        assert rc == 1
+
+    def test_out_of_window_comment_fits_extended_window(self) -> None:
+        """The same +30h comment is audited once the window is widened."""
+        merges = [{"commit": "abc", "pr_number": 1, "merged_at": "2026-09-22T12:00:00Z"}]
+        comments = [{"author": "modulo-reviewbot", "created_at": "2026-09-23T18:00:00Z", "pr_number": 1}]
+        rc = audit_main(
+            [
+                "--merges-json",
+                json.dumps(merges),
+                "--comments-json",
+                json.dumps(comments),
+                "--window-hours",
+                "48",
+            ]
+        )
+        assert rc == 0, "--window-hours must widen the reviewed window"

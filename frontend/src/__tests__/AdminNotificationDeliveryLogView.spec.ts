@@ -13,6 +13,7 @@ const mockAvailableEvents = [
   'budget_exceeded',
   'circuit_breaker_tripped',
   'trigger_deactivated',
+  'trigger_streak_alert',
 ]
 
 function defaultGet(url: string): Promise<{ data: unknown; error: unknown }> {
@@ -173,6 +174,7 @@ describe('AdminNotificationDeliveryLogView', () => {
     expect(labelFor('budget_exceeded')).toBe('Budget Exceeded')
     expect(labelFor('circuit_breaker_tripped')).toBe('Circuit Breaker Tripped')
     expect(labelFor('trigger_deactivated')).toBe('Trigger Deactivated')
+    expect(labelFor('trigger_streak_alert')).toBe('Trigger Streak Alert')
     expect(labelFor('hitl_deadline_warning')).toBe('HITL Deadline Warning')
   })
 

@@ -182,6 +182,23 @@ class TestDuplicatePrDetector:
         assert len(urls) == 1
         assert not find_duplicate_pr_urls(outputs, telemetry, None)
 
+    def test_case_variant_second_pr_url_still_breaches(self) -> None:
+        """FAR-1402: the harvest pattern's ``re.IGNORECASE`` is load-bearing.
+
+        ``gh`` echoes PR URLs in canonical lowercase, but the scanned blobs
+        also carry agent-TEXT (summaries, declared ``pr_url`` fields) where
+        the same URL can be spelled ``HTTPS://GITHUB.COM/...``. A second PR
+        visible ONLY in that case-variant form must still breach: dropping
+        ``re.IGNORECASE`` from ``db.crud.run._PR_URL_PATTERN`` makes this
+        test fail — the sweep would silently drop the sighting and report
+        one PR where two were delivered.
+        """
+        outputs = {"deliver": {"pr_url": _PR_1}}
+        variant = "HTTPS://GITHUB.COM/farnalabs/modulo/pull/1002"
+        telemetry = {"deliver": {"agent_stdout": f"{_PR_1}\n{variant}\n"}}
+        urls = find_duplicate_pr_urls(outputs, telemetry, None)
+        assert urls == [_PR_1, variant]
+
     def test_pr_list_json_listing_lines_do_not_count(self) -> None:
         """The delivery prompt's step-8 pre-check runs ``gh pr list --json
         ...,url``, which prints OTHER open PRs' URLs as JSON — a listing of

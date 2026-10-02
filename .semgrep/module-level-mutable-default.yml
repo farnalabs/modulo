@@ -1,4 +1,4 @@
-﻿rules:
+rules:
   - id: module-level-mutable-default
     patterns:
       - pattern-either:

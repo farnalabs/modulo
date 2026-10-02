@@ -11,3 +11,21 @@ rules:
     severity: ERROR
     paths:
       include: ["**/backend/src/**"]
+      # FAR-1399: exclude the FROZEN migration window (revisions 0000-0247) so
+      # shipped historical migrations stop contributing ~184 baseline findings
+      # to full scans. Two reasons: (1) these files are historical artefacts
+      # that must never be rewritten, so flagging them can never be acted on;
+      # (2) the dedicated rule .semgrep/migration-fstring-sql.yml exempts the
+      # same window by design (see its scope note) - this keeps both rules
+      # aligned on one cutoff. The window is permanent, not a rolling cutoff:
+      # it never extends. New migrations (>0247) and ALL product code stay
+      # fully covered by this rule, because the migration rule's line-scoped
+      # regexes are strictly narrower than these structural patterns (they
+      # miss multi-line `.execute(`/`text(` splits and quoted-identifier
+      # f-strings like f'public."{table}" ...'), so this rule remains the
+      # safety net for those shapes in new migrations.
+      exclude:
+        - "**/db/migrations/versions/00??_*.py"
+        - "**/db/migrations/versions/01??_*.py"
+        - "**/db/migrations/versions/02[0-3][0-9]_*.py"
+        - "**/db/migrations/versions/024[0-7]_*.py"

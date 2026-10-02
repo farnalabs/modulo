@@ -1239,6 +1239,23 @@ async def run_bundled_runner_node(
     script_lease_claimed = False
     output_json: Any = None
     start_time = time.monotonic()
+    # FAR-1315: pre-bound at function scope so the finally-block settle and
+    # the harvest reference them DIRECTLY (no ``locals()`` string lookups —
+    # see tests/architecture/test_no_locals_lookup.py). An unbound value is
+    # simply "" / None, which contributes no spend evidence.
+    provider: Any = None
+    provider_ref: str = ""
+    agent_stdout_raw: str = ""
+    agent_stderr_raw: str = ""
+    pr_url: str = ""
+    # FAR-1315: set once this node's run-scoped one-PR guard install ran (so
+    # the finally settles the ledger slot only for nodes that actually armed).
+    _single_pr_guard_armed = False
+    # FAR-1315 (MAJOR 2b): the guard install's status (installed /
+    # pre_planted / absent / failed), threaded into the finally's settle so a
+    # receipt probe against a path no shim ever wrote is UNKNOWN rather than
+    # "confirmed no create".
+    _gh_guard_install_status: str | None = None
 
     try:
         # Guard A (delivery-sentinel skip) — shared with the E2B path.
@@ -1297,6 +1314,53 @@ async def run_bundled_runner_node(
         dispatch_marker_set = True
         provider_ref = provision.provider_ref
         provider = route.provider
+
+        # FAR-1315: the one-PR-per-run ``gh`` guard on the Bundled Runner
+        # tier. The engine's sandbox-policy step (E2B-only) never runs on this
+        # dispatch branch — it returns to ``run_bundled_runner_node`` before
+        # the policy block — so a flagged node installs the SAME run-scoped
+        # shim here through the provider's exec primitive. The shared run
+        # LEDGER decides: the first flagged node of the run gets the live
+        # guard, a later or concurrent one gets a pre-planted refusal. Any
+        # absence or failure is surfaced LOUDLY at dispatch naming the tier
+        # (silent absence on a non-E2B tier is exactly the gap this closes).
+        if node_def.get("single_pr_per_run") is True:
+            _single_pr_guard_armed = True
+            from modulo.core.pipeline_engine.sandbox_policy import install_gh_pr_guard_via_exec
+
+            async def _guard_exec(command: list[str]) -> Any:
+                return await provider.exec_command(provider_ref, command, cmd_timeout=30)
+
+            _guard_install = await install_gh_pr_guard_via_exec(
+                _guard_exec,
+                run_scope=run_id,
+                guard_owner=node_id,
+            )
+            _gh_guard_install_status = _guard_install.status
+            if _guard_install.status in ("absent", "failed"):
+                _log.warning(
+                    "runner_dispatch.gh_pr_guard_unavailable: tier=%s status=%s node=%s run=%s detail=%s",
+                    route.provider_type,
+                    _guard_install.status,
+                    node_id,
+                    run_id,
+                    (_guard_install.detail or "no detail")[:300],
+                )
+            elif _guard_install.status == "pre_planted":
+                _log.warning(
+                    "runner_dispatch.gh_guard_run_claim_denied: tier=%s node=%s run=%s - "
+                    "pre-planted refusal, this node cannot create a PR (FAR-1315)",
+                    route.provider_type,
+                    node_id,
+                    run_id,
+                )
+            else:
+                _log.info(
+                    "runner_dispatch.gh_pr_guard_installed: tier=%s node=%s run=%s",
+                    route.provider_type,
+                    node_id,
+                    run_id,
+                )
 
         sandbox_envs, script_lease_claimed = await _resolve_sandbox_envs_with_script_setup(
             node_def=node_def,
@@ -1529,6 +1593,81 @@ async def run_bundled_runner_node(
             exclude_from_output=frozenset({"changed_files", "pr_url"}),
         )
     finally:
+        # FAR-1315: settle this node's run-scoped one-PR guard slot (only if
+        # the install ran above). Exception-safe and best-effort; runs BEFORE
+        # ``_teardown_and_clear`` destroys the workspace, so the shim's success
+        # receipt can still be HARVESTED here. SPEND EVIDENCE: harvested
+        # receipt -> a CORROBORATED delivered ``pr_url`` -> the captured
+        # streams (sentinel) only as a fallback when the receipt is UNKNOWN.
+        # A definitive receipt=False (LIVE install + probe ran) ignores pr_url
+        # and the sentinel and RELEASES this node's hold so a later flagged
+        # node of the run may claim; an ABSENT/FAILED install (the shipped
+        # runner image: no ``gh``) leaves the receipt meaningless rather than
+        # "confirmed no create". The streams / ``pr_url`` / install status are
+        # pre-bound at function scope and referenced DIRECTLY (no ``locals()``
+        # string lookups); an unbound value simply contributes nothing.
+        #
+        # CANCELLATION (re-gate MAJOR 1): the harvest is the first await in
+        # this finally and ``asyncio.CancelledError`` is a BaseException the
+        # ``except Exception`` below would not catch — a cancel landing here
+        # used to unwind the finally BEFORE ``_teardown_and_clear`` (leaked
+        # workspace, stale dispatch marker, stranded hold). The bounded
+        # harvest records the cancellation instead, teardown runs
+        # UNCONDITIONALLY, and the cancellation is re-raised at the end.
+        _gh_settle_cancelled: asyncio.CancelledError | None = None
+        if _single_pr_guard_armed:
+            try:
+                from modulo.core.pipeline_engine.sandbox_policy import (
+                    harvest_gh_pr_claim_bounded,
+                    settle_run_pr_guard,
+                )
+
+                _claim_receipt: bool | None = None
+                _harvest_provider = provider
+                _harvest_ref = provider_ref
+                if _harvest_provider is not None and _harvest_ref:
+
+                    async def _claim_receipt_exec(command: list[str]) -> Any:
+                        return await _harvest_provider.exec_command(_harvest_ref, command, cmd_timeout=15)
+
+                    try:
+                        # Bounded AND cancellation-safe: the probe task is
+                        # always awaited-or-cancelled (never left running
+                        # against a container the teardown below destroys),
+                        # and a cancellation is recorded rather than allowed
+                        # to unwind past the teardown.
+                        _claim_receipt = await harvest_gh_pr_claim_bounded(
+                            _claim_receipt_exec,
+                            run_scope=run_id,
+                            timeout=20.0,
+                        )
+                    # Cancellation is RECORDED, not re-raised here: the dispatch
+                    # re-raises it only after ``_teardown_and_clear`` below runs
+                    # (FAR-1315 re-gate MAJOR 1).
+                    except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
+                        _claim_receipt = None
+                        _gh_settle_cancelled = _cancel_exc
+                    except Exception:
+                        _claim_receipt = None
+                _output_json = output_json
+                settle_run_pr_guard(
+                    run_id,
+                    node_id,
+                    agent_stdout_raw,
+                    agent_stderr_raw,
+                    pr_url=pr_url or (_output_json.get("pr_url") if isinstance(_output_json, dict) else None),
+                    claim_receipt=_claim_receipt,
+                    # FAR-1315 (MAJOR 2b): only a LIVE install makes a
+                    # definitive receipt=False mean "confirmed no create".
+                    guard_install_status=_gh_guard_install_status,
+                )
+            except asyncio.CancelledError as _cancel_exc:  # NOSONAR S7497
+                # Defence in depth: settle itself is synchronous, but never
+                # let a cancellation skip ``_teardown_and_clear`` below.
+                if _gh_settle_cancelled is None:
+                    _gh_settle_cancelled = _cancel_exc
+            except Exception:
+                _log.debug("runner_dispatch.gh_guard_settle_failed", exc_info=True)
         await _teardown_and_clear(
             route=route,
             session_factory=session_factory,
@@ -1538,6 +1677,10 @@ async def run_bundled_runner_node(
             _attempt_key=attempt_key,
             dispatch_marker_set=dispatch_marker_set,
         )
+        # FAR-1315 (re-gate MAJOR 1): teardown has now run — deliver the
+        # cancellation that landed during the receipt harvest.
+        if _gh_settle_cancelled is not None:
+            raise _gh_settle_cancelled
 
 
 async def _maybe_start_loop_bridge(

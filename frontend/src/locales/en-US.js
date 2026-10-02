@@ -2079,6 +2079,7 @@ export default {
       "budget_exceeded": "Budget Exceeded",
       "circuit_breaker_tripped": "Circuit Breaker Tripped",
       "trigger_deactivated": "Trigger Deactivated",
+      "trigger_streak_alert": "Trigger Streak Alert",
       "hitl_deadline_warning": "HITL Deadline Warning",
       "response_body": "Response Body",
       "admin_view_of_all_webhook_notification_deliveries": "Admin view of all webhook notification deliveries",
@@ -4003,7 +4004,8 @@ export default {
       "hitl_deadline_warning": "HITL Deadline Warning",
       "budget_exceeded": "Budget Exceeded",
       "circuit_breaker_tripped": "Circuit Breaker Tripped",
-      "trigger_deactivated": "Trigger Deactivated"
+      "trigger_deactivated": "Trigger Deactivated",
+      "trigger_streak_alert": "Trigger Streak Alert"
     },
     "NotificationBell": {
       "notifications": "Notifications",

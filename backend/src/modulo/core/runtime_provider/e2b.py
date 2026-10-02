@@ -495,7 +495,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         spec: WorkspaceSpec,
         policy: IsolationPolicy,
-    ) -> None:
+    ) -> str | None:
         """Run the sandbox-policy enforcement scripts in the sandbox (FAR-1050 R3).
 
         ADR 040 ``apply_isolation``: wraps the existing
@@ -505,6 +505,13 @@ class E2BRuntimeProvider(RuntimeProvider):
         same enforcement-critical-raise vs best-effort split — so the
         flag-ON primitive and the flag-OFF engine invocation emit identical
         enforcement for a fixed policy (pinned by the R3 parity unit test).
+
+        FAR-1315: returns the one-PR guard's INSTALL STATUS
+        (``installed``/``pre_planted``/``absent``/``failed``, or ``None`` when
+        the flag did not arm the guard). The dispatch ``finally`` threads it
+        into ``settle_run_pr_guard`` so a receipt probe that ran against a
+        path no shim ever wrote (no ``gh`` / failed install) is treated as
+        UNKNOWN rather than "confirmed no create".
 
         The sandbox is taken from this instance's tracked handles when the
         provider created the workspace (the R4 dispatch shape); otherwise it
@@ -519,6 +526,9 @@ class E2BRuntimeProvider(RuntimeProvider):
         ``spec.run_id`` scopes the guard's claim marker so a marker can never
         leak across runs. A policy built without the flag installs no guard,
         so every existing caller and the R3 parity test are unaffected.
+        ``policy.guard_owner`` (FAR-1315) threads the claiming node's identity
+        into the run ledger so a SECOND flagged node of the same run gets a
+        pre-planted refusal instead of a fresh claimable marker.
         """
         # Lazy import (house convention): sandbox_policy is dependency-free,
         # but importing it pulls the pipeline_engine package __init__ — the
@@ -527,7 +537,7 @@ class E2BRuntimeProvider(RuntimeProvider):
 
         sandbox = await self._resolve_sandbox(provider_ref, "apply isolation")
         _run_scope = str(spec.run_id) if spec.run_id is not None else None
-        await apply_sandbox_policy(
+        return await apply_sandbox_policy(
             sandbox,
             read_only=policy.read_only,
             git_credentials=policy.git_credentials,
@@ -537,6 +547,7 @@ class E2BRuntimeProvider(RuntimeProvider):
             command_timeout=policy.command_timeout,
             single_pr_per_run=policy.single_pr_per_run,
             run_scope=_run_scope,
+            guard_owner=policy.guard_owner,
         )
 
     # ------------------------------------------------------------------

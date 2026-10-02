@@ -1303,6 +1303,11 @@ class _F6aMockSession:
     def get_bind(self) -> Any:
         return self._get_bind()
 
+    async def flush(self) -> None:
+        # Mirror of AsyncSession.flush — called by the FAR-1329 aged-nodeless
+        # router after it delegates to _fail_nodeless_run.
+        return None
+
     async def get(self, model: Any, pk: Any) -> SimpleNamespace:
         return SimpleNamespace(max_concurrent_runs=5)
 
@@ -1310,10 +1315,17 @@ class _F6aMockSession:
         s = str(stmt)
         if "set_config" in s:
             return MagicMock()
+        if s.startswith("SELECT id FROM runs"):
+            # FAR-1329 aged-nodeless router: zero-progress rows at the age
+            # bound (none configured here by default).
+            r = MagicMock()
+            r.all.return_value = [(uid,) for uid in self.terminalizer_rows.get("aged_nodeless", [])]
+            return r
         if "UPDATE runs SET" in s:
             ids: list[uuid.UUID] = []
-            if "executor_superseded" in s:
-                ids = self.terminalizer_rows.get("executor_superseded", [])
+            if "node_attempt_count" in s:
+                # FAR-1329 age-bound wedge gate (error code is a bound param).
+                ids = self.terminalizer_rows.get("no_progress", [])
             elif "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
             r = MagicMock()

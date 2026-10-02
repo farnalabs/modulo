@@ -125,6 +125,7 @@ async def _seed_run(
     status: str = "pending",
     claim_token: str | None = None,
     heartbeat_at: datetime | None = None,
+    completed_at: datetime | None = None,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     run_number = int(run_id.int % 10**9) + 1
@@ -138,6 +139,7 @@ async def _seed_run(
         "rn": run_number,
         "st": status,
         "hb": heartbeat_at,
+        "ca": completed_at,
     }
     async with engine.connect() as conn, conn.begin():
         if claim_token is None:
@@ -145,8 +147,8 @@ async def _seed_run(
                 text(
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                     "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                    "run_number, status, heartbeat_at) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :hb)"
+                    "run_number, status, heartbeat_at, completed_at) "
+                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :hb, :ca)"
                 ),
                 base_params,
             )
@@ -155,8 +157,8 @@ async def _seed_run(
                 text(
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                     "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                    "run_number, status, heartbeat_at, claim_token) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :hb, :tok)"
+                    "run_number, status, heartbeat_at, completed_at, claim_token) "
+                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :hb, :ca, :tok)"
                 ),
                 {**base_params, "tok": claim_token},
             )
@@ -375,6 +377,79 @@ async def test_conformance_worker_death_reclaim_no_double_execute(
     await pe.mark_complete(db_engine, str(run_id), str(org_id), claim_token="tok-a")
     status, completed_at, _ec, _cc, _tok = await _run_row(db_engine, run_id)
     assert status == "complete"
+
+
+# ---------------------------------------------------------------------------
+# 3b. FAR-1330: a terminal run can never be heartbeated again
+# ---------------------------------------------------------------------------
+
+
+async def _heartbeat_at(engine: AsyncEngine, run_id: uuid.UUID) -> Any:
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT heartbeat_at FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    return row[0]
+
+
+async def test_conformance_terminal_run_cannot_be_heartbeated(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1330: the token-fenced heartbeat is status-fenced, so a run the
+    platform already terminalised can NEVER look alive again.
+
+    Pre-fix, ``heartbeat_once``'s UPDATE carried only ``id`` + ``claim_token``
+    (the claim UPDATEs are status-guarded, this one was not), so a still-live
+    executor kept stamping ``heartbeat_at`` on a ``failed``/``complete`` row —
+    observed on run ``03721c8e`` as ``heartbeat_at`` ~31 min AFTER
+    ``completed_at``. Post-fix the matching-token heartbeat against a terminal
+    run matches zero rows and raises ``ClaimSupersededError`` (aborting the
+    executor) while ``heartbeat_at`` stays at/before ``completed_at``. A
+    non-terminal control proves legitimate in-flight heartbeats still land.
+    """
+    org_id = await _seed_org(db_engine, "ConformTermHb")
+    account_id = await _seed_account(db_engine, org_id, "conform-term-hb@test.local")
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeConformTermHb", account_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, {"nodes": [{"id": "n1", "node_type": "agent"}], "edges": []})
+
+    now = datetime.now(UTC)
+    terminal_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="failed",
+        claim_token="tok-terminal",
+        heartbeat_at=now - timedelta(minutes=6),
+        completed_at=now - timedelta(minutes=5),
+    )
+    # The token is STILL the executor's (nobody rotated it) — only the status
+    # guard can stop this write.
+    with pytest.raises(pe.ClaimSupersededError):
+        await pe.heartbeat_once(db_engine, str(terminal_id), str(org_id), claim_token="tok-terminal")
+
+    hb = await _heartbeat_at(db_engine, terminal_id)
+    assert hb is not None
+    assert hb <= now - timedelta(minutes=5), f"heartbeat_at {hb} advanced past completed_at"
+
+    # Control: the same call against a NON-terminal run still lands.
+    live_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        claim_token="tok-live",
+        heartbeat_at=now - timedelta(minutes=6),
+    )
+    await pe.heartbeat_once(db_engine, str(live_id), str(org_id), claim_token="tok-live")
+    live_hb = await _heartbeat_at(db_engine, live_id)
+    assert live_hb > now - timedelta(minutes=6), "an in-flight heartbeat must not be fenced"
 
 
 # ---------------------------------------------------------------------------

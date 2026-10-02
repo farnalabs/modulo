@@ -481,6 +481,27 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity=None,
         guidance="Superseded by a newer run.",
     ),
+    # FAR-1329: the dispatcher_reconcile AGE gate (``_terminalize_mid_graph_wedges``)
+    # writes the raw ``no_progress`` spelling — registered (and aliased below) in
+    # the same change that started writing it, so it never resolves through the
+    # ``harness.unknown`` fallback ("Unknown error"). Distinct from
+    # ``run.superseded`` on purpose: the age predicate
+    # (``running`` + ``dispatcher='saq'`` + ``started_at < now() - age``) never
+    # compares runs, so it used to label a stalled run "Superseded by a newer
+    # run." — a false cause that cost a full investigation (FAR-1318 / run
+    # 03721c8e). Terminal like its sibling (the run burned past the max
+    # plausible duration and was not retried by the gate); warning-level because
+    # a run that makes no progress for ~135 minutes is an infrastructure
+    # degradation worth watching, unlike a routine supersession.
+    "run.no_progress": ErrorCodeSpec(
+        error_class="run",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "No node progress within the reconcile age bound (~135 min); the run was "
+            "terminal-failed by dispatcher_reconcile's age gate."
+        ),
+    ),
     # --- connector codes -------------------------------------------------
     "connector.invalid_key": ErrorCodeSpec(
         error_class="connector",
@@ -684,6 +705,10 @@ LEGACY_ALIASES: dict[str, str] = {
     "node_cancelled": "node.cancelled",
     # Run-level.
     "executor_superseded": "run.superseded",
+    # FAR-1329: the age-bound wedge terminalizer writes ``no_progress`` — its
+    # own truthful code (see the ``run.no_progress`` registry entry) instead of
+    # the supersede vocabulary its predicate never justified.
+    "no_progress": "run.no_progress",
     # Contract.
     "output_rejected": _CODE_CONTRACT_SCHEMA,
     # Executor maps manual/agent output schema validation failures to this

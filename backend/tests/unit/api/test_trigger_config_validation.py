@@ -1,4 +1,4 @@
-"""Tests for trigger config_json key validation (FAR-1144).
+"""Tests for trigger config_json key validation (FAR-1144, FAR-1394).
 
 Covers:
 * ``_validate_trigger_config_keys`` (write-time gate): accepted keys pass
@@ -6,6 +6,9 @@ Covers:
   offending key(s) and the set of recognised keys.
 * ``_RECOGNISED_TRIGGER_CONFIG_KEYS`` stays in sync with the engine's
   ``cfg.get()`` read sites — a key added to one and not the other is a bug.
+* No-delivery-streak config keys (FAR-1394): each key the streak engine reads
+  in ``core/trigger_streak.py`` is accepted by the write path for both engine
+  trigger types (ongoing, cron), and a misspelled streak key still 400s.
 * ``_merge_trigger_config`` with ``None``-removal: ``{"events": null}``
   removes the dead key from the merged result.
 * Post-merge validation: an update that would *leave* an unread key in the
@@ -26,6 +29,7 @@ from modulo.api.routes.triggers import (
     _validate_trigger_config_keys,
 )
 from modulo.core.trigger_engine import _RECOGNISED_TRIGGER_CONFIG_KEYS as _ENGINE_KEYS
+from modulo.core.trigger_streak import _streak_auto_deactivate_enabled, _streak_config
 
 _ENGINE_SOURCE_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo"
 
@@ -33,36 +37,72 @@ _ENGINE_SOURCE_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo"
 #: ``polling.py`` and ``pre_guardrail.py`` also call ``.get()`` but on a
 #: *connector* config and a *guardrail-definition* config respectively — not the
 #: trigger ``config_json`` — so they are deliberately excluded.
+#: ``core/trigger_streak.py`` is included (FAR-1394): the no-delivery-streak
+#: engine reads its per-trigger config there, and omitting it is exactly how
+#: the streak keys stayed out of both recognised-key sets while every sync
+#: test passed.
 _TRIGGER_CONFIG_SOURCES: tuple[str, ...] = (
     "core/trigger_engine/__init__.py",
     "core/cron_helpers.py",
     "core/trigger_engine/agent_signal.py",
     "core/trigger_engine/slack_app_mention.py",
+    "core/trigger_streak.py",
 )
 
 #: Local variable names bound to a trigger's ``config_json`` at the read sites.
 _CONFIG_VAR_NAMES: frozenset[str] = frozenset({"cfg", "config"})
 
 
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Top-level ``NAME = "literal"`` assignments, for resolving ``.get(NAME)``
+    read sites whose key references a module constant
+    (e.g. ``STREAK_AUTO_DEACTIVATE_CONFIG_KEY``).
+    """
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    constants[target.id] = node.value.value
+    return constants
+
+
+def _receiver_is_trigger_config(node: ast.expr) -> bool:
+    """True when the ``.get()`` receiver is a trigger ``config_json`` local.
+
+    Matches a bare ``cfg``/``config`` name and the inline fallback form
+    ``(config or {})`` used by ``_streak_auto_deactivate_enabled``.
+    """
+    if isinstance(node, ast.Name):
+        return node.id in _CONFIG_VAR_NAMES
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or) and node.values:
+        first = node.values[0]
+        return isinstance(first, ast.Name) and first.id in _CONFIG_VAR_NAMES
+    return False
+
+
 def _trigger_config_read_site_keys() -> set[str]:
-    """Statically collect every ``cfg.get("<key>")`` / ``config.get("<key>")``
-    string-literal read across the trigger-config source files.
+    """Statically collect every ``cfg.get(<key>)`` / ``config.get(<key>)`` read
+    across the trigger-config source files, where ``<key>`` is a string literal
+    or a reference to a module-level string constant.
     """
     keys: set[str] = set()
     for rel in _TRIGGER_CONFIG_SOURCES:
         tree = ast.parse((_ENGINE_SOURCE_DIR / rel).read_text(encoding="utf-8"))
+        constants = _module_string_constants(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not node.args:
                 continue
             func = node.func
             if not isinstance(func, ast.Attribute) or func.attr != "get":
                 continue
-            target = func.value
-            if not isinstance(target, ast.Name) or target.id not in _CONFIG_VAR_NAMES:
+            if not _receiver_is_trigger_config(func.value):
                 continue
             first = node.args[0]
             if isinstance(first, ast.Constant) and isinstance(first.value, str):
                 keys.add(first.value)
+            elif isinstance(first, ast.Name) and first.id in constants:
+                keys.add(constants[first.id])
     return keys
 
 
@@ -227,3 +267,79 @@ class TestRecognisedKeysSync:
             f"engine reads keys missing from _RECOGNISED_TRIGGER_CONFIG_KEYS: {sorted(read_sites - engine_keys)}; "
             f"_RECOGNISED_TRIGGER_CONFIG_KEYS lists keys the engine never reads: {sorted(engine_keys - read_sites)}"
         )
+
+
+#: The no-delivery-streak config keys the streak engine actually reads —
+#: enumerated from ``core/trigger_streak.py`` (FAR-1394), NOT derived from the
+#: recognised-key sets (a set-derived list is satisfied while BOTH sets are
+#: wrong, which is how every streak setting became DB-write-only):
+#:
+#: * ``max_no_delivery_streak``       — ``_streak_config`` threshold read
+#:   (trigger_streak.py:473)
+#: * ``max_consecutive_failures``     — legacy threshold fallback, STILL read
+#:   by ``_streak_config``
+#:   (trigger_streak.py:475) — the engine honours it, so the write gate must
+#:   accept it while that read exists
+#: * ``no_delivery_min_window_hours`` — ``_streak_config`` per-trigger
+#:   wall-clock window (trigger_streak.py:488)
+#: * ``no_delivery_auto_deactivate``  — ``_streak_auto_deactivate_enabled``
+#:   (trigger_streak.py:505, constant defined at :128; added by FAR-1387)
+_STREAK_CONFIG_KEYS: tuple[tuple[str, object], ...] = (
+    ("max_no_delivery_streak", 5),
+    ("max_consecutive_failures", 3),
+    ("no_delivery_min_window_hours", 24),
+    ("no_delivery_auto_deactivate", True),
+)
+
+
+class TestStreakConfigKeysAccepted:
+    """FAR-1394 — every config key the streak engine reads passes the write gate.
+
+    The set-equality test above is satisfied while BOTH recognised-key sets are
+    wrong, so these tests pin the keys against the engine's own read sites
+    (hard-coded from ``core/trigger_streak.py``, independent of the sets):
+    each fails with HTTPException 400 if the key is dropped from the sets.
+    """
+
+    @pytest.mark.parametrize(("key", "value"), _STREAK_CONFIG_KEYS, ids=[k for k, _ in _STREAK_CONFIG_KEYS])
+    def test_streak_key_accepted_by_write_gate(self, key: str, value: object) -> None:
+        """The create-time write gate accepts each streak key."""
+        assert _validate_trigger_config_keys({key: value}) is None
+
+    @pytest.mark.parametrize(("key", "value"), _STREAK_CONFIG_KEYS, ids=[k for k, _ in _STREAK_CONFIG_KEYS])
+    def test_streak_key_accepted_in_merged_config(self, key: str, value: object) -> None:
+        """The update-time post-merge gate accepts each streak key too."""
+        merged = _merge_trigger_config({"hmac_secret": "secret"}, {key: value})
+        assert _validate_trigger_config_keys(merged, context="merged config_json") is None
+
+    @pytest.mark.parametrize("trigger_type", ["ongoing", "cron"])
+    def test_streak_config_accepted_and_honoured_for_engine_types(self, trigger_type: str) -> None:
+        """Acceptance holds for both trigger types the streak engine covers
+        (FAR-190 ongoing, FAR-1387 cron), and the engine consumes the values
+        for that type — the gate and the engine can no longer disagree.
+        """
+        config = {
+            "max_no_delivery_streak": 7,
+            "no_delivery_min_window_hours": 6,
+            "no_delivery_auto_deactivate": True,
+        }
+        assert _validate_trigger_config_keys(config) is None
+        threshold, window = _streak_config(config, trigger_type=trigger_type)
+        assert threshold == 7
+        assert window == 6
+        assert _streak_auto_deactivate_enabled(config) is True
+
+    def test_legacy_threshold_key_still_read_by_engine(self) -> None:
+        """``max_consecutive_failures`` stays recognised while the engine's
+        legacy fallback read exists (trigger_streak.py:475).
+        """
+        assert _validate_trigger_config_keys({"max_consecutive_failures": 4}) is None
+        threshold, _window = _streak_config({"max_consecutive_failures": 4})
+        assert threshold == 4
+
+    def test_misspelled_streak_key_still_rejected(self) -> None:
+        """A near-miss streak key is still rejected with 400 (negative control)."""
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_trigger_config_keys({"max_no_delivery_streek": 5})
+        assert exc_info.value.status_code == 400
+        assert "max_no_delivery_streek" in exc_info.value.detail

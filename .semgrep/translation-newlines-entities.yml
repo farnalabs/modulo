@@ -1,4 +1,4 @@
-﻿rules:
+rules:
   - id: translation-newlines-entities
     pattern-regex: '&amp;|&#\d+;'
     message: "Translation values must not contain HTML entities — use the actual character or a separate translation key instead"

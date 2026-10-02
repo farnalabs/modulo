@@ -692,15 +692,20 @@ describe('DashboardView branches — team expansion', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
 
-    // Team row should exist but team breakdown needs isTeam
+    // Team breakdown needs isTeam; the row must render for this branch
     const teamRow = wrapper.find('[data-testid="dashboard-team-row-team-a"]')
-    if (teamRow.exists()) {
-      await teamRow.trigger('click')
-      await flushPromises()
-      // Toggle again to collapse
-      await teamRow.trigger('click')
-      await flushPromises()
-    }
+    expect(teamRow.exists()).toBe(true)
+    expect(teamRow.attributes('aria-expanded')).toBe('false')
+
+    await teamRow.trigger('click')
+    await flushPromises()
+    expect(teamRow.attributes('aria-expanded')).toBe('true')
+
+    // Toggle again to collapse
+    await teamRow.trigger('click')
+    await flushPromises()
+    expect(teamRow.attributes('aria-expanded')).toBe('false')
+
     wrapper.unmount()
   })
 })

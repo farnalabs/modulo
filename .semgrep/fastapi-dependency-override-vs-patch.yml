@@ -1,4 +1,4 @@
-﻿rules:
+rules:
   - id: fastapi-dependency-override-vs-patch
     patterns:
       - pattern-either:

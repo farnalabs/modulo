@@ -114,6 +114,7 @@
             <tr v-for="team in summary.teams" :key="team.id"
                 role="button"
                 tabindex="0"
+                :aria-expanded="expandedTeam === team.id"
                 :data-testid="'dashboard-team-row-' + team.id"
                 class="border-b last:border-0 hover:bg-muted/50"
                 @click="toggleTeam(team.id)"

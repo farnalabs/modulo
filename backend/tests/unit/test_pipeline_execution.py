@@ -22,7 +22,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 import modulo.core.pipeline_execution as pe
 import modulo.core.run_terminal_advance as rta
-from modulo.db.models.run import Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 
 
 @pytest.fixture(autouse=True)
@@ -539,7 +539,10 @@ class TestHeartbeat:
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _FakeResult:
                 executed.append(str(stmt))
-                return _FakeResult()
+                # RETURNING id: a landed write returns the run id (FAR-1330
+                # added RETURNING to the claim-less variant too, so ``updated``
+                # is derived from rowcount instead of assumed).
+                return _FakeResult(("run-1",))
 
             async def commit(self) -> None:
                 return None
@@ -613,6 +616,55 @@ class TestHeartbeat:
 
         assert "claim_token=:tok" in executed[1]
         job.update.assert_not_awaited()
+
+    async def test_heartbeat_writes_are_status_fenced_to_non_terminal_runs(self) -> None:
+        """FAR-1330: both heartbeat UPDATEs are status-fenced.
+
+        The token-fenced write was the only run-status-unaware writer left
+        (the claim UPDATEs are status-guarded: ``status='pending' OR
+        (running AND stale heartbeat)``), so a live executor could keep
+        stamping ``heartbeat_at`` on a row the platform had already
+        terminalised — observed on run ``03721c8e`` as ``heartbeat_at`` ~31
+        minutes AFTER ``completed_at``. Pre-fix the UPDATE carries no status
+        predicate at all, so this test fails without the fence.
+        """
+        executed: list[tuple[str, dict[str, Any]]] = []
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _FakeResult:
+                executed.append((str(stmt), dict(params or {})))
+                return _FakeResult(("run-1",))  # RETURNING id lands
+
+            async def commit(self) -> None:
+                return None
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        job = MagicMock()
+        job.update = AsyncMock()
+
+        await pe.heartbeat_once(_AsyncEngine(), "run-1", "org-1", job=job, claim_token="tok-a")  # type: ignore[arg-type]
+        token_sql, token_params = executed[1]
+        assert "claim_token=:tok" in token_sql
+        assert "status IN" in token_sql, "fenced heartbeat must refuse terminal runs"
+
+        # The claim-less variant carries the same fence.
+        await pe.heartbeat_once(_AsyncEngine(), "run-1", "org-1")  # type: ignore[arg-type]
+        no_token_sql, no_token_params = executed[3]
+        assert "status IN" in no_token_sql
+
+        # The fence is the ACTIVE (non-terminal) status set, so a terminal
+        # status added later is fenced automatically.
+        for params in (token_params, no_token_params):
+            assert set(params["active_statuses"]) == set(ACTIVE_RUN_STATUSES)
 
     async def test_heartbeat_loop_sets_superseded_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A superseded heartbeat sets the ``superseded`` Event and breaks."""
