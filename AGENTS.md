@@ -81,3 +81,14 @@ Rules:
 2. A dependency that composes an authenticated dependency (`require_feature`, `get_plan_context`, `get_current_user`) must never guard a pre-auth route; use an anonymous resolver instead.
 3. "Covered" is a claim about user-reachable behaviour, not about the existence of tests. A feature whose primary entry point is unreachable is not covered.
 4. A mocked or authenticated test client does not exercise the unauthenticated path — add the unauthenticated case explicitly.
+
+### Reconstructing a historical value? Copy the consumer's WHOLE precedence chain, not just its first source (2026-10-02)
+
+`POST /runs/{run_id}/nodes/{node_id}/prompt/reveal` built the revealed prompt from the live `Agent` row's `prompt_template`, so editing an agent after a run changed what the endpoint showed for that run. The first fix moved the read to the run's frozen snapshot node. An independent multi-lens quality pass then found — independently, across four lenses — that **dispatch layers a second source on top of that node**: the run's frozen variant override (`_run_overrides["prompt_templates"][agent_id]`, seeded only from `run.variant_config_snapshot`). Reading one source still produced an attestation that was wrong for every A/B `prompt_version` run — the same defect class, one source deeper.
+
+Rules:
+
+1. When an endpoint reconstructs a value that some consumer computes, copy the consumer's **entire decision chain** — every layer, in the same order, with the same guards and the same emptiness checks. A reconstruction that reads only the primary source is correct for the common case and silently wrong for every layered case.
+2. Read each layer from the **frozen record the consumer read** — never from a live row, a checkpoint, or caller-influenced input. Where an override namespace exists specifically so caller input can never populate it (here: the system-reserved `_run_overrides`), sourcing it from `run_context`/`input_payload` reintroduces the injection vector that namespace exists to close.
+3. Audit the fix for **leftover live reads**. A live-state dependency that survives a "read the frozen record" change — here, a deleted agent still 404ing a historical read whose frozen record held everything needed — is the same defect in stronger form.
+4. Prove the reconstruction with a test that pins the layered case, not just the base case. A test that only exercises "snapshot template differs from live template" passes while the variant-override path is still wrong.

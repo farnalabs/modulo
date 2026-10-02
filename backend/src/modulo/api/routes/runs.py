@@ -3057,19 +3057,20 @@ class _MessageContext:
     node_id: str = ""
 
 
-def _build_messages(agent: Agent | None, ctx: _MessageContext) -> list[dict[str, str]]:
-    """Reconstruct the LLM messages for a node from agent + run data.
+def _build_messages(prompt_template: str | None, ctx: _MessageContext) -> list[dict[str, str]]:
+    """Reconstruct the LLM messages for a node from frozen config + run data.
 
-    Builds system message from the agent's prompt_template, user message
-    from the input payload or checkpoint state, and assistant messages
-    from previous node outputs.
+    Builds the system message from the run's FROZEN prompt template (FAR-1398:
+    the snapshot node's ``prompt_template`` with the run's frozen variant
+    per-agent override applied when one applies - what was in effect for THIS
+    run - never the live ``Agent`` row), the user message from the input
+    payload or checkpoint state, and assistant messages from previous node
+    outputs.
     """
     messages: list[dict[str, str]] = []
 
-    if agent is not None:
-        system_content = agent.prompt_template or ""
-        if system_content:
-            messages.append({"role": "system", "content": system_content})
+    if prompt_template:
+        messages.append({"role": "system", "content": prompt_template})
 
     messages.extend(_messages_from_prior_outputs(ctx.outputs_json, ctx.node_id))
 
@@ -3083,8 +3084,8 @@ def _build_messages(agent: Agent | None, ctx: _MessageContext) -> list[dict[str,
     return messages
 
 
-def _build_messages_from_agent_and_state(
-    agent: Agent | None,
+def _build_messages_from_template_and_state(
+    prompt_template: str | None,
     input_payload: dict[str, Any] | None,
     outputs_json: dict[str, Any] | None,
     checkpoint_state: dict[str, Any] | None,
@@ -3092,7 +3093,7 @@ def _build_messages_from_agent_and_state(
 ) -> list[dict[str, str]]:
     """Test-facing wrapper around ``_build_messages``."""
     return _build_messages(
-        agent,
+        prompt_template,
         _MessageContext(
             input_payload=input_payload,
             outputs_json=outputs_json,
@@ -3102,50 +3103,166 @@ def _build_messages_from_agent_and_state(
     )
 
 
+def _find_node(graph_json: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+    """Find a node by id in a graph definition - the single node-list scan.
+
+    FAR-1398: every node lookup on this route (existence, agent id, frozen
+    template) goes through this one helper so the loop body exists exactly
+    once and each lookup shares identical matching semantics
+    (``str(node["id"]) == node_id``).
+    """
+    nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
+    for node in nodes:
+        if str(node.get("id")) == node_id:
+            return node
+    return None
+
+
+def _require_node(graph_json: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The node, or 404 - the SINGLE owner of the node-existence check.
+
+    FAR-1398: both reveal helpers (visibility flag, template resolution) gate
+    through this, so the 404 fires for a node absent from the snapshot graph
+    no matter which helper runs first - it no longer depends on one helper
+    happening to run before the other (the hidden ordering dependency this
+    refactor removes).
+    """
+    node = _find_node(graph_json, node_id)
+    if node is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {node_id} not found in pipeline graph",
+        )
+    return node
+
+
+def _agent_id_from_node(node: dict[str, Any]) -> uuid.UUID | None:
+    """Parse a snapshot node's ``agent_id``; ``None`` for a non-agent node."""
+    agent_id = node.get("agent_id")
+    if agent_id is None:
+        return None
+    return uuid.UUID(str(agent_id))
+
+
 def _lookup_agent_for_node(
     graph_json: dict[str, Any],
     node_id: str,
 ) -> uuid.UUID | None:
-    """Find the agent_id for a node in the graph definition."""
-    nodes = graph_json.get("nodes", [])
-    for node in nodes:
-        if str(node.get("id")) == node_id:
-            agent_id = node.get("agent_id")
-            if agent_id is not None:
-                return uuid.UUID(str(agent_id))
-            return None
+    """Find the agent_id for a node in the graph definition (via ``_find_node``).
+
+    ``None`` means the node EXISTS but is not an agent node. A node absent
+    from the graph raises 404 (``_require_node``) - so the caller never has
+    to distinguish "absent" from "no agent" by inspecting the graph itself.
+    """
+    return _agent_id_from_node(_require_node(graph_json, node_id))
+
+
+def _variant_prompt_override(
+    variant_config_snapshot: Any,
+    agent_id: uuid.UUID,
+) -> str | None:
+    """The run's frozen per-agent prompt override, or ``None`` when none applies.
+
+    FAR-1398: replicates dispatch precedence (``node_runner.
+    _resolve_node_run_overrides``) - an A/B ``prompt_version`` run freezes a
+    per-agent ``prompt_templates`` map into ``run.variant_config_snapshot``
+    at fire time, and dispatch applies it ON TOP OF the snapshot node's
+    template. The reveal must attest the same template, or it claims a
+    configuration that was never in effect.
+
+    Read ONLY from the run's FROZEN ``variant_config_snapshot`` column - the
+    sole source the executor seeds ``_run_overrides`` from (``executor.py``).
+    ``run_context``/checkpoint/``input_payload`` are deliberately NOT
+    consulted: ``_run_overrides`` is a system-reserved namespace that exists
+    precisely so caller-supplied input can never promote it (FAR-342
+    injection surface).
+
+    Returns ``None`` (fall back to the snapshot node template) unless the
+    column is a dict carrying ``_run_overrides.prompt_templates`` as a dict
+    with a NON-EMPTY string for this exact agent - the same non-empty-string
+    condition dispatch requires to override.
+    """
+    if not isinstance(variant_config_snapshot, dict):
+        return None
+    run_overrides = variant_config_snapshot.get("_run_overrides")
+    if not isinstance(run_overrides, dict):
+        return None
+    prompt_templates = run_overrides.get("prompt_templates")
+    if not isinstance(prompt_templates, dict):
+        return None
+    override = prompt_templates.get(str(agent_id))
+    if isinstance(override, str) and override:
+        return override
     return None
 
 
-async def _load_reveal_agent(
+def _resolve_reveal_prompt_template(
+    graph_json: dict[str, Any],
+    node_id: str,
+    variant_config_snapshot: Any,
+) -> str | None:
+    """Resolve the template the reveal attests for a node.
+
+    FAR-1398 precedence, mirroring dispatch exactly:
+
+    1. the run's FROZEN variant per-agent prompt override, when it names this
+       node's agent (``_variant_prompt_override``);
+    2. otherwise the snapshot node's ``prompt_template`` - the agent's
+       template copied ONTO the node at snapshot creation
+       (``db/crud/pipeline_snapshot.py``), so editing an agent after a run
+       cannot change what this endpoint attests.
+
+    Returns ``None`` when neither yields a template (no variant override and
+    no frozen template). Raises 404 via ``_require_node`` when the node is
+    absent from the graph - the same gate the visibility resolver uses, so
+    the 404 never depends on which helper the handler happens to call first.
+    """
+    node = _require_node(graph_json, node_id)
+    agent_id = _agent_id_from_node(node)
+    override = _variant_prompt_override(variant_config_snapshot, agent_id) if agent_id is not None else None
+    if override is not None:
+        return override
+    template = node.get("prompt_template")
+    if template is None:
+        return None
+    return str(template)
+
+
+async def _validate_node_and_resolve_visibility(
     session: AsyncSession,
     graph_json: dict[str, Any],
     node_id: str,
-) -> tuple[Agent | None, bool]:
-    """Resolve the node's agent + prompt-visibility flag for prompt reveal.
+) -> bool:
+    """Validate the node exists, then resolve the prompt-visibility flag.
 
-    Returns ``(None, False)`` for non-agent nodes whose id exists in the
-    graph. Raises 404 for a node absent from the graph or an agent that no
-    longer exists.
+    Returns just the ``prompt_always_visible`` policy flag - a CURRENT
+    policy, not historical content (FAR-1398): the live ``Agent`` row is
+    read solely for this flag, and the prompt CONTENT comes from the run's
+    frozen template (see ``_resolve_reveal_prompt_template``).
+
+    Raises 404 when the node is absent from the snapshot graph (via
+    ``_lookup_agent_for_node`` -> ``_require_node``, the single owner of that
+    check - so the 404 does not depend on the agent-id branch or on helper
+    call order).
+
+    FAR-1398 behaviour change: an agent node whose live ``Agent`` row has
+    been DELETED no longer 404s. The snapshot is the sole surviving record
+    of the run's prompt, so the frozen template is served with
+    ``prompt_always_visible=False`` (fail-closed on the policy flag) - the
+    same "live state must not leak into a historical view" rule this ticket
+    exists to fix. A node absent from the snapshot graph still 404s.
     """
-    agent_id = _lookup_agent_for_node(graph_json, node_id)
+    agent_id = _lookup_agent_for_node(graph_json, node_id)  # 404s when absent
     if agent_id is None:
-        # Check if node exists at all (even non-agent nodes).
-        node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
-        if node_id not in node_ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Node {node_id} not found in pipeline graph",
-            )
-        return None, False
+        # Non-agent node (or node without an agent): no policy flag.
+        return False
     agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
     agent = agent_result.scalar_one_or_none()
     if agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Agent {agent_id} not found for node {node_id}",
-        )
-    return agent, bool(agent.prompt_always_visible)
+        # Deleted agent: fail CLOSED on the policy flag rather than 404 - the
+        # frozen template is still served (see docstring).
+        return False
+    return bool(agent.prompt_always_visible)
 
 
 def _render_prompt_response(
@@ -3172,11 +3289,19 @@ async def reveal_node_prompt(
     principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
     settings: Settings = Depends(get_settings),
 ) -> PromptRevealResponse:
-    """Reconstruct and reveal the exact prompt sent to the LLM for a node.
+    """Reveal the messages reconstructed for a node's LLM call.
 
-    Returns the full prompt text, structured messages (system, user,
-    assistant), and an estimated token count. Sensitive credential-like
-    values are masked.
+    Reconstructs a system message from the run's FROZEN prompt template -
+    the snapshot node's prompt_template with the run's frozen variant
+    per-agent prompt override applied on top when one applies (the same
+    precedence dispatch uses) - assistant messages from prior node outputs,
+    and a user message from the run's input payload (or checkpoint state).
+    This is a reconstruction of the run's frozen configuration plus observed
+    run data - NOT the rendered prompt actually dispatched to the model,
+    which is a single rendered user message built from dispatch-time
+    context. Returns the full prompt text, structured messages (system,
+    user, assistant), and an estimated token count. Sensitive
+    credential-like values are masked.
     """
     try:
         async with session.begin():
@@ -3195,8 +3320,24 @@ async def reveal_node_prompt(
                     detail=f"Snapshot {run.snapshot_id} not found for run",
                 )
 
-            # Verify node exists and load its agent (if any) + visibility flag.
-            agent, prompt_always_visible = await _load_reveal_agent(session, snapshot.graph_json, node_id)
+            # Validate the node exists (404 when absent from the snapshot
+            # graph), and read the live agent row ONLY for the
+            # prompt_always_visible policy flag - a current policy, not
+            # historical content (FAR-1398). A deleted agent fails CLOSED on
+            # the flag and still serves the frozen template.
+            prompt_always_visible = await _validate_node_and_resolve_visibility(session, snapshot.graph_json, node_id)
+
+            # FAR-1398: the prompt template is the configuration in effect
+            # when this run dispatched - the run's FROZEN variant per-agent
+            # override when one applies (dispatch precedence), otherwise the
+            # snapshot node's frozen prompt_template - never the live Agent
+            # row, so editing an agent after a run cannot change what this
+            # endpoint attests.
+            prompt_template = _resolve_reveal_prompt_template(
+                snapshot.graph_json,
+                node_id,
+                run.variant_config_snapshot,
+            )
 
             # Try to load checkpoint state for richer prompt reconstruction.
             checkpoint_state = await _get_checkpoint_state(
@@ -3212,7 +3353,7 @@ async def reveal_node_prompt(
 
         return _render_prompt_response(
             _build_messages(
-                agent,
+                prompt_template,
                 _MessageContext(
                     input_payload=run.input_payload,
                     outputs_json=blobs.outputs,
