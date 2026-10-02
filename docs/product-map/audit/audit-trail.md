@@ -76,6 +76,16 @@ guarded against tampering at both the ORM and the database layer.
   chain.
 
 ## QA History
+- 2026-10-02: **Improve Architecture product-map walk** — closed
+  the `personas/marcus-ciso.feature` "Marcus verifies the audit log is
+  append-only" journey gap (pinned `@awaiting-implementation` since 2026-08
+  while the feature shipped underneath it). The scenario now executes against
+  the REAL `register_append_only_guard` + `before_update`/`before_delete`
+  listeners via `steps/test_personas.py` (real `AuditEvent` row in an in-memory
+  engine; UPDATE and DELETE attempts both rejected with
+  `AppendOnlyViolationError`; original event intact, timestamped, attributable
+  afterwards) and was removed from
+  `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`).
 - 2026-09-17: **product-map review pass** — closed "No BDD
   scenario for append-only tampering". New executing `audit/append_only.feature`
   (`steps/test_audit_append_only.py`) drives the REAL application-layer guard:
