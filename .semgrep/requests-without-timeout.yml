@@ -1,4 +1,4 @@
-﻿rules:
+rules:
   - id: requests-without-timeout
     patterns:
       - pattern-either:
