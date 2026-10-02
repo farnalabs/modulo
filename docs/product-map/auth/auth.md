@@ -88,8 +88,32 @@ clients.
 - [x] RBAC privilege-cap model enforces team role ≤ org role; team CRUD,
       membership management, and feature gating by role
       (`backend/tests/bdd/features/auth/rbac.feature`)
+- [x] Access revocation is immediate (ADR 047): every tenant-scoped request
+      re-reads the account's LIVE org role from `org_memberships` (deactivated
+      rows excluded; INNER JOIN requires `accounts.active IS TRUE`) on each
+      call — a removed member's JWT is rejected 401 (`OrganisationMembershipNotFound`)
+      on the next API call, so they cannot list pipelines or view runs, and a
+      removed member's refresh token is rejected 401 ("Account no longer has
+      access to this organisation") BEFORE the family sequence advances
+      (`backend/src/modulo/auth/dependencies.py` `_verify_identity` /
+      `get_current_tenant_user`, `backend/src/modulo/api/routes/auth.py`
+      `_advance_refresh_sequence`, `backend/src/modulo/db/crud/org_membership.py`)
 
 ## QA History
+- 2026-10-02: **Improve Architecture product-map walk** — closed
+  the `personas/marcus-ciso.feature` "Marcus confirms offboarding immediately
+  revokes access" persona-journey gap (pinned `@awaiting-implementation` since
+  2026-08 while the feature shipped underneath it). The scenario now executes
+  against the REAL ADR 047 seams via `steps/test_personas.py`: a real in-memory
+  aiosqlite DB (Account / Organisation / OrgMembership / TokenFamily rows),
+  REAL minted access + refresh tokens (`create_access_token` /
+  `create_refresh_token`), the real `get_current_tenant_user` /
+  `get_current_tenant_user_or_api_key` JWT branch (which composes
+  `_verify_identity`'s live-role re-read against the real rows —
+  `pipeline.list` / `run.list` mount it) and the real
+  `_advance_refresh_sequence` refresh seam (401 before the family sequence
+  advances, family untouched) — and was removed from
+  `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`).
 - 2026-09-17: **product-map review pass** — closed the "No
   dedicated BDD for `/me` password-change forced flow" gap. `auth/change_password.feature`
   gained the "Forced password change clears the admin-reset flag in the same
