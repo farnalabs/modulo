@@ -715,13 +715,23 @@ jobs:
     # scan (coverage import)" status check is REQUIRED for merge, so it must also
     # run on pull_request — otherwise the check is never produced on a PR and the
     # merge gate can never go green. Reuses the coverage-report artifact
-    # backend-test already uploads instead of re-running the backend suite.
+    # backend-test already uploads (and the frontend-coverage artifact the
+    # frontend job uploads) instead of re-running either suite.
     # workflow_dispatch is allowed so this job can be validated manually.
     if: >-
-      github.event_name == 'pull_request'
+      !cancelled()
+      && needs.changes.result == 'success'
+      && needs.backend-test.result == 'success'
+      && (github.event_name == 'pull_request'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || github.event_name == 'workflow_dispatch'
-    needs: [backend-test, changes]
+      || github.event_name == 'workflow_dispatch')
+    # FAR-1430: `frontend` is a need only so its coverage artifact is ready to
+    # download. Sonar must still run when `frontend` FAILS (it ran independently
+    # before), so the condition above replaces the implicit success() with
+    # !cancelled() + an explicit backend-test success check (the old behaviour:
+    # skipped when backend-test fails/is skipped). frontend (~7 min) finishes
+    # well inside backend-test (~25 min), so this adds no wall-clock.
+    needs: [backend-test, frontend, changes]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v7
@@ -735,33 +745,39 @@ jobs:
         with:
           name: coverage-report
           path: backend    # artifact root is backend/ (upload path backend/coverage.xml) → restores backend/coverage.xml
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        if: needs.changes.outputs.sonar == 'true'
-        with:
-          version: 11.28.2
       - uses: actions/setup-node@v6
+        # Node only: SonarCloud's JS/TS analysis needs a Node runtime on the
+        # runner. pnpm, the dependency install and the vitest run are NOT needed
+        # here (FAR-1430) - the coverage is downloaded from the frontend job.
         if: needs.changes.outputs.sonar == 'true'
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install frontend dependencies
-        # FAR-1427: on a pull_request that touches no frontend path the vitest
-        # coverage run (~3 min) only regenerates lcov for code the PR did not
-        # change, and Sonar's PR quality gate measures new-code coverage only.
-        # Skipped there; ALWAYS run on push to main / dispatch so the main
-        # coverage measure (and README badge) stay complete. A missing lcov is a
-        # non-fatal Sonar warning.
+      - name: Download frontend coverage report (from the frontend job)
+        # FAR-1430: the `frontend` job already runs the identical vitest
+        # coverage command and uploads frontend/coverage/lcov.info as the
+        # `frontend-coverage` artifact (always(), when the path gate says
+        # frontend is in scope). Re-running vitest here cost ~3-4 min of runner
+        # time per CI run. A missing lcov is a NON-FATAL Sonar warning, never a
+        # job failure: the frontend job may have failed before producing
+        # coverage, and on a PR that touches no frontend path it does not run
+        # its steps at all (there is then no artifact; Sonar's PR gate measures
+        # new-code coverage only). `gh run download` inside an `if` is used
+        # instead of actions/download-artifact so a missing artifact cannot fail
+        # the step, and without the banned continue-on-error setting. Push to
+        # main / dispatch always have frontend=true, so the artifact normally
+        # exists there and the main coverage measure stays complete.
         if: needs.changes.outputs.sonar == 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true')
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Run unit tests with coverage (vitest lcov)
-        if: needs.changes.outputs.sonar == 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true')
-        working-directory: frontend
-        # Same invocation as the "frontend" job (FAR-101: cap 2 workers on the
-        # 2-vCPU runner) plus coverage: v8 provider, lcov reporter →
-        # frontend/coverage/lcov.info for sonar.javascript.lcov.reportPaths.
-        run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage --coverage.provider=v8 --coverage.reporter=lcov
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh run download "$RUN_ID" --repo "$REPO" --name frontend-coverage --dir frontend/coverage; then
+            ls -l frontend/coverage/lcov.info
+          else
+            echo "::warning::frontend-coverage artifact unavailable (frontend job failed before producing coverage, or was cancelled); Sonar will import no JS coverage for this run."
+          fi
       - name: Install SonarScanner CLI
         if: needs.changes.outputs.sonar == 'true'
         # The pinned SonarSource/sonarqube-scan-action is NOT used for the scan
