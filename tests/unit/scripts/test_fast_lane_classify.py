@@ -7,6 +7,7 @@ Run from the repo root:
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -414,6 +415,159 @@ class TestCheckCapFailClosed:
         assert "fail-closed" in detail
 
 
+class TestCheckCapCounts:
+    """check_cap's happy path and counting semantics.
+
+    Only merged PRs whose squash title carries the ``[auto-merge:
+    test-infra]`` marker, whose ``mergedAt`` parses, and whose merge epoch
+    falls inside the rolling window count toward the cap. Everything else
+    (missing/unparseable timestamps, non-marker titles, out-of-window
+    merges) is ignored — and the denial only fires once the count is at or
+    above the cap.
+    """
+
+    def _merged_prs(self, prs: list[dict]) -> str:
+        return json.dumps(prs)
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_below_cap_allows(self, mock_run: MagicMock) -> None:
+        """One marker PR in-window under a cap of 5 is allowed (cap OK)."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._merged_prs(
+                [
+                    {
+                        "number": 100,
+                        "title": "[auto-merge: test-infra] fix flaky test",
+                        "mergedAt": "2999-01-01T00:00:00+00:00",
+                    }
+                ]
+            ),
+            stderr="",
+        )
+        eligible, detail = check_cap("farnalabs/modulo", 5, 24)
+        assert eligible is True
+        assert "cap OK" in detail
+        assert "1/5" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_at_cap_denies(self, mock_run: MagicMock) -> None:
+        """Two marker PRs at a cap of 2 reach the cap and deny."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._merged_prs(
+                [
+                    {
+                        "number": 100,
+                        "title": "[auto-merge: test-infra] one",
+                        "mergedAt": "2999-01-01T00:00:00+00:00",
+                    },
+                    {
+                        "number": 101,
+                        "title": "[auto-merge: test-infra] two",
+                        "mergedAt": "2999-01-02T00:00:00+00:00",
+                    },
+                ]
+            ),
+            stderr="",
+        )
+        eligible, detail = check_cap("farnalabs/modulo", 2, 24)
+        assert eligible is False
+        assert "cap reached" in detail
+        assert "2/2" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_non_marker_title_not_counted(self, mock_run: MagicMock) -> None:
+        """A merged PR without the auto-merge marker contributes nothing."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._merged_prs(
+                [
+                    {
+                        "number": 100,
+                        "title": "fix flaky test",
+                        "mergedAt": "2999-01-01T00:00:00+00:00",
+                    },
+                    {
+                        "number": 101,
+                        "title": "[auto-merge: test-infra] real one",
+                        "mergedAt": "2999-01-02T00:00:00+00:00",
+                    },
+                ]
+            ),
+            stderr="",
+        )
+        eligible, detail = check_cap("farnalabs/modulo", 1, 24)
+        assert eligible is False
+        assert "cap reached" in detail
+        assert "1/1" in detail, "the non-marker merged PR must not be counted"
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_missing_and_unparseable_merged_at_skipped(self, mock_run: MagicMock) -> None:
+        """PRs without a usable mergedAt never count toward the cap."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._merged_prs(
+                [
+                    {"number": 100, "title": "[auto-merge: test-infra] missing"},
+                    {"number": 101, "title": "[auto-merge: test-infra] bad", "mergedAt": "not-a-date"},
+                    {
+                        "number": 102,
+                        "title": "[auto-merge: test-infra] good",
+                        "mergedAt": "2999-01-01T00:00:00+00:00",
+                    },
+                ]
+            ),
+            stderr="",
+        )
+        eligible, detail = check_cap("farnalabs/modulo", 2, 24)
+        assert eligible is True
+        assert "1/2" in detail, "only the parseable in-window marker PR may count"
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_out_of_window_skipped(self, mock_run: MagicMock) -> None:
+        """A marker PR merged outside the rolling window does not count."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._merged_prs(
+                [
+                    {
+                        "number": 100,
+                        "title": "[auto-merge: test-infra] old merge",
+                        "mergedAt": "2000-01-01T00:00:00+00:00",
+                    }
+                ]
+            ),
+            stderr="",
+        )
+        eligible, detail = check_cap("farnalabs/modulo", 1, 24)
+        assert eligible is True
+        assert "0/1" in detail, "an out-of-window merge must not count toward the cap"
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_zero_cap_denies_even_with_no_prs(self, mock_run: MagicMock) -> None:
+        """A zero cap means every candidate is already over the cap."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="[]", stderr="")
+        eligible, detail = check_cap("farnalabs/modulo", 0, 24)
+        assert eligible is False
+        assert "cap reached" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_unparseable_json_denies(self, mock_run: MagicMock) -> None:
+        """gh succeeding (exit 0) but emitting non-JSON is still fail-closed."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="not-json", stderr="")
+        eligible, detail = check_cap("farnalabs/modulo", 5, 24)
+        assert eligible is False
+        assert "fail-closed" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_gh_token_forwarded_to_env(self, mock_run: MagicMock) -> None:
+        """An explicit gh_token must reach the child process environment."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="[]", stderr="")
+        check_cap("farnalabs/modulo", 5, 24, gh_token="tok-123")
+        assert mock_run.call_args.kwargs["env"]["GH_TOKEN"] == "tok-123"
+
+
 class TestCheckShaPinningFailClosed:
     """check_sha_pinning must deny eligibility when it cannot resolve."""
 
@@ -495,6 +649,37 @@ class TestCheckShaPinningFailClosed:
         assert "(full)" in detail
 
 
+class TestCheckShaPinningMatch:
+    """check_sha_pinning's success path: the PR head matches the expected SHA."""
+
+    _HEAD = "72413204ff0dabcdef0123456789abcdef012345"
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_matching_sha_allows(self, mock_run: MagicMock) -> None:
+        """A PR head equal to the expected SHA is eligible (SHA-pinned)."""
+        mock_run.return_value = MagicMock(returncode=0, stdout=self._HEAD + "\n", stderr="")
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, self._HEAD)
+        assert eligible is True
+        assert "SHA-pinned" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_matching_sha_case_insensitive(self, mock_run: MagicMock) -> None:
+        """SHA comparison is case-insensitive — an upper-case expectation matches."""
+        mock_run.return_value = MagicMock(returncode=0, stdout=self._HEAD + "\n", stderr="")
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, self._HEAD.upper())
+        assert eligible is True
+        assert "SHA-pinned" in detail
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_mismatching_sha_still_denies(self, mock_run: MagicMock) -> None:
+        """A near-but-not-equal head must remain a denial (stale check)."""
+        different = "ffffffff0000abcdef0123456789abcdef012345"
+        mock_run.return_value = MagicMock(returncode=0, stdout=different + "\n", stderr="")
+        eligible, detail = check_sha_pinning("farnalabs/modulo", 42, self._HEAD)
+        assert eligible is False
+        assert "SHA mismatch" in detail
+
+
 class TestCheckNoTestWeakeningGitFailure:
     """check_no_test_weakening must deny when git diff fails."""
 
@@ -507,6 +692,191 @@ class TestCheckNoTestWeakeningGitFailure:
         assert eligible is False
         assert len(violations) == 1
         assert "fail-closed" in violations[0]
+
+
+class TestCheckNoTestWeakeningDiff:
+    """check_no_test_weakening's diff analysis: a test change that removes
+    coverage must be flagged, and a coverage-neutral change must pass.
+
+    The name-status run feeds the deleted-file check; the full diff run
+    feeds the test-function / assert-line / skip-marker / teardown checks.
+    """
+
+    def _mock_runs(self, mock_run: MagicMock, name_status: str, diff: str) -> None:
+        """Stage the two subprocess runs check_no_test_weakening performs."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=name_status, stderr=""),
+            MagicMock(returncode=0, stdout=diff, stderr=""),
+        ]
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_clean_changes_allowed(self, mock_run: MagicMock) -> None:
+        """An added test function with an assert — no coverage loss."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            "+def test_new():\n+    assert value == expected\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is True
+        assert violations == []
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_added_file_headers_not_counted(self, mock_run: MagicMock) -> None:
+        """``+++``/``---`` file headers must never count as assert lines."""
+        self._mock_runs(
+            mock_run,
+            "A\tbackend/tests/unit/test_assert_new.py\n",
+            (
+                "--- a/backend/tests/unit/test_assert_new.py\n"
+                "+++ b/backend/tests/unit/test_assert_new.py\n"
+                "@@ -0,0 +1,2 @@\n"
+                "+import pytest\n"
+                "+def test_new():\n"
+                "+    assert True\n"
+            ),
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is True
+        assert violations == []
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_assert_removal_flagged(self, mock_run: MagicMock) -> None:
+        """Removing an assert line without adding one is a coverage loss."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            "-def test_old():\n-    assert old_value == 1\n+def test_new():\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("assert-line count decreased" in v for v in violations)
+        assert "net -1" in violations[0]
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_balanced_assert_swap_allowed(self, mock_run: MagicMock) -> None:
+        """Moving an assert (one removed, one added) is not a decrease."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            "-    assert old_value == 1\n+    assert new_value == 1\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is True
+        assert violations == []
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_function_removal_flagged(self, mock_run: MagicMock) -> None:
+        """Removing a test function without adding one is a coverage loss."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            "-def test_old():\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("test-function count decreased" in v for v in violations)
+        assert "net -1" in violations[0]
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_function_renamed_not_flagged(self, mock_run: MagicMock) -> None:
+        """A one-for-one function replacement is coverage-neutral."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            "-def test_old():\n+def test_new():\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is True
+        assert violations == []
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_added_skip_marker_flagged(self, mock_run: MagicMock) -> None:
+        """Any added skip/xfail/skipif marker is a coverage loss."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            '+    @pytest.mark.xfail(reason="known broken")\n',
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("skip/xfail/skipif" in v for v in violations)
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_added_pytest_skip_call_flagged(self, mock_run: MagicMock) -> None:
+        """A bare ``pytest.skip(...)`` added to a test body is flagged."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            '+        pytest.skip("not implemented")\n',
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("skip/xfail/skipif" in v for v in violations)
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_deleted_test_file_flagged(self, mock_run: MagicMock) -> None:
+        """Deleting a whole test file is a coverage loss."""
+        self._mock_runs(
+            mock_run,
+            "D\tbackend/tests/unit/test_gone.py\n",
+            "",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("deleted test files" in v for v in violations)
+        assert "backend/tests/unit/test_gone.py" in violations[0]
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_malformed_name_status_line_ignored(self, mock_run: MagicMock) -> None:
+        """A name-status line without a tab separator must not be read as a
+        deletion (and cannot paint a false 'deleted test file' violation)."""
+        self._mock_runs(
+            mock_run,
+            "not-a-real-status-line\nM\tbackend/tests/unit/test_foo.py\n",
+            "+def test_new():\n+    assert True\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is True
+        assert violations == []
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_removed_teardown_flagged(self, mock_run: MagicMock) -> None:
+        """Removed fixture teardown (yield) is a coverage loss."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            "-    yield\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("fixture teardown" in v for v in violations)
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_removed_addfinalizer_flagged(self, mock_run: MagicMock) -> None:
+        """Removed ``addfinalizer`` teardown is a coverage loss."""
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_foo.py\n",
+            "-    request.addfinalizer(cleanup)\n",
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("fixture teardown" in v for v in violations)
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_content_fetch_failure_fails_closed(self, mock_run: MagicMock) -> None:
+        """Failure on the second (diff-content) run fails closed too."""
+        import subprocess as _sp
+
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="M\tbackend/tests/unit/test_foo.py\n", stderr=""),
+            _sp.TimeoutExpired(cmd="git", timeout=30),
+        ]
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert any("fail-closed" in v for v in violations)
+        assert any("could not fetch diff content" in v for v in violations)
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +988,26 @@ class TestCheckSuspensionNotSet:
         eligible, detail = check_suspension("farnalabs/modulo")
         assert eligible is True
         assert "not set" in detail.lower()
+
+
+class TestCheckSuspensionEmptyVariable:
+    """A set-but-empty suspension variable means no active suspension."""
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_empty_variable_allows(self, mock_run: MagicMock) -> None:
+        """gh succeeds with an empty value — treated as 'no active suspension'."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is True
+        assert "variable empty" in detail.lower()
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_whitespace_variable_allows(self, mock_run: MagicMock) -> None:
+        """A value made up only of whitespace strips to empty and allows."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="   \n", stderr="")
+        eligible, detail = check_suspension("farnalabs/modulo")
+        assert eligible is True
+        assert "variable empty" in detail.lower()
 
 
 class TestCheckSuspensionPermissionError:
