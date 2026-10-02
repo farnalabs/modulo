@@ -281,8 +281,6 @@ class LibraryPrimitiveResponse(BaseModel):
         if self.primitive_type != "composite":
             return self
         content = self.content_json
-        if not isinstance(content, dict):
-            return self
         nodes = content.get("nodes")
         if not isinstance(nodes, list):
             return self
