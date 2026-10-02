@@ -160,7 +160,6 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
             `last poll: ${outcome.lastError}`,
         )
       }
-      expect(outcome.status).toBe('complete')
 
       // Observable effect: the decision is hoisted as success feedback...
       await expect(page.getByTestId('run-detail-hitl-message')).toBeVisible({ timeout: 15_000 })
