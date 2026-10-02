@@ -66,6 +66,7 @@ const mockAvailableEvents = [
   'budget_exceeded',
   'circuit_breaker_tripped',
   'trigger_deactivated',
+  'trigger_streak_alert',
 ]
 
 // Hoisted function declaration so the (hoisted) vi.mock factory and the
@@ -233,6 +234,7 @@ describe('TeamNotificationEndpoints', () => {
     expect(labels).toContain('Run Stalled')
     expect(labels).toContain('Circuit Breaker Tripped')
     expect(labels).toContain('Trigger Deactivated')
+    expect(labels).toContain('Trigger Streak Alert')
   })
 
   it('shows a retryable message when the event registry fetch fails', async () => {
