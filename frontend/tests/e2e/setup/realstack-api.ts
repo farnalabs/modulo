@@ -84,15 +84,26 @@ export class HttpStatusError extends Error {
 }
 
 /**
- * True when `err` is a transient infrastructure HTTP 5xx (502/503/504) — the
- * staging DB-blip class the realstack harness deliberately tolerates. Used by
- * the HITL recovery to classify a run that never completed: a run left
- * claimed-but-undecided purely because every re-issue was refused by a
- * sustained transient-5xx storm is an unobservable-infrastructure condition,
- * NOT a failed product assertion.
+ * True when `err` is a transient infrastructure failure of the kind the
+ * realstack harness deliberately tolerates:
+ *
+ * - an explicit transient HTTP 5xx (502/503/504) — the staging DB-blip class
+ *   that rolls back and is safe to re-issue, or
+ * - a transient transport failure (timeout / network reset) that never reached
+ *   the API, so no server state was observed.
+ *
+ * Used by the HITL recovery to classify a run that never completed: a run left
+ * claimed-but-undecided because every re-issue was refused by a sustained
+ * outage is an unobservable-infrastructure condition, NOT a failed product
+ * assertion. A real outage mixes both — a 503 might be interleaved with a
+ * gateway timeout — so classifying only the explicit-5xx arm would wrongly
+ * report the mixed storm as a wedge. A deterministic response that DID reach
+ * the API (4xx / application 500) is deliberately NOT transient: it is
+ * observable evidence of a real defect and must still hard-fail.
  */
 function isTransientHttpError(err: unknown): boolean {
-  return err instanceof HttpStatusError && isTransientHttpStatus(err.status)
+  if (err instanceof HttpStatusError) return isTransientHttpStatus(err.status)
+  return isTransientTransportError(err)
 }
 
 // apiLogin is a single idempotent-safe ARRANGE call, so a short bounded retry
@@ -544,8 +555,10 @@ export async function approveReview(
  */
 export interface ReissueOutcome {
   /**
-   * True when the attempt failed with a transient infrastructure 5xx
-   * (502/503/504). False when it succeeded or failed deterministically.
+   * True when the attempt failed with a transient infrastructure condition —
+   * an explicit 502/503/504, or a transport failure that never reached the
+   * API. False when it succeeded or reached the API with a deterministic
+   * response.
    */
   transientFailure: boolean
   /** Human-readable result/error detail, for diagnostics and skip reasons. */
@@ -599,11 +612,12 @@ export async function reissueApproveBestEffort(
  * so the test timeout shared with the hook covers deadline + teardown.
  *
  * Returns a discriminated outcome rather than throwing on a non-complete run:
- * a run that never completed because EVERY re-issue was refused by a sustained
- * transient 5xx (``infra-blocked``) could not be observed at all, so it is an
- * infrastructure outage, not a product failure; a run that stayed incomplete
- * despite a re-issue reaching the API (``wedged``) is a real defect and the
- * caller MUST fail on it.
+ * a run that never completed because EVERY re-issue failed transiently — an
+ * explicit 5xx or a transport failure that never reached the API
+ * (``infra-blocked``) could not be observed at all, so it is an infrastructure
+ * outage, not a product failure; a run that stayed incomplete despite a
+ * re-issue reaching the API with a deterministic response (``wedged``) is a
+ * real defect and the caller MUST fail on it.
  */
 export type HitlRecoveryResult =
   | { kind: 'complete'; status: string }
@@ -666,10 +680,12 @@ export async function waitForRunCompletionWithHitlRecovery(
   }
   if (status === 'complete') return { kind: 'complete', status }
   // A run left incomplete is `infra-blocked` ONLY when at least one re-issue
-  // was attempted AND every one of them was refused by a transient 5xx. Any
-  // re-issue that reached the API (approve succeeded, or failed
-  // deterministically) means the run was observable but did not complete — a
-  // real defect the caller must fail on, never hide behind a skip.
+  // was attempted AND every one of them failed transiently (an explicit
+  // 502/503/504, or a transport failure that never reached the API). Any
+  // re-issue that reached the API (approve succeeded, or returned a
+  // deterministic 4xx/application 500) means the run was observable but did
+  // not complete — a real defect the caller must fail on, never hide behind a
+  // skip.
   if (reissues.length > 0 && reissues.every((r) => r.transientFailure)) {
     return { kind: 'infra-blocked', lastError: reissues[reissues.length - 1].detail }
   }
