@@ -95,9 +95,4 @@ class CsrfMiddleware(BaseHTTPMiddleware):
     def _is_exempt(self, path: str) -> bool:
         if path in _HARDCODED_EXEMPT_PATHS:
             return True
-        for pattern in self._exempt_paths:
-            if fnmatch.fnmatch(path, pattern):
-                return True
-            if path.startswith(pattern):
-                return True
-        return False
+        return any(fnmatch.fnmatch(path, pattern) or path.startswith(pattern) for pattern in self._exempt_paths)
