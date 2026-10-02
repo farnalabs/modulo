@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.scheduled_report import compute_initial_send, create_scheduled_report
+from modulo.db.crud.scheduled_report import compute_initial_send, create_scheduled_report, delete_scheduled_report
 from modulo.db.models.scheduled_report import ScheduledReport
 
 
@@ -87,4 +87,34 @@ async def test_create_cost_report_maps_to_scheduler_schema() -> None:
     assert report.next_send_at == datetime(2026, 8, 1, tzinfo=UTC)
     assert report.created_by == account_id
     session.add.assert_called_once_with(report)
+    session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_scheduled_report_stamps_soft_delete_columns() -> None:
+    org_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    report = ScheduledReport(
+        organisation_id=org_id,
+        name="Cost report",
+        report_type="cost",
+        cron_expression="0 0 * * *",
+    )
+    lookup = MagicMock()
+    lookup.scalar_one_or_none.return_value = report
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(return_value=lookup)
+    session.flush = AsyncMock()
+
+    assert (
+        await delete_scheduled_report(
+            cast(AsyncSession, session),
+            report_id=uuid.uuid4(),
+            organisation_id=org_id,
+            account_id=account_id,
+        )
+        is True
+    )
+    assert report.deleted_at is not None
+    assert report.deleted_by == account_id
     session.flush.assert_awaited_once()

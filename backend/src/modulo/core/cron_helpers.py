@@ -2783,7 +2783,7 @@ async def _advance_report_next_send(session: AsyncSession, report_id: uuid.UUID,
     r = await session.execute(
         text(
             "UPDATE scheduled_reports SET next_send_at = :ns "
-            "WHERE id = :rid AND active "
+            "WHERE id = :rid AND active AND deleted_at IS NULL "
             "AND (next_send_at IS NULL OR next_send_at <= now()) "
             "RETURNING id"
         ),

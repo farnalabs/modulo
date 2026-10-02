@@ -118,7 +118,11 @@ async def delete_scheduled_report(
     *,
     report_id: uuid.UUID,
     organisation_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
 ) -> bool:
+    # Soft delete (migration 0132 added deleted_at/deleted_by to this table
+    # with that intent; the global SoftDeleteMixin filter hides the row from
+    # every subsequent ORM read, including the due-scan and fire paths).
     report = await get_scheduled_report(
         session,
         report_id=report_id,
@@ -126,6 +130,7 @@ async def delete_scheduled_report(
     )
     if report is None:
         return False
-    await session.delete(report)
+    report.deleted_at = datetime.now(UTC)
+    report.deleted_by = account_id
     await session.flush()
     return True

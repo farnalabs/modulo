@@ -1058,6 +1058,7 @@ async def delete_report(
                 session,
                 report_id=report_id,
                 organisation_id=current_user.organisation_id,
+                account_id=current_user.account_id,
             )
     except ProgrammingError:
         _log.exception("delete_report ProgrammingError (org_id=%s)", current_user.organisation_id)
