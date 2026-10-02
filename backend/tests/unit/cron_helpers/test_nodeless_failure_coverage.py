@@ -179,6 +179,14 @@ class TestZeroNodePremiseEnforcedAtTheCarveOut:
     re-dispatch a run that already executed nodes.
     """
 
+    @pytest.fixture(autouse=True)
+    def _settings_double(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The row recheck reads the in-flight floor from settings (FAR-1088
+        F2); this class tests the checkpoint leg, so stand in the file's
+        settings double — the floor resolves to its default-config fallback
+        (3900) without needing a real Settings."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+
     def test_checkpointed_mid_run_row_is_not_a_nodeless_zombie(self) -> None:
         """Checkpoints present (a super-step completed) ⇒ NOT zero-node, no
         matter how old or how stale the heartbeat is."""
