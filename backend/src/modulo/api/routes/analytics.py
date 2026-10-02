@@ -93,6 +93,12 @@ class AnalyticsBucket(BaseModel):
     capacity_failure_count: int = 0
     avg_capacity_wait_ms: float | None = None
     avg_queue_wait_ms: float | None = None
+    # FAR-1421 claim→dispatch latency, bucketed per trigger (dimension
+    # trigger_type / trigger_id): dispatch_phase_entered_at - created_at,
+    # falling back to started_at - created_at when the phase timestamp is
+    # NULL (pre-migration rows / no durable phase / purged-run backfills).
+    # NULL when the bucket has no sample — never 0 for "no data".
+    avg_dispatch_latency_ms: float | None = None
     avg_final_idle_ms: float | None = None
     avg_output_bytes: float | None = None
 
@@ -471,7 +477,11 @@ async def analytics_query(
 
     ``pipeline_id`` may be repeated for "A vs B" comparisons in a single
     request. ``error_code`` filters to a specific failure code and doubles as a
-    group-by dimension (``dimension=error_code``). ``date_from``/``date_to``
+    group-by dimension (``dimension=error_code``); ``dimension=trigger_type`` /
+    ``dimension=trigger_id`` group the series per trigger, which is how the
+    claim→dispatch latency metric (``avg_dispatch_latency_ms`` —
+    ``dispatch_phase_entered_at - created_at``, else ``started_at - created_at``)
+    is read per trigger. ``date_from``/``date_to``
     accept bare dates ("2026-08-06", parsed as midnight UTC) or ISO datetimes
     ("2026-08-06T14:00:00Z"). ``auto_granularity=true`` overrides ``group_by``
     from the effective range span (hour ≤3d, day ≤90d, week otherwise).

@@ -1773,7 +1773,11 @@ export interface paths {
          *
          *     ``pipeline_id`` may be repeated for "A vs B" comparisons in a single
          *     request. ``error_code`` filters to a specific failure code and doubles as a
-         *     group-by dimension (``dimension=error_code``). ``date_from``/``date_to``
+         *     group-by dimension (``dimension=error_code``); ``dimension=trigger_type`` /
+         *     ``dimension=trigger_id`` group the series per trigger, which is how the
+         *     claim→dispatch latency metric (``avg_dispatch_latency_ms`` —
+         *     ``dispatch_phase_entered_at - created_at``, else ``started_at - created_at``)
+         *     is read per trigger. ``date_from``/``date_to``
          *     accept bare dates ("2026-08-06", parsed as midnight UTC) or ISO datetimes
          *     ("2026-08-06T14:00:00Z"). ``auto_granularity=true`` overrides ``group_by``
          *     from the effective range span (hour ≤3d, day ≤90d, week otherwise).
@@ -10130,6 +10134,8 @@ export interface components {
             avg_capacity_wait_ms?: number | null;
             /** Avg Queue Wait Ms */
             avg_queue_wait_ms?: number | null;
+            /** Avg Dispatch Latency Ms */
+            avg_dispatch_latency_ms?: number | null;
             /** Avg Final Idle Ms */
             avg_final_idle_ms?: number | null;
             /** Avg Output Bytes */
@@ -10139,7 +10145,7 @@ export interface components {
          * AnalyticsDimension
          * @enum {string}
          */
-        AnalyticsDimension: "trigger_type" | "status" | "pipeline" | "folder" | "team" | "error_code";
+        AnalyticsDimension: "trigger_type" | "trigger_id" | "status" | "pipeline" | "folder" | "team" | "error_code";
         /**
          * AnalyticsExportItem
          * @description One raw fact row — all fact columns, serialised to JSON-safe values.
