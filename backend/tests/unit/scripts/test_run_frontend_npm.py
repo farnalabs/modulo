@@ -106,12 +106,25 @@ def test_frontend_relative_paths_handles_absolute_paths(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # main() - extra args (the ESLint hook path)
 # ---------------------------------------------------------------------------
-def test_main_lint_extra_args_invokes_eslint_binary(tmp_path, monkeypatch):
-    """Regression: `FRONTEND_DIR / "node_modules"` crashed before this fix."""
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_main_lint_extra_args_invokes_eslint_binary(
+    tmp_path,
+    monkeypatch,
+    platform: str,
+):
+    """Regression: `FRONTEND_DIR / "node_modules"` crashed before this fix.
+
+    Parametrised over both platforms because ``run_frontend_npm`` deliberately
+    wraps the direct binary in ``["cmd.exe", "/c", ...]`` on Windows only —
+    CreateProcess cannot launch the ``.cmd`` shims in ``node_modules/.bin``
+    directly (WinError 193). Asserting the POSIX shape unconditionally made
+    this test fail on Windows while CI (Linux) stayed green.
+    """
     frontend = _patch_repo(tmp_path, monkeypatch)
     eslint_bin = frontend / "node_modules" / ".bin" / "eslint"
     eslint_bin.parent.mkdir(parents=True)
     eslint_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(sys, "argv", ["run_frontend_npm.py", "lint", "frontend/src/main.ts"])
 
     calls: list[tuple[list[str], dict[str, object]]] = []
@@ -120,7 +133,8 @@ def test_main_lint_extra_args_invokes_eslint_binary(tmp_path, monkeypatch):
     assert mod.main() == 0
     assert len(calls) == 1
     cmd, kwargs = calls[0]
-    assert cmd == [str(eslint_bin), "--cache", "--cache-location", ".cache/eslint", "src/main.ts"]
+    prefix = ["cmd.exe", "/c"] if platform == "win32" else []
+    assert cmd == [*prefix, str(eslint_bin), "--cache", "--cache-location", ".cache/eslint", "src/main.ts"]
     assert kwargs["cwd"] == frontend
 
 
