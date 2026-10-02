@@ -1660,6 +1660,14 @@ def _build_schema_failure_message(
     return "\n".join(parts)
 
 
+# GitHub PR URL in raw sandbox output (FAR-188): the FIRST match becomes the
+# marker's canonical ``pr_url``. Case-SENSITIVE on purpose (FAR-1402) — the
+# flag-relevant literals (https/github/pull) are always lowercase in gh's own
+# echo, while a case-variant agent-prose mention must not win the first match
+# and be persisted as THE delivery URL. The FAR-1274 detector sweep in
+# ``db.crud.run`` scans agent text instead and deliberately carries
+# re.IGNORECASE there. Every copy of this pattern — pattern AND flags — is
+# pinned by ``tests/unit/db/test_pr_url_regex_pins.py``.
 _PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
 
 # Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
