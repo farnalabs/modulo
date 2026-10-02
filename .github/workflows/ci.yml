@@ -24,6 +24,18 @@ env:
 permissions:
   contents: read
 
+# FAR-1427: cancel runs superseded by a newer push to the same PR so a
+# Branch Fixer / reviewer push storm does not bill a full ~56 runner-min suite
+# for every intermediate SHA. Cancellation is scoped to pull_request events
+# ONLY: every other event (push to main, workflow_dispatch) gets a group keyed
+# on the unique run id, so it can never be cancelled - nor can a queued main
+# run be displaced as the single "pending" run of a shared group.
+# notify-pr-failure treats `cancelled()` as a failure, so it carries a
+# superseded-SHA guard (see the "Skip if this run was superseded" step).
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Fast jobs run on ALL events (PR + push + manual)
 
@@ -993,9 +1005,37 @@ jobs:
       actions: write
       pull-requests: write
     steps:
+      - name: Skip if this run was superseded by a newer push
+        id: superseded-check
+        if: failure() || cancelled()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # FAR-1427: this workflow now cancels in-progress pull_request runs
+          # when a newer push lands (workflow-level concurrency). A job with
+          # `always()` still run on cancellation, and this job deliberately
+          # treats `cancelled()` as a failure, so a superseded (cancelled) run
+          # would otherwise dispatch the Branch Fixer - and post the
+          # "exhausted" comment - for a STALE head SHA. The newer push has its
+          # own run that owns the outcome. Compare this run's head SHA with the
+          # PR's current head: if they differ, this run is stale - do nothing.
+          # Fail OPEN (treat as current) on any API/parse failure: a genuine
+          # CI failure must not be silently dropped on an API blip; the Branch
+          # Fixer webhook already coalesces duplicates by (prNumber, headSha).
+          CURRENT_SHA=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
+          if [ -n "$CURRENT_SHA" ] && [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Run is for ${HEAD_SHA} but PR #${PR_NUM} head is now ${CURRENT_SHA} - superseded run, skipping Branch Fixer dispatch."
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check retry limit
         id: retry-check
-        if: (failure() || cancelled()) && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1031,7 +1071,7 @@ jobs:
 
       - name: Skip if a merge-queue run is already in flight for this PR
         id: queue-check
-        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1103,7 +1143,7 @@ jobs:
           fi
 
       - name: Trigger Modulo Branch Fixer
-        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
