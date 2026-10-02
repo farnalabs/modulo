@@ -461,9 +461,12 @@ async def _resolve_credential_scripts_for_input(
             #
             # The org id threads through this module as the run's string
             # identity (the same value the tenancy check above filters on);
-            # set_rls_org stringifies it for set_config() and stores it
-            # verbatim in session.info, and FernetSecretsBackend re-parses it.
-            await set_rls_org(session, org_id)  # type: ignore[arg-type]
+            # set_rls_org is typed ``uuid.UUID | None``, so convert at the
+            # boundary rather than suppressing the mismatch (the pattern used
+            # by node_runner, e.g. ``uuid.UUID(str(org_id))``).  set_rls_org
+            # then stringifies it for set_config() and stores it in
+            # session.info, and FernetSecretsBackend re-parses it.
+            await set_rls_org(session, uuid.UUID(org_id))
             await set_rls_execution_context(session)
             cred = await resolve_clone_credential(
                 session,

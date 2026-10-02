@@ -67,6 +67,14 @@ _FAKE_LS_REMOTE_OUTPUT = (
     "222333444555666777888999000aaabbbcccddd\trefs/tags/v1.0^{}\n"
 )
 
+# FAR-1409: _resolve_credential_scripts_for_input converts org_id to
+# uuid.UUID before calling set_rls_org, so any test that REACHES the
+# credential-resolution block must pass a real UUID org id or it would now
+# raise ValueError.  Tests whose input fails BEFORE that block (URL
+# derivation, ref resolution, no session_factory) keep the free-form
+# "org-1" id on purpose — they never parse it.
+_CRED_ORG = str(uuid.uuid4())
+
 
 # ---------------------------------------------------------------------------
 # URL helpers
@@ -694,7 +702,7 @@ async def test_resolve_managed_inputs_connector_credential_resolution(monkeypatc
     factory = _make_factory
     resolved = await resolve_managed_inputs_host_side(
         [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert len(resolved) == 1
@@ -723,7 +731,7 @@ async def test_resolve_managed_inputs_credential_resolution_error_permanent(monk
     with pytest.raises(ProvisioningError) as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
@@ -748,7 +756,7 @@ async def test_resolve_managed_inputs_credential_transient_error_retryable(monke
     with pytest.raises(ProvisioningError) as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
@@ -774,7 +782,7 @@ async def test_resolve_managed_inputs_credential_unexpected_error_permanent(monk
     with pytest.raises(ProvisioningError) as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
@@ -867,7 +875,7 @@ async def test_connector_backed_input_derives_url_from_github_config(
                 "ref": {"kind": "branch", "value": "main"},
             }
         ],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert len(resolved) == 1
@@ -896,7 +904,7 @@ async def test_connector_backed_input_strips_trailing_slash(
                 "ref": {"kind": "branch", "value": "main"},
             }
         ],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert resolved[0].url == "https://github.com/org/repo.git"
@@ -990,7 +998,7 @@ async def test_connector_backed_input_derives_url_ghe_base_url(
                 "ref": {"kind": "branch", "value": "main"},
             }
         ],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
     )
     assert resolved[0].url == "https://ghe.acme.com/acme/widgets.git"
@@ -1053,7 +1061,7 @@ async def test_read_only_credential_assertion_called_when_http_client_provided(
     factory = _make_factory
     resolved = await resolve_managed_inputs_host_side(
         [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
         http_client=fake_http,
     )
@@ -1086,7 +1094,7 @@ async def test_read_only_credential_assertion_skipped_without_http_client(
     factory = _make_factory
     resolved = await resolve_managed_inputs_host_side(
         [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-        org_id="org-1",
+        org_id=_CRED_ORG,
         session_factory=factory,
         http_client=None,
     )
@@ -1121,7 +1129,7 @@ async def test_read_only_credential_assertion_failure_raises(
     with pytest.raises(ProvisioningError, match="credential is not read-only") as exc:
         await resolve_managed_inputs_host_side(
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
-            org_id="org-1",
+            org_id=_CRED_ORG,
             session_factory=factory,
             http_client=MagicMock(),
         )
@@ -1137,7 +1145,12 @@ async def test_read_only_credential_assertion_failure_raises(
 from sqlalchemy import Column  # noqa: E402
 from sqlalchemy.sql.visitors import iterate  # noqa: E402
 
-_REQUEST_ORG = "org-request"
+# A UUID, because the same-org tenancy test continues into the
+# credential-resolution block, which converts org_id with uuid.UUID before
+# set_rls_org (FAR-1409).  The cross-org test shares this constant and stops
+# at the tenancy check, so it never parses it — its assertion (a DIFFERENT
+# connector org) is unaffected either way.
+_REQUEST_ORG = str(uuid.uuid4())
 
 
 def _where_has_org_column(stmt: object) -> bool:
@@ -1460,5 +1473,7 @@ async def test_set_rls_org_awaited_on_session_before_clone_credential_resolution
     )
 
     assert sequence == ["set_rls_org", "set_rls_execution_context", "resolve_clone_credential"]
-    assert rls_calls[0][1] == org
+    # set_rls_org is typed ``uuid.UUID | None``; the call site converts the
+    # module's string org id at the boundary, so compare canonical forms.
+    assert str(rls_calls[0][1]) == org
     assert rls_calls[0][0] is resolve_sessions[0]

@@ -407,9 +407,10 @@ class TestDecryptConnectorCreds:
 
     @pytest.mark.asyncio
     async def test_secrets_backend_generic_error_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A genuine secrets-backend failure (e.g. the unset RLS org context of
-        FAR-1409) is logged at WARNING — never buried at DEBUG — while the
-        ciphertext fallback still runs (control flow unchanged)."""
+        """A genuine secrets-backend failure (e.g. a corrupted stored value or
+        an unreadable org context) is logged at WARNING — never buried at
+        DEBUG — while the ciphertext fallback still runs (control flow
+        unchanged)."""
         session = AsyncMock()
         ci = _make_connector_instance(ciphertext=_encrypt('{"token": "sk-fallback"}'))
         mock_settings = MagicMock()
