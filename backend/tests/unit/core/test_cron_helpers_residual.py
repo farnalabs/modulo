@@ -1677,6 +1677,10 @@ async def test_record_fact_for_terminalized_run_swallows_failure(caplog):
 async def test_reconcile_org_read_failure_returns(caplog):
     session = _MockSession()
     summary: dict[str, Any] = {
+        # FAR-1329: the aged-nodeless router runs first and bumps its own
+        # counter — include it so this test fails on the PATCHED RuntimeError
+        # (its intent), not on a KeyError before the patched terminalizer runs.
+        "nodeless_failed": 0,
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_review_expired_terminalized": 0,
@@ -1713,6 +1717,10 @@ async def test_reconcile_org_read_failure_returns(caplog):
 async def test_reconcile_org_processes_rows():
     session = _MockSession([_mock_result(all=[]), _mock_result(all=[])])
     summary: dict[str, Any] = {
+        # FAR-1329: the aged-nodeless router is now the FIRST batch
+        # terminalizer, so its counter must be present like every other
+        # registry stats_key.
+        "nodeless_failed": 0,
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_review_expired_terminalized": 0,
@@ -1847,7 +1855,10 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
     assert recorded == [
         "executor_stalled",
         "claim_cap_exhausted",
-        "executor_superseded",
+        # FAR-1329: the age-bound gate's stall reason tracks the truthful code
+        # it writes (never the supersede vocabulary — its predicate does not
+        # compare runs).
+        "no_progress",
         "dispatch_failed",
         "hitl_review_expired",
         "hitl_review_missing",
@@ -2241,6 +2252,10 @@ async def test_committed_decision_resume_data_unstamped_payload_gets_row_gate():
 async def test_reconcile_org_reraises_cancellation():
     session = _MockSession()
     summary: dict[str, Any] = {
+        # FAR-1329: the aged-nodeless router is the first batch terminalizer
+        # and must be present in the summary before mid_graph runs (and
+        # raises CancelledError).
+        "nodeless_failed": 0,
         "mid_graph_wedge_terminalized": 0,
         "claim_cap_terminalized": 0,
         "hitl_review_expired_terminalized": 0,

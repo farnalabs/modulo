@@ -14,6 +14,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1731,13 +1732,38 @@ class _MockSession:
     def get_bind(self) -> Any:
         return self._get_bind()
 
+    async def flush(self) -> None:
+        # Mirror of AsyncSession.flush — called by the FAR-1329 aged-nodeless
+        # router after it delegates to _fail_nodeless_run.
+        return None
+
+    async def get(self, model: Any, pk: Any) -> SimpleNamespace:
+        # Mirror of AsyncSession.get for _fail_nodeless_run (a routed
+        # zero-progress run is re-read and status-checked there).
+        return SimpleNamespace(
+            status="running",
+            pipeline_id=uuid.uuid4(),
+            trigger_id=None,
+            claim_count=1,
+            started_at=None,
+            dispatched_at=None,
+        )
+
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         s = str(stmt)
         if "set_config" in s:
             return MagicMock()
+        if s.startswith("SELECT id FROM runs"):
+            # FAR-1329 aged-nodeless router (zero rows by default here).
+            r = MagicMock()
+            r.all.return_value = [(uid,) for uid in self.terminalizer_rows.get("aged_nodeless", [])]
+            return r
         if "UPDATE runs SET" in s:
-            ids = self.terminalizer_rows.get("executor_superseded", [])
-            if "claim_cap_exhausted" in s:
+            ids = self.terminalizer_rows.get("dispatch_failed", [])
+            if "node_attempt_count" in s:
+                # FAR-1329 age-bound wedge gate (error code is a bound param).
+                ids = self.terminalizer_rows.get("no_progress", [])
+            elif "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
             r = MagicMock()
             r.all.return_value = [(uid,) for uid in ids]
