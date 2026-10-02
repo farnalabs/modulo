@@ -5,8 +5,9 @@ database, and pin model/migration parity for the two new OAuth
 client-revoke lookup indexes:
 
 * the chain is pinned (0272 -> ``0271_org_api_keys_revocation_sweep_indexes``)
-  and it is the single linear head, so the pre-commit check-migration-heads
-  hook and every ``test_single_head_*`` pin cannot be ambushed by a renumber;
+  with ``0273_runs_dispatch_phase`` the single linear head, so the
+  pre-commit check-migration-heads hook and every ``test_single_head_*``
+  pin cannot be ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
   the client-revoke DELETEs rely on (``auth/oauth.py::delete_oauth_client``
   against ``oauth_authorization_codes`` and ``oauth_token_families``), each
@@ -105,9 +106,9 @@ def _model_indexes(model: type) -> dict[str, Index]:
 
 
 class TestChain:
-    def test_single_head_is_0272(self) -> None:
+    def test_single_head_is_0273(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
+        assert heads == ["0273_runs_dispatch_phase"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

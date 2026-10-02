@@ -83,7 +83,14 @@ from modulo.core.pipeline_engine.executor import (
 
 _log = logging.getLogger(__name__)
 
-WatchdogRetryHook = Callable[[str, str], Awaitable[bool]]
+# The hook takes ``(final_status, error_code)`` plus ONE optional keyword-only
+# flag: ``zero_node`` (FAR-1088). Only the in-process ZOMBIE watchdog passes it
+# — its kill fires pre-first-progress, so the run executed ZERO nodes by
+# construction and the zero-node failure carve-out is safe there. The FAR-369
+# node-deadline watchdog (and the in-execute retry path) never pass it, because
+# nodes may already have executed on those paths. ``Callable[..., ...]`` because
+# the kwarg is optional and call sites without it must keep working.
+WatchdogRetryHook = Callable[..., Awaitable[bool]]
 
 # Runtime SAQ job function names are FULLY-QUALIFIED ("modulo.core.saq_worker.execute_run"
 # / "...resume_run" — see dispatch.py SAQ_*_RUN_FUNCTION and the registered
@@ -131,13 +138,15 @@ def create_watchdog_retry_hook(
 ) -> tuple[WatchdogRetryHook, WatchdogRetryOutcome]:
     """Build the watchdog retry hook + its outcome box for one run.
 
-    The hook signature is ``(final_status, error_code) -> bool``: ``True`` when
-    the run was re-dispatched (the watchdog must NOT terminal-fail), ``False``
-    when it must terminal-fail exactly as before.
+    The hook signature is ``(final_status, error_code, *, zero_node=False) ->
+    bool``: ``True`` when the run was re-dispatched (the watchdog must NOT
+    terminal-fail), ``False`` when it must terminal-fail exactly as before.
+    ``zero_node`` opts the caller into the FAR-1088 zero-node failure
+    carve-out; the default keeps every existing caller's behaviour unchanged.
     """
     box = WatchdogRetryOutcome()
 
-    async def _hook(final_status: str, error_code: str) -> bool:
+    async def _hook(final_status: str, error_code: str, *, zero_node: bool = False) -> bool:
         return await watchdog_retry_after_policy(
             aeng=aeng,
             run_id=run_id,
@@ -146,6 +155,7 @@ def create_watchdog_retry_hook(
             exec_task=exec_task,
             final_status=final_status,
             error_code=error_code,
+            zero_node=zero_node,
             outcome=box,
         )
 
@@ -161,6 +171,7 @@ async def watchdog_retry_after_policy(
     final_status: str,
     error_code: str,
     exec_task: asyncio.Task[Any] | None = None,
+    zero_node: bool = False,
     outcome: WatchdogRetryOutcome | None = None,
 ) -> bool:
     """Consult the run's retry_policy for a watchdog kill; re-dispatch if allowed.
@@ -173,6 +184,23 @@ async def watchdog_retry_after_policy(
     policy coverage, exhausted budget, correction run, non-idempotent graph,
     superseded claim, stale script lease, lost fence, or any load failure —
     fail closed).
+
+    FAR-1088 zero-node failure carve-out — ``zero_node=True`` ONLY (the
+    in-process zombie watchdog passes it; its kill fires pre-first-progress,
+    so the run executed ZERO nodes and nothing can double-execute): when the
+    normal matcher finds no coverage for the kill (e.g. the policy is
+    ``{on: ["failure"]}``, which does not cover a ``stalled``/
+    ``executor_stalled`` outcome), consult the SAME shared matcher once more
+    for a failure-covered budget — ``_retry_after_policy(policy, "failed",
+    "")`` matches ONLY the failure arm for an empty code (stall/timeout/eval
+    arms cannot fire) and fail-closes on absent/empty ``on``, a malformed
+    policy, or a 0 budget, so the carve-out can never pull in the FAR-649
+    all-events default. This mirrors the dispatcher_reconcile cron path's
+    zero-node carve-out (``_should_redispatch_nodeless``) so the two paths
+    re-dispatch a failure-covered zero-node death on the same budget. With
+    ``zero_node=False`` (default — node-deadline watchdog, in-execute path)
+    behaviour is byte-for-byte unchanged: nodes may have executed there, so a
+    failure carve-out is not safe without an explicit zero-node criterion.
     """
     box = outcome if outcome is not None else WatchdogRetryOutcome()
     if executor is None:
@@ -209,6 +237,21 @@ async def watchdog_retry_after_policy(
     # never-retryable exclusions (script-mode terminal codes, hang deaths)
     # apply identically.
     retry_budget = _retry_after_policy(policy, final_status, error_code)
+    if retry_budget is None and zero_node:
+        # FAR-1088 zero-node failure carve-out (see docstring): the kill found
+        # no coverage for its own outcome — ask the SAME shared matcher for a
+        # failure-covered budget. Empty code ⇒ only the failure arm can match,
+        # and a non-covered / malformed / zero-budget policy still yields None
+        # (fail closed, same as the cron path's carve-out).
+        retry_budget = _retry_after_policy(policy, "failed", "")
+        if retry_budget is not None:
+            _log.info(
+                "pipeline.watchdog_retry_zero_node_carve_out run=%s kill_status=%s kill_code=%s budget=%s",
+                run_id,
+                final_status,
+                error_code,
+                retry_budget,
+            )
     if retry_budget is None:
         return False
     # Same gates as _retry_policy_applies: FAR-210 correction runs and FAR-295

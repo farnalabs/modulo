@@ -4033,6 +4033,36 @@ def _final_row_absent_expr() -> Any:
     )
 
 
+def _checkpoint_absent_expr() -> Any:
+    """The ONE correlated NOT-EXISTS expression for LangGraph progress:
+    ``NOT EXISTS(checkpoint for the run's thread)``.
+
+    Single definition shared by the nodeless zombie predicate (line-level
+    WHERE leg) and the reconcile org SELECT (the ``checkpoints_absent`` labeled
+    column — the label is applied at the call site), mirroring
+    :func:`_final_row_absent_expr`, so the two correlated subqueries can never
+    drift. FAR-1088 F4: the row-level recheck needs the SAME leg, because the
+    combined reconcile predicate is an OR — a worker-died-mid-run row with
+    checkpoints written can match via the stale-heartbeat branch and would
+    otherwise be admitted to the zero-node repair (and its failure carve-out)
+    without ever passing the SQL predicate's checkpoint leg.
+
+    A checkpoint is written when a node COMPLETES a super-step, so its
+    presence means at least one node executed.
+    """
+    from sqlalchemy import exists as sa_exists
+    from sqlalchemy import select as sa_select
+
+    return ~sa_exists(
+        sa_select(1)
+        .select_from(text("checkpoints c"))
+        .where(
+            text("c.organisation_id = runs.organisation_id"),
+            text("c.thread_id = runs.langgraph_thread_id"),
+        )
+    )
+
+
 def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     """Match a claimed-but-never-executed SAQ zombie.
 
@@ -4072,28 +4102,20 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     does NOT filter on ``dispatched_at``.
     """
     from sqlalchemy import and_
-    from sqlalchemy import exists as sa_exists
-    from sqlalchemy import select as sa_select
 
     from modulo.db.models.run import Run
 
-    checkpoint_subquery = (
-        sa_select(1)
-        .select_from(text("checkpoints c"))
-        .where(
-            text("c.organisation_id = runs.organisation_id"),
-            text("c.thread_id = runs.langgraph_thread_id"),
-        )
-    )
-    # Parameterised through the model columns (a Select carries bound params
-    # natively — a text()-leg would need bindparams() on a TextClause, which
-    # a Select does not expose).
+    # Model-column legs are parameterised natively (a text()-leg would need
+    # bindparams() on a TextClause, which a Select does not expose). The
+    # checkpoint leg is the shared _checkpoint_absent_expr (the same object
+    # the reconcile SELECT labels ``checkpoints_absent`` — parity by
+    # construction, FAR-1088 F4).
     return and_(
         Run.status == "running",
         Run.dispatcher == "saq",
         Run.node_token_usage.is_(None),
         Run.started_at < func_now_minus(age_minutes * 60),
-        ~sa_exists(checkpoint_subquery),
+        _checkpoint_absent_expr(),
         _final_row_absent_expr(),
     )
 
@@ -4110,6 +4132,20 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     flag (the reconcile SELECT carries ``NOT EXISTS( run_node_outputs
     __final__ row )`` — see :func:`_nodeless_zombie_predicate`), not the cut
     ``row.outputs_json`` attribute.
+
+    FAR-1088 F4: the ZERO-NODE premise is enforced here, not assumed. The
+    combined SQL predicate is an OR, so a worker-died-MID-RUN row (checkpoints
+    written by a completed super-step) can be selected via the stale-heartbeat
+    branch WITHOUT passing the SQL predicate's checkpoint leg — this recheck
+    therefore carries the SAME ``checkpoints_absent`` leg the SQL predicate
+    has (plus the existing ``node_token_usage`` / ``outputs_absent`` legs), so
+    such a row is never treated as a zero-node zombie and never reaches the
+    failure carve-out's re-dispatch (``_should_redispatch_nodeless`` is called
+    only after this returns True at BOTH call sites). The flag comes from the
+    reconcile SELECT's labeled ``_checkpoint_absent_expr()`` column; a row
+    WITHOUT the attribute fails closed (not zero-node — no repair, no
+    carve-out), so a future row source that forgets the column can never
+    re-dispatch a possibly-executed run.
     """
     if row.status != "running":
         return False
@@ -4117,7 +4153,11 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
         return False
     if row.started_at is None:
         return False
-    return bool((datetime.now(UTC) - row.started_at).total_seconds() > age_minutes * 60)
+    if (datetime.now(UTC) - row.started_at).total_seconds() <= age_minutes * 60:
+        return False
+    # Checkpoint leg LAST so the specific legs above stay the rejecting reason
+    # for rows that carry them (keeps the per-leg tests discriminating).
+    return bool(getattr(row, "checkpoints_absent", False))
 
 
 # ---------------------------------------------------------------------------
@@ -4216,8 +4256,38 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         (what it covers), never on dict non-emptiness — a no-op panel save
         must not silently convert budget-default repair into terminal-fail.
       * ``retry_policy`` whose ``on`` is non-empty but does NOT cover
-        ``"stall"``: terminal-fail — never re-dispatch a nodeless zombie for a
-        trigger it does not cover.
+        ``"stall"`` and does NOT cover ``"failure"``: terminal-fail — never
+        re-dispatch a nodeless zombie for a trigger it does not cover.
+      * FAR-1088 zero-node failure-coverage carve-out: a non-empty ``on``
+        covering ``"failure"`` re-dispatches under THAT policy's budget, with
+        the budget DERIVED from the shared matcher
+        (``_retry_after_policy(policy, "failed", "")`` — the failure arm only
+        for an empty code) rather than re-validated by hand, same
+        ``max(0, claim_count - 1)`` attempt count as the stall branch.
+
+    FAR-1088 — why the failure carve-out is safe HERE:
+    this function only ever sees nodeless zombies, which executed ZERO nodes
+    (no checkpoint, no node output), so nothing can double-execute — and the
+    callers enforce that premise: both call sites gate on
+    :func:`_is_nodeless_zombie_row`, whose row-level recheck carries the SAME
+    zero-node legs as the SQL predicate (``node_token_usage IS NULL``, no
+    ``__final__`` store row, NO checkpoints), so a worker-died-mid-run row
+    matched via the stale-heartbeat branch never reaches the carve-out. The
+    shared ``_failure_event_matches`` matcher deliberately excludes
+    stall-class codes (``executor_stalled`` included) because a MID-RUN stall
+    under a ``failure``-only policy could re-execute nodes that already ran —
+    that hazard is void for the zero-node population, which is exactly why
+    the carve-out lives at THIS call site and the shared matcher's semantics
+    are left untouched.
+
+    The equivalent carve-out for the in-process watchdog paths is gated on an
+    EXPLICIT zero-node flag instead: ``pipeline_engine/watchdog_retry.py`` is
+    shared with the FAR-369 node-deadline watchdog (nodes may have executed),
+    so it only applies the carve-out when the caller passes
+    ``zero_node=True`` — which ONLY the in-process zombie watchdog does (its
+    kill fires pre-first-progress, zero nodes by construction). The
+    executor's ``_maybe_retry_after_policy`` (in-execute path) never passes
+    it — nodes may have executed there.
     """
     from modulo.core.pipeline_engine.executor import _retry_after_policy
 
@@ -4244,7 +4314,27 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         # must terminal-fail (never re-dispatch for an uncovered trigger).
         on = retry_policy.get("on")
         if isinstance(on, list) and on:
-            # Non-empty `on` without "stall" — terminal-fail.
+            # FAR-1088 zero-node failure-coverage carve-out: a failure-covered
+            # policy re-dispatches this zero-node death under ITS OWN
+            # max_retries budget (same attempt count as the stall branch).
+            # Safe here because zero nodes ever executed (see docstring); the
+            # shared matcher is NOT modified. The budget is DERIVED from the
+            # SHARED matcher — ``_retry_after_policy(policy, "failed", "")``
+            # matches ONLY the failure arm for an empty code (stall/timeout/
+            # eval arms cannot fire) and fail-closes (None) on a malformed /
+            # 0 budget — instead of re-validating ``max_retries`` by hand, so
+            # the two can never drift. Guarded by the non-empty ``on`` above
+            # so the FAR-649 all-events default (absent/null ``on``) is never
+            # pulled into the carve-out: those policies already resolved
+            # through the stall matcher above (or fall through to the
+            # budget-default path when that returned None).
+            if "failure" in on:
+                failure_budget = _retry_after_policy(retry_policy, "failed", "")
+                if failure_budget is not None:
+                    attempt_count = max(0, row.claim_count - 1)
+                    return bool(attempt_count <= failure_budget)
+            # Non-empty `on` without "stall"/"failure" coverage (or a
+            # failure-covered policy with a 0/malformed budget) — terminal-fail.
             return False
         # Empty / missing `on` / zero-budget / malformed policy: fall through
         # to the budget-default repair (SAQ_NODELESS_REDISPATCH_BUDGET).
@@ -4298,10 +4388,12 @@ async def _fail_nodeless_run(
     never break the repair.
 
     FAR-1088: the error_detail now includes ``pipeline_id``, ``trigger_id``,
-    and ``claim_count`` so the terminal-failed run is diagnosable from the
+    ``claim_count``, and the run's last recorded ``dispatch_phase`` (+ the
+    seconds spent in it) so the terminal-failed run is diagnosable from the
     error alone — no cross-referencing TriggerEvent or pipeline config
     needed. The context_json sent to the Error Dashboard also carries these
-    fields for the same reason.
+    fields for the same reason. A NULL phase is rendered as
+    ``dispatch_phase=unknown`` rather than omitted.
     """
     from modulo.db.models.run import Run
 
@@ -4325,22 +4417,41 @@ async def _fail_nodeless_run(
     claim_count = getattr(run, "claim_count", None)
     pipeline_id = getattr(run, "pipeline_id", None)
     trigger_id = getattr(run, "trigger_id", None)
+    # FAR-1088: the run's LAST recorded dispatch phase — read straight off the
+    # already-loaded row's columns (no cross-module string protocol) — says
+    # WHERE the claim stalled. A NULL phase renders as ``unknown`` so "no
+    # phase was ever recorded" is unmistakable, never silently omitted.
+    dispatch_phase = getattr(run, "dispatch_phase", None)
+    dispatch_phase_text = dispatch_phase if dispatch_phase is not None else "unknown"
+    phase_entered_at = getattr(run, "dispatch_phase_entered_at", None)
+    if phase_entered_at is not None and phase_entered_at.tzinfo is None:
+        # Defensive: a naive timestamp must never raise inside the repair.
+        phase_entered_at = phase_entered_at.replace(tzinfo=UTC)
+    completed_at = datetime.now(UTC)
+    dispatch_phase_elapsed: float | None = None
+    if phase_entered_at is not None:
+        dispatch_phase_elapsed = max((completed_at - phase_entered_at).total_seconds(), 0.0)
+    phase_text = f"dispatch_phase={dispatch_phase_text}"
+    if dispatch_phase_elapsed is not None:
+        phase_text += f" dispatch_phase_elapsed={dispatch_phase_elapsed:.1f}s"
+    phase_log_text = f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown"
     run.status = "failed"
     run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
-    # FAR-1088: include pipeline_id, trigger_id, and claim_count in the
-    # error_detail so the terminal-failed run is diagnosable from the error
-    # alone — a future regression on a specific pipeline/trigger is
+    # FAR-1088: include pipeline_id, trigger_id, claim_count, and the dispatch
+    # phase in the error_detail so the terminal-failed run is diagnosable from
+    # the error alone — a future regression on a specific pipeline/trigger is
     # attributable in seconds instead of requiring TriggerEvent forensics.
     run.error_detail = (
         "Claimed by SAQ but dispatched no node within the nodeless window "
         "(dispatcher_reconcile zombie repair; pipeline={pipeline}, trigger={trigger}, "
-        "claim_count={claims})".format(
+        "claim_count={claims}, {phase})".format(
             pipeline=str(pipeline_id) if pipeline_id is not None else "unknown",
             trigger=str(trigger_id) if trigger_id is not None else "unknown",
             claims=claim_count if claim_count is not None else "unknown",
+            phase=phase_text,
         )
     )
-    run.completed_at = datetime.now(UTC)
+    run.completed_at = completed_at
     summary["claimed_but_never_dispatched"] += 1
     # Alert-grade: these runs burned their full retry budget without ever
     # executing a node — the environment (worker or sandbox) that claimed them
@@ -4349,7 +4460,8 @@ async def _fail_nodeless_run(
     queue_wait_text = f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown"
     _log.error(
         "dispatcher_reconcile.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
-        "pipeline=%s trigger=%s zombie_age_minutes=%s saq_queue_wait_seconds=%s "
+        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
+        "zombie_age_minutes=%s saq_queue_wait_seconds=%s "
         "dispatched_at=%s started_at=%s — "
         "terminal-failed; SAQ claimed this run but no node was ever dispatched",
         run_id,
@@ -4357,6 +4469,8 @@ async def _fail_nodeless_run(
         claim_count,
         pipeline_id,
         trigger_id,
+        dispatch_phase_text,
+        phase_log_text,
         age_text,
         queue_wait_text,
         dispatched_at.isoformat() if dispatched_at is not None else "None",
@@ -4377,6 +4491,9 @@ async def _fail_nodeless_run(
             "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
             "trigger_id": str(trigger_id) if trigger_id is not None else None,
             "claim_count": claim_count,
+            # FAR-1088: where the claim stalled, per the run row's own columns.
+            "dispatch_phase": dispatch_phase,
+            "dispatch_phase_elapsed": dispatch_phase_elapsed,
             "zombie_age_minutes": zombie_age_minutes,
             "saq_queue_wait_seconds": saq_queue_wait_seconds,
             "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
@@ -5908,6 +6025,13 @@ async def _reconcile_org(
                         # correlated NOT EXISTS (see _nodeless_zombie_predicate;
                         # one shared expression — qa iteration 1 rider).
                         _final_row_absent_expr().label("outputs_absent"),
+                        # FAR-1088 F4: the zero-node checkpoint leg as a row
+                        # flag — the SAME shared expression the SQL predicate
+                        # uses, so the row-level recheck
+                        # (_is_nodeless_zombie_row) enforces the identical
+                        # premise for rows matched via OTHER branches (e.g.
+                        # stale heartbeat).
+                        _checkpoint_absent_expr().label("checkpoints_absent"),
                         Run.started_at,
                         Run.claim_count,
                         Run.dispatcher,
