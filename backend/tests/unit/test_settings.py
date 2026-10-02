@@ -6,7 +6,7 @@ import socket
 import pytest
 from pydantic import ValidationError
 
-from modulo.settings import Settings, resolve_instance_identity
+from modulo.settings import MAX_NODE_TIMEOUT_SECONDS, Settings, resolve_instance_identity
 
 _VALID_32 = "a" * 32
 _VALID_KEY = "x" * 32
@@ -67,6 +67,55 @@ def test_saq_setup_grace_below_claim_stale_no_warning(caplog: pytest.LogCaptureF
     assert settings.saq_setup_grace_seconds == 300
     assert settings.run_claim_stale_seconds == 450
     assert not any("saq_setup_grace_ge_claim_stale" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# nodeless in-flight floor — DERIVED from the grace, and an explicit pin is
+# REJECTED when it no longer covers grace + max node timeout (FAR-1088 F2)
+# ---------------------------------------------------------------------------
+
+
+def test_nodeless_in_flight_floor_derives_from_the_default_grace() -> None:
+    """Unset -> derived: ``saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS``
+    (600 + 3300 = 3900), the value the pre-FAR-1088 constant hard-coded."""
+    settings = _make()
+    assert settings.saq_setup_grace_seconds == 600
+    assert settings.nodeless_in_flight_floor_seconds == 600 + MAX_NODE_TIMEOUT_SECONDS
+    assert settings.nodeless_in_flight_floor_seconds == 3900
+
+
+def test_raising_the_setup_grace_widens_the_derived_floor() -> None:
+    """Fails without F2: the floor stayed 3900 while the grace rose, silently
+    re-opening the claim-a-live-attempt bug (the shield expired before the
+    node deadline on a 900s-grace deployment)."""
+    settings = _make(SAQ_SETUP_GRACE_SECONDS="900")
+
+    assert settings.nodeless_in_flight_floor_seconds == 4200
+
+
+def test_nodeless_in_flight_floor_keeps_an_adequate_explicit_pin() -> None:
+    """An explicit floor that still covers grace + max node timeout is honoured
+    (the operator widened it further, e.g. 4500 on a 900s-grace deployment)."""
+    settings = _make(SAQ_SETUP_GRACE_SECONDS="900", NODELESS_IN_FLIGHT_FLOOR_SECONDS="4500")
+
+    assert settings.nodeless_in_flight_floor_seconds == 4500
+
+
+def test_nodeless_in_flight_floor_below_the_requirement_refuses_to_load() -> None:
+    """FAIL (never warn): a pin that no longer covers grace + max node timeout
+    would let the nodeless backstop claim an attempt whose node deadline has
+    not provably passed — so Settings raises at load with the arithmetic."""
+    with pytest.raises(ValidationError, match="NODELESS_IN_FLIGHT_FLOOR_SECONDS"):
+        _make(SAQ_SETUP_GRACE_SECONDS="900", NODELESS_IN_FLIGHT_FLOOR_SECONDS="3900")
+
+
+def test_nodeless_in_flight_floor_equal_to_the_requirement_is_accepted() -> None:
+    """The shipped default IS exactly grace + max node timeout (3900 = 600 +
+    3300), so equality must not be rejected — the guard is ``>=`` the
+    requirement, matching the shield's own boundary semantics."""
+    settings = _make(NODELESS_IN_FLIGHT_FLOOR_SECONDS="3900")
+
+    assert settings.nodeless_in_flight_floor_seconds == 3900
 
 
 # ---------------------------------------------------------------------------

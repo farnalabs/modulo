@@ -1404,6 +1404,7 @@ async def run_bundled_runner_node(
             watch_log_path=None,
             stdout_percentage_delta=config.stdout_percentage_delta,
             watch_globs=[],
+            sandbox_mode=sandbox_mode,
         )
         stream_broker = _run_broker_for(run_id)
 
