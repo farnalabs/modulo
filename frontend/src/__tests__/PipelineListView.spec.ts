@@ -248,6 +248,13 @@ describe('PipelineListView', () => {
     const banner = wrapper.find('[data-testid="pipeline-list-move-error"]')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('Move failed')
+
+    // The banner's close control clears the move error and hides the banner.
+    const closeButton = banner.find('[data-testid="pipeline-list-move-error-close"]')
+    expect(closeButton.exists()).toBe(true)
+    await closeButton.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-list-move-error"]').exists()).toBe(false)
   })
 
   it('persists folder expansion state across remounts', async () => {
@@ -370,6 +377,43 @@ describe('PipelineListView', () => {
     expect(wrapper.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
     const toggle = wrapper.find('[data-testid="pipeline-tree-folder-toggle"]')
     expect(toggle.attributes('aria-expanded')).toBe('true')
+  })
+
+  it('navigates back to the pipeline root from the folder breadcrumb', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+    ]
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Pipeline A', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f1' },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    wrapper.findComponent({ name: 'FolderTree' }).vm.$emit('select-folder', 'f1')
+    await flushPromises()
+    await nextTick()
+
+    const breadcrumbRoot = wrapper.find('[data-testid="pipeline-list-breadcrumb-root"]')
+    expect(breadcrumbRoot.exists()).toBe(true)
+
+    // Clicking the root crumb resets the folder selection back to "all".
+    await breadcrumbRoot.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-list-breadcrumb-root"]').exists()).toBe(false)
   })
 
   it('renders an accessible modal dialog with Escape-to-close and a focus trap', async () => {
