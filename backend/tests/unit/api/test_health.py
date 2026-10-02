@@ -305,19 +305,42 @@ class TestPerCheckTimeouts:
     async def test_checkpointer_check_times_out(self) -> None:
         settings = _make_settings().model_copy(update={"modulo_health_checkpointer_timeout_seconds": 0.2})
 
-        async def _hang(*args: object, **kwargs: object) -> None:
-            await asyncio.sleep(60)
-
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.pg_connection_string", return_value="postgresql://test"),
-            patch("modulo.api.routes.health.asyncpg.connect", side_effect=_hang),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
             result = await _check_checkpointer()
         assert result.status == "degraded"
         assert "timed out after 0.2s" in result.detail.lower()
         assert result.latency_ms is not None
         assert result.latency_ms < 60_000
+
+    async def test_checkpointer_check_uses_engine_pool_not_fresh_connection(self) -> None:
+        """FAR-1426 regression: the probe must go through the pooled engine.
+
+        The old probe opened a brand-new raw ``asyncpg`` connection from a
+        helper-built DSN on every readiness request. On prod, whenever the
+        event loop stalled between TCP connect and the StartupPacket, the
+        peer closed the fresh connection (~1s startup-idle close) and the
+        check reported ``ConnectionDoesNotExistError`` as a checkpointer
+        failure — while the pooled ``database`` check (same DB, same
+        moment) stayed OK. The probe must therefore depend on the engine
+        pool exactly like ``_check_database`` does, and must succeed
+        whenever the pool can run the schema query.
+        """
+        settings = _make_settings()
+        with patch("modulo.api.routes.health.get_settings", return_value=settings):
+            engine = AsyncMock()
+            conn = AsyncMock()
+            conn.__aenter__ = AsyncMock(return_value=conn)
+            conn.__aexit__ = AsyncMock(return_value=None)
+            engine.connect = lambda: conn
+            with patch("modulo.api.routes.health.get_or_create_engine", return_value=engine) as engine_factory:
+                result = await _check_checkpointer()
+
+        engine_factory.assert_called_once_with(settings)
+        assert result.status == "ok"
+        assert result.detail == "checkpointer schema accessible"
 
     async def test_migrations_check_times_out(self) -> None:
         settings = _make_settings().model_copy(update={"modulo_health_migrations_timeout_seconds": 0.2})

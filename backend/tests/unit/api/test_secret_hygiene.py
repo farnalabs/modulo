@@ -356,15 +356,17 @@ class TestHealthCheckNoExceptionLeak:
 
     @pytest.mark.asyncio
     async def test_checkpointer_check_detail_hides_exception(self) -> None:
+        engine = AsyncMock()
+        conn = AsyncMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=None)
+        conn.execute.side_effect = ConnectionError("host=pg.internal.example.com")
+        engine.connect = lambda: conn
+
         with (
             patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
-            patch("modulo.api.routes.health.asyncpg.connect") as mock_connect,
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=engine),
         ):
-            conn = AsyncMock()
-            conn.fetchrow.side_effect = ConnectionError("host=pg.internal.example.com")
-            conn.close = AsyncMock()
-            mock_connect.return_value = conn
-
             result = await _check_checkpointer()
 
         assert result.status == "degraded"

@@ -43,7 +43,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-import asyncpg
 import redis.asyncio as aioredis
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -53,7 +52,7 @@ from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
-from modulo.api.dependencies import get_or_create_engine, pg_connection_string
+from modulo.api.dependencies import get_or_create_engine
 from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
@@ -290,21 +289,29 @@ async def _check_redis() -> CheckResult:
 
 
 async def _check_checkpointer() -> CheckResult:
+    """Probe the checkpointer schema through the shared engine pool.
+
+    FAR-1426: probe via the pooled engine — the same connection path the
+    ``database``/``migrations`` checks and every real query use. The
+    previous implementation opened a brand-new raw ``asyncpg`` connection
+    on every readiness request from a helper-built DSN; whenever the event
+    loop stalled between TCP connect and the StartupPacket (the peer
+    closes startup-idle connections after ~1s), that fresh connection was
+    dropped and the check reported ``ConnectionDoesNotExistError`` as a
+    checkpointer failure that no real checkpointer path experienced.
+    """
     settings = get_settings()
     timeout = _per_check_timeout(settings, "modulo_health_checkpointer_timeout_seconds")
     start = time.monotonic()
 
     async def _probe() -> tuple[Literal["ok", "degraded"], str]:
-        conn_string = pg_connection_string(settings.database_url)
-        conn = await asyncpg.connect(conn_string, timeout=timeout)
-        try:
-            await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
-        except Exception:
-            _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
-            return "degraded", "checkpoint_migrations table not accessible"
-        finally:
-            with contextlib.suppress(Exception):
-                await conn.close()
+        engine = get_or_create_engine(settings)
+        async with engine.connect() as conn:
+            try:
+                await conn.execute(text("SELECT 1 FROM checkpoint_migrations LIMIT 1"))
+            except Exception:
+                _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
+                return "degraded", "checkpoint_migrations table not accessible"
         return "ok", "checkpointer schema accessible"
 
     try:
