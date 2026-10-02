@@ -21,12 +21,13 @@
 #
 # Pattern note: structural f-string metavariables match only in the ``{$X}``
 # brace form — ``op.execute(text(f"...{$X}..."))`` fires in this semgrep
-# version (verified empirically in 1.175.0: the earlier "never fires" claim
-# came from a probe using the bare ``$SQL`` no-brace form, which genuinely
-# does not match — a metavariable inside a string literal is not an AST node).
-# The line-scoped pattern-regex is still used because it additionally covers
-# shapes the structural pair misses: ``sa.text(...)``/``sqlalchemy.text(...)``
-# and a non-``op`` receiver combined with ``text(...)``.
+# version (verified empirically across semgrep 1.79.0-1.176.1 — 1.79.0 is the
+# repo-pinned version: the earlier "never fires" claim came from a probe using
+# the bare ``$SQL`` no-brace form, which genuinely does not match — a
+# metavariable inside a string literal is not an AST node). The line-scoped
+# pattern-regex is still used because it additionally covers shapes the
+# structural pair misses: ``sa.text(...)``/``sqlalchemy.text(...)`` and a
+# non-``op`` receiver combined with ``text(...)``.
 rules:
   - id: migration-fstring-sql
     pattern-either:

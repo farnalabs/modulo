@@ -15,8 +15,9 @@ run on Windows — see the semgrep lesson in AGENTS.md): the path-filter
 boundary via ``wcmatch`` (the library semgrep uses for path filtering) and
 the ``pattern-regex`` predicates via Python's ``re``. The line-level regexes
 were additionally verified against a real semgrep run (docker, semgrep
-1.176.1): 3 findings on a probe migration with f-string SQL, 0 findings on
-the untouched historical tree.
+1.176.1, within the 1.79.0-1.176.1 range recorded in the rule note where
+1.79.0 is the repo-pinned version): 3 findings on a probe migration with
+f-string SQL, 0 findings on the untouched historical tree.
 """
 
 from __future__ import annotations
