@@ -31,7 +31,7 @@ def bump(version: str, part: str) -> str:
     raise ValueError(f"Unknown part: {part}")
 
 
-def write_version(path: Path, old_version: str, new_version: str):
+def write_version(path: Path, old_version: str, new_version: str) -> None:
     # Defense in depth: only ever write version files that live inside the project
     # root, so user-controlled inputs can never redirect the write elsewhere.
     resolved = path.resolve()
@@ -49,7 +49,7 @@ def write_version(path: Path, old_version: str, new_version: str):
 _VALID_PARTS = {"major", "minor", "patch"}
 
 
-def main():
+def main() -> None:
     part = sys.argv[1] if len(sys.argv) > 1 else "patch"
     if part not in _VALID_PARTS:
         print(f"ERROR: invalid part {part!r} (expected one of: {', '.join(sorted(_VALID_PARTS))})")
