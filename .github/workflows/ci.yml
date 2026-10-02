@@ -254,6 +254,13 @@ jobs:
 
   backend-test:
     name: Test (Backend)
+    # FAR-1427 (cheap-first): wait for Lint (Backend) (~2.4 min) so a push that
+    # fails lint/mypy/bandit/vulture/semgrep does not burn ~25 runner-min of
+    # unit tests. Trade-off: +~2.4 min wall-clock on every green run. If lint
+    # fails this job is skipped and every dependent (coverage-gate, Sonar) is
+    # skipped with it - the run still concludes FAILURE because lint failed,
+    # and notify-pr-failure's failure() sees the failed ancestor.
+    needs: [backend-lint]
     runs-on: ubicloud-standard-2
     defaults:
       run:
@@ -485,7 +492,8 @@ jobs:
     # tier1b-nightly.yml (it must NOT be a schedule trigger here: a
     # schedule trigger fires this ENTIRE fast-validation suite, FAR-773).
     name: Tier 1b testcontainers (light)
-    needs: [changes]
+    # FAR-1427 (cheap-first): also waits for Lint (Backend), see backend-test.
+    needs: [changes, backend-lint]
     runs-on: ubicloud-standard-2
     defaults:
       run:
@@ -574,6 +582,14 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile --ignore-scripts
         if: needs.changes.outputs.frontend == 'true'
+      # FAR-1427 (cheap-first): lint + type-check run before the Playwright
+      # browser download and the WCAG/vitest/build steps, so a lint or type
+      # failure fails the job in ~2 min instead of after ~6. No new job
+      # dependency (and no added wall-clock) - same steps, cheaper-first order.
+      - run: pnpm run lint
+        if: needs.changes.outputs.frontend == 'true'
+      - run: pnpm run type-check
+        if: needs.changes.outputs.frontend == 'true'
       - name: Install Playwright browsers
         if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright install chromium
@@ -583,10 +599,6 @@ jobs:
       - name: Run WCAG contrast tests
         if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright test wcag-contrast
-      - run: pnpm run lint
-        if: needs.changes.outputs.frontend == 'true'
-      - run: pnpm run type-check
-        if: needs.changes.outputs.frontend == 'true'
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
         # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
