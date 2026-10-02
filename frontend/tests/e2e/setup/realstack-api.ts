@@ -689,9 +689,20 @@ export async function waitForRunCompletionWithHitlRecovery(
   if (reissues.length > 0 && reissues.every((r) => r.transientFailure)) {
     return { kind: 'infra-blocked', lastError: reissues[reissues.length - 1].detail }
   }
+  // `lastError` can legitimately be unset here: if the caller's budget was
+  // already exhausted (or every poll returned a non-`complete` status without
+  // throwing), no poll ever failed, so there is no error to surface. Report a
+  // descriptive fallback rather than the literal "undefined" string so a
+  // wedge is diagnosable from the skip/failure reason alone.
+  const lastErrorDetail =
+    lastError instanceof Error
+      ? lastError.message
+      : lastError != null
+        ? String(lastError)
+        : `run ${runId} did not complete within the ${opts.deadlineMs} ms recovery budget, and no status poll failed`
   return {
     kind: 'wedged',
-    lastError: lastError instanceof Error ? lastError.message : String(lastError),
+    lastError: lastErrorDetail,
   }
 }
 
