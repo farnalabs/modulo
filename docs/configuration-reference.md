@@ -375,7 +375,7 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 |----------|----------|---------|-------------|
 | `WATCHDOG_ENABLED` | No | `true` | Enable the watchdog tick |
 | `WATCHDOG_TICK_SECONDS` | No | `30` | Tick interval in seconds |
-| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Worker considered stale after this many seconds without heartbeat |
+| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Sustained window before an alert fires — applies to BOTH the SAQ-worker liveness condition AND the system-cron (`fire_due_triggers`) heartbeat condition, each of which must look bad continuously for this many seconds |
 | `WATCHDOG_ALERT_STATE_TTL_SECONDS` | No | `604800` | Edge-triggered alert state TTL (default 7 days) |
 | `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
 | `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
