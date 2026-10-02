@@ -928,6 +928,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `status: covered`; the deferral and known-gap bullet are removed.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-10-02):** closed the `feat-audit` persona-journey
+> gap (`audit/audit-trail.md`). The persona scenario "Marcus verifies the
+> audit log is append-only" (`personas/marcus-ciso.feature`) — pinned
+> `@awaiting-implementation` since 2026-08 while the feature shipped underneath
+> it — now executes against the REAL application-layer append-only guard
+> (`register_append_only_guard` + the SQLAlchemy `before_update` /
+> `before_delete` listeners) via new steps in `steps/test_personas.py`: a real
+> `AuditEvent` row persisted in an in-memory engine, both UPDATE and DELETE
+> attempts rejected with `AppendOnlyViolationError` (fresh session per attempt,
+> since a guard rejection deactivates the offending session), and the original
+> event still intact + timestamped/attributable afterwards. Removed the
+> scenario from `PINNED_AWAITING_IMPLEMENTATION`
+> (`test_test_suite_safety_nets.py`); `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
