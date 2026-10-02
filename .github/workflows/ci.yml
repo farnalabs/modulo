@@ -1247,15 +1247,13 @@ jobs:
           # the queue owns the outcome — do not dispatch a competing fixer run.
           #
           # How a queue run is associated with THIS PR (verified against the
-          # Actions API): review-triggered runs carry this PR's head ref AND
-          # head SHA and list the PR in pull_requests[]; check_suite runs on a
-          # PR head carry it too. The schedule/repository_dispatch sweeps run on
-          # main (head_branch 'main', prs []), so they match none of the tests
-          # below. We therefore match on head branch, head SHA, OR the run's
-          # associated PR — never on event, because the queue deliberately
-          # avoids workflow_dispatch (HTTP 422 caching bug) and its real triggers
-          # are pull_request_review / check_suite / schedule /
-          # repository_dispatch. A run that has not finished is reported by the
+          # Actions API): since FAR-1428 the queue runs only on schedule /
+          # workflow_dispatch / repository_dispatch, all of which run on main
+          # (head_branch 'main', prs []), so this guard now matches only legacy
+          # review/check_suite-triggered runs still in flight and is otherwise
+          # a harmless no-op; it is kept (fail-closed) rather than deleted. We
+          # match on head branch, head SHA, OR the run's associated PR - never
+          # on event. A run that has not finished is reported by the
           # Actions API as `queued`, `in_progress`, `pending`, `requested` or
           # `waiting` — observed live: the in-flight Merge: Queue run for this
           # very PR reports status "pending", NOT "queued"/"in_progress", so
