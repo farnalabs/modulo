@@ -499,6 +499,16 @@ export async function approveReview(
  * on the disabled button, so recovery must bypass the UI. Resolves the run's
  * still-undecided gate, re-claims it as the same account (FAR-686 re-issues a
  * fresh token), and approves — a no-op when the gate is already decided.
+ *
+ * Order matters when the approve 503s (a rolled-back DB blip — the documented
+ * transient the realstack harness tolerates). The claim SUCCEEDS first, which
+ * flips the run to ``claimed`` and re-arms the gate token; the subsequent
+ * approve then fails, leaving the gate claimed-but-undecided. The very next
+ * resolution therefore starts from a gate that is NO LONGER ``awaiting_human``,
+ * and a UI re-claim (or any resolver that gates on the run being
+ * ``awaiting_human``) is refused — only the API claim path re-issues a fresh
+ * token while the gate is claimed (FAR-686 same-account re-claim). Recovery
+ * MUST therefore go through this API path, never the UI.
  */
 export async function reissueApproveBestEffort(
   apiBase: string,
@@ -515,6 +525,78 @@ export async function reissueApproveBestEffort(
   } catch (err) {
     console.warn('[realstack] HITL recovery: approve re-issue failed:', err instanceof Error ? err.message : String(err))
   }
+}
+
+/**
+ * Wait for a run to reach a terminal status, recovering a HITL approve decision
+ * that was lost to a transient staging 503 — the real backend behaviour test
+ * for the run/HITL spine.
+ *
+ * A staging DB blip on the UI approve leaves the run parked at its gate. The
+ * recovery re-issues the decision through the real API (never the UI: the
+ * first approve keeps the UI control disabled while in flight, and once the
+ * recovery re-claim has flipped the run to ``claimed`` the UI claim is refused
+ * outright — see ``reissueApproveBestEffort``). Because each re-issue can
+ * itself 503 AFTER its claim has already moved the run to ``claimed``, the run
+ * is left claimed-but-undecided, which the committed-decision reconcile
+ * (``cron_helpers`` F6a, ``stale_window`` ~= 2 min) then resumes to completion
+ * via ``resume_run``. The re-issue cadence below is therefore ALIGNED to that
+ * reconcile cadence: it keeps a fresh decision committed for the reconcile to
+ * pick up, rather than hammering an endpoint that 503s under the same load.
+ *
+ * The wait is bounded by a TOTAL DEADLINE measured from ``startedAt`` (not a
+ * fixed iteration count, whose worst case (iterations x poll budget) overran
+ * Playwright's 100 s ``beforeEach`` hook timeout on staging). The first
+ * attempt always runs, then a bounded number of re-issue attempts (each itself
+ * bounded), so the caller can size the deadline with headroom under its hook.
+ * The caller should extend its ``beforeEach`` hook timeout (``test.setTimeout``)
+ * so the test timeout shared with the hook covers deadline + teardown.
+ */
+export async function waitForRunCompletionWithHitlRecovery(
+  apiBase: string,
+  token: string,
+  runId: string,
+  opts: {
+    /** Total wall-clock budget for the recovery loop, in ms. */
+    deadlineMs: number
+    /** Epoch ms the caller's budget started (defaults to now). */
+    startedAt?: number
+    /** Bounded inspect-before-recover interval (kept short for deadline headroom). */
+    pollMs?: number
+    /** Approve note carried on each re-issue. */
+    notes?: string
+  },
+): Promise<string> {
+  const startedAt = opts.startedAt ?? Date.now()
+  const deadline = startedAt + opts.deadlineMs
+  const pollMs = opts.pollMs ?? 5_000
+  let status = ''
+  let lastError: unknown
+  // The first attempt always runs, even if the deadline has already elapsed —
+  // a caller that sized the budget conservatively must still observe the run
+  // once rather than fail without polling.
+  for (let attempt = 0; ; attempt++) {
+    if (attempt > 0) {
+      // Re-issue the decision through the API (see reissueApproveBestEffort).
+      await reissueApproveBestEffort(apiBase, token, runId, opts.notes)
+    }
+    const remaining = Math.max(0, Math.min(pollMs, deadline - Date.now()))
+    if (remaining > 0) {
+      try {
+        status = await pollRunStatus(apiBase, token, runId, (s) => s === 'complete', { timeoutMs: remaining })
+      } catch (err) {
+        lastError = err
+      }
+    }
+    if (status === 'complete' || Date.now() >= deadline) break
+  }
+  if (status !== 'complete') {
+    throw new Error(
+      `run ${runId} did not complete after re-issuing the approve decision; ` +
+        `last poll: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    )
+  }
+  return status
 }
 
 export interface RunIoResponse {
