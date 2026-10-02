@@ -1375,6 +1375,28 @@ def test_settle_spends_on_a_corroborated_delivered_pr_url_and_never_on_junk() ->
     assert acquire_run_pr_guard(scope2, "node-2") == "acquired"
 
 
+def test_corroboration_pr_url_regex_is_pinned_to_node_runners_extraction() -> None:
+    """The corroboration arm's two regexes are ONE pattern kept in two places.
+
+    ``sandbox_policy`` cannot import ``node_runner`` (it must stay
+    dependency-free), so the PR-URL shape it matches against the
+    platform-captured streams (``_GH_PR_URL_RE``) is a MIRROR of the pattern
+    node_runner extracts the FAR-188 marker's ``pr_url`` with
+    (``_PR_URL_PATTERN``). Settle's ``pr_url`` arm compares the reported URL
+    against the streams with this mirror, so an isolated edit to either copy
+    would silently change spend/release outcomes with no other failing test.
+    Pin both copies together (pattern AND flags) so drift fails here."""
+    import modulo.core.pipeline_engine.node_runner as node_runner
+    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+
+    assert sandbox_policy._GH_PR_URL_RE.pattern == node_runner._PR_URL_PATTERN.pattern, (
+        "sandbox_policy's corroboration mirror must stay identical to node_runner's extraction"
+    )
+    assert sandbox_policy._GH_PR_URL_RE.flags == node_runner._PR_URL_PATTERN.flags, (
+        "a flag change (e.g. IGNORECASE) on one copy only would also desynchronise matching"
+    )
+
+
 def test_gh_pr_guard_marker_and_receipt_paths_agree_for_non_canonical_run_ids() -> None:
     """FAR-1315 latent fix: the marker/receipt PATH used to canonicalise a
     UUID run scope on the install side (``str(spec.run_id)``) but sanitise the
