@@ -503,6 +503,40 @@ class TestCheckCapCounts:
         assert "1/1" in detail, "the non-marker merged PR must not be counted"
 
     @patch("fast_lane_classify.subprocess.run")
+    def test_revert_title_still_counted(self, mock_run: MagicMock) -> None:
+        """A revert of a fast-lane merge still counts toward the rolling cap.
+
+        ``check_cap`` matches the marker as a case-insensitive substring of
+        the squash title (scripts/fast_lane_classify.py:203), so a revert such
+        as ``Revert "[auto-merge: test-infra] one"`` itself carries the marker
+        and consumes a cap slot -- a merge+revert pair spends two slots of the
+        budget. This pins the trap so it is visible, and makes any future
+        tightening to exact-title matching a deliberate, test-visible change.
+        """
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._merged_prs(
+                [
+                    {
+                        "number": 100,
+                        "title": "[auto-merge: test-infra] one",
+                        "mergedAt": "2999-01-01T00:00:00+00:00",
+                    },
+                    {
+                        "number": 101,
+                        "title": 'Revert "[auto-merge: test-infra] one"',
+                        "mergedAt": "2999-01-02T00:00:00+00:00",
+                    },
+                ]
+            ),
+            stderr="",
+        )
+        eligible, detail = check_cap("farnalabs/modulo", 2, 24)
+        assert eligible is False
+        assert "cap reached" in detail
+        assert "2/2" in detail, "the revert title still carries the marker and counts"
+
+    @patch("fast_lane_classify.subprocess.run")
     def test_missing_and_unparseable_merged_at_skipped(self, mock_run: MagicMock) -> None:
         """PRs without a usable mergedAt never count toward the cap."""
         mock_run.return_value = MagicMock(
@@ -722,14 +756,14 @@ class TestCheckNoTestWeakeningDiff:
         assert violations == []
 
     @patch("fast_lane_classify.subprocess.run")
-    def test_added_file_headers_not_counted(self, mock_run: MagicMock) -> None:
-        """``+++``/``---`` file headers must never count as assert lines."""
+    def test_clean_added_test_file_allowed(self, mock_run: MagicMock) -> None:
+        """An added test file with one test function and one assert is allowed."""
         self._mock_runs(
             mock_run,
-            "A\tbackend/tests/unit/test_assert_new.py\n",
+            "A\tbackend/tests/unit/test_new_module.py\n",
             (
-                "--- a/backend/tests/unit/test_assert_new.py\n"
-                "+++ b/backend/tests/unit/test_assert_new.py\n"
+                "--- /dev/null\n"
+                "+++ b/backend/tests/unit/test_new_module.py\n"
                 "@@ -0,0 +1,2 @@\n"
                 "+import pytest\n"
                 "+def test_new():\n"
@@ -739,6 +773,40 @@ class TestCheckNoTestWeakeningDiff:
         eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
         assert eligible is True
         assert violations == []
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_file_headers_not_counted_even_when_path_has_assert(self, mock_run: MagicMock) -> None:
+        """``+++``/``---`` headers are never assert lines, even when the file
+        path itself contains the substring ``assert``.
+
+        The path ``test_assert_new.py`` makes BOTH diff headers contain
+        ``assert``. A net-zero assert swap (one removed, one added) would hide
+        a regression in the ``+++``/``---`` exclusion, because both counts
+        would rise together. This fixture removes two content asserts and adds
+        one, so the violation message must report the exact content counts
+        ``-2 removed, +1 added``. If the header exclusion regressed, the
+        message would become ``-3 removed, +2 added`` and this assertion
+        fails.
+        """
+        self._mock_runs(
+            mock_run,
+            "M\tbackend/tests/unit/test_assert_new.py\n",
+            (
+                "--- a/backend/tests/unit/test_assert_new.py\n"
+                "+++ b/backend/tests/unit/test_assert_new.py\n"
+                "@@ -1,3 +1,2 @@\n"
+                " def test_keep():\n"
+                "-    assert old_a == 1\n"
+                "-    assert old_b == 2\n"
+                "+    assert new_a == 1\n"
+            ),
+        )
+        eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
+        assert eligible is False
+        assert len(violations) == 1, "only the assert-count violation should fire"
+        assert "-2 removed" in violations[0]
+        assert "+1 added" in violations[0]
+        assert "net -1" in violations[0]
 
     @patch("fast_lane_classify.subprocess.run")
     def test_assert_removal_flagged(self, mock_run: MagicMock) -> None:
