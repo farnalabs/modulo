@@ -942,6 +942,28 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > scenario from `PINNED_AWAITING_IMPLEMENTATION`
 > (`test_test_suite_safety_nets.py`); `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-10-02):** closed the `feat-auth` persona-journey
+> gap (`auth/auth.md`). The persona scenario "Marcus confirms offboarding
+> immediately revokes access" (`personas/marcus-ciso.feature`) — pinned
+> `@awaiting-implementation` since 2026-08 while the ADR 047 feature shipped
+> underneath it — now executes against the REAL seams via new steps in
+> `steps/test_personas.py`: a real in-memory aiosqlite DB seeded with actual
+> `Account` / `Organisation` / `OrgMembership` / `TokenFamily` rows, REAL
+> minted access + refresh tokens (`create_access_token` /
+> `create_refresh_token` in `modulo/auth/jwt.py`), and the real ADR 047
+> live-role re-reads. With an active `operator` membership the token resolves
+> (`get_current_tenant_user` returns the live role — the pre-removal
+> baseline); soft-deactivating the membership row (`deactivated_at` set) makes
+> the SAME token 401 on the next call via `_verify_identity`
+> (`OrganisationMembershipNotFound`), the `get_current_tenant_user_or_api_key`
+> JWT branch that `pipeline.list` / `run.list` mount rejects before any
+> handler runs (cannot list pipelines or view runs), and the real
+> `_advance_refresh_sequence` refresh seam 401s
+> ("Account no longer has access to this organisation") BEFORE the token-family
+> sequence advances so the family stays untouched. Removed the scenario from
+> `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
