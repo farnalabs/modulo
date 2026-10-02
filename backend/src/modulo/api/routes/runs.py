@@ -3057,19 +3057,19 @@ class _MessageContext:
     node_id: str = ""
 
 
-def _build_messages(agent: Agent | None, ctx: _MessageContext) -> list[dict[str, str]]:
-    """Reconstruct the LLM messages for a node from agent + run data.
+def _build_messages(prompt_template: str | None, ctx: _MessageContext) -> list[dict[str, str]]:
+    """Reconstruct the LLM messages for a node from frozen config + run data.
 
-    Builds system message from the agent's prompt_template, user message
-    from the input payload or checkpoint state, and assistant messages
-    from previous node outputs.
+    Builds the system message from the run's SNAPSHOT node ``prompt_template``
+    (FAR-1398: the template frozen at snapshot creation - what was in effect
+    for THIS run - never the live ``Agent`` row), the user message from the
+    input payload or checkpoint state, and assistant messages from previous
+    node outputs.
     """
     messages: list[dict[str, str]] = []
 
-    if agent is not None:
-        system_content = agent.prompt_template or ""
-        if system_content:
-            messages.append({"role": "system", "content": system_content})
+    if prompt_template:
+        messages.append({"role": "system", "content": prompt_template})
 
     messages.extend(_messages_from_prior_outputs(ctx.outputs_json, ctx.node_id))
 
@@ -3083,8 +3083,8 @@ def _build_messages(agent: Agent | None, ctx: _MessageContext) -> list[dict[str,
     return messages
 
 
-def _build_messages_from_agent_and_state(
-    agent: Agent | None,
+def _build_messages_from_template_and_state(
+    prompt_template: str | None,
     input_payload: dict[str, Any] | None,
     outputs_json: dict[str, Any] | None,
     checkpoint_state: dict[str, Any] | None,
@@ -3092,7 +3092,7 @@ def _build_messages_from_agent_and_state(
 ) -> list[dict[str, str]]:
     """Test-facing wrapper around ``_build_messages``."""
     return _build_messages(
-        agent,
+        prompt_template,
         _MessageContext(
             input_payload=input_payload,
             outputs_json=outputs_json,
@@ -3117,6 +3117,30 @@ def _lookup_agent_for_node(
     return None
 
 
+def _lookup_node_prompt_template(
+    graph_json: dict[str, Any],
+    node_id: str,
+) -> str | None:
+    """Find the frozen prompt_template for a node in a run's snapshot graph.
+
+    FAR-1398: snapshot creation copies the agent's ``prompt_template`` onto
+    the node (``db/crud/pipeline_snapshot.py``), so the snapshot node - not
+    the live ``Agent`` row - is the configuration that was in effect when the
+    run dispatched. Editing an agent after a run must not change what prompt
+    reveal attests for that run.
+
+    Returns ``None`` when the node has no frozen template (no agent, or the
+    agent had no template at snapshot time) or when the node is absent.
+    """
+    for node in graph_json.get("nodes", []):
+        if str(node.get("id")) == node_id:
+            template = node.get("prompt_template")
+            if template is None:
+                return None
+            return str(template)
+    return None
+
+
 async def _load_reveal_agent(
     session: AsyncSession,
     graph_json: dict[str, Any],
@@ -3124,9 +3148,14 @@ async def _load_reveal_agent(
 ) -> tuple[Agent | None, bool]:
     """Resolve the node's agent + prompt-visibility flag for prompt reveal.
 
+    FAR-1398: the returned live ``Agent`` row is read ONLY for the
+    ``prompt_always_visible`` policy flag - a current policy, not historical
+    content. The prompt CONTENT comes from the run's snapshot node (see
+    ``_lookup_node_prompt_template``).
+
     Returns ``(None, False)`` for non-agent nodes whose id exists in the
     graph. Raises 404 for a node absent from the graph or an agent that no
-    longer exists.
+    longer exists (deliberately unchanged by FAR-1398).
     """
     agent_id = _lookup_agent_for_node(graph_json, node_id)
     if agent_id is None:
@@ -3172,11 +3201,16 @@ async def reveal_node_prompt(
     principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
     settings: Settings = Depends(get_settings),
 ) -> PromptRevealResponse:
-    """Reconstruct and reveal the exact prompt sent to the LLM for a node.
+    """Reveal the messages reconstructed for a node's LLM call.
 
-    Returns the full prompt text, structured messages (system, user,
-    assistant), and an estimated token count. Sensitive credential-like
-    values are masked.
+    Reconstructs a system message from the run's SNAPSHOT-frozen prompt
+    template, assistant messages from prior node outputs, and a user message
+    from the run's input payload (or checkpoint state). This is a
+    reconstruction of the run's frozen configuration plus observed run data -
+    NOT the rendered prompt actually dispatched to the model, which is a
+    single rendered user message built from dispatch-time context. Returns
+    the full prompt text, structured messages (system, user, assistant), and
+    an estimated token count. Sensitive credential-like values are masked.
     """
     try:
         async with session.begin():
@@ -3195,8 +3229,17 @@ async def reveal_node_prompt(
                     detail=f"Snapshot {run.snapshot_id} not found for run",
                 )
 
-            # Verify node exists and load its agent (if any) + visibility flag.
-            agent, prompt_always_visible = await _load_reveal_agent(session, snapshot.graph_json, node_id)
+            # Verify the node exists and read the live agent row ONLY for the
+            # prompt_always_visible policy flag - a current policy, not
+            # historical content (FAR-1398; the missing-agent 404 is
+            # deliberately unchanged).
+            _agent, prompt_always_visible = await _load_reveal_agent(session, snapshot.graph_json, node_id)
+
+            # FAR-1398: the prompt template comes from the run's FROZEN
+            # snapshot node - the configuration in effect when this run
+            # dispatched - never the live Agent row, so editing an agent
+            # after a run cannot change what this endpoint attests.
+            prompt_template = _lookup_node_prompt_template(snapshot.graph_json, node_id)
 
             # Try to load checkpoint state for richer prompt reconstruction.
             checkpoint_state = await _get_checkpoint_state(
@@ -3212,7 +3255,7 @@ async def reveal_node_prompt(
 
         return _render_prompt_response(
             _build_messages(
-                agent,
+                prompt_template,
                 _MessageContext(
                     input_payload=run.input_payload,
                     outputs_json=blobs.outputs,

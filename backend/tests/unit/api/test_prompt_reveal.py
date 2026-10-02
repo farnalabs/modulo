@@ -85,7 +85,12 @@ def _make_run(
 def _make_snapshot(
     *,
     agent_id: uuid.UUID | None = _AGENT_ID,
+    prompt_template: str | None = None,
 ) -> MagicMock:
+    """Build a snapshot whose node mirrors snapshot creation: the agent's
+    ``prompt_template`` is copied ONTO the node (db/crud/pipeline_snapshot.py)
+    when the agent had one — that frozen copy is what prompt reveal reads
+    (FAR-1398)."""
     s = MagicMock()
     s.id = _SNAPSHOT_ID
     nodes = [
@@ -95,6 +100,8 @@ def _make_snapshot(
     if agent_id is None:
         nodes[0].pop("agent_id", None)
         nodes[1].pop("agent_id", None)
+    elif prompt_template is not None:
+        nodes[0]["prompt_template"] = prompt_template
     s.graph_json = {"nodes": nodes, "edges": []}
     return s
 
@@ -235,69 +242,71 @@ class TestLookupAgentForNode:
         assert result is None
 
 
-class TestBuildMessagesFromAgentAndState:
-    def test_includes_system_message_from_agent(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+class TestBuildMessagesFromTemplateAndState:
+    def test_includes_system_message_from_snapshot_template(self) -> None:
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        agent = _make_agent(prompt_template="You are a bot.")
-        messages = _build_messages_from_agent_and_state(agent, {"q": "hi"}, None, None, "node-a")
+        messages = _build_messages_from_template_and_state("You are a bot.", {"q": "hi"}, None, None, "node-a")
         roles = [m["role"] for m in messages]
         assert "system" in roles
         assert any("You are a bot." in m["content"] for m in messages)
 
     def test_includes_user_message_from_input_payload(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        agent = _make_agent()
-        messages = _build_messages_from_agent_and_state(agent, {"query": "hello"}, None, None, "node-a")
+        messages = _build_messages_from_template_and_state(
+            "You are a helpful assistant.", {"query": "hello"}, None, None, "node-a"
+        )
         user_msgs = [m for m in messages if m["role"] == "user"]
         assert len(user_msgs) == 1
         assert "hello" in user_msgs[0]["content"]
 
-    def test_no_system_message_when_no_agent(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+    def test_no_system_message_when_no_template(self) -> None:
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        messages = _build_messages_from_agent_and_state(None, {"q": "hi"}, None, None, "node-a")
+        messages = _build_messages_from_template_and_state(None, {"q": "hi"}, None, None, "node-a")
         roles = [m["role"] for m in messages]
         assert "system" not in roles
 
     def test_includes_assistant_messages_from_outputs(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        agent = _make_agent()
         outputs = {"node-b": "previous result"}
-        messages = _build_messages_from_agent_and_state(agent, {"q": "hi"}, outputs, None, "node-a")
+        messages = _build_messages_from_template_and_state(
+            "You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a"
+        )
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
         assert len(assistant_msgs) == 1
         assert "previous result" in assistant_msgs[0]["content"]
 
     def test_skips_own_node_output(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        agent = _make_agent()
         outputs = {"node-a": "self output", "node-b": "other output"}
-        messages = _build_messages_from_agent_and_state(agent, {"q": "hi"}, outputs, None, "node-a")
+        messages = _build_messages_from_template_and_state(
+            "You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a"
+        )
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
         assert all("self output" not in m["content"] for m in assistant_msgs)
         assert any("other output" in m["content"] for m in assistant_msgs)
 
     def test_prefers_checkpoint_state_over_input_payload(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        agent = _make_agent()
         checkpoint_state = {"run_context": {"input": {"query": "from checkpoint"}}}
-        messages = _build_messages_from_agent_and_state(
-            agent, {"query": "from payload"}, None, checkpoint_state, "node-a"
+        messages = _build_messages_from_template_and_state(
+            "You are a helpful assistant.", {"query": "from payload"}, None, checkpoint_state, "node-a"
         )
         user_msgs = [m for m in messages if m["role"] == "user"]
         assert "from checkpoint" in user_msgs[0]["content"]
 
     def test_new_shape_outputs_use_pure_return_content(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        agent = _make_agent()
         outputs = {"node-b": {"summary": "agent summary", "changed_files": ["a.py"]}}
-        messages = _build_messages_from_agent_and_state(agent, {"q": "hi"}, outputs, None, "node-a")
+        messages = _build_messages_from_template_and_state(
+            "You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a"
+        )
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
         assert len(assistant_msgs) == 1
         content = assistant_msgs[0]["content"]
@@ -307,9 +316,9 @@ class TestBuildMessagesFromAgentAndState:
         assert "wall_clock_time_ms" not in content
 
     def test_returns_empty_when_no_data(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+        from modulo.api.routes.runs import _build_messages_from_template_and_state
 
-        messages = _build_messages_from_agent_and_state(None, None, None, None, "node-a")
+        messages = _build_messages_from_template_and_state(None, None, None, None, "node-a")
         assert messages == []
 
 
@@ -430,7 +439,9 @@ class TestRevealNodePrompt:
     def test_reveal_returns_prompt_with_system_message(self, client: TestClient) -> None:
         session = _session_holder[0]
         run = _make_run()
-        snapshot = _make_snapshot()
+        # The system message comes from the SNAPSHOT node (FAR-1398): the
+        # frozen copy the agent had at snapshot creation.
+        snapshot = _make_snapshot(prompt_template="You are a helpful coding assistant.")
         agent = _make_agent(prompt_template="You are a helpful coding assistant.")
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
@@ -455,10 +466,42 @@ class TestRevealNodePrompt:
         assert any("coding assistant" in m["content"] for m in messages)
         assert any("test input" in m["content"] for m in messages)
 
+    def test_reveal_uses_snapshot_frozen_template_not_live_agent(self, client: TestClient) -> None:
+        """FAR-1398 regression: the reveal must attest the run's FROZEN config.
+
+        The snapshot node carries ``<SNAPSHOT>`` (what was in effect when the
+        run dispatched) while the live ``Agent`` row now carries ``<LIVE>``
+        (edited after the run). Without the fix the endpoint rendered the
+        live row's template, attesting configuration that was never in
+        effect for this run.
+        """
+        session = _session_holder[0]
+        run = _make_run()
+        snapshot = _make_snapshot(prompt_template="<SNAPSHOT>")
+        agent = _make_agent(prompt_template="<LIVE>")
+        # The policy flag is CURRENT policy — still read from the live row.
+        agent.prompt_always_visible = True
+
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
+
+        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        system_contents = [m["content"] for m in body["messages"] if m["role"] == "system"]
+        assert system_contents == ["<SNAPSHOT>"]
+        assert "<SNAPSHOT>" in body["prompt"]
+        assert "<LIVE>" not in body["prompt"]
+        assert "<LIVE>" not in json.dumps(body["messages"])
+        assert body["prompt_always_visible"] is True
+
     def test_reveal_masks_sensitive_values(self, client: TestClient) -> None:
         session = _session_holder[0]
         run = _make_run(input_payload={"api_key": "sk-real-key", "query": "hello"})
-        snapshot = _make_snapshot()
+        snapshot = _make_snapshot(prompt_template="Process the input.")
         agent = _make_agent(prompt_template="Process the input.")
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
@@ -478,7 +521,7 @@ class TestRevealNodePrompt:
     def test_reveal_with_checkpoint_state(self, client: TestClient) -> None:
         session = _session_holder[0]
         run = _make_run()
-        snapshot = _make_snapshot()
+        snapshot = _make_snapshot(prompt_template="You are a helpful assistant.")
         agent = _make_agent()
 
         checkpoint_data = json.dumps(
@@ -527,7 +570,7 @@ class TestRevealNodePrompt:
     def test_reveal_count_tokens_consistently(self, client: TestClient) -> None:
         session = _session_holder[0]
         run = _make_run(input_payload={"query": "short"})
-        snapshot = _make_snapshot()
+        snapshot = _make_snapshot(prompt_template="Short.")
         agent = _make_agent(prompt_template="Short.")
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
@@ -550,7 +593,7 @@ class TestRevealNodePrompt:
 
         session = _session_holder[0]
         run = _make_run()
-        snapshot = _make_snapshot()
+        snapshot = _make_snapshot(prompt_template="You are a helpful assistant.")
         agent = _make_agent()
 
         f = Fernet(_FERNET_KEY.encode())

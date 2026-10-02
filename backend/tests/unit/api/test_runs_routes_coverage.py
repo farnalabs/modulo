@@ -1056,10 +1056,10 @@ async def test_get_checkpoint_state_returns_none_for_non_dict_checkpoint() -> No
 
 
 def test_build_messages_prefers_string_user_input() -> None:
-    agent = MagicMock()
-    agent.prompt_template = "be helpful"
+    # FAR-1398: the system message comes from the frozen snapshot template,
+    # not the live agent row — the first arg is the template itself.
     messages = runs_module._build_messages(
-        agent,
+        "be helpful",
         runs_module._MessageContext(
             input_payload={"k": "v"},
             outputs_json=None,
