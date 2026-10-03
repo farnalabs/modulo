@@ -91,7 +91,10 @@ grows with run history.
 - **Version**: 16 or later
 - **Extensions**: none required; `gen_random_uuid()` is built into PostgreSQL 16+ (core since PG 13)
 - **Connection**: Async via `asyncpg` driver
-- **TLS**: `sslmode=require` recommended for production
+- **TLS**: `sslmode=require` (or stronger) recommended for production; the
+  `sslmode` in the database URL is honoured. Accepted values: `disable`,
+  `require`, `verify-ca`, `verify-full` — `prefer`/`allow` are rejected at
+  startup (they silently downgrade to plaintext). No `sslmode` = plaintext.
 - **Schema**: Alembic-managed migrations run on startup
 
 ### SQLite Limitations (Dev Only)

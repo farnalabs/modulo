@@ -7,7 +7,8 @@ process (``api.dependencies.get_or_create_engine``) each had an independent
 pool — up to three pools per process, each duplicating (or omitting) the
 Fly/HAProxy compat knobs. ``get_shared_engine`` is the ONE factory: it bakes in
 ``pool_pre_ping``, ``statement_cache_size=0`` (the asyncpg prepared-statement
-cache is incompatible with HAProxy), and pool sizing from settings, and accepts
+cache is incompatible with HAProxy), the database TLS posture (operator
+``sslmode`` honoured, absent/disabled → ``ssl=False``), and pool sizing from settings, and accepts
 pool overrides (the SAQ worker keeps its per-worker budget via
 ``saq_worker_db_pool_size``). The web process's
 ``api.dependencies.get_or_create_engine`` delegates here (dist/cleanup-engine-unify),
@@ -20,6 +21,7 @@ import logging
 import threading
 from typing import Any
 
+from sqlalchemy import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.audit_logger.append_only import register_append_only_guard
@@ -72,25 +74,41 @@ def _build_engine(
 
     Extracted into a function so tests can replace it without patching
     module-level state. Fly/HAProxy-compatible knobs are applied for Postgres
-    (``pool_pre_ping``, ``statement_cache_size=0``); pool sizing defaults to
-    20/10 unless overridden (the SAQ worker passes its per-worker budget).
+    (``pool_pre_ping``, ``statement_cache_size=0``) and the operator's URL
+    ``sslmode`` is translated into asyncpg's ``ssl`` connect arg (absent or
+    ``disable`` → ``ssl=False``; ``require``/``verify-ca``/``verify-full`` →
+    a fail-closed SSL mode; ``prefer``/``allow`` are rejected at boot
+    because asyncpg would silently downgrade them to plaintext). Pool sizing
+    defaults to 20/10 unless overridden (the SAQ worker passes its
+    per-worker budget).
     """
     settings = get_settings()
     db_type = settings.modulo_db.lower()
 
     # connect_args.timeout applies to every backend (the historical API-engine
     # default, preserved so the API path's behaviour is unchanged). Postgres
-    # additionally disables SSL (asyncpg defaults to "prefer", which causes
-    # ConnectionResetError on Fly private networks with no TLS listener) and
-    # the asyncpg prepared-statement cache (HAProxy does not reliably support
-    # extended-protocol reuse) — the Fly/HAProxy compat knobs.
+    # additionally translates the operator's ``sslmode`` (FAR-1440 — absent
+    # or ``disable`` → explicit ``ssl=False``, never the driver's ``prefer``
+    # default which breaks non-TLS listeners such as Fly's internal Postgres)
+    # and disables the asyncpg prepared-statement cache (HAProxy does not
+    # reliably support extended-protocol reuse) — the Fly/HAProxy compat knobs.
     connect_args: dict[str, Any] = {"timeout": 10}
-    if db_type == "postgres":
-        connect_args["ssl"] = False
+    url = settings.database_url
+    # Guard on the URL's ACTUAL driver scheme, not on ``settings.modulo_db``:
+    # ``modulo_db`` is an independent knob defaulting to "postgres", so a
+    # SQLite-configured process (schema generation, local dev) would otherwise
+    # pass this branch and ``split_postgres_sslmode`` would fail the boot
+    # (FAR-1440 schema-freshness defect). SQLite/MySQL keep ``timeout`` only —
+    # their drivers have no ``ssl``/``statement_cache_size`` knobs.
+    if str(make_url(url).drivername).startswith("postgres"):
+        from modulo.db.url_utils import split_postgres_sslmode
+
+        url, ssl_arg = split_postgres_sslmode(url)
+        connect_args["ssl"] = ssl_arg
         connect_args["statement_cache_size"] = 0
 
     kw: dict[str, Any] = {
-        "url": settings.database_url,
+        "url": url,
         "pool_pre_ping": True,
         "connect_args": connect_args,
     }

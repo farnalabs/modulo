@@ -1,4 +1,4 @@
-"""Clone split-transaction tests (hitl-gate-removal-guard-plan.md v19 §3 item 3).
+"""Clone split-transaction tests (hitl-gate-removal-guard-plan.md v19 Â§3 item 3).
 
 Verifies the step-(a) short read transaction / step-(b) slow clone-write split:
 - the FOR SHARE read happens on a separate session that commits before the
@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
 
-from modulo.db.crud.pipeline import _clone_edges, clone_pipeline
+from modulo.db.crud.pipeline import _clone_edges, _resolve_read_session_factory, clone_pipeline
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -117,6 +120,87 @@ def _make_main_session() -> AsyncMock:
     session.add_all = MagicMock()
     session.flush = AsyncMock()
     return session
+
+
+# ---------------------------------------------------------------------------
+# FAR-1440: the clone-engine sslmode contract. The source engine's URL is
+# clean (its ``sslmode`` was extracted into connect_args upstream), so the
+# derived clone-read engine must re-translate ``sslmode`` explicitly â€” a naive
+# create_async_engine would use asyncpg's default ``prefer`` (CERT_NONE with
+# silent plaintext retry) and silently downgrade a ``sslmode=require`` deploy.
+# ---------------------------------------------------------------------------
+
+
+class _FakeSyncBind:
+    def __init__(self, url: Any) -> None:
+        self.url = url
+
+
+def _session_bound_to_url(url: Any) -> MagicMock:
+    """A session whose bind is neither AsyncEngine nor AsyncConnection: the
+    fallback branch that DERIVES a fresh async engine from a URL."""
+    session = MagicMock(spec=AsyncSession)
+    session.bind = None
+    session.get_bind = MagicMock(return_value=_FakeSyncBind(url))
+    return session
+
+
+class TestResolveReadSessionFactorySslContract:
+    def test_require_url_yields_fail_closed_clone_engine(self) -> None:
+
+        session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db?sslmode=require"))
+        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+            factory, engine = _resolve_read_session_factory(session, read_factory=None)
+
+        assert engine is mock_create.return_value
+        # The contract: a require-URL clone engine connects fail-closed.
+        assert mock_create.call_args.args[0] == "postgresql+asyncpg://u:p@h/db"
+        assert mock_create.call_args.kwargs["connect_args"] == {"ssl": "require"}
+        assert mock_create.call_args.kwargs["poolclass"] is NullPool
+        assert isinstance(factory, async_sessionmaker)
+
+    def test_engine_bound_sessions_do_not_spawn_a_clone_engine(self) -> None:
+
+        engine = MagicMock(spec=AsyncEngine)
+        session = MagicMock(spec=AsyncSession)
+        session.bind = engine
+        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+            factory, read_engine = _resolve_read_session_factory(session, read_factory=None)
+        assert read_engine is None
+        mock_create.assert_not_called()
+        assert isinstance(factory, async_sessionmaker)
+
+    def test_absent_sslmode_is_explicit_plaintext(self) -> None:
+
+        session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db"))
+        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+            _resolve_read_session_factory(session, read_factory=None)
+        assert mock_create.call_args[1]["connect_args"] == {"ssl": False}
+
+    def test_verify_full_is_translate_fail_closed(self) -> None:
+
+        session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db?sslmode=verify-full"))
+        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+            _resolve_read_session_factory(session, read_factory=None)
+        assert mock_create.call_args[1]["connect_args"] == {"ssl": "verify-full"}
+
+    def test_unsafe_sslmode_fails_the_clone_engine_build(self) -> None:
+
+        session = _session_bound_to_url(make_url("postgresql+asyncpg://u:p@h/db?sslmode=prefer"))
+        with (
+            patch("modulo.db.crud.pipeline.create_async_engine") as mock_create,
+            pytest.raises(ValueError, match="sslmode"),
+        ):
+            _resolve_read_session_factory(session, read_factory=None)
+        mock_create.assert_not_called()
+
+    def test_non_postgres_binding_gets_no_ssl_arg(self) -> None:
+
+        session = _session_bound_to_url(make_url("sqlite+aiosqlite:///./test.db"))
+        with patch("modulo.db.crud.pipeline.create_async_engine") as mock_create:
+            _resolve_read_session_factory(session, read_factory=None)
+        kw = mock_create.call_args[1]
+        assert "ssl" not in kw["connect_args"]
 
 
 def _gated_edge() -> _Row:
