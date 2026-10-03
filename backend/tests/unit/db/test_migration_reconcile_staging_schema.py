@@ -107,8 +107,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0273_runs_dispatch_phase chains off 0272,
 # 0274_policy_gate_pin_fingerprint_operator_control chains off 0273, and
 # 0275_run_cancel_reason_vocabulary chains off 0274, and
-# 0276_runs_autovacuum_enabled chains off 0275 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0276_runs_autovacuum_enabled"
+# 0276_runs_autovacuum_enabled chains off 0275, and
+# 0277_table_autovacuum_tuning chains off 0276 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0277_table_autovacuum_tuning"
 
 
 def _source(name: str) -> str:
