@@ -6,7 +6,13 @@ from typing import NoReturn, ParamSpec, TypeVar
 
 import pydantic
 from fastapi import HTTPException, status
-from sqlalchemy.exc import IntegrityError, InvalidRequestError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import (
+    IntegrityError,
+    InvalidRequestError,
+    PendingRollbackError,
+    ProgrammingError,
+    SQLAlchemyError,
+)
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_reporting import log_service_unavailable
@@ -37,6 +43,14 @@ _MSG_LOCK_TIMEOUT = (
 # database outage (and logged via ``log_service_unavailable("db_transient")``),
 # which cost five days of misdiagnosis.
 #
+# ONE subclass is exempt from that mapping: ``PendingRollbackError``. It IS an
+# ``InvalidRequestError``, but it signals a TRANSIENT fault — the session was
+# left in a failed-transaction state by an earlier error (server disconnect,
+# serialization failure, pool timeout) and the next statement refuses to run.
+# Filing it as a 500 "server-side bug, retrying will not help" would invert the
+# FAR-1408 misclassification on a common outage path, so it gets its own 503
+# arm ahead of this one.
+#
 # PUBLIC (not module-private) because the same misclassification exists in the
 # route-local ``except SQLAlchemyError`` arms, which never reach
 # ``handle_db_errors`` at all — e.g. every ``hitl.py`` route arm imports this
@@ -52,14 +66,20 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
 
     The except-class -> status mapping and its order are the contract this
     module exists to enforce (IntegrityError->409, ProgrammingError->501,
-    InvalidRequestError->500, SQLAlchemyError->503,
+    PendingRollbackError->503, InvalidRequestError->500, SQLAlchemyError->503,
     pydantic.ValidationError->422; passthrough re-raises for CancelledError /
     StorageExhaustedError / HTTPException; Exception->500). The chain below
     preserves the original except order - never reorder it (MRO: specific
     classes before their bases).
 
-    Two within-class refinements sit on the arms below:
+    Three within-class refinements sit on the arms below:
 
+    * ``PendingRollbackError`` (a subclass of ``InvalidRequestError``) gets its
+      own 503 arm BEFORE the ``InvalidRequestError`` arm: it signals a
+      TRANSIENT fault left behind by an earlier failure (the session was never
+      rolled back, so the next statement refuses to run), so it maps to the
+      same 503 + ``log_service_unavailable("db_transient", ...)`` record as the
+      ``SQLAlchemyError`` backstop - NOT the 500 programming-error arm below.
     * ``InvalidRequestError`` (a subclass of ``SQLAlchemyError``) gets its own
       arm BEFORE the base ``SQLAlchemyError`` arm: it is a session-contract
       violation (a programming error), so it maps to 500 with an accurate
@@ -86,6 +106,26 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except PendingRollbackError as exc:
+        # Subclass of InvalidRequestError, but a TRANSIENT-fault signal: an
+        # earlier statement failed and the session was never rolled back, so
+        # the next statement on it refuses to run. The underlying fault
+        # (server disconnect, serialization failure, pool timeout) is often
+        # transient, so answer 503 and emit the same structured ``db_transient``
+        # record as the SQLAlchemyError backstop. MUST precede the
+        # InvalidRequestError arm below (MRO), which would otherwise file this
+        # outage as a 500 programming bug - the inverse of the FAR-1408 fix.
+        _log.exception("%s.pending_rollback_error", log_prefix)
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route=log_prefix,
+            detail="transient database error (PendingRollbackError)",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
         ) from None
     except InvalidRequestError:
         # Session-contract violation (subclass of SQLAlchemyError) - a local

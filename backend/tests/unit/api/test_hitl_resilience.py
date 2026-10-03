@@ -11,8 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
+from sqlalchemy.exc import InvalidRequestError, PendingRollbackError, SQLAlchemyError
 
+from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY
 from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.hitl_answer_validation import AnswerValidationError
@@ -1655,6 +1656,69 @@ class TestSessionContractErrorIs500Not503:
         # A session-contract violation must never be filed as a DB outage.
         records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
         assert not records, f"a programming error must not write a service_unavailable record: {records}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1408 follow-up: ``PendingRollbackError`` is the TRANSIENT subclass of
+# ``InvalidRequestError``. It means an earlier statement failed and the session
+# was never rolled back — during a real outage that earlier fault is the cause —
+# so every route-local arm must keep the 503 + ``db_transient`` treatment rather
+# than answering the 500 session-contract reply.
+# ---------------------------------------------------------------------------
+
+_PENDING_ROLLBACK_MSG = "This Session's transaction has been rolled back due to a previous exception"
+
+
+class TestPendingRollbackErrorIs503Not500:
+    """The transient subclass keeps the 503 + structured record on every arm."""
+
+    @pytest.mark.parametrize(("method", "url", "payload", "_log_key"), _SESSION_CONTRACT_CASES)
+    def test_pending_rollback_is_503_with_the_transient_detail(
+        self,
+        client: TestClient,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+        _log_key: str,
+    ) -> None:
+        with patch(
+            "modulo.api.routes.hitl.set_rls_org",
+            new=AsyncMock(side_effect=PendingRollbackError(_PENDING_ROLLBACK_MSG)),
+        ):
+            resp = _call(client, method, url, payload)
+
+        assert resp.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, resp.text
+        detail = resp.json()["detail"]
+        assert detail == MSG_DB_ERROR_PLEASE_TRY
+        assert detail != MSG_SESSION_CONTRACT
+
+    @pytest.mark.parametrize(("method", "url", "payload", "log_key"), _SESSION_CONTRACT_CASES)
+    def test_pending_rollback_emits_the_structured_db_transient_record(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+        log_key: str,
+    ) -> None:
+        with (
+            patch(
+                "modulo.api.routes.hitl.set_rls_org",
+                new=AsyncMock(side_effect=PendingRollbackError(_PENDING_ROLLBACK_MSG)),
+            ),
+            caplog.at_level(logging.ERROR),
+        ):
+            resp = _call(client, method, url, payload)
+
+        assert resp.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, resp.text
+        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        assert len(records) == 1, records
+        payload_record = records[0].__dict__["service_unavailable"]
+        assert payload_record["reason"] == "db_transient"
+        assert payload_record["route"] == log_key
+        assert payload_record["exception_class"] == "PendingRollbackError"
+        assert payload_record["detail"] == "transient database error (PendingRollbackError)"
 
 
 # ---------------------------------------------------------------------------
