@@ -241,6 +241,6 @@ jobs:
             if gh api -X POST "repos/$REPO/dispatches" --input - <<< "$PAYLOAD" 2>&1; then
               echo "Re-armed merge-queue via repository_dispatch."
             else
-              echo "::warning::merge-queue-watchdog: repository_dispatch to re-arm merge-queue.yml failed — the 15-min cron + PR/CI events still cover the queue."
+              echo "::warning::merge-queue-watchdog: repository_dispatch to re-arm merge-queue.yml failed — the Housekeeper dispatch + cron still cover the queue."
             fi
           fi

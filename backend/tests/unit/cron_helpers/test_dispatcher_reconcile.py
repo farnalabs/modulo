@@ -872,6 +872,14 @@ class TestNodelessZombiePredicateCompiled:
     a standalone compile renders an uncorrelated shape that is never executed).
     """
 
+    @pytest.fixture(autouse=True)
+    def _settings_double(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The in-flight floor is DERIVED from settings (FAR-1088 F2), and this
+        class compiles the predicate directly — stand in the dir's usual
+        settings double (a MagicMock), so the floor resolves to its
+        default-config fallback of 3900 without needing a real Settings."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+
     @staticmethod
     def _compiled_predicate(age_minutes: int = 35) -> tuple[str, dict[str, Any]]:
         import sqlalchemy as sa

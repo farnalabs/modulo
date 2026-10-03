@@ -47,8 +47,8 @@
       <main class="flex-1 page-wide min-w-0 overflow-y-auto">
         <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
           <span>{{ moveError }}</span>
-          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('common.close')" @click="moveError = null">
-            <X :size="16" />
+          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('common.close')" data-testid="pipeline-list-move-error-close" @click="moveError = null">
+            <X :size="16" aria-hidden="true" />
           </button>
         </div>
         <div v-if="loading || !foldersReady">
@@ -127,10 +127,10 @@
           <!-- Breadcrumb navigation -->
           <div class="mb-4 flex items-center gap-2 text-sm">
             <template v-if="selectedFolderId && selectedFolderName">
-              <button type="button" class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
+              <button type="button" class="text-muted-foreground hover:text-foreground transition-colors" data-testid="pipeline-list-breadcrumb-root" @click="onSelectFolder(null)">
                 {{ $t('views.PipelineListView.all_pipelines') }}
               </button>
-              <ChevronRight :size="12" class="text-muted-foreground" />
+              <ChevronRight :size="12" class="text-muted-foreground" aria-hidden="true" />
               <span class="font-medium text-foreground">{{ selectedFolderName }}</span>
             </template>
             <h2 v-else class="text-base font-semibold text-foreground">{{ $t('views.PipelineListView.all_pipelines') }}</h2>
@@ -166,8 +166,9 @@
                           :size="14"
                           :class="{ 'rotate-90': isFolderExpanded((row.data as FolderItem).id) }"
                           class="transition-transform shrink-0"
+                          aria-hidden="true"
                         />
-                        <Folder :size="14" class="shrink-0" />
+                        <Folder :size="14" class="shrink-0" aria-hidden="true" />
                         {{ (row.data as FolderItem).name }}
                         <span class="text-muted-foreground text-xs ml-2">{{ pipelineFolderCount.get((row.data as FolderItem).id) || 0 }} {{ $t('views.PipelineListView.pipelines') }}</span>
                       </button>
@@ -177,7 +178,7 @@
                   <tr v-else-if="row.type === 'uncategorised-header'" class="bg-muted/20">
                     <td colspan="8" class="px-4 py-2">
                       <span class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                        <FolderOpen :size="14" class="shrink-0" />
+                        <FolderOpen :size="14" class="shrink-0" aria-hidden="true" />
                         {{ $t('views.PipelineListView.uncategorised') }}
                       </span>
                     </td>
@@ -201,7 +202,7 @@
                     </td>
                     <td class="px-4 py-3">
                       <span v-if="(row.data as PipelineItem).description" class="text-muted-foreground truncate block max-w-xs">{{ (row.data as PipelineItem).description }}</span>
-                      <span v-else class="text-muted-foreground/50 italic">{{ $t('views.PipelineListView.no_description') }}</span>
+                      <span v-else class="text-muted-foreground/80 italic">{{ $t('views.PipelineListView.no_description') }}</span>
                     </td>
                     <td class="px-4 py-3">
                       <span class="badge text-xs" :class="(row.data as PipelineItem).visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
@@ -223,7 +224,7 @@
                     <td class="px-4 py-3">
                       <div class="flex justify-end items-center gap-1">
                         <button type="button" class="rounded p-1 hover:bg-accent" :aria-label="$t('views.PipelineListView.pipeline_actions')" data-testid="pipeline-list-action-menu" @click.stop="openActionMenu($event, row.data as PipelineItem)">
-                          <MoreVertical :size="14" />
+                          <MoreVertical :size="14" aria-hidden="true" />
                         </button>
                       </div>
                     </td>
@@ -255,17 +256,21 @@
               :key="f.id"
               class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
               :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
+              data-testid="pipeline-list-move-folder-option"
+              :aria-pressed="moveToFolderId === f.id"
               @click="moveToFolderId = f.id"
             >
-              <Folder :size="14" class="shrink-0 text-muted-foreground" />
+              <Folder :size="14" class="shrink-0 text-muted-foreground" aria-hidden="true" />
               {{ f.name }}
             </button>
             <button type="button"
               class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
               :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
+              data-testid="pipeline-list-move-folder-none"
+              :aria-pressed="moveToFolderId === null"
               @click="moveToFolderId = null"
             >
-              <FolderOpen :size="14" class="shrink-0 text-muted-foreground" />
+              <FolderOpen :size="14" class="shrink-0 text-muted-foreground" aria-hidden="true" />
               {{ $t('views.PipelineListView.no_folder') }}
             </button>
           </div>
@@ -273,10 +278,10 @@
             {{ moveError }}
           </div>
           <div class="mt-4 flex justify-end gap-2">
-            <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="closeMoveToFolder">
+            <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" data-testid="pipeline-list-move-cancel" @click="closeMoveToFolder">
               {{ $t('common.cancel') }}
             </button>
-            <Button :disabled="moving" @click="handleMoveToFolder">
+            <Button :disabled="moving" data-testid="pipeline-list-move-save" @click="handleMoveToFolder">
               {{ moving ? $t('common.saving') : $t('common.save') }}
             </Button>
           </div>
@@ -300,6 +305,7 @@
                 v-model="renameName"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 :placeholder="$t('views.PipelineListView.pipeline_name_placeholder')"
+                data-testid="pipeline-list-rename-name"
                 @keyup.enter="handleRename"
               />
             </div>
@@ -310,11 +316,12 @@
               <button
                 type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+                data-testid="pipeline-list-rename-cancel"
                 @click="closeRename"
               >
                 {{ $t('common.cancel') }}
               </button>
-              <Button :disabled="!renameName.trim() || renaming" @click="handleRename">
+              <Button :disabled="!renameName.trim() || renaming" data-testid="pipeline-list-rename-save" @click="handleRename">
                 {{ renaming ? $t('common.saving') : $t('common.save') }}
               </Button>
             </div>
@@ -342,6 +349,7 @@
             <button
               type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              data-testid="pipeline-list-delete-cancel"
               @click="closeDelete"
             >
               {{ $t('common.cancel') }}
@@ -349,6 +357,7 @@
             <button
               type="button"
               class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+              data-testid="pipeline-list-delete-confirm"
               @click="handleDelete"
             >
               {{ $t('common.delete') }}

@@ -110,9 +110,10 @@ class TestChain:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         # 0273_runs_dispatch_phase (FAR-1088), then
         # 0274_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10), then
-        # 0275_run_cancel_reason_vocabulary (FAR-1406),
-        # now chain onto this migration, so the single head moved up three.
-        assert heads == ["0275_run_cancel_reason_vocabulary"], f"expected a single head, got {heads}"
+        # 0275_run_cancel_reason_vocabulary (FAR-1406), then
+        # 0276_runs_autovacuum_enabled (FAR-1419),
+        # now chain onto this migration, so the single head moved up four.
+        assert heads == ["0276_runs_autovacuum_enabled"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

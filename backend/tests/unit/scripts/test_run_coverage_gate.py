@@ -2968,3 +2968,84 @@ class TestFar1063BranchFloorFailClosed:
         captured = capsys.readouterr()
         assert "WARNING" not in captured.out, "Floor breaches must not print 'WARNING' — they are hard failures"
         assert "BREACH" in captured.out, "Floor breaches should print 'BREACH'"
+
+
+# ---------------------------------------------------------------------------
+# --allow-missing-js-report (FAR-1427): JS-leg-only tolerance
+# ---------------------------------------------------------------------------
+def _write_healthy_python_report(path: Path) -> None:
+    """A Cobertura report with 100% line + branch coverage (clears every floor)."""
+    lines = "\n".join(
+        f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)">'
+        "<conditions>"
+        '<condition number="0" type="jump" coverage="100%"/>'
+        '<condition number="1" type="jump" coverage="100%"/>'
+        "</conditions></line>"
+        for i in range(1, 101)
+    )
+    path.write_text(
+        "<coverage><packages><package><classes>"
+        '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
+    )
+
+
+def _run_main_with_changes(argv_tail: list[str], changed_by_language: dict[str, dict[str, int]]) -> int:
+    def fake_changed(_compare_branch: str, language: str) -> dict[str, int]:
+        return changed_by_language.get(language, {})
+
+    with (
+        patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
+        patch("sys.argv", ["run_coverage_gate.py", "--compare-branch", "origin/main", *argv_tail]),
+    ):
+        return mod.main()
+
+
+def test_allow_missing_js_report_skips_js_leg_and_passes(tmp_path, capsys):
+    py_report = tmp_path / "coverage.xml"
+    _write_healthy_python_report(py_report)
+    rc = _run_main_with_changes(
+        [
+            "--python-report",
+            str(py_report),
+            "--js-report",
+            str(tmp_path / "missing" / "lcov.info"),
+            "--allow-missing-js-report",
+        ],
+        {"JavaScript": {"src/app.ts": 20}},
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "no coverage report found" in out.lower()
+
+
+def test_allow_missing_js_report_keeps_python_leg_strict(tmp_path, capsys):
+    rc = _run_main_with_changes(
+        [
+            "--python-report",
+            str(tmp_path / "missing" / "coverage.xml"),
+            "--js-report",
+            str(tmp_path / "missing" / "lcov.info"),
+            "--allow-missing-js-report",
+        ],
+        {"Python": {"src/main.py": 20}},
+    )
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "missing coverage report" in out.lower()
+
+
+def test_missing_js_report_without_flag_fails(tmp_path, capsys):
+    py_report = tmp_path / "coverage.xml"
+    _write_healthy_python_report(py_report)
+    rc = _run_main_with_changes(
+        [
+            "--python-report",
+            str(py_report),
+            "--js-report",
+            str(tmp_path / "missing" / "lcov.info"),
+        ],
+        {"JavaScript": {"src/app.ts": 20}},
+    )
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "missing coverage report" in out.lower()

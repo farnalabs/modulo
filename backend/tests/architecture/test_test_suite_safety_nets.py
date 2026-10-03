@@ -83,9 +83,7 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
     ),
     "tests/bdd/features/personas/marcus-ciso.feature": frozenset(
         {
-            "Marcus verifies the audit log is append-only",
             "Marcus confirms no data leaves the organisation's infrastructure",
-            "Marcus confirms offboarding immediately revokes access",
         }
     ),
     "tests/bdd/features/personas/priya-platform-engineer.feature": frozenset(

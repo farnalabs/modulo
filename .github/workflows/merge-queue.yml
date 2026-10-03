@@ -13,22 +13,19 @@ on:
     # Off-boundary minutes dodge the scheduler sampling that drops round-boundary crons on high-activity repos (FAR-492).
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
-  # FAR-492: GitHub's scheduler dropped ~95% of the */15 cron events on this
-  # high-activity repo (2-5h effective cadence vs 15m configured; gaps up to
-  # 9.7h), leaving approved, CI-green PRs waiting hours to merge. The cron
-  # stays as a last-resort sweep; the paths below make the queue event-driven
-  # so it runs the moment a PR becomes mergeable. Relevance filtering for the
-  # event paths lives in the `event-gate` job.
-  pull_request_review:
-    # Primary path: a queue-recognized reviewer (farnalabs / modulo-reviewbot)
-    # submits an APPROVED review. Filtered in event-gate.
-    types: [submitted]
-  check_suite:
-    # Primary path: a check suite completed (CI on a PR head). Runs only when
-    # a SUCCESSFUL suite belongs to the head of an open, APPROVED PR.
-    types: [completed]
+  # Trigger design (FAR-1428; supersedes the FAR-492 event-driven design):
+  # the queue runs ONLY on schedule, workflow_dispatch and the
+  # repository_dispatch self-chain below. GitHub's scheduler drops most
+  # high-frequency cron events on this high-activity repo (FAR-492), so the
+  # reliable cadence is the app's PR Housekeeper pipeline dispatching this
+  # workflow (workflow_dispatch) every 15 min; the merge-queue-watchdog
+  # workflow also re-arms it via repository_dispatch when the queue has been
+  # idle >=15 min. FAR-492 had added pull_request_review and check_suite
+  # triggers; they were removed in FAR-1428 because the event-gate filtering
+  # ran on billed runners and produced ~7,000 runs/month (82% of all runs),
+  # and the shared concurrency group displaced pending runs.
   repository_dispatch:
-    # Self-chaining fallback (stateless, FAR-492): a pass that found approved
+    # Self-chaining (stateless, FAR-492): a pass that found approved
     # PRs still waiting on CI dispatches 'merge-queue-chain' ~10 min ahead.
     # Deliberately repository_dispatch instead of `gh workflow run` because
     # GitHub has a caching bug where workflow_dispatch on a recently modified
@@ -107,14 +104,12 @@ jobs:
 
   event-gate:
     name: Event relevance gate (FAR-492)
-    # Cheap context-only filter so the heavy queue job only runs for relevant
-    # events. schedule/workflow_dispatch always pass; pull_request_review
-    # passes for an APPROVED review by a queue-recognized reviewer;
-    # check_suite passes when a successful suite belongs to the head of an
-    # open, approved PR; repository_dispatch (self-chain) honors the payload's
-    # not-before time so chained passes pace ~10 min apart - the wait happens
-    # HERE on a tiny idle runner, NOT inside the queue job, which would hold
-    # the merge-queue concurrency slot and delay real event-triggered merges.
+    # Cheap context-only filter. schedule/workflow_dispatch always pass;
+    # repository_dispatch (self-chain) honors the payload's not-before time so
+    # chained passes pace ~10 min apart - the wait happens HERE on a tiny idle
+    # runner, NOT inside the queue job, which would hold the merge-queue
+    # concurrency slot and delay other runs. (The pull_request_review and
+    # check_suite paths were removed in FAR-1428.)
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     permissions:
@@ -130,10 +125,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
-          REVIEW_STATE: ${{ github.event.review.state }}
-          REVIEW_AUTHOR: ${{ github.event.review.user.login }}
-          CS_CONCLUSION: ${{ github.event.check_suite.conclusion }}
-          CS_HEAD_SHA: ${{ github.event.check_suite.head_sha }}
           CHAIN_DEPTH: ${{ github.event.client_payload.depth || 0 }}
           CHAIN_READY_AT: ${{ github.event.client_payload.ready_at || 0 }}
         shell: bash
@@ -165,24 +156,6 @@ jobs:
                     echo "Chained pass not due yet - waiting ${WAIT}s (paced self-chain)."
                     sleep "$WAIT"
                   fi
-                  SHOULD_RUN=true
-                fi
-              fi ;;
-            pull_request_review)
-              # Same reviewer set the collect step accepts - anything else is
-              # not queue-relevant and must not wake the heavy job.
-              if [ "$REVIEW_STATE" = "APPROVED" ] && { [ "$REVIEW_AUTHOR" = "farnalabs" ] || [ "$REVIEW_AUTHOR" = "modulo-reviewbot" ]; }; then
-                SHOULD_RUN=true
-              fi ;;
-            check_suite)
-              # Run only when the successful suite belongs to the head of an
-              # open, approved PR - i.e. the PR just became mergeable.
-              if [ "$CS_CONCLUSION" = "success" ] && [ -n "$CS_HEAD_SHA" ]; then
-                MATCHES=$(gh pr list --state open --limit 100 \
-                  --json number,headRefOid,reviewDecision \
-                  --jq "[.[] | select(.headRefOid == \"$CS_HEAD_SHA\" and .reviewDecision == \"APPROVED\")] | length" \
-                  2>/dev/null || echo 0)
-                if [ "${MATCHES:-0}" -gt 0 ]; then
                   SHOULD_RUN=true
                 fi
               fi ;;
@@ -378,8 +351,8 @@ jobs:
                 # FAR-492: a still-running/queued (or unknown) CI is a "waiting"
                 # state the self-chain step keeps pace with. A FAILED CI is
                 # deliberately NOT chained - the Branch Fixer loop owns that;
-                # its push fires the check_suite event that re-triggers the
-                # queue, so chaining here would only burn light passes.
+                # the next scheduled/dispatched pass picks the PR up once the
+                # fixed CI is green, so chaining here would only burn light passes.
                 case "$CI_CONCLUSION" in
                   ""|null|unknown|in_progress|queued|pending|requested|waiting)
                     echo "$NUM" >> /tmp/ci_pending_prs.txt ;;
@@ -1533,8 +1506,9 @@ jobs:
       # state: the dispatch payload itself carries {depth, ready_at}; the
       # event-gate job honors the not-before time (~10-min pacing on a tiny
       # idle runner) and the depth cap (12, then re-anchor to the 15-min cron).
-      # Idle passes chain NOTHING - the next approval or CI-success event
-      # re-fires the queue - so the loop self-terminates when nothing waits.
+      # Idle passes chain NOTHING - the next Housekeeper dispatch / watchdog
+      # re-arm / cron tick re-fires the queue - so the loop self-terminates
+      # when nothing waits.
       #
       # FAR-1099 CI-stall detection: when approved PRs are stuck with no CI
       # conclusion for >2 hours, fail loudly and post a Linear comment. This
@@ -1658,8 +1632,8 @@ jobs:
           if gh api -X POST "repos/${{ github.repository }}/dispatches" --input - <<< "$PAYLOAD" 2>&1; then
             echo "Chained next queue pass (~10 min out, depth $NEXT_DEPTH) - keeps pace while CI runs."
           else
-            # Non-fatal: the 15-min cron sweep + PR/CI events still cover the queue.
-            echo "::warning::repository_dispatch chain failed - cron + events keep coverage."
+            # Non-fatal: the Housekeeper dispatch + cron + watchdog re-arm still cover the queue.
+            echo "::warning::repository_dispatch chain failed - Housekeeper dispatch + cron + watchdog keep coverage."
           fi
 
       # If CI failed or conflicts -- preserve for fixer

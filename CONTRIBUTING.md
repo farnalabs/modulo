@@ -15,10 +15,10 @@
 
 ## Welcome
 
-Modulo is a self-hosted agent governance platform for building governed,
-repeatable AI-assisted software delivery pipelines. It provides a composable
-pipeline of atomic AI agents that automate work between existing tools like
-GitHub, GitLab, and Slack.
+Modulo is a self-hosted Agentic Delivery Governance platform for building
+governed, repeatable AI-assisted software delivery pipelines. It provides a
+composable pipeline of atomic AI agents that automate work between existing
+tools like GitHub, GitLab, and Slack.
 
 We're glad you're here. Be respectful, constructive, and assume good faith.
 
@@ -431,7 +431,7 @@ in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | Push to main, every PR, manual | Backend lint (ruff, ruff-format, mypy, bandit, vulture, semgrep, pip-audit, import-linter); backend unit tests with coverage + architecture tests + changed integration tests; frontend (lint, type-check, vitest, build, pnpm audit, WCAG contrast); schema freshness; product-map validation; manifest validation; gitleaks secret scan |
+| `ci.yml` | Push to main, every PR, manual | Backend lint (ruff, ruff-format, mypy, bandit, vulture, semgrep, pip-audit, import-linter); backend unit tests with coverage + architecture tests + changed integration tests; frontend (lint, type-check, vitest, build, pnpm audit, WCAG contrast); schema freshness; product-map validation; manifest validation; gitleaks secret scan. Cost controls (FAR-1427): a newer push to a PR cancels that PR's in-flight run (push-to-main and manual runs are never cancelled); `Test (Backend)` and the Tier 1b job wait for `Lint (Backend)` so a lint failure does not burn the heavy jobs; on PRs a `Detect changed paths` job skips `Frontend and WCAG` when nothing frontend-related changed, `Tier 1b` for frontend/docs-only changes, and `SonarCloud` for docs-only changes (skips are step-level, so the checks still report success; every event other than `pull_request` runs everything) |
 | `bdd.yml` | Push to main, every PR, manual | Full BDD/E2E suite: Postgres + Redis, Alembic migrations, frontend build, backend + preview, pytest-bdd Playwright suite |
 | `deploy.yml` | Push to main, manual | Deploy pipeline: throttle check → pre-deploy full CI → staging deploy + staging E2E → production deploy + prod smoke tests |
 | `merge-queue.yml` | Cron every 15 min, manual | Merge queue: squash-merges approved PRs to main after CI + approval re-verification; closes Linear tickets; dispatches CI/deploy on main |

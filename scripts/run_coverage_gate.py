@@ -2030,6 +2030,16 @@ def main() -> int:
         default=False,
         help="Exit 0 when a report file is missing (for local use only; CI must NOT pass this).",
     )
+    parser.add_argument(
+        "--allow-missing-js-report",
+        action="store_true",
+        default=False,
+        help=(
+            "Tolerate a missing/absent JavaScript (LCOV) report ONLY: the JavaScript leg "
+            "is skipped, the Python leg stays strict. For CI runs where the frontend job "
+            "deliberately produced no coverage because the PR touched no frontend path."
+        ),
+    )
     args = parser.parse_args()
 
     # Resolve default report paths relative to the repo root
@@ -2078,7 +2088,8 @@ def main() -> int:
                     report,
                     args.compare_branch,
                     args.fail_under,
-                    allow_missing=args.allow_missing_reports,
+                    allow_missing=args.allow_missing_reports
+                    or (language == "JavaScript" and args.allow_missing_js_report),
                     branch_fail_under=args.branch_fail_under,
                     js_src_root=js_src_root,
                 )

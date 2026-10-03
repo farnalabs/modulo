@@ -3,7 +3,7 @@ Feature: Marcus — CISO at a Regulated Organisation
   I want every agent action to be auditable, attributable, and reversible
   So that I can approve AI-in-SDLC without expanding our regulatory risk
 
-  @goal-marcus-immutable-audit @awaiting-implementation
+  @goal-marcus-immutable-audit
   Scenario: Marcus verifies the audit log is append-only
     Given an audit event has been written for a run action
     When I attempt to delete or alter the audit event
@@ -58,7 +58,7 @@ Feature: Marcus — CISO at a Regulated Organisation
     Then no organisation can access another org's pipelines, runs, or credentials
     And RLS is enforced at the database level
 
-  @goal-marcus-offboarding @awaiting-implementation
+  @goal-marcus-offboarding
   Scenario: Marcus confirms offboarding immediately revokes access
     Given user "engineer-bob" has an active JWT session
     When Bob is removed from the organisation

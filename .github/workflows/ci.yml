@@ -24,8 +24,118 @@ env:
 permissions:
   contents: read
 
+# FAR-1427: cancel runs superseded by a newer push to the same PR so a
+# Branch Fixer / reviewer push storm does not bill a full ~56 runner-min suite
+# for every intermediate SHA. Cancellation is scoped to pull_request events
+# ONLY: every other event (push to main, workflow_dispatch) gets a group keyed
+# on the unique run id, so it can never be cancelled - nor can a queued main
+# run be displaced as the single "pending" run of a shared group.
+# notify-pr-failure treats `cancelled()` as a failure, so it carries a
+# superseded-SHA guard (see the "Skip if this run was superseded" step).
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Fast jobs run on ALL events (PR + push + manual)
+
+  changes:
+    # FAR-1427: one cheap, checkout-free path detector feeding the path gates
+    # on the heavy jobs below (Frontend and WCAG, Tier 1b testcontainers,
+    # SonarCloud scan). It reads the PR file list from the GitHub API (no
+    # checkout, no toolchain: a few seconds) and publishes three outputs:
+    #
+    #   frontend      - the Frontend and WCAG job has something to validate:
+    #                   anything under frontend/, the e2e route-coverage script,
+    #                   or this workflow itself.
+    #   sonar         - the change is NOT docs-only (markdown + docs/ outside
+    #                   docs/api/examples/). SonarCloud analyses source,
+    #                   workflows, Dockerfiles and config, so anything else keeps
+    #                   it running.
+    #   backend_heavy - the change is NOT confined to frontend/ + docs. The
+    #                   Tier 1b suites drive backend connectors/model servers
+    #                   against containers and read nothing under frontend/ or
+    #                   docs/ (verified by grep).
+    #
+    # Every output is "true" for every event except pull_request (push to main,
+    # workflow_dispatch, merge-queue dispatches ALWAYS run everything), and the
+    # detector FAILS OPEN: any API error, a 3000+ file PR (the API's cap), or
+    # an empty list sets all three to true with a ::warning::. Gated jobs skip
+    # at STEP level, never job level, so their check still reports "success"
+    # (a job-level skip is surfaced as a non-green "skipped" check, which the
+    # PR Reviewer flags - same reason notify-pr-failure gates at step level).
+    #
+    # Test (Backend) is deliberately NOT gated: backend/tests/architecture/
+    # read frontend/ (product map, manifest, login field), and its coverage
+    # artifact feeds SonarCloud and the coverage gate.
+    name: Detect changed paths
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      frontend: ${{ steps.detect.outputs.frontend }}
+      sonar: ${{ steps.detect.outputs.sonar }}
+      backend_heavy: ${{ steps.detect.outputs.backend_heavy }}
+    steps:
+      - name: Detect changed paths
+        id: detect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          all_true() {
+            {
+              echo "frontend=true"
+              echo "sonar=true"
+              echo "backend_heavy=true"
+            } >> "$GITHUB_OUTPUT"
+          }
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Event ${EVENT_NAME}: path gates disabled - running everything."
+            all_true
+            exit 0
+          fi
+          # `rc=0; out=$(...) || rc=$?` survives Actions' `bash -e -o pipefail`
+          # so a failed API call reaches the fail-open branch below instead of
+          # aborting the step. Rename sources are included so moving a file out
+          # of a gated area still counts as touching it.
+          rc=0
+          FILES="$(gh api --paginate "/repos/${REPO}/pulls/${PR_NUM}/files?per_page=100" \
+            --jq '.[] | .filename, (.previous_filename // empty)')" || rc=$?
+          COUNT=$(printf '%s\n' "$FILES" | grep -c . || true)
+          if [ "$rc" -ne 0 ] || [ "$COUNT" -eq 0 ] || [ "$COUNT" -ge 3000 ]; then
+            echo "::warning::could not obtain a reliable changed-file list (rc=${rc}, count=${COUNT}); running everything (fail open)"
+            all_true
+            exit 0
+          fi
+          echo "Changed files (${COUNT}):"
+          printf '%s\n' "$FILES" | sort -u | sed 's/^/  /'
+          FRONTEND=false; SONAR=true; BACKEND=true
+          if printf '%s\n' "$FILES" | grep -qE '^(frontend/|\.github/workflows/ci\.yml$|\.github/scripts/check_e2e_route_coverage\.py$)'; then
+            FRONTEND=true
+          fi
+          # docs-only: every file is markdown, or lives under docs/ (but not the
+          # docs/api/examples/ code samples Sonar analyses).
+          NON_DOCS=$(printf '%s\n' "$FILES" | awk 'NF && !/\.mdx?$/ && (/^docs\/api\/examples\// || !/^docs\//)' | wc -l)
+          if [ "$NON_DOCS" -eq 0 ]; then
+            SONAR=false
+          fi
+          # backend-heavy: false only when everything is under frontend/ or docs.
+          NON_BACKEND_FREE=$(printf '%s\n' "$FILES" | awk 'NF && !/^frontend\// && !/\.mdx?$/ && (/^docs\/api\/examples\// || !/^docs\//)' | wc -l)
+          if [ "$NON_BACKEND_FREE" -eq 0 ]; then
+            BACKEND=false
+          fi
+          {
+            echo "frontend=${FRONTEND}"
+            echo "sonar=${SONAR}"
+            echo "backend_heavy=${BACKEND}"
+          } >> "$GITHUB_OUTPUT"
+          echo "frontend=${FRONTEND} sonar=${SONAR} backend_heavy=${BACKEND}"
 
   backend-lint:
     name: Lint (Backend)
@@ -144,6 +254,13 @@ jobs:
 
   backend-test:
     name: Test (Backend)
+    # FAR-1427 (cheap-first): wait for Lint (Backend) (~2.4 min) so a push that
+    # fails lint/mypy/bandit/vulture/semgrep does not burn ~25 runner-min of
+    # unit tests. Trade-off: +~2.4 min wall-clock on every green run. If lint
+    # fails this job is skipped and every dependent (coverage-gate, Sonar) is
+    # skipped with it - the run still concludes FAILURE because lint failed,
+    # and notify-pr-failure's failure() sees the failed ancestor.
+    needs: [backend-lint]
     runs-on: ubicloud-standard-2
     defaults:
       run:
@@ -375,15 +492,19 @@ jobs:
     # tier1b-nightly.yml (it must NOT be a schedule trigger here: a
     # schedule trigger fires this ENTIRE fast-validation suite, FAR-773).
     name: Tier 1b testcontainers (light)
+    # FAR-1427 (cheap-first): also waits for Lint (Backend), see backend-test.
+    needs: [changes, backend-lint]
     runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.backend_heavy == 'true'
         with:
           persist-credentials: false
       - name: Free up disk space
+        if: needs.changes.outputs.backend_heavy == 'true'
         # The Tier 1b suites pull many container images and the runner's local
         # disk is the binding constraint: on ubicloud-standard-2 the suite has
         # been observed with 0-2 MB free, which aborts Docker pulls and kills
@@ -402,6 +523,7 @@ jobs:
           sudo -n apt-get clean || true
           echo "disk after:"; df -h / || true
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        if: needs.changes.outputs.backend_heavy == 'true'
         with:
           python-version: "3.12"
           enable-cache: true
@@ -410,7 +532,9 @@ jobs:
       # a cold uv cache. `--frozen` locks the exact revisions, so the builds are
       # deterministic and trusted (no untrusted setup scripts execute).
       - run: uv sync --frozen  # NOSONAR
+        if: needs.changes.outputs.backend_heavy == 'true'
       - name: Run Tier 1b light connector + model-server suites
+        if: needs.changes.outputs.backend_heavy == 'true'
         run: |
           uv run --no-build --no-sync pytest \
             tests/integration/test_tier1b_connectors_light.py \
@@ -436,32 +560,47 @@ jobs:
 
   frontend:
     name: Frontend and WCAG
+    needs: [changes]
     runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.frontend == 'true'
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        if: needs.changes.outputs.frontend == 'true'
         with:
           version: 11.28.2
       - uses: actions/setup-node@v6
+        if: needs.changes.outputs.frontend == 'true'
         with:
           node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile --ignore-scripts
+        if: needs.changes.outputs.frontend == 'true'
+      # FAR-1427 (cheap-first): lint + type-check run before the Playwright
+      # browser download and the WCAG/vitest/build steps, so a lint or type
+      # failure fails the job in ~2 min instead of after ~6. No new job
+      # dependency (and no added wall-clock) - same steps, cheaper-first order.
+      - run: pnpm run lint
+        if: needs.changes.outputs.frontend == 'true'
+      - run: pnpm run type-check
+        if: needs.changes.outputs.frontend == 'true'
       - name: Install Playwright browsers
+        if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright install chromium
       - name: Validate Playwright test compilation
+        if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright test --list
       - name: Run WCAG contrast tests
+        if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright test wcag-contrast
-      - run: pnpm run lint
-      - run: pnpm run type-check
       - name: Run unit tests (vitest)
+        if: needs.changes.outputs.frontend == 'true'
         # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
         # script hardcodes --maxWorkers=4, which saturates both cores with 4
         # concurrently-loading jsdom environments (Vue SFC + ECharts/reka-ui/
@@ -477,12 +616,14 @@ jobs:
         run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage --coverage.provider=v8 --coverage.reporter=lcov
       - name: Upload frontend coverage report
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && needs.changes.outputs.frontend == 'true'
         with:
           name: frontend-coverage
           path: frontend/coverage/lcov.info
       - run: pnpm run build
+        if: needs.changes.outputs.frontend == 'true'
       - name: Audit dependencies (critical)
+        if: needs.changes.outputs.frontend == 'true'
         # Best-effort against npm registry outages: a failed audit caused by an
         # unreachable advisory endpoint must not block CI. Real critical
         # vulnerabilities still fail the build; only registry/network errors
@@ -520,6 +661,7 @@ jobs:
           echo "$out"
           exit $rc
       - name: E2E route coverage gate
+        if: needs.changes.outputs.frontend == 'true'
         # FAR-637: every production route must be referenced by at least one
         # e2e spec (guards against routes rotting with zero e2e coverage, e.g.
         # /pipelines/:id/editor, FAR-616). Known-uncovered MVP routes are
@@ -559,7 +701,7 @@ jobs:
         # aggregate step that only runs when a real failure occurred (the
         # reporting step passes rc=2 through), ending with `exit 1` so the
         # required check genuinely fails rather than being silently masked.
-        if: failure() && steps.route-coverage.outputs.route_coverage_rc == '2'
+        if: (failure() && steps.route-coverage.outputs.route_coverage_rc == '2') && needs.changes.outputs.frontend == 'true'
         run: |
           echo "::error::E2E route coverage gate failed (rc=2: malformed router or missing e2e directory). See the 'E2E route coverage gate' step output." >&2
           exit 1
@@ -573,42 +715,85 @@ jobs:
     # scan (coverage import)" status check is REQUIRED for merge, so it must also
     # run on pull_request — otherwise the check is never produced on a PR and the
     # merge gate can never go green. Reuses the coverage-report artifact
-    # backend-test already uploads instead of re-running the backend suite.
+    # backend-test already uploads (and the frontend-coverage artifact the
+    # frontend job uploads) instead of re-running either suite.
     # workflow_dispatch is allowed so this job can be validated manually.
     if: >-
-      github.event_name == 'pull_request'
+      !cancelled()
+      && needs.changes.result == 'success'
+      && needs.backend-test.result == 'success'
+      && (github.event_name == 'pull_request'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || github.event_name == 'workflow_dispatch'
-    needs: [backend-test]
+      || github.event_name == 'workflow_dispatch')
+    # FAR-1430: `frontend` is a need only so its coverage artifact is ready to
+    # download. Sonar must still run when `frontend` FAILS (it ran independently
+    # before), so the condition above replaces the implicit success() with
+    # !cancelled() + an explicit backend-test success check (the old behaviour:
+    # skipped when backend-test fails/is skipped). frontend (~7 min) finishes
+    # well inside backend-test (~25 min), so this adds no wall-clock.
+    needs: [backend-test, frontend, changes]
     runs-on: ubicloud-standard-2
+    # A job-level block REPLACES the workflow default. actions: read is needed
+    # by `gh run download` (Actions artifacts REST API) in the frontend-coverage
+    # step; contents: read is for checkout. The scan authenticates with
+    # SONAR_TOKEN and posts nothing to GitHub, so no other scope is needed.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.sonar == 'true'
         with:
           fetch-depth: 0   # SonarCloud needs full history for blame/new-code detection
           persist-credentials: false
       - name: Download backend coverage report
+        if: needs.changes.outputs.sonar == 'true'
         uses: actions/download-artifact@v4
         with:
           name: coverage-report
           path: backend    # artifact root is backend/ (upload path backend/coverage.xml) → restores backend/coverage.xml
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          version: 11.28.2
       - uses: actions/setup-node@v6
+        # Node only: SonarCloud's JS/TS analysis needs a Node runtime on the
+        # runner. pnpm, the dependency install and the vitest run are NOT needed
+        # here (FAR-1430) - the coverage is downloaded from the frontend job.
+        if: needs.changes.outputs.sonar == 'true'
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Run unit tests with coverage (vitest lcov)
-        working-directory: frontend
-        # Same invocation as the "frontend" job (FAR-101: cap 2 workers on the
-        # 2-vCPU runner) plus coverage: v8 provider, lcov reporter →
-        # frontend/coverage/lcov.info for sonar.javascript.lcov.reportPaths.
-        run: pnpm exec vitest run src --pool=threads --maxWorkers=2 --coverage --coverage.provider=v8 --coverage.reporter=lcov
+      - name: Download frontend coverage report (from the frontend job)
+        # FAR-1430: the `frontend` job already runs the identical vitest
+        # coverage command and uploads frontend/coverage/lcov.info as the
+        # `frontend-coverage` artifact (always(), when the path gate says
+        # frontend is in scope). Re-running vitest here cost ~3-4 min of runner
+        # time per CI run. A missing lcov is a NON-FATAL Sonar warning, never a
+        # job failure: the frontend job may have failed before producing
+        # coverage, and on a PR that touches no frontend path it does not run
+        # its steps at all (there is then no artifact; Sonar's PR gate measures
+        # new-code coverage only). `gh run download` inside an `if` is used
+        # instead of actions/download-artifact so a missing artifact cannot fail
+        # the step, and without the banned continue-on-error setting. Push to
+        # main / dispatch always have frontend=true, so the artifact normally
+        # exists there and the main coverage measure stays complete.
+        if: needs.changes.outputs.sonar == 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if gh run download "$RUN_ID" --repo "$REPO" --name frontend-coverage --dir frontend/coverage; then
+            ls -l frontend/coverage/lcov.info
+          else
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "::warning::frontend-coverage artifact unavailable (frontend job failed before producing coverage, or was cancelled); Sonar will import no JS coverage for this run."
+            else
+              # push to main / dispatch: frontend=true, so the artifact must
+              # exist. Loud, but do not fail the scan (it still reports).
+              echo "::error::frontend-coverage artifact unavailable on ${EVENT_NAME}; Sonar will import NO JS coverage for this run (main coverage measure and badge will dip). Check the frontend job and this step's permissions."
+            fi
+          fi
       - name: Install SonarScanner CLI
+        if: needs.changes.outputs.sonar == 'true'
         # The pinned SonarSource/sonarqube-scan-action is NOT used for the scan
         # itself: its work would run before any retry could wrap it, and the
         # repo's .semgrep/continue-on-error-in-ci.yaml rule bans the
@@ -662,6 +847,7 @@ jobs:
           echo "SCANNER=$SCANNER" >> "$GITHUB_ENV"
           "$SCANNER" --version
       - name: SonarCloud scan
+        if: needs.changes.outputs.sonar == 'true'
         # Transient race in SonarCloud's Python sensor: PackageRootResolver's
         # unconditional Files.walk(baseDir) in FileProvider descends into `.git/`
         # and races with the SCM provider's short-lived `.git/.probe-*` files,
@@ -719,7 +905,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request'
       || github.event_name == 'workflow_dispatch'
-    needs: [backend-test, frontend]
+    needs: [backend-test, frontend, changes]
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v7
@@ -747,6 +933,9 @@ jobs:
           name: coverage-report
           path: backend
       - name: Download frontend coverage report
+        # FAR-1427: the frontend job skips its steps (no lcov artifact) when the
+        # PR touches no frontend path; there is then no changed JS to gate.
+        if: needs.changes.outputs.frontend == 'true'
         uses: actions/download-artifact@v4
         with:
           name: frontend-coverage
@@ -755,6 +944,7 @@ jobs:
         working-directory: backend
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
+          FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
         run: |
           # Provision an isolated venv with ONLY the gate's dependency
           # (diff-cover) using `--no-build`, so no third-party setup scripts
@@ -768,10 +958,21 @@ jobs:
           # Run the gate with the venv's Python directly so it finds diff-cover
           # next to this interpreter. The script validates its CLI args before
           # any subprocess.
+          # FAR-1427: with no frontend change the frontend job produced no lcov
+          # (and the download above is skipped), so the JavaScript leg has no
+          # report and no changed lines. Tolerate that missing JS report ONLY
+          # then, via the NARROW --allow-missing-js-report flag: the Python leg
+          # stays strict (the global --allow-missing-reports must never be
+          # passed in CI).
+          EXTRA_ARGS=()
+          if [ "$FRONTEND_CHANGED" != "true" ]; then
+            EXTRA_ARGS+=(--allow-missing-js-report)
+          fi
           .venv/bin/python ../scripts/run_coverage_gate.py \
             --compare-branch "origin/$BASE_REF" \
             --python-report coverage.xml \
-            --js-report ../frontend/coverage/lcov.info
+            --js-report ../frontend/coverage/lcov.info \
+            "${EXTRA_ARGS[@]}"
 
   schema-freshness:
     # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
@@ -987,15 +1188,50 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate]
+    # FAR-1429: `needs` must list EVERY job that can fail on a PR. failure() and
+    # success() in the steps below consider all ancestor jobs, so a failing job
+    # missing from this list (tier1b-light, sonarcloud-scan,
+    # migration-heads-check were) never reached the Branch Fixer / reviewer
+    # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
+    # every job here either always runs (path gates are step-level) or is only
+    # skipped because an ancestor already failed, which is itself a failure.
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
       pull-requests: write
     steps:
+      - name: Skip if this run was superseded by a newer push
+        id: superseded-check
+        if: failure() || cancelled()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # FAR-1427: this workflow now cancels in-progress pull_request runs
+          # when a newer push lands (workflow-level concurrency). A job with
+          # `always()` still run on cancellation, and this job deliberately
+          # treats `cancelled()` as a failure, so a superseded (cancelled) run
+          # would otherwise dispatch the Branch Fixer - and post the
+          # "exhausted" comment - for a STALE head SHA. The newer push has its
+          # own run that owns the outcome. Compare this run's head SHA with the
+          # PR's current head: if they differ, this run is stale - do nothing.
+          # Fail OPEN (treat as current) on any API/parse failure: a genuine
+          # CI failure must not be silently dropped on an API blip; the Branch
+          # Fixer webhook already coalesces duplicates by (prNumber, headSha).
+          CURRENT_SHA=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
+          if [ -n "$CURRENT_SHA" ] && [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Run is for ${HEAD_SHA} but PR #${PR_NUM} head is now ${CURRENT_SHA} - superseded run, skipping Branch Fixer dispatch."
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check retry limit
         id: retry-check
-        if: (failure() || cancelled()) && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1031,7 +1267,7 @@ jobs:
 
       - name: Skip if a merge-queue run is already in flight for this PR
         id: queue-check
-        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -1048,15 +1284,13 @@ jobs:
           # the queue owns the outcome — do not dispatch a competing fixer run.
           #
           # How a queue run is associated with THIS PR (verified against the
-          # Actions API): review-triggered runs carry this PR's head ref AND
-          # head SHA and list the PR in pull_requests[]; check_suite runs on a
-          # PR head carry it too. The schedule/repository_dispatch sweeps run on
-          # main (head_branch 'main', prs []), so they match none of the tests
-          # below. We therefore match on head branch, head SHA, OR the run's
-          # associated PR — never on event, because the queue deliberately
-          # avoids workflow_dispatch (HTTP 422 caching bug) and its real triggers
-          # are pull_request_review / check_suite / schedule /
-          # repository_dispatch. A run that has not finished is reported by the
+          # Actions API): since FAR-1428 the queue runs only on schedule /
+          # workflow_dispatch / repository_dispatch, all of which run on main
+          # (head_branch 'main', prs []), so this guard now matches only legacy
+          # review/check_suite-triggered runs still in flight and is otherwise
+          # a harmless no-op; it is kept (fail-closed) rather than deleted. We
+          # match on head branch, head SHA, OR the run's associated PR - never
+          # on event. A run that has not finished is reported by the
           # Actions API as `queued`, `in_progress`, `pending`, `requested` or
           # `waiting` — observed live: the in-flight Merge: Queue run for this
           # very PR reports status "pending", NOT "queued"/"in_progress", so
@@ -1103,7 +1337,7 @@ jobs:
           fi
 
       - name: Trigger Modulo Branch Fixer
-        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.superseded-check.outputs.superseded != 'true' && steps.retry-check.outputs.exhausted == 'false' && steps.queue-check.outputs.queue_in_flight != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -1332,7 +1566,14 @@ jobs:
     # reports success on pull_request events; the "only dispatch when all
     # needed checks are green" logic lives on the webhook step below.
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, schema-freshness, gitleaks, break-glass-deploy-gate]
+    # FAR-1429: `needs` must list EVERY job that can fail on a PR. failure() and
+    # success() in the steps below consider all ancestor jobs, so a failing job
+    # missing from this list (tier1b-light, sonarcloud-scan,
+    # migration-heads-check were) never reached the Branch Fixer / reviewer
+    # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
+    # every job here either always runs (path gates are step-level) or is only
+    # skipped because an ancestor already failed, which is itself a failure.
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       contents: read
