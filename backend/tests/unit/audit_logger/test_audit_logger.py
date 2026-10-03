@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core import audit_logger as audit_mod
 from modulo.core.audit_logger import (
     BATCH_MAX_SIZE,
     LIST_MAX_LIMIT,
@@ -23,6 +24,7 @@ from modulo.core.audit_logger import (
     get_audit_events_batch,
     get_chain_head,
     list_audit_events,
+    stream_export_chain,
     verify_chain,
 )
 from modulo.db.models.audit_event import AuditChainHead
@@ -1398,3 +1400,136 @@ class TestExportEdgeCases:
         assert item["request_id"] == "req-1"
         assert item["previous_hash"] == "ph"
         assert item["created_at"] == "2025-06-01T00:00:00+00:00"
+
+
+class _ScanSession:
+    """Async-CM session stand-in whose ``execute`` serves successive pages.
+
+    Supports ``async with factory() as session, session.begin():`` — both the
+    session and ``session.begin()`` are async context managers (the same object
+    stands in for both). Each ``execute`` call returns the next pre-built page
+    (``list[AuditEvent]``); requests past the last page return an empty page.
+    """
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.executed = []
+
+    def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def begin(self):
+        return self
+
+    async def execute(self, query):
+        self.executed.append(query)
+        idx = len(self.executed) - 1
+        if idx < len(self.pages):
+            return _scalars_result(self.pages[idx])
+        return _scalars_result([])
+
+
+class _ScanFactory:
+    """Callable ``factory() -> session`` for one scan."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def __call__(self):
+        return self.session
+
+
+def _scan_events(org_id, n):
+    return [
+        _make_event(
+            org_id=org_id,
+            event_type="test.scan",
+            payload_json={"seq": i},
+            created_at_val=f"2025-06-01T00:00:{i:02d}+00:00",
+        )
+        for i in range(n)
+    ]
+
+
+class TestStreamExportChain:
+    @pytest.fixture
+    def run_scan(self, monkeypatch):
+        """Return an async helper driving one scan with a fresh fake session."""
+        monkeypatch.setattr(audit_mod, "set_rls_org", AsyncMock())
+
+        async def _run(*, pages, org_id=None, page_size=100, **filters):
+            session = _ScanSession(pages)
+            factory = _ScanFactory(session)
+            events = [
+                event
+                async for event in stream_export_chain(
+                    factory=factory,
+                    org_id=org_id or uuid.uuid4(),
+                    page_size=page_size,
+                    **filters,
+                )
+            ]
+            return events, session
+
+        return _run
+
+    async def test_stream_empty_chain(self, run_scan):
+        events, session = await run_scan(pages=[])
+        assert events == []
+        assert len(session.executed) == 1
+
+    async def test_stream_single_page(self, run_scan):
+        org_id = uuid.uuid4()
+        events, session = await run_scan(pages=[_scan_events(org_id, 3)])
+        assert len(events) == 3
+        assert len(session.executed) == 1
+        assert [e["payload_json"]["seq"] for e in events] == [0, 1, 2]
+
+    async def test_stream_keyset_paginates_across_batches(self, run_scan):
+        org_id = uuid.uuid4()
+        source = _scan_events(org_id, 5)
+        events, session = await run_scan(pages=[source[:2], source[2:4], source[4:]], page_size=2)
+        assert [e["payload_json"]["seq"] for e in events] == [0, 1, 2, 3, 4]
+        # Two full batches plus one short batch: the scan only stops when a page
+        # comes back short, so a multiple-of-page-size run never duplicates rows.
+        assert len(session.executed) == 3
+        assert session.executed[1].whereclause is not None, "second page must add a keyset bound"
+
+    async def test_stream_exact_multiple_does_not_duplicate(self, run_scan):
+        org_id = uuid.uuid4()
+        source = _scan_events(org_id, 4)
+        events, session = await run_scan(pages=[source[:2], source[2:], []], page_size=2)
+        assert [e["payload_json"]["seq"] for e in events] == [0, 1, 2, 3]
+        assert len(session.executed) == 3
+
+    async def test_stream_applies_filters(self, run_scan):
+        org_id = uuid.uuid4()
+        actor_id = uuid.uuid4()
+        from_date = datetime(2025, 1, 1, tzinfo=UTC)
+        to_date = datetime(2025, 12, 31, tzinfo=UTC)
+        events, session = await run_scan(
+            pages=[[]],
+            org_id=org_id,
+            event_type="user.login",
+            actor_user_id=actor_id,
+            resource_type="pipeline",
+            from_date=from_date,
+            to_date=to_date,
+        )
+        assert events == []
+        sql = str(session.executed[0].compile(compile_kwargs={"literal_binds": True}))
+        assert "user.login" in sql
+        assert actor_id.hex in sql
+        assert "pipeline" in sql
+        assert "2025-01-01 00:00:00+00:00" in sql
+        assert "2025-12-31 00:00:00+00:00" in sql
+
+    async def test_stream_serializes_event_dicts(self, run_scan):
+        org_id = uuid.uuid4()
+        events, _ = await run_scan(pages=[_scan_events(org_id, 1)])
+        item = events[0]
+        assert set(item) >= {"id", "event_type", "actor_user_id", "created_at", "payload_json"}
+        assert item["event_type"] == "test.scan"
