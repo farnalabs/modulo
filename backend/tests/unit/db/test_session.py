@@ -5,8 +5,11 @@ factory. Every DB consumer gets its engine from here — the API via
 ``api.dependencies.get_or_create_engine``, the SAQ worker (per-worker pool
 budget), ``cron_helpers``, and the per-item fire jobs — so a pool
 misconfiguration is a production incident (connection exhaustion → 503/504).
-The factory bakes in the Fly/HAProxy compat knobs (``pool_pre_ping``,
-asyncpg ``statement_cache_size=0``, ``ssl=False``), sizes the pool from
+The factory bakes in the Fly/HAProxy compat knobs (``pool_pre_ping``, asyncpg
+``statement_cache_size=0``, explicit plaintext default ``ssl=False`` when no
+``sslmode`` is present), translates the operator's ``sslmode`` (require/
+verify-* kept fail-closed; prefer/allow rejected at boot — FAR-1440), sizes
+the pool from
 settings (or the caller's override — first caller fixes it for the process),
 and wires the process-global ORM listeners (append-only guard + tenant filter)
 exactly once.
@@ -19,8 +22,11 @@ semantics can't silently drift:
     ``pool_size``/``max_overflow`` wins; sqlite skips every pool knob
     (aiosqlite has no real pool).
   * **Per-backend connect args** — ``timeout=10`` on every backend; postgres
-    additionally gets ``ssl=False`` + ``statement_cache_size=0`` (asyncpg /
-    HAProxy compat); mariadb/sqlite do NOT get the asyncpg-only knobs.
+    additionally gets an explicit ``ssl`` value (``False`` when absent/
+    ``disable``; the operator's ``require``/``verify-*`` string otherwise;
+    ``prefer``/``allow``/unknown rejected — FAR-1440) +
+    ``statement_cache_size=0`` (asyncpg / HAProxy compat); mariadb/sqlite do
+    NOT get the asyncpg-only knobs.
   * **RLS reset hook** — registered on the engine for postgres only.
   * **Global hooks** — ``register_append_only_guard`` + ``register_tenant_filter``
     are process-global (engine-agnostic) and must run exactly once even under
@@ -82,7 +88,7 @@ def _settings(modulo_db: str, database_url: str) -> MagicMock:
 class TestBuildEngine:
     def test_postgres_default_pool_and_haproxy_knobs(self, session_mod: Any) -> None:
         """Postgres gets pool_pre_ping, 20/10/3600/30 pool config, and the asyncpg
-        HAProxy connect knobs (ssl=False, statement_cache_size=0)."""
+        HAProxy connect knobs ({ssl: False, statement_cache_size: 0})."""
         with (
             patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
             patch("modulo.db.session.create_async_engine") as mock_create,
@@ -100,6 +106,57 @@ class TestBuildEngine:
         assert kw["pool_timeout"] == 30
         assert kw["connect_args"] == {"timeout": 10, "ssl": False, "statement_cache_size": 0}
         assert mock_create.return_value is engine
+
+    def test_postgres_sslmode_disabled_explicit_plaintext(self, session_mod: Any) -> None:
+        """Absent or `sslmode=disable` → explicit `ssl=False` + unchanged engine URL."""
+        with (
+            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+        ):
+            session_mod._build_engine()
+        kw = mock_create.call_args[1]
+        assert kw["connect_args"]["ssl"] is False
+        assert kw["url"] == POSTGRES_URL
+
+    def test_postgres_sslmode_require_is_translated_fail_closed(self, session_mod: Any) -> None:
+        """`sslmode=require` survives in connect_args AND is stripped from the engine URL."""
+        url = "postgresql+asyncpg://u:p@localhost/db?sslmode=require"
+        with (
+            patch("modulo.db.session.get_settings", return_value=_settings("postgres", url)),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+        ):
+            session_mod._build_engine()
+        kw = mock_create.call_args[1]
+        assert kw["connect_args"]["ssl"] == "require"
+        assert kw["url"] == POSTGRES_URL
+
+    def test_postgres_sslmode_verify_full_is_translated(self, session_mod: Any) -> None:
+        """`sslmode=verify-full` → fail-closed SSL mode with CA verification."""
+        url = "postgresql+asyncpg://u:p@localhost/db?sslmode=verify-full"
+        with (
+            patch("modulo.db.session.get_settings", return_value=_settings("postgres", url)),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+        ):
+            session_mod._build_engine()
+        kw = mock_create.call_args[1]
+        assert kw["connect_args"]["ssl"] == "verify-full"
+        assert kw["url"] == POSTGRES_URL
+
+    @pytest.mark.parametrize("unsafe_mode", ["prefer", "allow", "bogus"])
+    def test_postgres_unsafe_sslmode_fails_the_boot(self, session_mod: Any, unsafe_mode: str) -> None:
+        """prefer/allow/unknown raise at engine build — never a silent plaintext go."""
+        url = f"postgresql+asyncpg://u:p@localhost/db?sslmode={unsafe_mode}"
+        with (
+            patch("modulo.db.session.get_settings", return_value=_settings("postgres", url)),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+            pytest.raises(ValueError, match="sslmode"),
+        ):
+            session_mod._build_engine()
+        mock_create.assert_not_called()
 
     def test_postgres_pool_overrides_win(self, session_mod: Any) -> None:
         """A caller's pool budget (the SAQ worker's per-worker size) wins."""

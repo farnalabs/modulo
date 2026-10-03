@@ -740,15 +740,18 @@ def get_or_create_system_engine() -> AsyncEngine:
                 if settings.modulo_system_database_url:
                     from sqlalchemy.ext.asyncio import create_async_engine
 
+                    from modulo.db.url_utils import split_postgres_sslmode
+
+                    system_url, system_ssl_arg = split_postgres_sslmode(settings.modulo_system_database_url)
                     _SYSTEM_ASYNC_ENGINE = create_async_engine(
-                        settings.modulo_system_database_url,
+                        system_url,
                         pool_pre_ping=True,
                         pool_size=20,
                         max_overflow=10,
                         pool_recycle=3600,
                         pool_timeout=30,
                         connect_args={
-                            "ssl": False,
+                            "ssl": system_ssl_arg,
                             "statement_cache_size": 0,
                             "timeout": 10,
                             "command_timeout": _SYSTEM_DB_COMMAND_TIMEOUT_SECONDS,
