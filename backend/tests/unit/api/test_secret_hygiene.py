@@ -11,6 +11,7 @@ Verifies that:
 import base64
 import json
 import uuid
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +30,21 @@ from modulo.api.routes.health import (
 )
 from modulo.settings import Settings, get_settings
 from tests.unit.mcp.helpers import AuthContext, make_session_context
+
+
+@pytest.fixture(autouse=True)
+def _reset_repo_heads_cache() -> Generator[None, None, None]:
+    """FAR-1439: ``_check_migrations`` memoizes the parsed alembic heads in a
+    process-wide cache; reset it around every test so this module's
+    ``_resolve_alembic_ini``-raises test cannot be short-circuited by a cache
+    warmed elsewhere (which would silently turn the intended fail path into
+    a database path)."""
+    from modulo.api.routes import health as health_mod
+
+    health_mod._REPO_HEADS_CACHE = None
+    yield
+    health_mod._REPO_HEADS_CACHE = None
+
 
 # ---------------------------------------------------------------------------
 # #94 — MCP create_agent does not leak raw exception text
