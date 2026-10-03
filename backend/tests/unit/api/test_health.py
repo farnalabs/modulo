@@ -1367,3 +1367,28 @@ class TestEventLoopStallGuard:
         # Advisory only: the stall must not flip overall readiness or gate.
         assert resp.status_code == 200
         assert body["status"] == "ok"
+
+    def test_empty_heads_are_not_cached_so_the_parse_is_retried(self) -> None:
+        """A parse yielding no heads must return empty and stay UNcached.
+
+        ``_load_repo_heads`` caches only successful NON-EMPTY loads (mirroring
+        ``migration_guard._load_repo_revisions``), so a transient parse that
+        yields an empty head set is retried on the next probe rather than
+        pinned in the process-wide cache for the process's lifetime.
+        """
+        from modulo.api.routes import health as health_mod
+
+        script = MagicMock()
+        script.get_heads.return_value = set()
+        with patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script):
+            first = health_mod._load_repo_heads(_make_settings())
+            second = health_mod._load_repo_heads(_make_settings())
+        assert first == set()
+        assert second == set()
+        assert health_mod._REPO_HEADS_CACHE is None, (
+            "an empty head set must not populate the process-wide cache — a transient parse "
+            "failure has to be retried on the next probe (FAR-1439)"
+        )
+        assert script.get_heads.call_count == 2, (
+            "an empty (uncached) load must re-parse on the next probe, not be served from cache"
+        )
