@@ -1716,7 +1716,12 @@ class TestPendingRollbackErrorIs503Not500:
         assert len(records) == 1, records
         payload_record = records[0].__dict__["service_unavailable"]
         assert payload_record["reason"] == "db_transient"
-        assert payload_record["route"] == log_key
+        # The transient record's route label MUST be distinct from the
+        # session-contract 500's key, or the two are indistinguishable in the
+        # service-unavailable trail (FAR-1408 review observation 1).
+        expected_transient_key = log_key.removesuffix(".session_contract_error") + ".pending_rollback_error"
+        assert payload_record["route"] == expected_transient_key
+        assert payload_record["route"] != log_key
         assert payload_record["exception_class"] == "PendingRollbackError"
         assert payload_record["detail"] == "transient database error (PendingRollbackError)"
 

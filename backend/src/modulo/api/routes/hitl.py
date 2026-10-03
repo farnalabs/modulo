@@ -588,11 +588,19 @@ def _raise_session_contract_error(log_key: str, exc: InvalidRequestError) -> NoR
     silenced.
     """
     if isinstance(exc, PendingRollbackError):
-        logger.error(log_key, exc_info=exc)
+        # ``log_key`` ends in ``.session_contract_error`` (the caller's label).
+        # A PendingRollbackError is NOT a session-contract violation — it is the
+        # transient subclass — so relabel the key's suffix to
+        # ``.pending_rollback_error`` on the ``db_transient`` record. Without
+        # this the record carries the SAME route label a session-contract 500
+        # would use, and the two are indistinguishable in the service-
+        # unavailable trail (FAR-1408 review observation 1).
+        transient_key = log_key.removesuffix(".session_contract_error") + ".pending_rollback_error"
+        logger.error(transient_key, exc_info=exc)
         log_service_unavailable(
             "db_transient",
             exc,
-            route=log_key,
+            route=transient_key,
             detail="transient database error (PendingRollbackError)",
         )
         raise HTTPException(
