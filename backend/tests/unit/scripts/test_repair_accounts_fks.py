@@ -8,23 +8,32 @@ HONOURED on the asyncpg connect, never silently stripped or downgraded.
 
 from __future__ import annotations
 
-import sys
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+# repair_accounts_fks.py lives in backend/scripts/, which is NOT a package
+# (no __init__.py) and shares the bare name ``scripts`` with the real
+# repo-root scripts/ package (which DOES have __init__.py). Importing it as
+# ``scripts.repair_accounts_fks`` therefore collides with the repo-root
+# package and fails collection depending on sys.path order. Load it directly
+# from its file path instead, mirroring test_generate_sbom.py.
 for parent in Path(__file__).resolve().parents:
-    if (parent / "scripts" / "repair_accounts_fks.py").exists():
-        sys.path.insert(0, str(parent))
+    _script_path = parent / "backend" / "scripts" / "repair_accounts_fks.py"
+    if _script_path.exists():
         break
 else:
-    raise RuntimeError("Could not find repo root (scripts/repair_accounts_fks.py)")
+    raise RuntimeError("Could not find backend/scripts/repair_accounts_fks.py")
 
-from scripts.repair_accounts_fks import (  # noqa: E402
-    _resolve_db_url,
-    split_postgres_sslmode,
-)
+_loader = SourceFileLoader("repair_accounts_fks", str(_script_path))
+_mod = module_from_spec(spec_from_loader("repair_accounts_fks", _loader))
+_loader.exec_module(_mod)
+
+split_postgres_sslmode = _mod.split_postgres_sslmode
+_resolve_db_url = _mod._resolve_db_url
 
 
 @pytest.mark.parametrize(
@@ -106,7 +115,7 @@ async def test_dispatch_passes_ssl_kwarg_to_asyncpg(monkeypatch: pytest.MonkeyPa
     Uses an unknown command so _dispatch returns 1 without running any SQL —
     the connect (and its kwargs) is what this test pins.
     """
-    import scripts.repair_accounts_fks as mod
+    mod = _mod
 
     captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
@@ -130,7 +139,7 @@ async def test_dispatch_passes_ssl_kwarg_to_asyncpg(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_dispatch_passes_no_ssl_kwarg_when_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    import scripts.repair_accounts_fks as mod
+    mod = _mod
 
     captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
