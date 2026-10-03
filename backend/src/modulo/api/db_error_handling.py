@@ -6,7 +6,7 @@ from typing import NoReturn, ParamSpec, TypeVar
 
 import pydantic
 from fastapi import HTTPException, status
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, InvalidRequestError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_reporting import log_service_unavailable
@@ -28,22 +28,43 @@ _MSG_LOCK_TIMEOUT = (
     "Re-issue the request once the other change completes."
 )
 
+# ``InvalidRequestError`` is a SQLAlchemy SESSION-CONTRACT violation (e.g. a
+# query issued on an ``autobegin=False`` session before ``session.begin()``) —
+# a local programming error, never a database outage. The detail must say
+# neither "temporarily unavailable" nor invite a retry: the request will fail
+# identically until the code is fixed. FAR-1408: this class previously fell
+# through to the generic 503 arm below, so a route-level bug was reported as a
+# database outage (and logged via ``log_service_unavailable("db_transient")``),
+# which cost five days of misdiagnosis.
+_MSG_SESSION_CONTRACT = (
+    "Internal server error: a database session was used outside an active transaction. "
+    "This is a server-side bug, not a database outage; retrying will not help."
+)
+
 
 def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
     """Map one exception escaped from the endpoint body to its HTTP response.
 
     The except-class -> status mapping and its order are the contract this
     module exists to enforce (IntegrityError->409, ProgrammingError->501,
-    SQLAlchemyError->503, pydantic.ValidationError->422; passthrough
-    re-raises for CancelledError / StorageExhaustedError / HTTPException;
-    Exception->500). The chain below preserves the original except order -
-    never reorder it (MRO: specific classes before their bases).
+    InvalidRequestError->500, SQLAlchemyError->503,
+    pydantic.ValidationError->422; passthrough re-raises for CancelledError /
+    StorageExhaustedError / HTTPException; Exception->500). The chain below
+    preserves the original except order - never reorder it (MRO: specific
+    classes before their bases).
 
-    One WITHIN-class refinement sits on the SQLAlchemyError arm: SQLSTATE
-    55P03 (``lock_not_available`` - a bounded ``lock_timeout`` expiring) maps
-    to 409, not 503. It is a busy-row conflict rather than a database outage,
-    so the class ordering above is unchanged - only the status for that one
-    SQLSTATE differs.
+    Two within-class refinements sit on the arms below:
+
+    * ``InvalidRequestError`` (a subclass of ``SQLAlchemyError``) gets its own
+      arm BEFORE the base ``SQLAlchemyError`` arm: it is a session-contract
+      violation (a programming error), so it maps to 500 with an accurate
+      detail and is logged as an unexpected error - it must NOT reach the 503
+      backstop's ``log_service_unavailable("db_transient", ...)`` record,
+      which would file a local bug as a database outage.
+    * SQLSTATE 55P03 (``lock_not_available`` - a bounded ``lock_timeout``
+      expiring) on the ``SQLAlchemyError`` arm maps to 409, not 503. It is a
+      busy-row conflict rather than a database outage, so the class ordering
+      above is unchanged - only the status for that one SQLSTATE differs.
     """
     try:
         raise exc
@@ -60,6 +81,17 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except InvalidRequestError:
+        # Session-contract violation (subclass of SQLAlchemyError) - a local
+        # programming error, NOT a database outage. MUST precede the
+        # SQLAlchemyError arm below or the 503 backstop would both mislabel it
+        # to the client AND write a misleading ``db_transient`` service-
+        # unavailability record (FAR-1408).
+        _log.exception("%s.session_contract_error", log_prefix)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_SESSION_CONTRACT,
         ) from None
     except SQLAlchemyError as exc:
         if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:

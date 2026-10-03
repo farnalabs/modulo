@@ -685,6 +685,8 @@ async def _run_hitl_manager(
     mgr_method: str,
     action: str | None = None,
     answer: dict[str, Any] | None = None,
+    validate_answer: bool = False,
+    require_answer: bool = False,
     **call_kwargs: Any,
 ) -> Any:
     """Open a tenant-scoped transaction and invoke a HITLManager decision method.
@@ -698,12 +700,41 @@ async def _run_hitl_manager(
     ``action`` (FAR-634) is the REST action label for the human_only denial
     audit event; it defaults to ``mgr_method`` (identical for every route
     except submit-manual, whose manager call is ``approve``).
+
+    ``validate_answer`` (FAR-1408): run the FAR-860/FAR-907 choice-answer
+    validation HERE, inside the decision transaction and immediately AFTER
+    ``set_rls_org`` — never at route level before this call. Two reasons:
+    the REST DI session is built ``autobegin=False`` (transaction management
+    is left to the caller), so any query issued before ``session.begin()``
+    raises ``InvalidRequestError``; and the validation's resolution read
+    (``resolve_hitl_review_config`` → ``get_run``) is RLS-scoped, so it must
+    run in the SAME transaction whose ``set_rls_org`` set
+    ``app.organisation_id`` — otherwise the predicate filters the claim/run
+    rows away and validation silently FAILS OPEN (a worse bug than the
+    crash). The validated answer is injected into ``decision_payload`` (the
+    very dict the route reuses for the direct ``executor.resume`` injection)
+    and forwarded to the manager as ``answer``, so the validated contract and
+    the committed decision are consistent by construction. ``require_answer``
+    is forwarded to the validator unchanged (approve / approve-with-modification
+    both require a declared choice to be answered).
     """
     audit_action = action or mgr_method
     mgr = HITLManager()
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            if validate_answer:
+                answer = await _validate_choice_answer(
+                    session,
+                    run_id,
+                    review_id,
+                    principal.organisation_id,
+                    answer,
+                    require_answer=require_answer,
+                )
+                payload = call_kwargs.get("decision_payload")
+                if answer is not None and isinstance(payload, dict):
+                    payload["answer"] = answer
             if enforce_human_only:
                 await _enforce_human_only_gate(session, principal, run_id, review_id, audit_action)
             if require_sandbox:
@@ -780,14 +811,17 @@ async def approve_review(
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
-    # FAR-860/FAR-907: validate choice answer against the gate's response_contract
-    # BEFORE the manager call (fail-fast, no side effects). A choice gate
-    # REQUIRES a valid answer on this path too — without it a direct API caller
-    # could approve while skipping the declared choice (mirrors
-    # approve-with-modification).
-    validated_answer = await _validate_choice_answer(
-        session, run_id, review_id, principal.organisation_id, req.answer, require_answer=True
-    )
+    # FAR-860/FAR-907: a choice gate REQUIRES a valid answer on this path too
+    # — without it a direct API caller could approve while skipping the
+    # declared choice (mirrors approve-with-modification). The validation is
+    # NOT done here: FAR-1408 proved a route-level call ran before any
+    # transaction was open, and the REST DI session is ``autobegin=False``, so
+    # every request crashed with ``InvalidRequestError`` (surfacing as a 503
+    # "Database temporarily unavailable"). It now runs inside
+    # ``_run_hitl_manager``'s transaction, after ``set_rls_org`` — see that
+    # helper's ``validate_answer`` doc. The raw request answer is handed over;
+    # the validated value is injected into ``resume_data`` (same object) by
+    # the helper before the manager call.
     # FAR-541: every resume decision is STAMPED with the gate it resolves so a
     # per-gate consumer (``_hitl_review_resume_result``) can reject a foreign
     # decision left in state by an earlier gate (decisions are per-RUN but
@@ -797,8 +831,6 @@ async def approve_review(
     resume_data: dict[str, Any] = {"action": "approved", "review_id": review_id}
     if req.notes:
         resume_data["notes"] = req.notes
-    if validated_answer is not None:
-        resume_data["answer"] = validated_answer
 
     await _run_hitl_manager(
         session,
@@ -811,7 +843,9 @@ async def approve_review(
         claim_token=req.claim_token,
         decision_payload=resume_data,
         client_type=_client_type(principal),
-        answer=validated_answer,
+        answer=req.answer,
+        validate_answer=True,
+        require_answer=True,
     )
 
     try:
@@ -857,14 +891,13 @@ async def approve_review_with_modification(
     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
     documenting the change.
     """
-    # FAR-907: validate the choice answer against the gate's response_contract
-    # BEFORE the manager call (fail-fast, no side effects). A choice gate
-    # REQUIRES a valid answer on this path — without it a reviewer could
-    # modify-approve while skipping the declared choice (previously nothing
-    # validated, so the requirement was silently skipped).
-    validated_answer = await _validate_choice_answer(
-        session, run_id, review_id, principal.organisation_id, req.answer, require_answer=True
-    )
+    # FAR-907: a choice gate REQUIRES a valid answer on this path — without
+    # it a reviewer could modify-approve while skipping the declared choice
+    # (previously nothing validated, so the requirement was silently
+    # skipped). As on /approve, the validation itself runs INSIDE
+    # ``_run_hitl_manager``'s transaction after ``set_rls_org`` (FAR-1408):
+    # the route hands over the raw request answer and the helper injects the
+    # validated value into ``resume_data`` before the manager call.
     # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
     # The real writer contract: action "approved" + "modified_output" (there is
     # no "approved_with_modification" action). _decide would stamp the persisted
@@ -877,11 +910,10 @@ async def approve_review_with_modification(
     }
     if req.notes:
         resume_data["notes"] = req.notes
-    if validated_answer is not None:
-        # FAR-907: the answer rides in the persisted decision so
-        # ``_inject_answer_state`` places ``hitl_answer_<review_id>`` in run
-        # state exactly as on the plain approve path.
-        resume_data["answer"] = validated_answer
+    # FAR-907: when present the answer rides in the persisted decision so
+    # ``_inject_answer_state`` places ``hitl_answer_<review_id>`` in run
+    # state exactly as on the plain approve path (injected in-transaction by
+    # ``_run_hitl_manager``, FAR-1408).
     await _run_hitl_manager(
         session,
         principal,
@@ -894,7 +926,9 @@ async def approve_review_with_modification(
         modified_output=req.modified_output,
         decision_payload=resume_data,
         client_type=_client_type(principal),
-        answer=validated_answer,
+        answer=req.answer,
+        validate_answer=True,
+        require_answer=True,
     )
 
     try:
