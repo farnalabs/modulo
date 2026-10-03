@@ -1,6 +1,20 @@
 <template>
   <div class="space-y-6">
-    <LoadingSpinner v-if="store.isLoading" />
+    <div
+      v-if="store.isLoading"
+      class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+      data-testid="envprofile-list-loading"
+      aria-hidden="true"
+    >
+      <div v-for="n in 6" :key="n" class="card p-5 flex flex-col gap-3 animate-pulse">
+        <div class="flex items-start justify-between gap-3">
+          <div class="h-4 w-2/3 rounded bg-muted" />
+          <div class="h-4 w-16 rounded-full bg-muted" />
+        </div>
+        <div class="h-3 w-full rounded bg-muted" />
+        <div class="h-3 w-1/3 rounded bg-muted" />
+      </div>
+    </div>
 
     <ErrorAlert v-else-if="store.error" :message="store.error" :on-retry="store.fetchProfiles" />
 
@@ -112,9 +126,7 @@
               :aria-label="$t('views.RunnersProfilesTab.delete_profile')"
               @click="confirmDelete(row.profile)"
             >
-              <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              </svg>
+              <Trash2 class="h-4 w-4" aria-hidden="true" />
             </button>
             <button
               v-else
@@ -125,9 +137,7 @@
               disabled
               data-testid="envprofile-list-delete"
             >
-              <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              </svg>
+              <Trash2 class="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
 
@@ -209,8 +219,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Trash2 } from '@lucide/vue'
 import Button from 'primevue/button'
-import LoadingSpinner from '../../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import { useEnvironmentProfilesStore, type EnvironmentProfileSummary } from '../../stores/environmentProfiles'
 import { getAuthHeaders, api } from '../../lib/api/client'

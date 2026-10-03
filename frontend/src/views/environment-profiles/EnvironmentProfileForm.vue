@@ -4,27 +4,37 @@
       <button type="button"
         class="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         data-testid="envprofile-form-back"
-        :aria-label="'Back to environment profiles'"
+        :aria-label="$t('views.EnvironmentProfileForm.back_to_profiles')"
         @click="$router.push('/environment-profiles')"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
-        </svg>
+        <ArrowLeft class="h-[18px] w-[18px]" aria-hidden="true" />
       </button>
       <PageHeader
-        :title="isEdit ? 'Edit Environment Profile' : 'New Environment Profile'"
-        :subtitle="isEdit ? 'Update the sandbox environment template' : 'Define a reusable sandbox environment template'"
+        :title="isEdit ? $t('views.EnvironmentProfileForm.edit_title') : $t('views.EnvironmentProfileForm.new_title')"
+        :subtitle="isEdit ? $t('views.EnvironmentProfileForm.edit_subtitle') : $t('views.EnvironmentProfileForm.new_subtitle')"
       />
     </header>
 
-    <form @submit.prevent="handleSubmit" class="card max-w-3xl p-6 space-y-5">
+    <div
+      v-if="store.isLoading"
+      class="card max-w-3xl p-6 space-y-5 animate-pulse"
+      data-testid="envprofile-form-loading"
+      aria-hidden="true"
+    >
+      <div v-for="n in 6" :key="n" class="space-y-1.5">
+        <div class="h-3 w-32 rounded bg-muted" />
+        <div class="h-9 w-full rounded bg-muted" />
+      </div>
+    </div>
+
+    <form v-else @submit.prevent="handleSubmit" class="card max-w-3xl p-6 space-y-5">
       <div>
         <label for="environmentprofileform-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.name') }} <span class="text-destructive">*</span></label>
         <input id="environmentprofileform-field-7"
           v-model="form.name"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          placeholder="e.g. python-dev"
+          :placeholder="$t('views.EnvironmentProfileForm.name_placeholder')"
           data-testid="envprofile-form-name"
           :class="{ 'border-destructive': submitted && !form.name.trim() }"
         />
@@ -37,7 +47,7 @@
           v-model="form.description"
           rows="3"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          placeholder="Optional description of this environment template"
+          :placeholder="$t('views.EnvironmentProfileForm.description_placeholder')"
           data-testid="envprofile-form-description"
         />
       </div>
@@ -45,9 +55,9 @@
       <div>
         <label for="environmentprofileform-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.provider_type') }} <span class="text-destructive">*</span></label>
         <Select
-  aria-label="Provider type"
+    :aria-label="$t('views.EnvironmentProfileForm.provider_type')"
   v-model="form.provider_type"
-  placeholder="Select provider type"
+    :placeholder="$t('views.EnvironmentProfileForm.select_provider_type')"
   data-testid="envprofile-form-provider"
   class="w-full"
   :options="[{ value: 'local_docker', label: $t('views.EnvironmentProfileForm.local_docker') }, { value: 'e2b', label: $t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') }]"
@@ -73,7 +83,7 @@
           v-model="form.image_ref"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          placeholder="e.g. python:3.12-slim, node:20-bookworm"
+          :placeholder="$t('views.EnvironmentProfileForm.image_placeholder')"
           data-testid="envprofile-form-image"
         />
       </div>
@@ -102,9 +112,9 @@
       <div>
         <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.network_policy') }}</label>
         <Select
-  aria-label="Network policy"
+    :aria-label="$t('views.EnvironmentProfileForm.network_policy')"
   v-model="form.network_policy"
-  placeholder="Select network policy"
+    :placeholder="$t('views.EnvironmentProfileForm.select_network_policy')"
   data-testid="envprofile-form-network"
   class="w-full"
   :options="[{ value: 'outbound', label: $t('views.EnvironmentProfileForm.outbound_full_egress') }, { value: 'none', label: $t('views.EnvironmentProfileForm.none_isolated') }, { value: 'selected', label: $t('views.EnvironmentProfileForm.selected_domains_only') }]"
@@ -120,9 +130,9 @@
       <div>
         <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.initialisation_strategy') }}</label>
         <Select
-  aria-label="Initialisation strategy"
+    :aria-label="$t('views.EnvironmentProfileForm.initialisation_strategy')"
   v-model="form.initialisation_strategy"
-  placeholder="Select strategy"
+    :placeholder="$t('views.EnvironmentProfileForm.select_strategy')"
   data-testid="envprofile-form-init"
   class="w-full"
   :options="[{ value: 'git_clone', label: $t('views.EnvironmentProfileForm.git_clone') }, { value: 'blank', label: $t('views.EnvironmentProfileForm.blank_empty_workspace') }, { value: 'worktree', label: $t('views.EnvironmentProfileForm.git_worktree') }]"
@@ -138,9 +148,9 @@
       <div>
         <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.persistence_policy') }}</label>
         <Select
-  aria-label="Persistence policy"
+    :aria-label="$t('views.EnvironmentProfileForm.persistence_policy')"
   v-model="form.persistence_policy"
-  placeholder="Select policy"
+    :placeholder="$t('views.EnvironmentProfileForm.select_policy')"
   data-testid="envprofile-form-persistence"
   class="w-full"
   :options="[{ value: 'ephemeral', label: $t('views.EnvironmentProfileForm.ephemeral_destroyed_after_run') }, { value: 'retained', label: $t('views.EnvironmentProfileForm.retained_available_for_inspection') }, { value: 'cache', label: $t('views.EnvironmentProfileForm.cache_reusable_between_runs') }]"
@@ -158,7 +168,7 @@
 
       <div class="flex items-center gap-2 pt-2">
         <Button :disabled="store.isSaving" type="submit" data-testid="envprofile-form-submit">
-          {{ store.isSaving ? 'Saving...' : (isEdit ? 'Save Changes' : 'Create Profile') }}
+          {{ store.isSaving ? $t('views.EnvironmentProfileForm.saving') : (isEdit ? $t('views.EnvironmentProfileForm.save_changes') : $t('views.EnvironmentProfileForm.create_profile')) }}
         </Button>
         <button
           type="button"
@@ -166,7 +176,7 @@
           data-testid="envprofile-form-cancel"
           @click="$router.push('/environment-profiles')"
         >
-          Cancel
+          {{ $t('views.EnvironmentProfileForm.cancel') }}
         </button>
       </div>
     </form>
@@ -178,7 +188,8 @@ import PageHeader from '../../components/shared/PageHeader.vue'
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
+import { ArrowLeft } from '@lucide/vue'
+import { useEnvironmentProfilesStore, type EnvironmentProfile } from '../../stores/environmentProfiles'
 import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
 import Button from 'primevue/button'
 import Select from '../../components/shared/AppSelect.vue'
@@ -242,7 +253,7 @@ async function handleSubmit() {
   if (!form.name.trim()) return
   if (!form.provider_type) return
 
-  const payload: Record<string, unknown> = {
+  const payload: Partial<EnvironmentProfile> = {
     name: form.name.trim(),
     description: form.description.trim() || null,
     provider_type: form.provider_type,
@@ -256,13 +267,13 @@ async function handleSubmit() {
   try {
     const profileId = props.profileId || (route.params.id as string)
     if (profileId && profileId !== 'new') {
-      await store.updateProfile(profileId, payload as any)
+      await store.updateProfile(profileId, payload)
     } else {
-      await store.createProfile(payload as any)
+      await store.createProfile(payload)
     }
     router.push('/environment-profiles')
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : 'Failed to save profile'
+    formError.value = e instanceof Error ? e.message : t('views.EnvironmentProfileForm.save_failed')
   }
 }
 
