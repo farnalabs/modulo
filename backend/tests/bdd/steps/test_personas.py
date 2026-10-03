@@ -861,7 +861,12 @@ def _transparency_test_client(principal: AuthenticatedPrincipal) -> TestClient:
     app.include_router(transparency_router)
 
     async def _session() -> AsyncMock:
-        return AsyncMock()
+        session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        return session
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_current_user] = lambda: principal

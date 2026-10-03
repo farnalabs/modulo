@@ -18707,6 +18707,11 @@ export interface components {
              * @default false
              */
             enforcement_enabled: boolean;
+            /**
+             * Egress Allowed
+             * @default false
+             */
+            egress_allowed: boolean;
             /** Warning */
             warning?: string | null;
         };
