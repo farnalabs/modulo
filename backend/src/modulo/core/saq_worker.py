@@ -69,6 +69,7 @@ from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.core.cron_helpers import CRON_LIVENESS_STATS_TTL_SECONDS, SAQ_TASK_FIRE_SUITE_RUN
+from modulo.core.logging_config import org_id_var
 from modulo.settings import get_settings, resolve_instance_identity
 
 _log = logging.getLogger(__name__)
@@ -1796,6 +1797,9 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         "cancellation_hard_deadline_s": _CANCELLATION_HARD_DEADLINE_S,
         "dequeue_timeout": _DEQUEUE_TIMEOUT,
         "timers": dict(_TIMERS),
+        # FAR-1417: bind the job's organisation BEFORE SAQ creates the job
+        # task, so every ERROR the job logs is attributable to error_events.
+        "before_process": _before_process_hook,
         "after_process": _after_process_hook,
         # FAR-250: register SQLAlchemy listeners + configure the EventBus
         # Redis broker, and hold a non-relaying Redis subscription. Flows
@@ -1806,6 +1810,28 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         # platform-neutral resolver at call time (ADR 043 / FAR-1194).
         "metadata": {"hostname": resolve_instance_identity()},
     }
+
+
+async def _before_process_hook(ctx: dict[str, Any]) -> None:
+    """SAQ ``before_process`` hook — bind the job's organisation for ERROR capture (FAR-1417).
+
+    ``Worker.process()`` awaits this hook BEFORE ``asyncio.create_task``-ing the
+    job function, so the contextvar set here is copied into the job's own
+    context and is visible to every log call the job makes — including the
+    synchronous ``ErrorTrackingLogHandler.emit`` read.
+
+    Org-scoped jobs (``execute_run``, ``resume_run``, ``fire_*_trigger``,
+    ``execute_suite_run``, ...) carry the organisation as an ``org_id`` kwarg.
+    System crons carry none; they bind ``None`` EXPLICITLY rather than leaving
+    whatever was there, so a job can never inherit a previous job's
+    organisation. Residual (no org to bind): those system-cron ERROR records
+    are stdout-only — persisting them would need a system/unknown organisation
+    (schema decision, reported under FAR-1417).
+    """
+    job = ctx.get("job")
+    kwargs = getattr(job, "kwargs", None) or {}
+    raw_org = kwargs.get("org_id", kwargs.get("organisation_id"))
+    org_id_var.set(None if raw_org is None else str(raw_org))
 
 
 async def _after_process_hook(ctx: dict[str, Any]) -> None:

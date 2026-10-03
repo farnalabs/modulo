@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 from collections.abc import Awaitable, Callable
+from contextvars import Token
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -10,13 +11,34 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from modulo.api.models.problem import ProblemDetail, ProblemType
-from modulo.core.logging_config import correlation_id_var
+from modulo.core.logging_config import correlation_id_var, org_id_var
 from modulo.version import get_version
 
 logger = logging.getLogger(__name__)
 
 _unhandled_exception_count: int = 0
 _unhandled_count_lock = threading.Lock()
+
+
+def _bind_request_org(request: Request) -> Token[str | None] | None:
+    """Bind the request's organisation into ``org_id_var`` for this error path (FAR-1417).
+
+    This middleware sits OUTSIDE the route's task context (BaseHTTPMiddleware
+    runs the downstream app in its own task), so the value the auth dependency
+    bound in the route's context is invisible here — an ERROR logged from this
+    ``except`` would otherwise be dropped for want of an organisation, which is
+    exactly the diagnostic this middleware exists to emit. ``request.state`` is
+    ASGI-scope-backed and therefore shared with every layer, so re-bind from it
+    before logging.
+
+    Returns the ``org_id_var`` token for the caller's ``finally`` reset, or
+    ``None`` when no organisation was ever resolved (pre-auth failures stay
+    stdout-only — see ``ErrorTrackingLogHandler.emit``).
+    """
+    org_id = getattr(request.state, "organisation_id", None)
+    if org_id is None:
+        return None
+    return org_id_var.set(str(org_id))
 
 
 class CatchAllMiddleware(BaseHTTPMiddleware):
@@ -31,24 +53,29 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
                 _unhandled_exception_count += 1
 
             rid = getattr(request.state, "request_id", None)
-            logger.exception(
-                "middleware.unhandled_exception",
-                extra={
-                    "method": request.method,
-                    "path": str(request.url.path),
-                    "request_id": rid,
-                    "total_unhandled": _unhandled_exception_count,
-                },
-            )
+            org_token = _bind_request_org(request)
             try:
-                await _ingest_unhandled_error(request)
-            except Exception:
-                # Best-effort ingest must never abort the 500 response. The helper
-                # swallows most failures internally, but this guard guarantees the
-                # catch-all contract (a structured 500 for every unhandled
-                # exception) even if the ingest path itself raises.
-                logger.exception("middleware.error_ingest_dispatch_failed")
-            return _make_500_response(rid)
+                logger.exception(
+                    "middleware.unhandled_exception",
+                    extra={
+                        "method": request.method,
+                        "path": str(request.url.path),
+                        "request_id": rid,
+                        "total_unhandled": _unhandled_exception_count,
+                    },
+                )
+                try:
+                    await _ingest_unhandled_error(request)
+                except Exception:
+                    # Best-effort ingest must never abort the 500 response. The helper
+                    # swallows most failures internally, but this guard guarantees the
+                    # catch-all contract (a structured 500 for every unhandled
+                    # exception) even if the ingest path itself raises.
+                    logger.exception("middleware.error_ingest_dispatch_failed")
+                return _make_500_response(rid)
+            finally:
+                if org_token is not None:
+                    org_id_var.reset(org_token)
 
 
 async def _ingest_unhandled_error(request: Request) -> None:
