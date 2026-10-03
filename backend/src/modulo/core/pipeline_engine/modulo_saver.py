@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from typing import Any, cast
 
@@ -99,6 +99,9 @@ _UPSERT_CHECKPOINT_WRITES_SQL = """
         blob = EXCLUDED.blob;
 """
 
+# Schema DDL ONLY. ``ModuloPostgresSaver.MIGRATIONS`` — the list ``setup()``
+# actually executes — is this list PLUS :data:`_AUTOVACUUM_TUNING_SQL` below,
+# so the performance tuning always runs AFTER the CREATEs it depends on.
 _MIGRATION_SQL: list[str] = [
     "CREATE TABLE IF NOT EXISTS checkpoint_migrations (v INTEGER PRIMARY KEY);",
     """
@@ -155,6 +158,117 @@ _MIGRATION_SQL: list[str] = [
     "ALTER TABLE checkpoint_blobs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();",
     "ALTER TABLE checkpoint_writes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();",
 ]
+
+# ---------------------------------------------------------------------------
+# Per-table autovacuum tuning for the runtime-created checkpoint tables
+# (FAR-1442)
+# ---------------------------------------------------------------------------
+
+#: The tuning applied to ``checkpoints`` and ``checkpoint_writes``.
+#:
+#: SINGLE SOURCE OF TRUTH for the startup path: every statement in
+#: :data:`_AUTOVACUUM_TUNING_SQL` is rendered from this mapping by
+#: :func:`autovacuum_set_clause`, so ``setup()`` cannot drift from itself.
+#:
+#: Alembic revision ``0279_table_autovacuum_tuning`` carries the same values
+#: for the ALREADY-DEPLOYED path (it runs before this module ever sees the
+#: database). It does not import this mapping: a migration is a frozen
+#: historical artefact and must not change behaviour when application
+#: constants evolve (repo convention, stated in 0192/0193/0215), and
+#: import-linter's ``db-does-not-import-core`` contract forbids a
+#: ``modulo.db`` module importing ``modulo.core`` anyway. The two sides are
+#: therefore pinned identical by
+#: ``tests/unit/pipeline_engine/test_modulo_saver.py::TestCheckpointAutovacuumTwin``
+#: — edit one without the other and CI fails.
+#:
+#: Values are justified in migration 0279's module docstring (measured
+#: production churn: ``checkpoints`` 9,436 MB / ``checkpoint_writes`` 5,893 MB
+#: with 2.18M lifetime deletes). Every value must be a BARE Postgres literal
+#: (numeric or boolean) — :func:`autovacuum_set_clause` emits it verbatim, so
+#: a value needing quoting would have to change the renderer too.
+#:
+#: ``autovacuum_vacuum_cost_delay`` is deliberately ABSENT: it defaults to
+#: 2 ms (PostgreSQL 12+), so pinning it would only re-state the default, and
+#: a per-table pin would silently override an operator who raised the delay
+#: globally to protect their own I/O budget. The cost figures in 0279's
+#: docstring are therefore stated *at the default 2 ms delay*.
+CHECKPOINT_AUTOVACUUM_TUNING: dict[str, str] = {
+    "autovacuum_vacuum_scale_factor": "0.02",
+    "autovacuum_analyze_scale_factor": "0.01",
+    "autovacuum_vacuum_cost_limit": "10000",
+}
+
+#: The tables carrying :data:`CHECKPOINT_AUTOVACUUM_TUNING`, in a fixed order
+#: so the startup log (and migration 0279's log) is deterministic.
+CHECKPOINT_AUTOVACUUM_TABLES: tuple[str, ...] = ("checkpoints", "checkpoint_writes")
+
+
+def autovacuum_set_clause(tuning: Mapping[str, str]) -> str:
+    """Render ``tuning`` as the option list of ``ALTER TABLE ... SET (...)``.
+
+    Values are emitted verbatim, so each must be a bare Postgres literal
+    (numeric or boolean), never text that needs quoting.
+    """
+    return ", ".join(f"{key} = {value}" for key, value in tuning.items())
+
+
+def _checkpoint_autovacuum_sql(table: str) -> str:
+    """Boot-time tuning statement for one runtime-created checkpoint table.
+
+    This is the FRESH-INSTALL path that migration 0279 cannot reach:
+    ``deploy/fly/entrypoint.sh`` runs ``alembic upgrade heads`` BEFORE
+    ``uvicorn`` starts, so on a brand-new database 0279 meets a schema with
+    no checkpoint tables, skips them, records itself applied and never
+    replays. This statement runs at every application boot AFTER the CREATEs
+    in :data:`_MIGRATION_SQL` (``MIGRATIONS`` orders them that way), which is
+    what actually lands the tuning for a new install.
+
+    It is a PLAIN ``ALTER TABLE ... SET`` — deliberately NOT wrapped in a
+    plpgsql ``DO`` block with an in-SQL ``RAISE WARNING``. These statements
+    run through psycopg3 (``AsyncPostgresSaver.from_conn_string``), which
+    discards server NOTICEs and WARNINGs unless a notice handler is
+    registered — none is registered anywhere in ``backend/src`` — and it
+    replaces libpq's default stderr printer at connect, so a ``RAISE
+    WARNING`` inside the SQL would reach nobody at all. Python is therefore
+    the only logging site that works: :meth:`ModuloPostgresSaver.setup`
+    catches the raised error, logs a WARNING naming the table and the error,
+    and continues with the next statement. An absent table surfaces here as
+    ``UndefinedTable`` and is logged exactly the same way.
+
+    Re-running is a no-op: ``ALTER TABLE ... SET`` merges the named options
+    into any existing reloption set and re-SETTING the same value changes
+    nothing (pinned by
+    ``tests/integration/test_migration_0279_table_autovacuum_tuning.py``).
+    """
+    clause = autovacuum_set_clause(CHECKPOINT_AUTOVACUUM_TUNING)
+    return f'ALTER TABLE public."{table}" SET ({clause});'
+
+
+#: Every boot-time tuning statement begins with this prefix; no schema-DDL
+#: statement in :data:`_MIGRATION_SQL` does. :func:`_autovacuum_tuning_target`
+#: uses it to tell a tuning failure (log a WARNING, keep going) apart from a
+#: schema-DDL failure (re-raise, so the boot's own failure signal stays true).
+_TUNING_PREFIX = 'ALTER TABLE public."'
+
+
+def _autovacuum_tuning_target(statement: str) -> str | None:
+    """Table named by a boot-time tuning ``ALTER``, or ``None`` for schema DDL.
+
+    Returns ``None`` for anything that is not shaped like a tuning statement,
+    so an unexpected statement is treated as schema DDL (fail loudly) rather
+    than silently downgraded to a warning.
+    """
+    if not statement.lstrip().startswith(_TUNING_PREFIX):
+        return None
+    start = len(_TUNING_PREFIX)
+    end = statement.find('"', start)
+    return statement[start:end] if end > start else None
+
+
+#: Boot-time autovacuum tuning, DERIVED from :data:`CHECKPOINT_AUTOVACUUM_TUNING`.
+#: Appended after the schema DDL in :data:`_MIGRATION_SQL` via
+#: ``ModuloPostgresSaver.MIGRATIONS``.
+_AUTOVACUUM_TUNING_SQL: list[str] = [_checkpoint_autovacuum_sql(table) for table in CHECKPOINT_AUTOVACUUM_TABLES]
 
 
 def _serialize_checkpoint(checkpoint: Checkpoint) -> str:
@@ -233,7 +347,12 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     UPSERT_CHECKPOINTS_SQL = _UPSERT_CHECKPOINTS_SQL
     UPSERT_CHECKPOINT_BLOBS_SQL = _UPSERT_CHECKPOINT_BLOBS_SQL
     UPSERT_CHECKPOINT_WRITES_SQL = _UPSERT_CHECKPOINT_WRITES_SQL
-    MIGRATIONS = _MIGRATION_SQL
+    #: Everything ``setup()`` executes, in order: the schema DDL first (so
+    #: the checkpoint tables exist), then the boot-time autovacuum tuning.
+    #: Keep it an explicit copy — ``_MIGRATION_SQL`` alone is what the
+    #: schema-only fixtures replay. Class-level to match the base class'
+    #: declaration (RUF012 is suppressed for that reason only).
+    MIGRATIONS = [*_MIGRATION_SQL, *_AUTOVACUUM_TUNING_SQL]  # noqa: RUF012
 
     def __init__(
         self,
@@ -341,10 +460,43 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # ------------------------------------------------------------------
 
     async def setup(self) -> None:
-        """Run Modulo-specific migrations (org_id columns)."""
+        """Run Modulo-specific migrations, then the boot-time autovacuum tuning.
+
+        Every statement is executed on every boot, so each one must be
+        idempotent (``CREATE ... IF NOT EXISTS``, ``ADD COLUMN IF NOT
+        EXISTS``, re-``SET`` of the same reloptions). Runs after alembic has
+        finished — see :func:`_checkpoint_autovacuum_sql` for why the
+        checkpoint tables' tuning has to live here.
+
+        Failure policy — Python is the logging site:
+
+        * a schema-DDL failure RAISES, so ``main.py`` logs
+          ``startup.checkpointer_init_failed`` with the traceback and does
+          NOT log ``startup.checkpointer_initialised`` — the boot keeps a
+          truthful signal that the schema is broken;
+        * an autovacuum-tuning failure is a performance reloption, never a
+          reason to fail a boot: it is logged as a WARNING carrying the
+          statement's table and the error, and the loop CONTINUES, so one
+          table's failure never skips the other table's tuning.
+
+        The WARNING is emitted HERE rather than inside the SQL: the
+        statements run over psycopg3, which discards server notices unless a
+        notice handler is registered (none is registered in
+        ``backend/src``), so a ``RAISE WARNING`` in the statement would
+        reach nobody — the exact silent-skip this logging site replaces.
+        """
         async with self._cursor() as cur:
             for migration in self.MIGRATIONS:
-                await cur.execute(migration)
+                try:
+                    await cur.execute(migration)
+                except Exception as exc:
+                    table = _autovacuum_tuning_target(migration)
+                    if table is None:
+                        raise
+                    _log.warning(
+                        "checkpoint.autovacuum_tuning_failed",
+                        extra={"table": table, "error": str(exc)[:300]},
+                    )
 
     # ------------------------------------------------------------------
     # Override: aget_tuple — filter by org_id
