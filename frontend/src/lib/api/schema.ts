@@ -10203,6 +10203,34 @@ export interface components {
             output_bytes?: number | null;
             /** Rate Limited */
             rate_limited?: boolean | null;
+            /** Batch Id */
+            batch_id?: string | null;
+            /** Telemetry Bytes */
+            telemetry_bytes?: number | null;
+            /** Dispatched At */
+            dispatched_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Total Queue Wait Ms */
+            total_queue_wait_ms?: number | null;
+            /** Workspace Inputs Count */
+            workspace_inputs_count?: number | null;
+            /** Enforcement Native Count */
+            enforcement_native_count?: number | null;
+            /** Enforcement Verbatim Count */
+            enforcement_verbatim_count?: number | null;
+            /** Enforcement Repair Count */
+            enforcement_repair_count?: number | null;
+            /** Enforcement Wasted Count */
+            enforcement_wasted_count?: number | null;
+            /** Trigger Id */
+            trigger_id?: string | null;
+            /** Dispatch Phase */
+            dispatch_phase?: string | null;
+            /** Dispatch Phase Entered At */
+            dispatch_phase_entered_at?: string | null;
             /** Created At */
             created_at: string;
         };

@@ -259,6 +259,27 @@ class AnalyticsExportItem(BaseModel):
     run_number: int | None = None
     output_bytes: int | None = None
     rate_limited: bool | None = None
+    # The JSON surface validates through this model, so every column in the
+    # service's ``_EXPORT_COLUMNS`` must exist here too or pydantic silently
+    # drops it — CSV/NDJSON would carry the value and JSON would not. Parity is
+    # asserted by ``tests/unit/api/test_analytics_export_contract.py``.
+    batch_id: str | None = None
+    telemetry_bytes: int | None = None
+    dispatched_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    total_queue_wait_ms: int | None = None
+    workspace_inputs_count: int | None = None
+    enforcement_native_count: int | None = None
+    enforcement_verbatim_count: int | None = None
+    enforcement_repair_count: int | None = None
+    enforcement_wasted_count: int | None = None
+    # FAR-1421 claim→dispatch latency provenance — the fields
+    # avg_dispatch_latency_ms is bucketed from (dispatch_phase_entered_at -
+    # created_at, else started_at - created_at).
+    trigger_id: str | None = None
+    dispatch_phase: str | None = None
+    dispatch_phase_entered_at: str | None = None
     created_at: str
 
 
