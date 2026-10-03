@@ -55,9 +55,40 @@ class TriggerEvent(OrgScoped):
             _TRIGGER_EVENT_VALIDATION_SQL,
             name="ck_trigger_events_validation_result",
         ),
+        # 0278_trigger_events_trigger_type_check — mirrors
+        # ``ck_triggers_type`` on the parent ``triggers`` table. Every write
+        # site stores either a literal in this vocabulary (webhook /
+        # agent_signal / polling / cron / ongoing / slack_app_mention) or a
+        # passthrough of ``Trigger.trigger_type`` (itself CHECK-constrained),
+        # so the event log can never disagree with the trigger vocabulary.
+        CheckConstraint(
+            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'slack_app_mention')",
+            name="ck_trigger_events_trigger_type",
+        ),
         # Age-based retention (FAR-167) reads ``received_at`` in a bounded
         # select-then-delete sweep (migration 0092).
         Index("ix_trigger_events_received_at", "received_at"),
+        # 0277_trigger_events_listing_indexes — the event-listing hot paths
+        # (``api/routes/triggers.py::list_trigger_events``,
+        # ``api/routes/admin_triggers.py``, ``api/mcp_server.py``) all filter
+        # ``organisation_id = $1 [AND trigger_id = $2]`` with optional
+        # ``validation_result`` / ``trigger_type`` equality predicates and
+        # ``ORDER BY created_at DESC, id DESC LIMIT n+1``. The pre-existing
+        # single-column org/trigger indexes forced a bitmap-AND plus a sort;
+        # these composites serve the filter prefix and the recency ordering.
+        # Both lead on ``organisation_id`` (RLS org-isolated table, so the
+        # tenant column must be the index prefix — the 0272 convention).
+        Index(
+            "ix_trigger_events_org_trigger_created",
+            "organisation_id",
+            "trigger_id",
+            "created_at",
+        ),
+        Index(
+            "ix_trigger_events_org_created",
+            "organisation_id",
+            "created_at",
+        ),
     )
 
     trigger_id: Mapped[uuid.UUID] = mapped_column(

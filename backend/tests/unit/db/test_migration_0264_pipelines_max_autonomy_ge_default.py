@@ -19,9 +19,11 @@ Lenses:
   0272_oauth_client_revoke_lookup_indexes chains onto 0271,
   0273_runs_dispatch_phase chains onto 0272,
   0274_policy_gate_pin_fingerprint_operator_control chains onto 0273, and
-  0275_run_cancel_reason_vocabulary chains onto 0274, and
-  0276_runs_autovacuum_enabled chains onto 0275 as the
-  single linear head (0259's test documents the run-up through 0276).
+  0275_run_cancel_reason_vocabulary chains onto 0274,
+  0276_runs_autovacuum_enabled chains onto 0275,
+  0277_trigger_events_listing_indexes chains onto 0276, and
+  0278_trigger_events_trigger_type_check chains onto 0277 as the
+  single linear head (0259's test documents the run-up through 0278).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -56,7 +58,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0276_runs_autovacuum_enabled"
+_HEAD_MIGRATION = "0278_trigger_events_trigger_type_check"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

@@ -1,22 +1,23 @@
-"""Unit tests for migration 0272_oauth_client_revoke_lookup_indexes.
+"""Unit tests for migration 0277_trigger_events_listing_indexes.
 
 Structural - load the migration module and assert its contract without a
-database, and pin model/migration parity for the two new OAuth
-client-revoke lookup indexes:
+database, and pin model/migration parity for the two new trigger_events
+listing indexes:
 
-* the chain is pinned (0272 -> ``0271_org_api_keys_revocation_sweep_indexes``)
-  with ``0273_runs_dispatch_phase`` the single linear head, so the
-  pre-commit check-migration-heads hook and every ``test_single_head_*``
-  pin cannot be ambushed by a renumber;
-* the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
-  the client-revoke DELETEs rely on (``auth/oauth.py::delete_oauth_client``
-  against ``oauth_authorization_codes`` and ``oauth_token_families``), each
-  leading on ``organisation_id`` (both tables are RLS org-isolated, so the
-  tenant column must be the index prefix);
+* the chain is pinned (0277 -> ``0276_runs_autovacuum_enabled``, with
+  ``0278_trigger_events_trigger_type_check`` now the single linear head)
+  so the pre-commit check-migration-heads hook and every
+  ``test_single_head_*`` pin cannot be ambushed by a renumber;
+* the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS``
+  statements the event-listing read paths rely on
+  (``api/routes/triggers.py::list_trigger_events`` per-trigger listing,
+  ``api/routes/admin_triggers.py`` / ``api/mcp_server.py`` org-wide
+  listings), each leading on ``organisation_id`` (``trigger_events`` is
+  RLS org-isolated, so the tenant column must be the index prefix);
 * the downgrade drops exactly those two indexes;
-* the ``OAuthAuthorizationCode`` / ``OAuthTokenFamily`` models declare the
-  same two indexes - same name, same ordered key columns - so
-  ``create_all``'d schemas and autogenerate stay in sync.
+* the ``TriggerEvent`` model declares the same two indexes - same name,
+  same ordered key columns - so ``create_all``'d schemas and autogenerate
+  stay in sync.
 
 They run without a database.
 """
@@ -31,31 +32,26 @@ from unittest.mock import MagicMock, patch
 from alembic.script import ScriptDirectory
 from sqlalchemy import Index
 
-from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from modulo.db.models.trigger_event import TriggerEvent
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0272_oauth_client_revoke_lookup_indexes"
+_MIGRATION_NAME = "0277_trigger_events_listing_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0271_org_api_keys_revocation_sweep_indexes"
+_DOWN_REVISION = "0276_runs_autovacuum_enabled"
+_HEAD_MIGRATION = "0278_trigger_events_trigger_type_check"
 
 #: Index name -> (table, ordered key columns). This is the single source of
 #: truth asserted against BOTH the migration DDL and the ORM declaration,
 #: so a one-sided edit to either fails here instead of in prod.
 _INDEXES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "ix_oauth_auth_codes_org_client": (
-        'public."oauth_authorization_codes"',
-        ("organisation_id", "client_id"),
+    "ix_trigger_events_org_trigger_created": (
+        'public."trigger_events"',
+        ("organisation_id", "trigger_id", "created_at"),
     ),
-    "ix_oauth_token_families_org_client": (
-        'public."oauth_token_families"',
-        ("organisation_id", "client_id"),
+    "ix_trigger_events_org_created": (
+        'public."trigger_events"',
+        ("organisation_id", "created_at"),
     ),
-}
-
-#: Index name -> declaring ORM model, for the model/migration parity checks.
-_MODEL_BY_INDEX: dict[str, type] = {
-    "ix_oauth_auth_codes_org_client": OAuthAuthorizationCode,
-    "ix_oauth_token_families_org_client": OAuthTokenFamily,
 }
 
 
@@ -101,23 +97,16 @@ def _executed(entry_point: str) -> list[str]:
     return executed
 
 
-def _model_indexes(model: type) -> dict[str, Index]:
-    return {idx.name: idx for idx in model.__table__.indexes if idx.name is not None}
+def _model_indexes() -> dict[str, Index]:
+    return {idx.name: idx for idx in TriggerEvent.__table__.indexes if idx.name is not None}
 
 
 class TestChain:
-    def test_single_head_is_0275(self) -> None:
+    def test_single_head_is_0278(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        # 0273_runs_dispatch_phase (FAR-1088), then
-        # 0274_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10), then
-        # 0275_run_cancel_reason_vocabulary (FAR-1406), then
-        # 0276_runs_autovacuum_enabled (FAR-1419),
-        # 0277_trigger_events_listing_indexes, then
-        # 0278_trigger_events_trigger_type_check,
-        # now chain onto this migration, so the single head moved up six.
-        assert heads == ["0278_trigger_events_trigger_type_check"], f"expected a single head, got {heads}"
+        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
+    def test_down_revision_is_0276_runs_autovacuum_enabled(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -140,15 +129,15 @@ class TestUpgrade:
 
     def test_uses_the_idempotent_create_index_if_not_exists_convention(self) -> None:
         code = _source_code()
-        # The idempotency convention of 0128/0155/0267/0271: raw CREATE INDEX
-        # IF NOT EXISTS, not op.create_index.
+        # The idempotency convention of 0128/0155/0267/0271/0272: raw
+        # CREATE INDEX IF NOT EXISTS, not op.create_index.
         assert "op.create_index" not in code
         assert "op.execute(f" not in code
         assert "text(f" not in code
         assert code.count("CREATE INDEX") == len(_INDEXES)
 
     def test_both_indexes_qualify_the_table_and_lead_on_the_tenant_column(self) -> None:
-        # Both tables are RLS org-isolated, so the org-scoped predicate must
+        # trigger_events is RLS org-isolated, so the org-scoped predicate must
         # lead with organisation_id for the tenant filter to be the index
         # prefix. The statement comes from the executed SQL (the source splits
         # each statement across concatenated literals).
@@ -175,7 +164,7 @@ class TestDowngrade:
 class TestModelParity:
     def test_model_declares_the_two_indexes_with_the_same_columns(self) -> None:
         for name, (_, columns) in _INDEXES.items():
-            declared = _model_indexes(_MODEL_BY_INDEX[name])
+            declared = _model_indexes()
             assert name in declared, f"model/migration drift: {name} missing from the ORM"
             model_columns = tuple(col.name for col in declared[name].columns)
             assert model_columns == columns, (
