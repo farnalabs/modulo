@@ -638,11 +638,9 @@ async def stream_export_chain(
                     (AuditEvent.created_at > cursor_created_at)
                     | ((AuditEvent.created_at == cursor_created_at) & (AuditEvent.id > cursor_id))
                 )
-            query = query.order_by(
-                AuditEvent.created_at.asc(), AuditEvent.id.asc()
-            ).limit(safe_page_size)
+            query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).limit(safe_page_size)
             result = await session.execute(query)
-            page = list(result.scalars())
+            page: list[Any] = list(result.scalars())
             for event in page:
                 yield _audit_event_to_dict(event)
             if len(page) < safe_page_size:
