@@ -62,7 +62,7 @@ function stubFetch(route: StubRouter): () => void {
 }
 
 test.describe('Harness probe: HITL recovery outcome (no backend)', { tag: '@regression' }, () => {
-  test('a persistent approve 503 behind a healthy status endpoint comes back incomplete, not skipped', async () => {
+  test('a persistent approve 503 behind a healthy status endpoint comes back incomplete, not skipped', { tag: '@regression' }, async () => {
     // The exact 2026-10-02 signature: GET /runs answers 200 `claimed` while
     // POST .../approve answers 503 "Database temporarily unavailable." — the
     // API and DB reachable, the approve path broken. #1214 skipped on this;
@@ -99,7 +99,7 @@ test.describe('Harness probe: HITL recovery outcome (no backend)', { tag: '@regr
     }
   })
 
-  test('a genuine transient approve 503 is still recovered by the bounded per-request retry', async () => {
+  test('a genuine transient approve 503 is still recovered by the bounded per-request retry', { tag: '@regression' }, async () => {
     // The approve 503s three times (the rolled-back blip class) and only the
     // FOURTH request inside ONE re-issue succeeds. A later re-issue cycle
     // would never see a 200 again — only call 4 returns one — so passing here
