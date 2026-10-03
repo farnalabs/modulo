@@ -2590,10 +2590,14 @@ async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
     description=(
         "Query run analytics over the daily facts table. Returns a bucketed series "
         "(hour/day/week) with per-bucket count, cost, tokens, duration, success rate, "
-        "failure and stall counts, queue wait, final idle, and output size. "
+        "failure and stall counts, queue wait, claim→dispatch latency "
+        "(`avg_dispatch_latency_ms` = dispatch_phase_entered_at - created_at, else "
+        "started_at - created_at), final idle, and output size. "
         "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
-        "and error_code for filtering/grouping by failure code. The result also "
-        "carries a `deep_link` to the /analytics view pre-filtered with the same "
+        "and error_code for filtering/grouping by failure code. `dimension` groups the "
+        "series by a key — `trigger_type`, `trigger_id`, `status`, `pipeline`, `folder`, "
+        "`team` or `error_code` — which is how per-trigger latency is read. The result "
+        "also carries a `deep_link` to the /analytics view pre-filtered with the same "
         "parameters — share that link instead of dumping the raw buckets. Requires "
         "the analytics.query permission and the analytics_page plan feature."
     ),
