@@ -207,6 +207,24 @@ describe('EnvironmentProfileForm — create mode', () => {
     expect(routerPush).not.toHaveBeenCalled()
   })
 
+  it('create failure with a non-Error rejection falls back to the generic save error', async () => {
+    postMock.mockRejectedValue('quota exhausted (non-Error)')
+    const wrapper = mountForm()
+    await flush()
+
+    await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
+    // FAR-587 made provider_type required (no default) - select it so submit reaches the API.
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'local_docker'
+    await nextTick()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(wrapper.text()).toContain('Failed to save profile')
+    expect(routerPush).not.toHaveBeenCalled()
+  })
+
   it('back and cancel buttons navigate back to the list', async () => {
     const wrapper = mountForm()
     await flush()

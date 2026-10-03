@@ -43,7 +43,34 @@
       </p>
     </div>
 
-    <LoadingSpinner v-if="!loaded" />
+    <!-- STATE-3 (ux-conformance): a determinate-shaped table skeleton, not an
+         indeterminate spinner — the column count and headers are known up front,
+         so the placeholder mirrors the real layout and avoids a layout shift
+         when the rows arrive. -->
+    <div
+      v-if="!loaded"
+      class="overflow-x-auto rounded-lg border bg-card shadow-sm"
+      role="status"
+      :aria-label="$t('common.loading')"
+      data-testid="settings-triggers-loading"
+    >
+      <table class="w-full text-left text-sm">
+        <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
+          <tr>
+            <th v-for="col in 6" :key="col" class="px-4 py-3">
+              <span class="block h-3 w-24 animate-pulse rounded bg-muted" />
+            </th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          <tr v-for="row in 5" :key="row">
+            <td v-for="col in 6" :key="col" class="px-4 py-3">
+              <span class="block h-4 w-full animate-pulse rounded bg-muted" />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
 
@@ -505,7 +532,6 @@ import { useCurrentUser } from '../composables/useCurrentUser'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import TableActions from '../components/shared/TableActions.vue'
