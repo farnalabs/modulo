@@ -29,16 +29,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, nullslast, select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import InvalidRequestError, PendingRollbackError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import MSG_SESSION_CONTRACT, handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
     get_db_session,
@@ -543,6 +544,77 @@ async def _validate_choice_answer(
 
 
 # ---------------------------------------------------------------------------
+# FAR-1408: session-contract (InvalidRequestError) -> 500, at route level;
+# its TRANSIENT subclass PendingRollbackError -> 503 (with the db_transient
+# record), mirroring db_error_handling._translate_wrapped_exception.
+# ---------------------------------------------------------------------------
+
+
+def _raise_session_contract_error(log_key: str, exc: InvalidRequestError) -> NoReturn:
+    """Report a session exception caught inside a route-local arm.
+
+    ``InvalidRequestError`` subclasses ``SQLAlchemyError``, so each of this
+    module's route-local ``except SQLAlchemyError`` arms would otherwise catch
+    it FIRST and answer ``503 MSG_DB_ERROR_PLEASE_TRY`` ("Database error.
+    Please try again.") — a retry-inviting reply to a non-retryable local
+    programming bug. ``handle_db_errors`` cannot save us: it only sees
+    exceptions that ESCAPE the route, and these arms never let it out.
+
+    For a plain ``InvalidRequestError`` this mirrors
+    ``db_error_handling._translate_wrapped_exception``'s
+    ``InvalidRequestError`` arm: 500 with ``MSG_SESSION_CONTRACT`` (no
+    "temporarily unavailable", no retry invitation), logged under a distinct
+    programming-error key, and NO ``log_service_unavailable("db_transient",
+    ...)`` record.
+
+    ``PendingRollbackError`` is the one subclass exempt from that mapping. It
+    IS an ``InvalidRequestError``, but it signals a TRANSIENT fault: an earlier
+    statement failed and the session was never rolled back, so the next
+    statement refuses to run — and during a genuine outage that earlier fault
+    (server disconnect, serialization failure, pool timeout) is usually the
+    real cause. Filing it as a non-retryable 500 would invert the FAR-1408
+    misclassification on a common path, so it maps to 503 with the structured
+    ``db_transient`` record, exactly like the ``SQLAlchemyError`` backstop.
+
+    Shared by all five arms so the status, detail and log shape cannot drift
+    per site — only ``log_key`` varies. ``NoReturn`` keeps mypy's flow
+    analysis correct for the caller's except-chain.
+
+    Logging note: this is ``logger.exception``'s exact behaviour (ERROR level
+    + the raised exception's traceback) spelled as ``error(..., exc_info=exc)``
+    because the call sits in a helper rather than lexically inside an
+    ``except`` block — ``exc`` IS the active exception here, so the emitted
+    record carries the same traceback, and ruff's LOG004 does not have to be
+    silenced.
+    """
+    if isinstance(exc, PendingRollbackError):
+        # ``log_key`` ends in ``.session_contract_error`` (the caller's label).
+        # A PendingRollbackError is NOT a session-contract violation — it is the
+        # transient subclass — so relabel the key's suffix to
+        # ``.pending_rollback_error`` on the ``db_transient`` record. Without
+        # this the record carries the SAME route label a session-contract 500
+        # would use, and the two are indistinguishable in the service-
+        # unavailable trail (FAR-1408 review observation 1).
+        transient_key = log_key.removesuffix(".session_contract_error") + ".pending_rollback_error"
+        logger.error(transient_key, exc_info=exc)
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route=transient_key,
+            detail="transient database error (PendingRollbackError)",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    logger.error(log_key, exc_info=exc)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=MSG_SESSION_CONTRACT,
+    ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Claim
 # ---------------------------------------------------------------------------
 
@@ -640,6 +712,8 @@ async def claim_review(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.claim_review.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
@@ -685,6 +759,8 @@ async def _run_hitl_manager(
     mgr_method: str,
     action: str | None = None,
     answer: dict[str, Any] | None = None,
+    validate_answer: bool = False,
+    require_answer: bool = False,
     **call_kwargs: Any,
 ) -> Any:
     """Open a tenant-scoped transaction and invoke a HITLManager decision method.
@@ -698,12 +774,52 @@ async def _run_hitl_manager(
     ``action`` (FAR-634) is the REST action label for the human_only denial
     audit event; it defaults to ``mgr_method`` (identical for every route
     except submit-manual, whose manager call is ``approve``).
+
+    ``validate_answer`` (FAR-1408): run the FAR-860/FAR-907 choice-answer
+    validation HERE, inside the decision transaction and immediately AFTER
+    ``set_rls_org`` — never at route level before this call. Two reasons:
+    the REST DI session is built ``autobegin=False`` (transaction management
+    is left to the caller), so any query issued before ``session.begin()``
+    raises ``InvalidRequestError``; and the validation's resolution read
+    (``resolve_hitl_review_config`` → ``get_run``) is RLS-scoped, so it must
+    run in the SAME transaction whose ``set_rls_org`` set
+    ``app.organisation_id`` — otherwise the predicate filters the claim/run
+    rows away and validation silently FAILS OPEN (a worse bug than the
+    crash). The validated answer is injected into ``decision_payload`` (the
+    very dict the route reuses for the direct ``executor.resume`` injection)
+    and forwarded to the manager as ``answer``, so the validated contract and
+    the committed decision are consistent by construction. ``require_answer``
+    is forwarded to the validator unchanged (approve / approve-with-modification
+    both require a declared choice to be answered), and it IMPLIES
+    ``validate_answer`` — see the note directly below: an enforcement
+    flag must never be able to silently switch its own enforcement off.
     """
     audit_action = action or mgr_method
+    # FAR-907: ``require_answer`` is an ENFORCEMENT flag, so it must never be
+    # able to disable the enforcement it belongs to. Until now the flag was
+    # only forwarded inside ``if validate_answer:``, so a caller passing
+    # ``require_answer=True`` on its own got NO validation at all — a silent
+    # enforcement skip, the exact failure class FAR-907 exists to prevent.
+    # Imply validation instead of failing the request: the caller's intent
+    # ("this answer is mandatory") is unambiguous, and turning it into a 500
+    # would break the route rather than honour it.
+    validate_answer = validate_answer or require_answer
     mgr = HITLManager()
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            if validate_answer:
+                answer = await _validate_choice_answer(
+                    session,
+                    run_id,
+                    review_id,
+                    principal.organisation_id,
+                    answer,
+                    require_answer=require_answer,
+                )
+                payload = call_kwargs.get("decision_payload")
+                if answer is not None and isinstance(payload, dict):
+                    payload["answer"] = answer
             if enforce_human_only:
                 await _enforce_human_only_gate(session, principal, run_id, review_id, audit_action)
             if require_sandbox:
@@ -745,6 +861,8 @@ async def _run_hitl_manager(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl._run_hitl_manager.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl._run_hitl_manager")
         raise HTTPException(
@@ -780,14 +898,17 @@ async def approve_review(
     principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
-    # FAR-860/FAR-907: validate choice answer against the gate's response_contract
-    # BEFORE the manager call (fail-fast, no side effects). A choice gate
-    # REQUIRES a valid answer on this path too — without it a direct API caller
-    # could approve while skipping the declared choice (mirrors
-    # approve-with-modification).
-    validated_answer = await _validate_choice_answer(
-        session, run_id, review_id, principal.organisation_id, req.answer, require_answer=True
-    )
+    # FAR-860/FAR-907: a choice gate REQUIRES a valid answer on this path too
+    # — without it a direct API caller could approve while skipping the
+    # declared choice (mirrors approve-with-modification). The validation is
+    # NOT done here: FAR-1408 proved a route-level call ran before any
+    # transaction was open, and the REST DI session is ``autobegin=False``, so
+    # every request crashed with ``InvalidRequestError`` (surfacing as a 503
+    # "Database temporarily unavailable"). It now runs inside
+    # ``_run_hitl_manager``'s transaction, after ``set_rls_org`` — see that
+    # helper's ``validate_answer`` doc. The raw request answer is handed over;
+    # the validated value is injected into ``resume_data`` (same object) by
+    # the helper before the manager call.
     # FAR-541: every resume decision is STAMPED with the gate it resolves so a
     # per-gate consumer (``_hitl_review_resume_result``) can reject a foreign
     # decision left in state by an earlier gate (decisions are per-RUN but
@@ -797,8 +918,6 @@ async def approve_review(
     resume_data: dict[str, Any] = {"action": "approved", "review_id": review_id}
     if req.notes:
         resume_data["notes"] = req.notes
-    if validated_answer is not None:
-        resume_data["answer"] = validated_answer
 
     await _run_hitl_manager(
         session,
@@ -811,7 +930,9 @@ async def approve_review(
         claim_token=req.claim_token,
         decision_payload=resume_data,
         client_type=_client_type(principal),
-        answer=validated_answer,
+        answer=req.answer,
+        validate_answer=True,
+        require_answer=True,
     )
 
     try:
@@ -857,14 +978,13 @@ async def approve_review_with_modification(
     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
     documenting the change.
     """
-    # FAR-907: validate the choice answer against the gate's response_contract
-    # BEFORE the manager call (fail-fast, no side effects). A choice gate
-    # REQUIRES a valid answer on this path — without it a reviewer could
-    # modify-approve while skipping the declared choice (previously nothing
-    # validated, so the requirement was silently skipped).
-    validated_answer = await _validate_choice_answer(
-        session, run_id, review_id, principal.organisation_id, req.answer, require_answer=True
-    )
+    # FAR-907: a choice gate REQUIRES a valid answer on this path — without
+    # it a reviewer could modify-approve while skipping the declared choice
+    # (previously nothing validated, so the requirement was silently
+    # skipped). As on /approve, the validation itself runs INSIDE
+    # ``_run_hitl_manager``'s transaction after ``set_rls_org`` (FAR-1408):
+    # the route hands over the raw request answer and the helper injects the
+    # validated value into ``resume_data`` before the manager call.
     # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
     # The real writer contract: action "approved" + "modified_output" (there is
     # no "approved_with_modification" action). _decide would stamp the persisted
@@ -877,11 +997,10 @@ async def approve_review_with_modification(
     }
     if req.notes:
         resume_data["notes"] = req.notes
-    if validated_answer is not None:
-        # FAR-907: the answer rides in the persisted decision so
-        # ``_inject_answer_state`` places ``hitl_answer_<review_id>`` in run
-        # state exactly as on the plain approve path.
-        resume_data["answer"] = validated_answer
+    # FAR-907: when present the answer rides in the persisted decision so
+    # ``_inject_answer_state`` places ``hitl_answer_<review_id>`` in run
+    # state exactly as on the plain approve path (injected in-transaction by
+    # ``_run_hitl_manager``, FAR-1408).
     await _run_hitl_manager(
         session,
         principal,
@@ -894,7 +1013,9 @@ async def approve_review_with_modification(
         modified_output=req.modified_output,
         decision_payload=resume_data,
         client_type=_client_type(principal),
-        answer=validated_answer,
+        answer=req.answer,
+        validate_answer=True,
+        require_answer=True,
     )
 
     try:
@@ -1189,6 +1310,8 @@ async def list_run_pending_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.list_run_pending_reviews.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_run_pending_reviews")
         raise HTTPException(
@@ -1272,6 +1395,8 @@ async def list_org_pending_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.list_org_pending_reviews.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_org_pending_reviews")
         raise HTTPException(
@@ -1383,6 +1508,8 @@ async def list_org_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.list_org_reviews.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_org_reviews")
         raise HTTPException(
