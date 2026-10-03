@@ -55,10 +55,19 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+
+# Make ``modulo`` importable when this documented repair tool is run directly
+# from a repo checkout (``python scripts/repair_accounts_fks.py``) rather than
+# through the installed package. Mirrors the other backend/scripts entrypoints
+# (backfill_daily_facts.py, migrate-checkpoint-blobs.py). The helper it imports
+# is stdlib-only, so this keeps the "asyncpg + stdlib only" runtime contract.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
+
+from modulo.db.bootstrap import split_postgres_sslmode
 
 # FK on-delete action shared by the nullable-account FKs below: deleting the
 # account nulls the child column rather than cascading.
@@ -163,51 +172,6 @@ _ACCOUNTS_GRANTS: tuple[str, ...] = (
 )
 
 _ON_DELETE_ACTIONS = frozenset({ON_DELETE_RESTRICT, ON_DELETE_CASCADE, ON_DELETE_SET_NULL, "NO ACTION", "SET DEFAULT"})
-
-
-def split_postgres_sslmode(url: str) -> tuple[str, bool | str]:
-    """Extract ``sslmode`` from a Postgres URL into an asyncpg ``ssl`` value.
-
-    Local stdlib-only twin of :func:`modulo.db.bootstrap.split_postgres_sslmode`
-    (FAR-1440's shared ``modulo.db.url_utils.split_postgres_sslmode``) — this is
-    a standalone repair script that must run with only asyncpg installed, so it
-    cannot import the app. Semantics:
-
-    * absent / ``disable`` → ``(url_without_sslmode, False)`` — explicit
-      plaintext, never the asyncpg ``prefer`` driver default (which fails open
-      and broke Fly's private networks with ``ConnectionResetError``);
-    * ``require`` / ``verify-ca`` / ``verify-full`` → the same string — asyncpg
-      FAILS CLOSED when TLS is required and the server cannot provide it;
-    * ``prefer`` / ``allow`` / any other value → ``ValueError`` — they would
-      silently downgrade to plaintext, which is never permitted.
-
-    The returned URL is rebuilt without the ``sslmode`` param (asyncpg rejects
-    it in the DSN). Only Postgres-family schemes are accepted — callers gate on
-    the scheme and pass non-Postgres URLs through with no ``ssl`` arg.
-    """
-    parts = urlsplit(url)
-    if not parts.scheme.startswith("postgres"):
-        raise ValueError(f"split_postgres_sslmode expects a Postgres URL, got scheme {parts.scheme!r}")
-    ssl: bool | str = False
-    kept: list[str] = []
-    for item in parts.query.split("&") if parts.query else []:
-        key, _, value = item.partition("=")
-        if key != "sslmode":
-            kept.append(item)
-            continue
-        mode = value.strip().lower().replace("_", "-")
-        if mode == "disable":
-            ssl = False
-        elif mode in ("require", "verify-ca", "verify-full"):
-            ssl = mode
-        else:
-            raise ValueError(
-                f"Unsupported sslmode={value!r}: use disable, require, "
-                "verify-ca or verify-full (prefer/allow silently downgrade "
-                "to plaintext and are not permitted)"
-            )
-    query = "&".join(kept)
-    return parts._replace(query=query).geturl(), ssl
 
 
 def _resolve_db_url(raw: str) -> tuple[str, bool | str | None]:
