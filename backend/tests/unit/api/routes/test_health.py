@@ -99,6 +99,7 @@ class TestCheckDispatcherReconcile:
         assert result.status == "ok"
         assert result.detail is not None
         assert "scanned=3" in result.detail
+        assert "rows_deferred=0" in result.detail
 
     @pytest.mark.asyncio
     async def test_stale_run_degraded(self) -> None:

@@ -6450,7 +6450,13 @@ async def _reconcile_org(
                 # evaluates them once per fetched row — an unbounded fetch is
                 # unbounded work inside this single statement, on top of the
                 # per-row loop below.
-                row_select = row_select.limit(row_budget)
+                #
+                # Fetch ONE row beyond the budget so an exactly-full result
+                # set can be distinguished from a genuinely capped one (review
+                # follow-up): ``row_budget + 1`` returned rows prove overflow
+                # exists; exactly ``row_budget`` rows prove the backlog was
+                # drained this tick, so nothing is deferred.
+                row_select = row_select.limit(row_budget + 1)
             rows = (await session.execute(row_select)).all()
         except asyncio.CancelledError:
             raise
@@ -6477,10 +6483,13 @@ async def _reconcile_org(
                 terminalized_run_ids,
                 early_detect_minutes=early_detect_minutes,
             )
-        # FAR-1425: a fetch that fills the budget exactly may have left rows
-        # behind. Count the org as deferred so the cap is visible instead of
-        # silently reported as a clean tick; the remainder drains next tick.
-        if row_budget is not None and len(rows) >= row_budget:
+        # FAR-1425: the fetch above returned one row beyond the budget when
+        # (and only when) matching rows remain. Count the org as deferred so
+        # the cap is visible instead of silently reported as a clean tick; the
+        # remainder drains next tick. A fetch of exactly ``row_budget`` rows
+        # means the backlog was drained this tick — deferring it every tick
+        # would misreport a clean org as permanently capped.
+        if row_budget is not None and len(rows) > row_budget:
             summary["rows_deferred"] = summary.get("rows_deferred", 0) + 1
     return enqueue_failed_redispatched
 

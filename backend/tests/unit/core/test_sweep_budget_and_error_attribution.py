@@ -761,6 +761,19 @@ class TestSingleOrgRowBudget:
         assert "LIMIT" in str(session.statements[0])
 
     @pytest.mark.asyncio
+    async def test_exactly_full_budget_is_not_reported_deferred(self) -> None:
+        """A fetch of exactly ``row_budget`` rows means the backlog was fully
+        drained this tick: with nothing left behind, the org must NOT be
+        reported as deferred (the fetch asks for ``row_budget + 1`` precisely
+        so an exactly-full steady state is distinguishable from a capped one).
+        """
+        summary, session, one_row = await _run_org([object() for _ in range(3)], row_budget=3)
+        assert one_row.await_count == 3
+        assert summary["scanned"] == 3
+        assert summary.get("rows_deferred", 0) == 0
+        assert "LIMIT" in str(session.statements[0])
+
+    @pytest.mark.asyncio
     async def test_direct_call_without_a_budget_stays_unbounded(self) -> None:
         """``row_budget=None`` is the pre-FAR-1425 contract for direct
         callers — no LIMIT, no defer accounting."""
