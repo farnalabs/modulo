@@ -1,15 +1,24 @@
 """Unit tests for ModuloPostgresSaver — org isolation, encryption, SQL."""
 
 import asyncio
+import importlib.util
 import json
+import re
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from modulo.core.pipeline_engine.modulo_saver import (
+    _AUTOVACUUM_TUNING_SQL,
+    CHECKPOINT_AUTOVACUUM_TABLES,
+    CHECKPOINT_AUTOVACUUM_TUNING,
+    ModuloPostgresSaver,
+)
 
 
 class _AsyncIter:
@@ -232,6 +241,101 @@ class TestSQLConstants:
         migration_sql = "\n".join(ModuloPostgresSaver.MIGRATIONS)
         for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
             assert f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS created_at" in migration_sql
+
+
+_MIGRATION_0277_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "modulo"
+    / "db"
+    / "migrations"
+    / "versions"
+    / "0277_table_autovacuum_tuning.py"
+)
+
+#: ``autovacuum_<option> = <literal>`` pairs, as they appear inside an
+#: ``ALTER TABLE ... SET (...)`` clause.
+_RELOPT_NAME_RE = re.compile(r"\b(autovacuum_[a-z_]+)\s*=\s*([0-9]+(?:\.[0-9]+)?|true|false)")
+
+#: The same option names WITHOUT their values, as they appear in the
+#: migration's ``RESET (a, b, c)`` list — which carries no values at all.
+_RELOPT_BARE_NAME_RE = re.compile(r"\b(autovacuum_[a-z_]+)\b")
+
+
+def _reloptions_of(sql: str) -> dict[str, str]:
+    """Parse the ``key = value`` reloption pairs out of a rendered statement."""
+    return dict(_RELOPT_NAME_RE.findall(sql))
+
+
+def _load_migration_0277() -> ModuleType:
+    """Execute migration 0277's module so its builders can be called directly.
+
+    Alembic version files are loaded by path (no ``__init__.py`` in
+    ``versions/``), so this mirrors how alembic itself imports them.
+    """
+    assert _MIGRATION_0277_PATH.exists(), f"migration file missing: {_MIGRATION_0277_PATH}"
+    spec = importlib.util.spec_from_file_location("migration_0277_table_autovacuum_tuning", _MIGRATION_0277_PATH)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestCheckpointAutovacuumTwin:
+    """Migration 0277 and the startup path must carry IDENTICAL tuning values (FAR-1442).
+
+    Alembic revision ``0277_table_autovacuum_tuning`` tunes the checkpoint
+    tables on an ALREADY-DEPLOYED database; ``ModuloPostgresSaver.setup()``
+    tunes them on every boot, which is the only path a FRESH install gets
+    (alembic records 0277 before the tables exist and never replays it).
+
+    The two sides hold separate copies rather than one imported object: a
+    migration is a frozen historical artefact and may not import application
+    constants (the rule documented inline in migrations 0192/0193/0215), and
+    import-linter's ``db-does-not-import-core`` contract forbids a
+    ``modulo.db`` module importing ``modulo.core`` anyway. This class is what
+    makes the duplication safe — it pins the copies equal, so an edit to one
+    side alone fails here rather than shipping divergent tuning. The VALUES
+    themselves are pinned against real Postgres by
+    ``tests/integration/test_migration_0277_table_autovacuum_tuning.py``.
+    """
+
+    def test_migration_and_setup_tuning_values_are_identical(self):
+        migration = _load_migration_0277()
+        assert migration._CHECKPOINT_TABLES == CHECKPOINT_AUTOVACUUM_TABLES
+        for table in CHECKPOINT_AUTOVACUUM_TABLES:
+            assert _reloptions_of(migration._checkpoint_set(table)) == CHECKPOINT_AUTOVACUUM_TUNING, (
+                f"migration 0277's tuning for {table} drifted from "
+                f"modulo_saver.CHECKPOINT_AUTOVACUUM_TUNING: {_reloptions_of(migration._checkpoint_set(table))!r}"
+            )
+            assert set(_RELOPT_BARE_NAME_RE.findall(migration._checkpoint_reset(table))) == set(
+                CHECKPOINT_AUTOVACUUM_TUNING
+            ), f"migration 0277's downgrade must RESET exactly the options it adds on {table}"
+
+    def test_setup_statements_are_rendered_from_the_shared_constant(self):
+        for statement, table in zip(_AUTOVACUUM_TUNING_SQL, CHECKPOINT_AUTOVACUUM_TABLES, strict=True):
+            assert _reloptions_of(statement) == CHECKPOINT_AUTOVACUUM_TUNING, (
+                f"setup() tuning for {table} is not derived from CHECKPOINT_AUTOVACUUM_TUNING"
+            )
+            assert f'ALTER TABLE public."{table}" SET' in statement
+
+    def test_tuning_runs_after_the_create_statements(self):
+        """``setup()`` executes MIGRATIONS in order, so the ALTERs must come last.
+
+        The statements are also existence-gated, but ordering them after the
+        CREATEs is what makes the fresh-install path work at all.
+        """
+        migrations = ModuloPostgresSaver.MIGRATIONS
+        first_tuning_index = migrations.index(_AUTOVACUUM_TUNING_SQL[0])
+        assert migrations[first_tuning_index:] == _AUTOVACUUM_TUNING_SQL
+        for table in CHECKPOINT_AUTOVACUUM_TABLES:
+            create_index = next(
+                index
+                for index, statement in enumerate(migrations)
+                if f"CREATE TABLE IF NOT EXISTS {table} (" in statement
+            )
+            assert create_index < first_tuning_index, f"{table}'s CREATE must run before its autovacuum tuning"
 
 
 class TestBlobEncryption:

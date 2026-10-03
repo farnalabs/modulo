@@ -32,7 +32,13 @@ So this module asserts, against REAL Postgres (testcontainers):
   brand-new database, where the checkpoint tables do NOT exist yet
   (alembic runs before ``ModuloPostgresSaver.setup()``), so the
   existence-gated ALTER must skip them (loudly, via NOTICE) instead of
-  failing the chain.
+  failing the chain;
+* the FRESH-INSTALL boot path - the one this migration originally got
+  wrong: alembic has already recorded 0277 with the tables absent, then the
+  application's first ``ModuloPostgresSaver.setup()`` runs. It must create
+  the tables AND land the tuning on them (the migration will never replay),
+  twice in a row (idempotent). Run against real Postgres through the real
+  ``setup()``/psycopg path, not a re-implementation of it.
 
 No assertion depends on autovacuum's wall-clock scheduling - the tests
 prove the CONFIGURATION, never that a background worker happened to run.
@@ -43,18 +49,25 @@ The private-database fixture mirrors ``test_migration_0276_runs_autovacuum.py``.
 
 from __future__ import annotations
 
+import asyncio
+import selectors
+import threading
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
+
+from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
 pytestmark = [pytest.mark.integration]
 
@@ -399,5 +412,89 @@ class TestFreshDatabase:
                 assert not await _table_exists(engine, table), (
                     f"{table} is runtime-created, it must be absent on a fresh alembic-only database"
                 )
+        finally:
+            await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# The fresh-install boot path - the shape 0277 alone could not fix
+# ---------------------------------------------------------------------------
+
+_saver_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _run_on_selector_loop(coro: Any) -> Any:
+    """Run a psycopg-backed coroutine on a dedicated SelectorEventLoop.
+
+    psycopg's async connections refuse the ProactorEventLoop pytest-asyncio
+    may use on Windows. Mirrors the helper in ``test_checkpoint_isolation.py``:
+    the point is to drive the REAL ``ModuloPostgresSaver.setup()`` path, not a
+    re-implementation of it.
+    """
+    global _saver_loop
+    if _saver_loop is None or _saver_loop.is_closed():
+        _saver_loop = asyncio.SelectorEventLoop(selectors.SelectSelector())
+        threading.Thread(target=_saver_loop.run_forever, name="m0277-saver-loop", daemon=True).start()
+    return asyncio.run_coroutine_threadsafe(coro, _saver_loop).result(timeout=120)
+
+
+async def _apply_setup(db_url: str) -> None:
+    """Run ``ModuloPostgresSaver.setup()`` - the exact code a boot runs."""
+    async with ModuloPostgresSaver.from_conn_string(
+        db_url.replace("postgresql+asyncpg://", "postgresql://", 1),
+        organisation_id=uuid.uuid4(),
+        fernet_key=Fernet.generate_key().decode(),
+    ) as saver:
+        await saver.setup()
+
+
+class TestFreshInstallBoot:
+    async def test_first_boot_tunes_tables_the_migration_never_saw(
+        self,
+        fresh_chain_db_url: str,
+    ) -> None:
+        """A brand-new install ends up tuned, proven through the real ``setup()``.
+
+        Boot order (``deploy/fly/entrypoint.sh``): ``alembic upgrade heads``
+        FIRST, then ``uvicorn``, whose lifespan runs
+        ``ModuloPostgresSaver.setup()``. On a brand-new database alembic
+        records 0277 while the checkpoint tables do not exist, its guarded
+        ALTER skips them, and 0277 never replays - so without the tuning in
+        ``setup()`` the two multi-GB tables would keep Postgres' DEFAULT
+        autovacuum settings forever. That is the customer-facing case for a
+        self-hosted install, so it is driven here end to end: migration
+        applied, tables absent, then the real ``setup()`` must create them
+        AND land the tuning.
+        """
+        engine = create_async_engine(fresh_chain_db_url, poolclass=NullPool)
+        try:
+            # 1. The broken shape: 0277 is recorded, the tables are absent.
+            assert await _alembic_version(engine) == MIGRATION_REV
+            for table in ("checkpoints", "checkpoint_writes"):
+                assert not await _table_exists(engine, table), (
+                    f"{table} must not exist yet - alembic runs before the application's first boot"
+                )
+            # NEGATIVE CONTROL: the assertion below cannot pass against this
+            # state, so the post-setup assertions discriminate rather than
+            # passing vacuously.
+            with pytest.raises(AssertionError, match="autovacuum_vacuum_scale_factor"):
+                await _assert_table_tuned(engine, "checkpoints")
+            await _assert_table_tuned(engine, "runs")
+
+            # 2. The application's first boot.
+            _run_on_selector_loop(_apply_setup(fresh_chain_db_url))
+
+            # 3. THE FIX: the tables exist AND carry the tuning. Only
+            #    setup() could have done this - 0277 is already recorded.
+            for table in ("checkpoints", "checkpoint_writes"):
+                assert await _table_exists(engine, table), f"{table} was not created by setup()"
+                await _assert_table_tuned(engine, table)
+            await _assert_table_tuned(engine, "runs")
+
+            # 4. Idempotent: setup() runs on EVERY boot, so a second run must
+            #    succeed and leave the identical values behind.
+            _run_on_selector_loop(_apply_setup(fresh_chain_db_url))
+            for table in _EXPECTED_RELOPTIONS:
+                await _assert_table_tuned(engine, table)
         finally:
             await engine.dispose()

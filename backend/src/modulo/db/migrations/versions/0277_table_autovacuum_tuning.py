@@ -102,13 +102,37 @@ is observable in the migration log, never silent. On every already-deployed
 database (tables created at first boot long before this revision ran) the
 guard passes and the tuning lands.
 
-**Known limitation, stated explicitly rather than papered over:** on an
-install whose alembic chain reaches 0277 before the application's first
-boot, ``runs`` is tuned but ``checkpoints``/``checkpoint_writes`` are not -
-alembic records the revision as applied and never replays it. Closing that
-gap means carrying the same statements in
-``ModuloPostgresSaver._MIGRATION_SQL`` (which runs idempotently on every
-startup), which is application code outside this migration's scope.
+The fresh-install gap is closed by the startup path, not by this revision
+------------------------------------------------------------------------
+
+A brand-new install used to be the one shape that ended up with DEFAULT
+tuning: alembic records this revision as applied while the checkpoint tables
+are still absent, never replays it, and the tables are created moments later
+by ``setup()`` with server defaults - on the two largest, highest-churn
+relations in the product. ``ModuloPostgresSaver`` now carries the SAME
+tuning statements (rendered from
+``modulo.core.pipeline_engine.modulo_saver.CHECKPOINT_AUTOVACUUM_TUNING``)
+at the end of the list ``setup()`` executes, ordered after the CREATEs, so
+every boot - fresh or deployed - applies it. This revision keeps its own
+ALTERs because they are what lands the tuning on an already-deployed
+database at migration time, before the application's next boot.
+
+Why the values are mirrored rather than shared by import
+--------------------------------------------------------
+
+The two sides are deliberately NOT one imported object. A migration is a
+frozen historical artefact: if it imported an application constant, editing
+that constant later would silently change what replaying this revision
+produces (the repo's rule since 0192 - "migrations cannot import app
+constants" - and import-linter's ``db-does-not-import-core`` contract, which
+forbids a ``modulo.db`` module importing ``modulo.core``). So the literals
+live here and the runtime mapping lives in ``modulo_saver``; the pair is
+pinned identical by
+``tests/unit/pipeline_engine/test_modulo_saver.py::TestCheckpointAutovacuumTwin``,
+and the resulting reloptions are asserted against real Postgres by
+``tests/integration/test_migration_0277_table_autovacuum_tuning.py`` (which
+also proves the fresh-install ``setup()`` path lands them). Change one side
+without the other and CI fails.
 
 Shape and idempotency
 ---------------------
