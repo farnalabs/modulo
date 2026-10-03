@@ -24,6 +24,7 @@ import jmespath.exceptions
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo import settings
 from modulo.core.graph_validator._types import (
     ValidationIssue,
     ValidationResult,
@@ -639,8 +640,10 @@ def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: Valid
     enforcing E2B's 1-hour sandbox timeout cap: a sandbox_agent node with
     ``timeout_seconds`` above the cap now fails provisioning with
     ``400: Timeout cannot be greater than 1 hours`` (previously accepted).
-    Reject anything above 3300 at save time so there is provisioning headroom;
-    do NOT clamp — the author must pick a value explicitly.
+    Reject anything above ``settings.MAX_NODE_TIMEOUT_SECONDS`` at save time so
+    there is provisioning headroom; do NOT clamp — the author must pick a value
+    explicitly. The cap lives in settings (FAR-1424) so this check and the
+    FAR-1088 nodeless in-flight floor can never drift apart.
     """
     timeout = node.get("timeout_seconds")
     if timeout is None:
@@ -649,11 +652,11 @@ def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: Valid
         t = int(timeout) if not isinstance(timeout, int) else timeout
     except (ValueError, TypeError):
         return
-    if t > 3300:
+    if t > settings.MAX_NODE_TIMEOUT_SECONDS:
         result.error(
             "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
             f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the E2B sandbox "
-            "cap (1 hour); use <= 3300 to leave provisioning headroom",
+            f"cap (1 hour); use <= {settings.MAX_NODE_TIMEOUT_SECONDS} to leave provisioning headroom",
             node_id=nid,
         )
 

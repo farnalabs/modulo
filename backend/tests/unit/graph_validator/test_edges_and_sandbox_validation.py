@@ -6,6 +6,9 @@ Covers ``_check_edges`` (GRAPH_* codes) and ``_check_sandbox_agent_config``
 
 import uuid
 
+import pytest
+
+from modulo import settings
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 
 
@@ -291,6 +294,47 @@ def test_sandbox_timeout_just_over_cap_is_error():
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" in _codes(result)
     assert not result.is_valid
+
+
+def test_e2b_cap_boundary_equals_settings_max_node_timeout():
+    """FAR-1424: the save-time cap is exactly ``settings.MAX_NODE_TIMEOUT_SECONDS``.
+
+    The cap must not be a literal duplicated from settings — the boundary the
+    validator enforces and the setting must agree, or a future change to either
+    silently desynchronises them.
+    """
+    cap = settings.MAX_NODE_TIMEOUT_SECONDS
+
+    at_cap = {"nodes": [_sandbox_node(timeout_seconds=cap)], "edges": []}
+    at_result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(at_cap, at_result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" not in _codes(at_result)
+
+    over_cap = {"nodes": [_sandbox_node(timeout_seconds=cap + 1)], "edges": []}
+    over_result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(over_cap, over_result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" in _codes(over_result)
+
+
+def test_e2b_cap_follows_settings_change(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1424: the validator reads the cap FROM settings, it has no own literal.
+
+    Moving ``settings.MAX_NODE_TIMEOUT_SECONDS`` must move the accept/reject
+    boundary with it. A validator holding its own copy of 3300 ignores the
+    patched value and this test fails.
+    """
+    monkeypatch.setattr(settings, "MAX_NODE_TIMEOUT_SECONDS", 3000)
+    assert settings.MAX_NODE_TIMEOUT_SECONDS == 3000
+
+    over = {"nodes": [_sandbox_node(timeout_seconds=3001)], "edges": []}
+    over_result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(over, over_result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" in _codes(over_result)
+
+    at = {"nodes": [_sandbox_node(timeout_seconds=3000)], "edges": []}
+    at_result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(at, at_result)
+    assert "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" not in _codes(at_result)
 
 
 def test_non_sandbox_node_timeout_over_cap_unaffected():
