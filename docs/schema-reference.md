@@ -220,8 +220,10 @@ schemas/
 - **Canonical** files carry the raw, sanitised schema (free-text keywords
   stripped, `default` preserved).
 - **Active** files carry the rendered form. When the profile is `verbatim`,
-  active equals canonical. When the profile is `provider-strict` or
-  `runtime-sdk`, active is the rendered (keyword-stripped) version.
+  active equals canonical. When the profile is `provider-strict`, active is
+  the rendered (keyword-stripped) version; when it is `runtime-sdk`, active is
+  the `$ref`-inlined form (top-level `$defs`/`definitions` removed, no keyword
+  stripping).
 
 ### Sanitisation rules
 
