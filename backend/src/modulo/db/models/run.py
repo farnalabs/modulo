@@ -260,7 +260,7 @@ class Run(OrgScoped):
         # seq-scans the whole runs table per tick. The partial predicate is
         # the sweep's WHERE VERBATIM (both conjuncts), so every entry already
         # passes the filter and the (id) key serves ORDER BY id as a plain
-        # ordered scan stopping at LIMIT 200. Migration 0277; parity with the
+        # ordered scan stopping at LIMIT 200. Migration 0278; parity with the
         # sweep predicate is guarded by
         # tests/unit/db/test_migration_0278_runs_workspace_drift_sweep_index.py.
         Index(

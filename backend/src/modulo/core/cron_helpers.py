@@ -6529,9 +6529,9 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
             # definitive below and drop out of the NULL-flag set entirely).
             #
             # FAR-1438: the WHERE below is indexed by the partial index
-            # ix_runs_workspace_drift_sweep (migration 0277), whose
+            # ix_runs_workspace_drift_sweep (migration 0278), whose
             # postgresql_where must match this predicate verbatim — the
-            # parity test in tests/unit/db/test_migration_0277_* fails if
+            # parity test in tests/unit/db/test_migration_0278_* fails if
             # either side drifts.
             rows = (
                 await session.execute(
