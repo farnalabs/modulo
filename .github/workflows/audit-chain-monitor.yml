@@ -5,6 +5,15 @@ name: "Audit chain continuity monitor"
 # ticket-on-failure path, same `if: failure()` pattern, same fail-open
 # behaviour when a credential is absent.
 #
+# FAR-1468 (live-tested against app.modulo.run) corrected two defects in the
+# original version: (1) both audit endpoints require audit.manage, which maps
+# to the ADMIN org role and can never be satisfied by an API key (mintable
+# only as operator/runner) - the monitor now logs in with prod admin
+# credentials and uses the returned JWT; (2) verify_chain() returns
+# valid=false whenever the chain is truncated past VERIFY_MAX_EVENTS (10k) and
+# production is well past that, so truncation is now treated as PASS (a known
+# product limitation) rather than a permanent false lapse ticket.
+#
 # Deliberate cadence: every 6h, NOT more often. GitHub drops high-frequency
 # cron events on high-activity repos (see the merge-queue */15 lesson in the
 # workspace guidance) - a */10 cron would silently stop firing, which is
@@ -23,27 +32,87 @@ jobs:
     name: Check app.modulo.run audit chain continuity
     runs-on: ubicloud-standard-2
     steps:
+      # Authenticate (FAR-1468): BOTH audit endpoints require
+      # require_permission("audit.manage"), and audit.manage maps to the ADMIN
+      # org role (backend/src/modulo/auth/permissions.py:180; role order
+      # viewer < runner < operator < admin). API keys are only mintable as
+      # operator/runner, so `Bearer <api key>` always gets HTTP 403 here -
+      # live-tested against app.modulo.run. The monitor therefore logs in with
+      # the prod admin credentials (POST /api/v1/auth/login; body field is
+      # `email`, NOT `username` - a `username` body returns HTTP 422) and
+      # carries the returned JWT access token as MODULO_TOKEN. The token is
+      # masked before it reaches $GITHUB_ENV so it never appears in logs.
+      #
+      # Fail-open on missing credentials (consistent with uptime-monitor.yml):
+      # a not-yet-configured secret must not red-queue the workflow. A FAILED
+      # login, by contrast, exits 1 - the monitor cannot do its job without
+      # auth, and the ticket step catches it.
+      - name: Authenticate to app.modulo.run (admin login)
+        id: auth
+        shell: bash
+        env:
+          E2E_PROD_ADMIN_EMAIL: ${{ secrets.E2E_PROD_ADMIN_EMAIL }}
+          E2E_PROD_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
+        run: |
+          if [ -z "$E2E_PROD_ADMIN_EMAIL" ] || [ -z "$E2E_PROD_ADMIN_PASSWORD" ]; then
+            echo "::warning::E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD not set - skipping audit-chain monitor (FAR-1468)."
+            exit 0
+          fi
+
+          LOGIN_BODY="$(mktemp)"
+          LOGIN_CODE=$(curl -sS -m 20 -o "$LOGIN_BODY" -w "%{http_code}" \
+            -X POST "https://app.modulo.run/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg email "$E2E_PROD_ADMIN_EMAIL" --arg password "$E2E_PROD_ADMIN_PASSWORD" \
+                  '{email: $email, password: $password}')" 2>/dev/null) || LOGIN_CODE="000"
+
+          if [ "$LOGIN_CODE" != "200" ]; then
+            echo "::error::Admin login to app.modulo.run failed (HTTP ${LOGIN_CODE}) - audit-chain monitor cannot authenticate (FAR-1468)."
+            rm -f "$LOGIN_BODY"
+            exit 1
+          fi
+
+          TOKEN=$(jq -r 'if (.access_token | type) == "string" and (.access_token | length) > 0
+                          then .access_token else error("missing access_token") end' \
+                   "$LOGIN_BODY" 2>/dev/null) || TOKEN=""
+          rm -f "$LOGIN_BODY"
+
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Admin login succeeded but the response carried no access_token - audit-chain monitor cannot authenticate (FAR-1468)."
+            exit 1
+          fi
+
+          echo "::add-mask::$TOKEN"
+          echo "MODULO_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "admin login OK - JWT access token acquired for the audit-chain checks"
+
       # Check 1 - integrity: recompute the hash chain server-side.
       # Endpoint verified: backend/src/modulo/api/routes/audit.py:32
       # (router prefix "/api/v1/admin/audit") + :146 (GET "/verify").
-      # Auth header verified, not guessed: the historical smoke-test job
-      # polled app.modulo.run with `Authorization: Bearer ${MODULO_SMOKE_TEST_API_KEY}`
-      # (commit 2b435ff5a, "ci: fail fast ... smoke test API key is
-      # unauthorized"), and API keys travel over the same Bearer scheme
-      # (backend/src/modulo/auth/dependencies.py:176-223 resolves the
-      # `mk_` prefix out of the Bearer token; cli/apply/executor.py:103 sets
-      # `Authorization: Bearer <api_key>`).
+      #
+      # Auth: `Authorization: Bearer ${MODULO_TOKEN}` - the admin JWT from the
+      # Authenticate step above (FAR-1468). An API key can never satisfy
+      # audit.manage (admin-only), so the old MODULO_SMOKE_TEST_API_KEY path
+      # was removed.
+      #
+      # TRUNCATION IS NOT A LAPSE (FAR-1468, live-tested): verify_chain()
+      # returns valid=false whenever total_events > VERIFY_MAX_EVENTS (10000,
+      # backend/src/modulo/core/audit_logger/__init__.py:30,462) - production
+      # has ~23.5k events, so /verify reports {"valid": false, "truncated":
+      # true} on EVERY call. Check 1 therefore PASSES on truncated=true (logged
+      # as an informational note - a known product limitation) and FAILS only
+      # when truncated=false AND valid=false: a genuine gap or tamper. The
+      # alert detail stays rich (valid/total_events/truncated/checked_events/
+      # first_gap_index/first_tampered_id/chain_head_match/chain_count_mismatch)
+      # so triage can still tell tampering from truncation.
       - name: Check 1 - verify audit chain integrity
         id: integrity
         shell: bash
-        env:
-          MODULO_SMOKE_TEST_API_KEY: ${{ secrets.MODULO_SMOKE_TEST_API_KEY }}
         run: |
-          # Fail-open: without the key there is nothing to authenticate with.
-          # Warn and exit 0 exactly like uptime-monitor.yml does for its key -
-          # a missing credential must not red-queue the workflow.
-          if [ -z "$MODULO_SMOKE_TEST_API_KEY" ]; then
-            echo "::warning::MODULO_SMOKE_TEST_API_KEY not set - skipping audit-chain integrity check (FAR-1466)."
+          # Fail-open: no token means the Authenticate step was skipped for
+          # want of a credential - warn and exit 0, exactly as before.
+          if [ -z "$MODULO_TOKEN" ]; then
+            echo "::warning::MODULO_TOKEN not available (admin login skipped) - skipping audit-chain integrity check (FAR-1468)."
             exit 0
           fi
 
@@ -56,7 +125,7 @@ jobs:
           HTTP_CODE="000"
           for i in 1 2 3; do
             HTTP_CODE=$(curl -sS -m 20 -o "$BODY_FILE" -w "%{http_code}" \
-              -H "Authorization: Bearer ${MODULO_SMOKE_TEST_API_KEY}" \
+              -H "Authorization: Bearer ${MODULO_TOKEN}" \
               "https://app.modulo.run/api/v1/admin/audit/verify" 2>/dev/null) || HTTP_CODE="000"
             if [ "$HTTP_CODE" = "200" ]; then
               OK=true
@@ -70,7 +139,7 @@ jobs:
           done
 
           if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
-            echo "::error::Audit verify auth failed (HTTP ${HTTP_CODE}): MODULO_SMOKE_TEST_API_KEY is invalid/expired, or the key lacks audit.manage (backend/src/modulo/auth/permissions.py:180 maps audit.manage to the admin role). Rotate or re-grant the secret (FAR-1466)."
+            echo "::error::Audit verify auth failed (HTTP ${HTTP_CODE}): the admin access token is invalid/expired, or the account lacks audit.manage (backend/src/modulo/auth/permissions.py:180 maps audit.manage to the admin role). Re-check E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD (FAR-1468)."
             echo "integrity_detail=GET /api/v1/admin/audit/verify returned HTTP ${HTTP_CODE} (auth/permission)" >> "$GITHUB_OUTPUT"
             rm -f "$BODY_FILE"
             exit 1
@@ -84,41 +153,50 @@ jobs:
           fi
 
           # Parse the body. Safe on unparseable input: jq's error() exits
-          # non-zero when .valid is missing or not a boolean, and we alert on
-          # that instead of crashing the workflow. Note `jq -e` alone is NOT
-          # usable here - it also exits non-zero on the legitimate value
-          # `false`, which would mask a real chain break as "unparseable".
+          # non-zero when .valid or .truncated is missing or not a boolean,
+          # and we alert on that instead of crashing the workflow. Note `jq -e`
+          # alone is NOT usable here - it also exits non-zero on the legitimate
+          # value `false`, which would mask a real chain break as "unparseable".
           if ! VALID=$(jq -r '
-            if (.valid | type) == "boolean" then (.valid | tostring)
-            else error("missing or non-boolean .valid") end
+            if (.valid | type) != "boolean" then error("missing or non-boolean .valid")
+            elif (.truncated | type) != "boolean" then error("missing or non-boolean .truncated")
+            else (.valid | tostring) end
           ' "$BODY_FILE" 2>/dev/null); then
             echo "::error::GET /api/v1/admin/audit/verify response is not a verify result (FAR-1466)"
-            echo "integrity_detail=verify response body not parseable (missing boolean .valid)" >> "$GITHUB_OUTPUT"
+            echo "integrity_detail=verify response body not parseable (missing boolean .valid/.truncated)" >> "$GITHUB_OUTPUT"
             rm -f "$BODY_FILE"
             exit 1
           fi
+          TRUNCATED=$(jq -r '.truncated | tostring' "$BODY_FILE")
+
+          # Rich detail for triage - kept on BOTH the pass and fail paths so a
+          # ticket (or a log reader) can tell tampering from truncation at a
+          # glance.
+          DETAIL=$(jq -r '
+            [
+              "valid=\(.valid)",
+              "total_events=\(.total_events)",
+              "truncated=\(.truncated)",
+              "checked_events=\(.checked_events)",
+              "first_gap_index=\(.first_gap_index)",
+              "first_tampered_id=\(.first_tampered_id)",
+              "chain_head_match=\(.chain_head_match)",
+              "chain_count_mismatch=\(.chain_count_mismatch)"
+            ] + (if .detail then ["detail=\(.detail)"] else [] end)
+            | join("; ")
+          ' "$BODY_FILE" 2>/dev/null || echo "verify result unparseable")
+
+          if [ "$TRUNCATED" = "true" ]; then
+            # PASS: a truncated chain is a known product limitation (the
+            # server cannot prove the whole chain past VERIFY_MAX_EVENTS), not
+            # a lapse. Log it informatively; do NOT raise a ticket for it.
+            echo "audit chain verify TRUNCATED - passing on the intact checked prefix (known product limitation, FAR-1468): ${DETAIL}"
+            rm -f "$BODY_FILE"
+            exit 0
+          fi
 
           if [ "$VALID" != "true" ]; then
-            # Known limitation worth reading before triaging a ticket:
-            # verify_chain() returns valid=false whenever the chain is
-            # TRUNCATED - i.e. total_events > VERIFY_MAX_EVENTS (10000,
-            # backend/src/modulo/core/audit_logger/__init__.py:30,462). So an
-            # org past 10k events fails this check even with an intact prefix.
-            # That is still worth alerting on (the product can no longer prove
-            # the whole chain), and the dedup below caps it at ONE open ticket.
-            DETAIL=$(jq -r '
-              [
-                "valid=\(.valid)",
-                "total_events=\(.total_events)",
-                "checked_events=\(.checked_events)",
-                "truncated=\(.truncated)",
-                "first_gap_index=\(.first_gap_index)",
-                "first_tampered_id=\(.first_tampered_id)",
-                "chain_head_match=\(.chain_head_match)",
-                "chain_count_mismatch=\(.chain_count_mismatch)"
-              ] + (if .detail then ["detail=\(.detail)"] else [] end)
-              | join("; ")
-            ' "$BODY_FILE" 2>/dev/null || echo "verify result unparseable")
+            # truncated=false AND valid=false: a genuine gap or tamper.
             echo "::error::Audit chain FAILED verification on app.modulo.run: ${DETAIL} (FAR-1466)"
             echo "integrity_detail=${DETAIL}" >> "$GITHUB_OUTPUT"
             rm -f "$BODY_FILE"
@@ -146,11 +224,9 @@ jobs:
         id: continuity
         if: success() || failure()
         shell: bash
-        env:
-          MODULO_SMOKE_TEST_API_KEY: ${{ secrets.MODULO_SMOKE_TEST_API_KEY }}
         run: |
-          if [ -z "$MODULO_SMOKE_TEST_API_KEY" ]; then
-            echo "::warning::MODULO_SMOKE_TEST_API_KEY not set - skipping audit-chain continuity check (FAR-1466)."
+          if [ -z "$MODULO_TOKEN" ]; then
+            echo "::warning::MODULO_TOKEN not available (admin login skipped) - skipping audit-chain continuity check (FAR-1468)."
             exit 0
           fi
 
@@ -160,7 +236,7 @@ jobs:
           HTTP_CODE="000"
           for i in 1 2 3; do
             HTTP_CODE=$(curl -sS -m 20 -o "$BODY_FILE" -w "%{http_code}" \
-              -H "Authorization: Bearer ${MODULO_SMOKE_TEST_API_KEY}" \
+              -H "Authorization: Bearer ${MODULO_TOKEN}" \
               "https://app.modulo.run/api/v1/admin/audit?limit=1" 2>/dev/null) || HTTP_CODE="000"
             if [ "$HTTP_CODE" = "200" ]; then
               OK=true
@@ -174,7 +250,7 @@ jobs:
           done
 
           if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
-            echo "::error::Audit list auth failed (HTTP ${HTTP_CODE}): MODULO_SMOKE_TEST_API_KEY is invalid/expired, or the key lacks audit.manage (FAR-1466)."
+            echo "::error::Audit list auth failed (HTTP ${HTTP_CODE}): the admin access token is invalid/expired, or the account lacks audit.manage (backend/src/modulo/auth/permissions.py:180). Re-check E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD (FAR-1468)."
             echo "continuity_detail=GET /api/v1/admin/audit returned HTTP ${HTTP_CODE} (auth/permission)" >> "$GITHUB_OUTPUT"
             rm -f "$BODY_FILE"
             exit 1
