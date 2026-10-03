@@ -166,35 +166,41 @@ class TestGetDbSession:
 
 
 class TestPgConnectionString:
-    """Test pg_connection_string URL transformation."""
+    """Test pg_connection_string URL transformation (FAR-1426).
+
+    The helper strips the SQLAlchemy driver prefix and NEVER forces an
+    sslmode: an explicit sslmode is preserved, and a URL without one is
+    returned unchanged so the driver applies its own default (libpq
+    ``prefer`` — TLS with plaintext fallback).
+    """
 
     @pytest.mark.parametrize(
         ("input_url", "expected"),
         [
             pytest.param(
                 "postgresql+asyncpg://user:pass@localhost/db",
-                "postgresql://user:pass@localhost/db?sslmode=disable",
-                id="asyncpg_prefix",
+                "postgresql://user:pass@localhost/db",
+                id="asyncpg_prefix_no_sslmode_not_forced",
             ),
             pytest.param(
                 "postgresql+psycopg://user:pass@localhost/db",
-                "postgresql://user:pass@localhost/db?sslmode=disable",
-                id="psycopg_prefix",
+                "postgresql://user:pass@localhost/db",
+                id="psycopg_prefix_no_sslmode_not_forced",
             ),
             pytest.param(
                 "postgresql+asyncpg://user:pass@localhost/db?sslmode=require",
                 "postgresql://user:pass@localhost/db?sslmode=require",
-                id="preserves_sslmode",
+                id="preserves_sslmode_require",
             ),
             pytest.param(
                 "postgresql://user:pass@localhost/db",
-                "postgresql://user:pass@localhost/db?sslmode=disable",
+                "postgresql://user:pass@localhost/db",
                 id="noop_for_plain_postgresql",
             ),
             pytest.param(
                 "postgresql+asyncpg://user:pass@localhost/db?connect_timeout=10",
-                "postgresql://user:pass@localhost/db?connect_timeout=10&sslmode=disable",
-                id="preserves_existing_query_params",
+                "postgresql://user:pass@localhost/db?connect_timeout=10",
+                id="preserves_existing_query_params_without_forcing_sslmode",
             ),
             pytest.param(
                 "postgresql+psycopg://user:pass@localhost:5432/mydb?sslmode=require&connect_timeout=30",
@@ -204,7 +210,7 @@ class TestPgConnectionString:
             pytest.param(
                 "postgresql+asyncpg://user:pass@localhost/db?sslmode=disable",
                 "postgresql://user:pass@localhost/db?sslmode=disable",
-                id="already_disabled",
+                id="already_disabled_preserved",
             ),
         ],
     )
@@ -213,3 +219,28 @@ class TestPgConnectionString:
 
         result = pg_connection_string(input_url)
         assert result == expected
+
+    @pytest.mark.parametrize(
+        "input_url",
+        [
+            pytest.param(
+                "postgresql+asyncpg://user:pass@localhost/db",
+                id="no_query_string",
+            ),
+            pytest.param(
+                "postgresql+asyncpg://user:pass@localhost/db?connect_timeout=10",
+                id="existing_query_string",
+            ),
+        ],
+    )
+    def test_pg_connection_string_never_forces_sslmode_disable(self, input_url: str) -> None:
+        """Regression (FAR-1426): URLs without an explicit sslmode must not
+        be silently downgraded to plaintext — forcing sslmode=disable broke
+        real checkpointer connections on TLS-required deployments."""
+        from modulo.api.dependencies import pg_connection_string
+
+        result = pg_connection_string(input_url)
+        assert "sslmode=disable" not in result
+        # The driver prefix must still be stripped either way.
+        assert "postgresql+asyncpg://" not in result
+        assert result.startswith("postgresql://")

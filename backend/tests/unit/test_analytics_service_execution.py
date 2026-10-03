@@ -39,6 +39,7 @@ from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 import modulo.core.analytics.service as svc
 from modulo.core.analytics.builder import AnalyticsDimension, AnalyticsGroupBy, AnalyticsStatus
 from modulo.core.analytics.service import (
+    EXPORT_COLUMN_NAMES,
     AnalyticsDatabaseError,
     AnalyticsMigrationRequiredError,
     AnalyticsQueryTimeoutError,
@@ -537,6 +538,7 @@ class TestSerializeFactRow:
             "rate_limited": False,
             "created_at": datetime(2026, 8, 6, 12, 0, 0, tzinfo=UTC),
         }
+        defaults.update({name: None for name in EXPORT_COLUMN_NAMES if name not in defaults})
         defaults.update(overrides)
         return SimpleNamespace(**defaults)
 
@@ -590,6 +592,7 @@ class TestExportFacts:
             "rate_limited": False,
             "created_at": datetime(2026, 8, 6, 12, 0, 0, tzinfo=UTC),
         }
+        defaults.update({name: None for name in EXPORT_COLUMN_NAMES if name not in defaults})
         defaults.update(overrides)
         return SimpleNamespace(**defaults)
 
@@ -926,6 +929,7 @@ class TestStreamExportFacts:
             "rate_limited": False,
             "created_at": datetime(2026, 8, 6, 12, 0, 0, tzinfo=UTC),
         }
+        defaults.update({name: None for name in EXPORT_COLUMN_NAMES if name not in defaults})
         defaults.update(overrides)
         return SimpleNamespace(**defaults)
 

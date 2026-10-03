@@ -206,7 +206,15 @@ class TestFAR102Filters:
 
     def test_team_id_filter_absent_for_org_wide_query(self) -> None:
         stmt, params = build_facts_query(_query())
-        assert "COALESCE" not in str(stmt.compile(dialect=postgresql.dialect())).upper()
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        # The team-scope predicate IS the Pipeline join + its
+        # COALESCE(team_id, pipelines.owner_team_id) — assert on those
+        # signatures rather than on "COALESCE" alone: the FAR-1421 latency
+        # metric legitimately coalesces dispatch_phase_entered_at/started_at in
+        # the SELECT list of EVERY query, org-wide included, and that says
+        # nothing about team scoping.
+        assert "owner_team_id" not in sql.lower(), "an org-wide query must not apply the pipeline team scope"
+        assert "pipelines" not in sql.lower(), "an org-wide query must not join Pipeline for team scoping"
         assert "team_id" not in params
 
     def test_team_ids_member_sees_own_teams_plus_org_level_rows(self) -> None:
@@ -580,6 +588,115 @@ class TestFAR102Metrics:
         bucket = out[0]
         assert bucket["capacity_failure_count"] == 0
         assert bucket["avg_capacity_wait_ms"] is None
+
+
+class TestFAR1421DispatchLatency:
+    """FAR-1421: claim→dispatch latency, bucketed per trigger_type / trigger_id.
+
+    Definition (named in the builder): ``avg_dispatch_latency_ms`` =
+    ``dispatch_phase_entered_at - created_at``, falling back to
+    ``started_at - created_at`` when the phase timestamp is NULL
+    (pre-migration rows / no durable phase / purged-run backfills).
+    """
+
+    def test_select_labels_metric_and_uses_phase_with_started_fallback(self) -> None:
+        stmt, _ = build_facts_query(_query())
+        names = {k.name for k in stmt.selected_columns}
+        assert "avg_dispatch_latency_ms" in names, "the claim→dispatch metric must be selected"
+        expr = str(stmt.selected_columns["avg_dispatch_latency_ms"].element).lower()
+        assert "coalesce" in expr, "the NULL phase timestamp must fall back to started_at"
+        assert "dispatch_phase_entered_at" in expr, "the phase timestamp is the primary latency source"
+        assert "started_at" in expr, "the fallback side of the coalesce must be started_at"
+        assert "created_at" in expr, "latency is measured from the run's created_at"
+
+    def test_metric_is_a_single_bound_select_not_interpolated(self) -> None:
+        # Same guarantee as every other metric: the compiled SQL names columns
+        # only — no literal values, no string interpolation.
+        sql = str(build_facts_query(_query())[0].compile(dialect=postgresql.dialect()))
+        assert "avg_dispatch_latency_ms" in sql
+        assert "dispatch_phase_entered_at" in sql
+
+    def test_bucket_aggregates_dispatch_latency_weighted_by_count(self) -> None:
+        rows = [
+            _row(date(2026, 8, 5), count=3, avg_dispatch_latency_ms=1000.0),
+            _row(date(2026, 8, 5), count=1, avg_dispatch_latency_ms=3000.0),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        # (1000*3 + 3000*1) / 4 — weighted by the row's run count, like queue_wait.
+        assert out[0]["avg_dispatch_latency_ms"] == 1500.0
+
+    def test_zero_filled_bucket_has_null_dispatch_latency(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 1),
+        )
+        assert out[0]["avg_dispatch_latency_ms"] is None
+
+    def test_rows_without_the_metric_are_excluded_not_zeroed(self) -> None:
+        # A NULL-phase, NULL-started row contributes no latency sample — the
+        # bucket mean stays NULL rather than collapsing to 0.
+        out = bucket_rows(
+            [_row(date(2026, 8, 5), count=2, avg_dispatch_latency_ms=None)],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["avg_dispatch_latency_ms"] is None
+
+    def test_trigger_id_dimension_selects_the_raw_key(self) -> None:
+        stmt, _ = build_facts_query(_query(dimension=AnalyticsDimension.TRIGGER_ID))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "trigger_id" in keys, "the trigger_id dimension key must be in the SELECT for bucket_rows"
+        assert "key_label" not in keys, "trigger_id has no snapshot label — raw key only"
+
+    def test_trigger_id_dimension_buckets_by_uuid_string(self) -> None:
+        tid = uuid.UUID("77777777-7777-4777-8777-777777777777")
+        out = bucket_rows(
+            [_row(date(2026, 8, 5), count=1, trigger_id=tid)],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.TRIGGER_ID,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["key"] == str(tid), "dimension keys must be str | None, never a raw UUID"
+
+    def test_trigger_id_dimension_null_key_does_not_crash(self) -> None:
+        # manual runs carry no trigger_id — the NULL key must sort and bucket.
+        out = bucket_rows(
+            [_row(date(2026, 8, 5), count=1, trigger_id=None)],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.TRIGGER_ID,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["key"] is None
+
+    def test_dispatch_latency_is_bucketable_by_trigger_type(self) -> None:
+        # The headline FAR-1421 figure: latency AND trigger grouping in ONE
+        # bucketed series (dimension=trigger_type).
+        rows = [
+            _row(date(2026, 8, 5), count=1, trigger_type="cron", avg_dispatch_latency_ms=500.0),
+            _row(date(2026, 8, 5), count=1, trigger_type="webhook", avg_dispatch_latency_ms=5000.0),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.TRIGGER_TYPE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        by_key = {b["key"]: b["avg_dispatch_latency_ms"] for b in out}
+        assert by_key == {"cron": 500.0, "webhook": 5000.0}
 
 
 class TestDimensionedSelect:
@@ -1023,6 +1140,7 @@ class TestExtractedBucketHelpers:
         assert out["failure_count"] == 0
         assert out["stall_count"] == 0
         assert out["avg_duration_ms"] is None
+        assert out["avg_dispatch_latency_ms"] is None
 
     def test_emit_bucket_row_populated_bucket_computes_aggregates(self) -> None:
         b = {
@@ -1043,6 +1161,8 @@ class TestExtractedBucketHelpers:
             "final_idle_n": 2,
             "output_bytes_sum": 2048.0,
             "output_bytes_n": 2,
+            "dispatch_latency_sum": 6000.0,
+            "dispatch_latency_n": 3,
         }
         out = _emit_bucket_row(b, datetime(2026, 8, 6, 10, 0, tzinfo=UTC), None)
         assert out["date"] == "2026-08-06T10:00:00"
@@ -1057,6 +1177,7 @@ class TestExtractedBucketHelpers:
         assert out["avg_queue_wait_ms"] == 20.0
         assert out["avg_final_idle_ms"] == 5.0
         assert out["avg_output_bytes"] == 1024.0
+        assert out["avg_dispatch_latency_ms"] == 2000.0
 
 
 class TestHourGranularity:

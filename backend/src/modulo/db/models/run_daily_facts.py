@@ -36,6 +36,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     Uuid,
 )
@@ -89,6 +90,15 @@ class RunDailyFact(OrgScoped):
         Uuid(), ForeignKey("pipeline_folders.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # FAR-1421: the trigger that fired the run, copied from Run.trigger_id so
+    # claim→dispatch latency can be bucketed per trigger WITHOUT joining runs
+    # (ADR 020 — facts must stay self-contained and survive the run purge).
+    # NULL for manual runs (no trigger row) and for facts written before this
+    # column existed.
+    trigger_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        comment=("NOT a FK — facts survive the run purge (ADR 020); NULL for manual runs and for pre-FAR-1421 facts"),
+    )
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     total_tokens: Mapped[int | None] = mapped_column(Integer)
@@ -158,6 +168,29 @@ class RunDailyFact(OrgScoped):
     total_queue_wait_ms: Mapped[int | None] = mapped_column(
         BigInteger,
         comment="Run.started_at - Run.created_at (full wait from creation to start), else NULL",
+    )
+    # FAR-1421 claim→dispatch latency provenance — copied from the run at
+    # finalize so the bucketed metric never joins ``runs`` (ADR 020).
+    #
+    # The metric (``avg_dispatch_latency_ms`` in core/analytics/builder.py) is
+    #   dispatch_phase_entered_at - created_at
+    # falling back to
+    #   started_at - created_at
+    # when the phase timestamp is NULL (pre-FAR-1421 facts / no durable phase /
+    # purged-run backfills).
+    #
+    # ``dispatch_phase`` names the LAST durable phase these columns record: the
+    # writer is monotonic (one guarded UPDATE per phase entry), so the timestamp
+    # refers to whatever phase ``dispatch_phase`` names at finalize time.
+    #
+    # The NARROWER claim→first-node figure (``first_node_dispatched``) is
+    # deliberately NOT offered: that phase is not in DURABLE_PHASES yet, so it
+    # never reaches these columns. It becomes derivable the moment the phase is
+    # written durably (a separate change) — no schema change needed then.
+    dispatch_phase: Mapped[str | None] = mapped_column(Text)
+    dispatch_phase_entered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="when runs.dispatch_phase was last entered — from Run.dispatch_phase_entered_at",
     )
     # FAR-801: count of managed workspace inputs resolved for this run.
     # NULL when the run had no workspace inputs configured or the audit
