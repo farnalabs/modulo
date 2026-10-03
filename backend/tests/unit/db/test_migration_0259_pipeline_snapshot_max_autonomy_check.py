@@ -23,7 +23,8 @@ Lenses:
   0273_runs_dispatch_phase chains onto 0272,
   0274_policy_gate_pin_fingerprint_operator_control chains onto 0273, and
   0275_run_cancel_reason_vocabulary chains onto 0274, and
-  0276_runs_autovacuum_enabled chains onto 0275 as the
+  0276_runs_autovacuum_enabled chains onto 0275, and
+  0277_runs_workspace_drift_sweep_index chains onto 0276 as the
   single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -49,7 +50,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0276_runs_autovacuum_enabled"
+_HEAD_MIGRATION = "0277_runs_workspace_drift_sweep_index"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

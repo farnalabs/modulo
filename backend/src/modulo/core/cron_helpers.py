@@ -6469,6 +6469,12 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
             # progress (it never re-scans the same fixed first-N rows every
             # tick — runs with a workspace_inputs audit row are marked
             # definitive below and drop out of the NULL-flag set entirely).
+            #
+            # FAR-1438: the WHERE below is indexed by the partial index
+            # ix_runs_workspace_drift_sweep (migration 0277), whose
+            # postgresql_where must match this predicate verbatim — the
+            # parity test in tests/unit/db/test_migration_0277_* fails if
+            # either side drifts.
             rows = (
                 await session.execute(
                     sa.select(Run.id, Run.organisation_id)

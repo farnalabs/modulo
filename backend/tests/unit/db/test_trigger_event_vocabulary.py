@@ -140,10 +140,11 @@ _MIGRATION_PATH = (
 # 0273_runs_dispatch_phase chained onto 0272,
 # 0274_policy_gate_pin_fingerprint_operator_control chained onto 0273, and
 # 0275_run_cancel_reason_vocabulary chained onto 0274, and
-# 0276_runs_autovacuum_enabled chained onto 0275 as the chain head.
+# 0276_runs_autovacuum_enabled chained onto 0275, and
+# 0277_runs_workspace_drift_sweep_index chained onto 0276 as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0276_runs_autovacuum_enabled"
+_CHAIN_HEAD_MIGRATION_NAME = "0277_runs_workspace_drift_sweep_index"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
