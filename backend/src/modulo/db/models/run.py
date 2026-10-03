@@ -251,6 +251,32 @@ class Run(OrgScoped):
             "error_code",
             postgresql_where=text("error_code IS NOT NULL"),
         ),
+        # FAR-1438 — workspace-input drift compensating sweep
+        # (core/cron_helpers.py::_sweep_workspace_input_drift_flags): its
+        # bounded SELECT filters status IN (TERMINAL_STATUSES) AND
+        # workspace_inputs_drift_detected IS NULL, ORDER BY id, LIMIT 200 and
+        # runs every reconcile tick (60s). Migration 0238 added the column
+        # with no index, so once the historical NULL set drains the planner
+        # seq-scans the whole runs table per tick. The partial predicate is
+        # the sweep's WHERE VERBATIM (both conjuncts), so every entry already
+        # passes the filter and the (id) key serves ORDER BY id as a plain
+        # ordered scan stopping at LIMIT 200. Migration 0278; parity with the
+        # sweep predicate is guarded by
+        # tests/unit/db/test_migration_0278_runs_workspace_drift_sweep_index.py.
+        Index(
+            "ix_runs_workspace_drift_sweep",
+            "id",
+            postgresql_where=text(
+                "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
+                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
+                "AND workspace_inputs_drift_detected IS NULL"
+            ),
+            sqlite_where=text(
+                "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
+                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
+                "AND workspace_inputs_drift_detected IS NULL"
+            ),
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
