@@ -833,7 +833,15 @@ def _ensure_app_database(launcher_state: Any, secrets: Any) -> None:
         root_url = (
             f"postgresql://modulo:{secrets.postgres_password}@{POSTGRES_HOST}:{launcher_state.postgres_port}/postgres"
         )
-        conn = await asyncpg.connect(root_url, ssl=False)
+        # FAR-1441: never rely on asyncpg's fail-open ``prefer`` driver default
+        # — derive the ``ssl`` arg explicitly. The bundled root URL is locally
+        # constructed (no sslmode), so this yields the explicit plaintext
+        # ``ssl=False`` the loopback cluster needs; routing it through the
+        # shared translator keeps the fail-closed invariant in one place.
+        from modulo.db.bootstrap import split_postgres_sslmode
+
+        root_url, root_ssl = split_postgres_sslmode(root_url)
+        conn = await asyncpg.connect(root_url, ssl=root_ssl)
         try:
             exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", APP_DB_NAME)
             if not exists:

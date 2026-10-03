@@ -1711,3 +1711,38 @@ class TestEnsureAppDatabaseSafety:
             entry_module._ensure_app_database(launcher_state, secrets)
 
         assert connects == []
+
+    def test_ensure_app_database_connects_with_explicit_ssl_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1441: the bundled-cluster root connect carries an EXPLICIT ssl
+        value (plaintext for the loopback cluster), never asyncpg's fail-open
+        ``prefer`` driver default, and the DSN carries no sslmode param."""
+        from types import SimpleNamespace
+
+        import asyncpg
+
+        captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        class _Conn:
+            async def fetchval(self, *_a: object, **_k: object) -> int:
+                return 1  # database already exists — no CREATE DATABASE
+
+            async def execute(self, *_a: object, **_k: object) -> str:
+                return "OK"
+
+            async def close(self) -> None:
+                return None
+
+        async def _record_connect(*args: object, **kwargs: object) -> object:
+            captured.append((args, kwargs))
+            return _Conn()
+
+        monkeypatch.setattr(asyncpg, "connect", _record_connect)
+        secrets = SimpleNamespace(postgres_password="pw")
+        launcher_state = SimpleNamespace(postgres_port=5432)
+
+        entry_module._ensure_app_database(launcher_state, secrets)
+
+        assert len(captured) == 1
+        args, kwargs = captured[0]
+        assert kwargs["ssl"] is False
+        assert "sslmode" not in str(args[0])
