@@ -335,6 +335,34 @@ class Run(OrgScoped):
     # non-executing ones (capacity-deferral demotions, pre-node setup failures)
     # that would otherwise exhaust the retry budget (postmortem FAR-121).
     node_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # FAR-1463: absolute node-deadline watchdog (FAR-369) FIRINGS — the durable
+    # fingerprint that makes a watchdog firing observable in analytics WITHOUT
+    # log access. Incremented on EVERY firing by
+    # ``pipeline_execution._fail_overdue_node`` BEFORE the shared retry consult,
+    # so BOTH outcomes are counted: the re-dispatch (which otherwise leaves ZERO
+    # analytics fingerprints, because the fenced pending-reset nulls
+    # ``error_code`` — FAR-1423) and the terminal fail (which also carries
+    # ``error_code='node_deadline_exceeded'``). Copied onto ``run_daily_facts``
+    # at finalize so the analytics read path never joins ``runs`` (ADR 020) and
+    # the marker outlives the 90-day run purge.
+    #
+    # SURVIVES A RE-DISPATCH: neither ``_CLAIM_UPDATE_SQL`` (sets status /
+    # heartbeat_at / claim_count / dispatch_phase / claim_token) nor the fenced
+    # pending-reset (sets status='pending', error_code=NULL, error_detail=NULL)
+    # names this column, so the count is intact on the next claim — unlike
+    # ``dispatch_phase``, which every re-claim deliberately resets to 'claimed'.
+    #
+    # Distinctness: a node-deadline kill structurally requires an IN-FLIGHT
+    # node, so ``>= 1`` proves a node was dispatched and blew its deadline (a
+    # run that never dispatched a node always reads 0), while a genuine
+    # terminal failure with no firing also reads 0 (``error_code`` separates
+    # those two).
+    #
+    # INTERNAL ONLY: NOT API-projected (absent from ``RunResponse`` /
+    # ``_build_list_item`` / the MCP run payloads) — the analytics surface
+    # (facts export + ``query_analytics`` buckets) is the read path. NOT NULL
+    # DEFAULT 0: rows that predate this migration never recorded a firing.
+    node_deadline_watchdog_fired_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     # Cost breakdown — list of component snapshots (amounts as strings).

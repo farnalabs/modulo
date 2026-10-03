@@ -734,6 +734,9 @@ _EXPORT_COLUMNS: tuple[Any, ...] = (
     RunDailyFact.trigger_id,
     RunDailyFact.dispatch_phase,
     RunDailyFact.dispatch_phase_entered_at,
+    # FAR-1463: node-deadline watchdog firings — appended so an operator can
+    # see a firing per run (re-dispatch AND terminal-fail) without log access.
+    RunDailyFact.node_deadline_watchdog_fired_count,
 )
 
 _EXPORT_COLUMN_NAMES: tuple[str, ...] = tuple(c.name for c in _EXPORT_COLUMNS)
