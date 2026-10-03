@@ -30,6 +30,7 @@ unit-tests:
   - backend/tests/unit/api/test_webhooks_endpoint.py
   - backend/tests/unit/api/test_webhook_replay.py
   - backend/tests/unit/api/test_trigger_config_secrets.py
+  - frontend/src/__tests__/SettingsTriggersView.spec.ts
 bdd:
   - backend/tests/bdd/features/triggers/manual.feature
   - backend/tests/bdd/features/triggers/cron.feature
@@ -110,6 +111,29 @@ rate-limited by the `TriggerEngine`.
       no_delivery / excluded / unclassified row, a non-agent-reported confidence,
       or an unknown/absent key renders no qualifier
       (`test_trigger_streak_engine.py`, `SettingsTriggersView.spec.ts`)
+- [x] The no-delivery streak engine covers cron triggers as well as ongoing
+      (FAR-1387): the sweep walks cron triggers' terminal classifications with
+      the SAME streak walk and GREATEST(last_delivery_at, streak_epoch)
+      boundary, `streak_status` returns real values for a covered cron (never
+      the unconfigured base), and a cron trip NOTIFIES and SURFACES
+      (append-only `cron_trigger.no_delivery_streak_alert` record + sweep
+      "tripped" count) WITHOUT auto-deactivating — deactivation is opt-in per
+      cron via `config_json no_delivery_auto_deactivate` (default OFF), cron
+      applies its own 48h minimum wall-clock window
+      (MODULO_CRON_STREAK_MIN_WINDOW_HOURS override), and cron audit records
+      use `cron_trigger.*` event types, never the `ongoing_trigger.*` stream
+      (`core/trigger_streak.py`, `test_trigger_streak_engine.py`)
+- [x] The streak badge in `SettingsTriggersView` renders for every trigger type
+      the engine covers — ongoing AND cron — via ONE mirrored constant
+      (`STREAK_COVERED_TRIGGER_TYPES`, pointing at the backend
+      `STREAK_TRIGGER_TYPES` in `core/trigger_streak.py`), and the "Deactivated"
+      badge + re-enable action are driven by `streak_status.state ===
+      'deactivated'` (`deactivated_reason`), NEVER by the trigger type: a
+      notify-only cron trip (state `ok`, `deactivated_reason` null) shows only
+      "No-delivery streak x/N" with `role=status`/aria-live, while "Deactivated"
+      wording appears only when the backend reports the deactivated state
+      (FAR-1405; `SettingsTriggersView.vue`,
+      `frontend/src/__tests__/SettingsTriggersView.spec.ts`)
 
 ## Known Gaps
 
@@ -118,6 +142,21 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-10-03: **Improve Architecture product-map walk** – closed the
+  `feat-triggers` tracker lag left by FAR-1387 (cron no-delivery streak
+  engine, merged 2026-09-26) and FAR-1405 (no-delivery streak badge,
+  merged 2026-09-27): the manifest `feat-triggers` registry carried the
+  shipped cron-streak behaviour and the badge rendering rule, but the
+  human-readable graph entry lagged behind (no behaviour line for either,
+  and the `SettingsTriggersView.spec.ts` unit citation was absent from the
+  frontmatter). Added the two checked behaviours — the notify-only-by-default
+  cron streak trip (opt-in `no_delivery_auto_deactivate`, the 48h minimum
+  window, `cron_trigger.*` audit event types) and the
+  `STREAK_COVERED_TRIGGER_TYPES` badge rule where "Deactivated" wording is
+  driven by backend state, never trigger type — plus the
+  `core/trigger_streak.py` code citation and the
+  `SettingsTriggersView.spec.ts` unit citation.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-01: **Improve Architecture product-map walk** – closed the
   sub-surface gap left by FAR-1373 (merged as the streak-outcome confidence
   qualifier): the streak/outcomes readout's per-outcome `delivery_confidence`
