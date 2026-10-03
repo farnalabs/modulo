@@ -1,7 +1,7 @@
 """Per-table autovacuum tuning for ``runs``, ``checkpoints`` and ``checkpoint_writes`` (FAR-1442).
 
-Revision ID: 0277_table_autovacuum_tuning
-Revises: 0276_runs_autovacuum_enabled
+Revision ID: 0278_table_autovacuum_tuning
+Revises: 0277_run_daily_facts_trigger_dispatch_phase
 Create Date: 2026-10-03
 
 Postgres' autovacuum defaults are sized for SMALL tables. A relation only
@@ -81,7 +81,7 @@ Why the defaults are wrong for this table shape
   ``autovacuum_enabled=false`` reloption caused the bloat above; repeating
   it here keeps the migration correct under EITHER ``ALTER TABLE ... SET``
   semantics (see below) and makes this revision self-contained: even on a
-  database where somehow only 0277 replayed, ``runs`` ends up enabled.
+  database where somehow only 0278 replayed, ``runs`` ends up enabled.
 
 Merge semantics of ``ALTER TABLE ... SET (k = v)``
 --------------------------------------------------
@@ -95,7 +95,7 @@ deploy target): a table carrying ``autovacuum_enabled=false`` that then gets
 ``RESET`` is the exact inverse - it drops only the named options, and
 ``RESET`` of an option that was never set is accepted as a no-op. That
 behaviour is pinned by
-``tests/integration/test_migration_0277_table_autovacuum_tuning.py::TestAlterTableSetSemantics``.
+``tests/integration/test_migration_0278_table_autovacuum_tuning.py::TestAlterTableSetSemantics``.
 The migration does not merely rely on it: ``autovacuum_enabled = true`` is
 included in ``runs``' SET list, so ``runs`` is correctly enabled whether
 SET merges (it merges) or replaces.
@@ -154,7 +154,7 @@ live here and the runtime mapping lives in ``modulo_saver``; the pair is
 pinned identical by
 ``tests/unit/pipeline_engine/test_modulo_saver.py::TestCheckpointAutovacuumTwin``,
 and the resulting reloptions are asserted against real Postgres by
-``tests/integration/test_migration_0277_table_autovacuum_tuning.py`` (which
+``tests/integration/test_migration_0278_table_autovacuum_tuning.py`` (which
 also proves the fresh-install ``setup()`` path lands them). Change one side
 without the other and CI fails.
 
@@ -180,8 +180,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0277_table_autovacuum_tuning"
-down_revision: str | None = "0276_runs_autovacuum_enabled"
+revision: str = "0278_table_autovacuum_tuning"
+down_revision: str | None = "0277_run_daily_facts_trigger_dispatch_phase"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -213,7 +213,7 @@ def _checkpoint_set(table: str) -> str:
         "autovacuum_analyze_scale_factor = 0.01, "
         "autovacuum_vacuum_cost_limit = 10000); "
         "ELSE "
-        f"RAISE NOTICE '0277_table_autovacuum_tuning: skipping {table} - "
+        f"RAISE NOTICE '0278_table_autovacuum_tuning: skipping {table} - "
         "table does not exist yet (created by ModuloPostgresSaver.setup() "
         "at application startup)'; "
         "END IF; END $$;"

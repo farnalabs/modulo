@@ -79,11 +79,16 @@ DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
 # guaranteed floor and resets on every re-claim; these later entries are
 # best-effort instrumentation layered on top. ``PHASE_CLAIMED`` is
 # deliberately excluded — re-writing it here would duplicate the floor.
+# FAR-1422: ``PHASE_FIRST_NODE_DISPATCHED`` makes the pre-node vs
+# node-started transition durable — a run that STARTED a node then hung
+# persists ``first_node_dispatched`` instead of looking like it never
+# dispatched anything.
 DURABLE_PHASES: frozenset[str] = frozenset(
     {
         PHASE_LOADING_SETUP,
         PHASE_SETUP_COMPLETE,
         PHASE_STREAMING,
+        PHASE_FIRST_NODE_DISPATCHED,
     }
 )
 

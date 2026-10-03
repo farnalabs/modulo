@@ -439,6 +439,13 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "started_at": run.started_at,
             "completed_at": run.completed_at,
             "total_queue_wait_ms": _fact_total_queue_wait_ms(run),
+            # FAR-1421: claim→dispatch latency provenance — trigger_id +
+            # dispatch-phase columns copied onto the fact so the bucketed
+            # metric (avg_dispatch_latency_ms) never joins runs (ADR 020) and
+            # survives the run purge. getattr for legacy run-shaped objects.
+            "trigger_id": getattr(run, "trigger_id", None),
+            "dispatch_phase": getattr(run, "dispatch_phase", None),
+            "dispatch_phase_entered_at": getattr(run, "dispatch_phase_entered_at", None),
             "workspace_inputs_count": workspace_inputs_count,
             # FAR-902: schema enforcement aggregate counters — aggregated
             # from per-attempt enforcement records on run_node_outputs.
@@ -482,6 +489,9 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "started_at": stmt.excluded.started_at,
                 "completed_at": stmt.excluded.completed_at,
                 "total_queue_wait_ms": stmt.excluded.total_queue_wait_ms,
+                "trigger_id": stmt.excluded.trigger_id,
+                "dispatch_phase": stmt.excluded.dispatch_phase,
+                "dispatch_phase_entered_at": stmt.excluded.dispatch_phase_entered_at,
                 "workspace_inputs_count": stmt.excluded.workspace_inputs_count,
                 "enforcement_native_count": stmt.excluded.enforcement_native_count,
                 "enforcement_verbatim_count": stmt.excluded.enforcement_verbatim_count,

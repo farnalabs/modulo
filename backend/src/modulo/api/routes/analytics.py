@@ -93,6 +93,12 @@ class AnalyticsBucket(BaseModel):
     capacity_failure_count: int = 0
     avg_capacity_wait_ms: float | None = None
     avg_queue_wait_ms: float | None = None
+    # FAR-1421 claim→dispatch latency, bucketed per trigger (dimension
+    # trigger_type / trigger_id): dispatch_phase_entered_at - created_at,
+    # falling back to started_at - created_at when the phase timestamp is
+    # NULL (pre-migration rows / no durable phase / purged-run backfills).
+    # NULL when the bucket has no sample — never 0 for "no data".
+    avg_dispatch_latency_ms: float | None = None
     avg_final_idle_ms: float | None = None
     avg_output_bytes: float | None = None
 
@@ -253,6 +259,27 @@ class AnalyticsExportItem(BaseModel):
     run_number: int | None = None
     output_bytes: int | None = None
     rate_limited: bool | None = None
+    # The JSON surface validates through this model, so every column in the
+    # service's ``_EXPORT_COLUMNS`` must exist here too or pydantic silently
+    # drops it — CSV/NDJSON would carry the value and JSON would not. Parity is
+    # asserted by ``tests/unit/api/test_analytics_export_contract.py``.
+    batch_id: str | None = None
+    telemetry_bytes: int | None = None
+    dispatched_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    total_queue_wait_ms: int | None = None
+    workspace_inputs_count: int | None = None
+    enforcement_native_count: int | None = None
+    enforcement_verbatim_count: int | None = None
+    enforcement_repair_count: int | None = None
+    enforcement_wasted_count: int | None = None
+    # FAR-1421 claim→dispatch latency provenance — the fields
+    # avg_dispatch_latency_ms is bucketed from (dispatch_phase_entered_at -
+    # created_at, else started_at - created_at).
+    trigger_id: str | None = None
+    dispatch_phase: str | None = None
+    dispatch_phase_entered_at: str | None = None
     created_at: str
 
 
@@ -471,7 +498,11 @@ async def analytics_query(
 
     ``pipeline_id`` may be repeated for "A vs B" comparisons in a single
     request. ``error_code`` filters to a specific failure code and doubles as a
-    group-by dimension (``dimension=error_code``). ``date_from``/``date_to``
+    group-by dimension (``dimension=error_code``); ``dimension=trigger_type`` /
+    ``dimension=trigger_id`` group the series per trigger, which is how the
+    claim→dispatch latency metric (``avg_dispatch_latency_ms`` —
+    ``dispatch_phase_entered_at - created_at``, else ``started_at - created_at``)
+    is read per trigger. ``date_from``/``date_to``
     accept bare dates ("2026-08-06", parsed as midnight UTC) or ISO datetimes
     ("2026-08-06T14:00:00Z"). ``auto_granularity=true`` overrides ``group_by``
     from the effective range span (hour ≤3d, day ≤90d, week otherwise).

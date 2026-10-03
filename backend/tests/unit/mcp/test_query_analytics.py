@@ -201,6 +201,54 @@ class TestQueryAnalytics(_AuthContext):
         assert params.group_by.value == "day"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_trigger_id_dimension_is_accepted_and_carried_in_deep_link(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-1421: ``dimension=trigger_id`` groups the series per trigger.
+
+        The dimension must parse (a raw string that is not an
+        ``AnalyticsDimension`` member is rejected as ``invalid_params``) and
+        survive into the /analytics deep link like every other dimension.
+        """
+        canned = {
+            "group_by": "day",
+            "dimension": "trigger_id",
+            "date_from": "2026-08-01T00:00:00+00:00",
+            "date_to": "2026-08-07T23:59:59+00:00",
+            "buckets": [
+                {
+                    "date": "2026-08-07",
+                    "key": "99999999-9999-4999-8999-999999999999",
+                    "count": 1,
+                    "avg_dispatch_latency_ms": 1234.5,
+                }
+            ],
+        }
+        session_cm, org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            session_cm,
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch(
+                "modulo.api.mcp_server._get_session_factory",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "modulo.api.mcp_server.run_analytics_query",
+                new=AsyncMock(return_value=canned),
+            ) as mock_run,
+        ):
+            result = await query_analytics(dimension="trigger_id", group_by="day")
+        assert "error" not in result, "dimension=trigger_id must parse, not fall through to invalid_params"
+        assert result["dimension"] == "trigger_id"
+        assert "dimension=trigger_id" in result["deep_link"]
+        params = mock_run.await_args.kwargs["params"]
+        assert params.dimension is not None
+        assert params.dimension.value == "trigger_id"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_rate_limited_maps_to_error_dict(
         self,
         mock_validate_auth: AsyncMock,
