@@ -43,7 +43,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-import asyncpg
 import redis.asyncio as aioredis
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -53,7 +52,7 @@ from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
-from modulo.api.dependencies import get_or_create_engine, pg_connection_string
+from modulo.api.dependencies import get_or_create_engine
 from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
@@ -290,21 +289,29 @@ async def _check_redis() -> CheckResult:
 
 
 async def _check_checkpointer() -> CheckResult:
+    """Probe the checkpointer schema through the shared engine pool.
+
+    FAR-1426: probe via the pooled engine — the same connection path the
+    ``database``/``migrations`` checks and every real query use. The
+    previous implementation opened a brand-new raw ``asyncpg`` connection
+    on every readiness request from a helper-built DSN; whenever the event
+    loop stalled between TCP connect and the StartupPacket (the peer
+    closes startup-idle connections after ~1s), that fresh connection was
+    dropped and the check reported ``ConnectionDoesNotExistError`` as a
+    checkpointer failure that no real checkpointer path experienced.
+    """
     settings = get_settings()
     timeout = _per_check_timeout(settings, "modulo_health_checkpointer_timeout_seconds")
     start = time.monotonic()
 
     async def _probe() -> tuple[Literal["ok", "degraded"], str]:
-        conn_string = pg_connection_string(settings.database_url)
-        conn = await asyncpg.connect(conn_string, timeout=timeout)
-        try:
-            await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
-        except Exception:
-            _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
-            return "degraded", "checkpoint_migrations table not accessible"
-        finally:
-            with contextlib.suppress(Exception):
-                await conn.close()
+        engine = get_or_create_engine(settings)
+        async with engine.connect() as conn:
+            try:
+                await conn.execute(text("SELECT 1 FROM checkpoint_migrations LIMIT 1"))
+            except Exception:
+                _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
+                return "degraded", "checkpoint_migrations table not accessible"
         return "ok", "checkpointer schema accessible"
 
     try:
@@ -338,12 +345,36 @@ def _resolve_alembic_ini() -> Path:
     return Path("alembic.ini")
 
 
-async def _check_migrations() -> CheckResult:
-    settings = get_settings()
-    timeout = _per_check_timeout(settings, "modulo_health_migrations_timeout_seconds")
-    start = time.monotonic()
+#: Process-wide cache of the alembic head revisions.  The migration tree is
+#: fixed for the lifetime of a process, so re-parsing it on every
+#: ``/healthz/ready`` probe is pure overhead — and a synchronous re-parse is
+#: exactly the event-loop stall FAR-1439 identified (see
+#: ``_load_repo_heads``).  Only successful non-empty loads are cached so a
+#: transient parse failure is retried on the next probe.
+_REPO_HEADS_CACHE: set[str] | None = None
 
-    async def _probe() -> tuple[Literal["ok", "degraded"], str]:
+
+def _load_repo_heads(settings: Settings) -> set[str]:
+    """Parse the migration tree for its head revisions (BLOCKING).
+
+    Alembic's ``ScriptDirectory.get_heads()`` reads and executes every
+    migration module to discover the heads — measured at ~0.8-1.4s for this
+    repo's ~170 migrations, and longer on a shared-CPU container.  Running
+    that inline inside the readiness probe froze the whole event loop for the
+    parse's duration (FAR-1439: every sub-check reported the stall as its own
+    latency, and probes timed out at the proxy).  Callers must therefore run
+    this via ``asyncio.to_thread``; the process-wide cache makes every probe
+    after the first a plain in-memory set read.
+
+    The cache deliberately short-circuits BEFORE ``_resolve_alembic_ini``:
+    a warm process must not touch the filesystem at all.
+
+    Only successful non-empty loads are cached, mirroring
+    ``migration_guard._load_repo_revisions`` — a transient failure returns
+    uncached and is retried on the next probe.
+    """
+    global _REPO_HEADS_CACHE
+    if _REPO_HEADS_CACHE is None:
         alembic_ini = _resolve_alembic_ini()
         alembic_cfg = Config(str(alembic_ini))
         alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
@@ -351,9 +382,25 @@ async def _check_migrations() -> CheckResult:
             "script_location",
             str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
         )
-
         script = ScriptDirectory.from_config(alembic_cfg)
         heads = set(script.get_heads())
+        if heads:
+            _REPO_HEADS_CACHE = heads
+        return heads
+    return set(_REPO_HEADS_CACHE)
+
+
+async def _check_migrations() -> CheckResult:
+    settings = get_settings()
+    timeout = _per_check_timeout(settings, "modulo_health_migrations_timeout_seconds")
+    start = time.monotonic()
+
+    async def _probe() -> tuple[Literal["ok", "degraded"], str]:
+        # FAR-1439: the alembic head parse is synchronous CPU + filesystem
+        # work — run it in a worker thread so a cold (or cache-bypassed)
+        # probe can never block the event loop.  Warm probes hit the
+        # process-wide cache inside the thread for a few microseconds.
+        heads = set(await asyncio.to_thread(_load_repo_heads, settings))
 
         engine = get_or_create_engine(settings)
         async with engine.connect() as conn:
@@ -362,11 +409,14 @@ async def _check_migrations() -> CheckResult:
 
         # FAR-872: check for repo-vs-DB migration divergence (DB has applied
         # revisions the repo does not ship).  Logged at ERROR in
-        # migration_guard; surfaced here so it is visible without grepping logs.
+        # migration_guard; surfaced here so it is visible without grepping
+        # logs.  Also threaded (FAR-1439): the guard's first call parses the
+        # migration tree a second time before its own process-wide cache
+        # warms, and that parse must not run on the event loop either.
         divergence: DivergenceCheckResult | None = None
         divergence_check_failed = False
         try:
-            divergence = check_migration_divergence(applied)
+            divergence = await asyncio.to_thread(check_migration_divergence, applied)
         except Exception:
             # Contractually fail-open, but never silent: a failure here would
             # otherwise hide a real bug behind the "migrations up to date" path.
@@ -675,7 +725,8 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"enqueue_failed_capped={stats.get('enqueue_failed_capped', 0)}, "
         f"capacity_deferred={stats.get('capacity_deferred', 0)}, "
         f"terminalize_capped={stats.get('terminalize_capped', 0)}, "
-        f"facts_deferred={stats.get('facts_deferred', 0)}"
+        f"facts_deferred={stats.get('facts_deferred', 0)}, "
+        f"rows_deferred={stats.get('rows_deferred', 0)}"
     )
 
 
@@ -974,6 +1025,37 @@ async def _check_system_crons() -> CheckResult:
     return await _check_fleet_system_crons()
 
 
+# FAR-1439: event-loop stall visibility.  A synchronous call on the
+# readiness path — the bug class that froze the loop for ~2.4s per probe and
+# produced the ~40% 504s — inflates the latency of EVERY sub-check at once,
+# which names nothing.  A cooperative sampler ticks every
+# ``_LOOP_LAG_TICK_SECONDS`` for the duration of a probe and records the
+# worst scheduling delay (oversleep) it observes; the result is surfaced as
+# the advisory ``event_loop_lag`` check so a regression is visible directly
+# in the readiness payload.
+_LOOP_LAG_TICK_SECONDS = 0.01
+#: A tick that overslept by at least this much is a STALLED loop, not
+#: scheduling jitter: a healthy loop oversleeps a 10ms tick by single-digit
+#: milliseconds, while the FAR-1439 stall measured ~2400ms.
+_LOOP_LAG_DEGRADED_MS = 250.0
+
+
+async def _track_event_loop_lag(state: dict[str, float], stop: asyncio.Event) -> None:
+    """Record the worst event-loop scheduling delay until ``stop`` is set.
+
+    Runs concurrently with the readiness gather.  Each tick sleeps
+    ``_LOOP_LAG_TICK_SECONDS`` and records how late the loop actually woke
+    the task; a synchronous call anywhere on the loop shows up as one
+    oversized tick.  ``state`` is shared with the caller so the recorded
+    worst value survives task completion and can be read after the fact.
+    """
+    while not stop.is_set():
+        started = time.monotonic()
+        await asyncio.sleep(_LOOP_LAG_TICK_SECONDS)
+        lag_ms = (time.monotonic() - started - _LOOP_LAG_TICK_SECONDS) * 1000.0
+        state["worst_ms"] = max(state["worst_ms"], lag_ms)
+
+
 @router.get("/healthz")
 @handle_db_errors("health.liveness")
 async def liveness() -> dict[str, str]:
@@ -983,36 +1065,69 @@ async def liveness() -> dict[str, str]:
 @router.get("/healthz/ready")
 @handle_db_errors("health.readiness")
 async def readiness(response: Response) -> ReadinessResponse:
-    (
-        db_check,
-        redis_check,
-        cp_check,
-        mig_check,
-        saq_check,
-        cron_check,
-        dr_check,
-        srr_check,
-        sr_check,
-        hps_check,
-        rwr_check,
-        rms_check,
-        rhp_check,
-    ) = await asyncio.gather(
-        _check_database(),
-        _check_redis(),
-        _check_checkpointer(),
-        _check_migrations(),
-        _check_saq_workers(),
-        _check_system_crons(),
-        _check_dispatcher_reconcile(),
-        _check_stale_run_recovery(),
-        _check_slot_reconciliation(),
-        _check_hitl_park_sweep(),
-        _check_runner_workspace_reconcile(),
-        _check_runner_marker_sweep(),
-        _check_runner_health_probe(),
-    )
+    # FAR-1439: sample the loop for the duration of the probe.  Stopped with
+    # a plain await — never a cancel — so a tick that became due DURING a
+    # stall still runs and records it before the handler reads the state.
+    lag_state: dict[str, float] = {"worst_ms": 0.0}
+    lag_stop = asyncio.Event()
+    lag_task = asyncio.create_task(_track_event_loop_lag(lag_state, lag_stop))
+    try:
+        (
+            db_check,
+            redis_check,
+            cp_check,
+            mig_check,
+            saq_check,
+            cron_check,
+            dr_check,
+            srr_check,
+            sr_check,
+            hps_check,
+            rwr_check,
+            rms_check,
+            rhp_check,
+        ) = await asyncio.gather(
+            _check_database(),
+            _check_redis(),
+            _check_checkpointer(),
+            _check_migrations(),
+            _check_saq_workers(),
+            _check_system_crons(),
+            _check_dispatcher_reconcile(),
+            _check_stale_run_recovery(),
+            _check_slot_reconciliation(),
+            _check_hitl_park_sweep(),
+            _check_runner_workspace_reconcile(),
+            _check_runner_marker_sweep(),
+            _check_runner_health_probe(),
+        )
+    finally:
+        lag_stop.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await lag_task
     bg_check = _check_break_glass()
+
+    # FAR-1439: worst event-loop scheduling delay observed while the probe
+    # ran.  ADVISORY only — excluded from the aggregate below so a transient
+    # stall alerts without gating bluegreen — but it names the failure mode
+    # that previously only showed up as every sub-check reporting ~2.4s.
+    worst_lag_ms = lag_state["worst_ms"]
+    lag_degraded = worst_lag_ms >= _LOOP_LAG_DEGRADED_MS
+    if lag_degraded:
+        _log.warning(
+            "health.readiness event-loop stall detected (FAR-1439)",
+            extra={"worst_lag_ms": worst_lag_ms},
+        )
+    lag_check = CheckResult(
+        status="degraded" if lag_degraded else "ok",
+        latency_ms=round(worst_lag_ms, 1),
+        detail=(
+            f"EVENT-LOOP STALL: loop delayed up to {worst_lag_ms:.0f}ms during this probe "
+            "(a synchronous call blocked the event loop — see FAR-1439)"
+            if lag_degraded
+            else f"event loop responsive (worst scheduling delay {worst_lag_ms:.0f}ms during probe)"
+        ),
+    )
 
     checks: dict[str, CheckResult] = {
         "database": db_check,
@@ -1024,6 +1139,12 @@ async def readiness(response: Response) -> ReadinessResponse:
         # ADVISORY only — excluded from the aggregate so a break-glass config
         # warning never degrades readiness (plan §3 watchdog reduction).
         "break_glass": bg_check,
+        # FAR-1439 ADVISORY only — excluded from the aggregate (never gates
+        # readiness): the worst event-loop scheduling delay seen during this
+        # probe.  A value >= _LOOP_LAG_DEGRADED_MS means a synchronous call
+        # blocked the loop mid-probe; it alerts here without blocking a
+        # deploy.
+        "event_loop_lag": lag_check,
         # FAR-199: dispatcher_reconcile gates readiness at its "unavailable"
         # tier only (see the aggregation below); its "degraded" tier stays
         # advisory so a single missed reconcile tick never blocks bluegreen.

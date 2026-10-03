@@ -257,6 +257,10 @@ class TestRecordRunFacts:
                 "enforcement_verbatim_count",
                 "enforcement_repair_count",
                 "enforcement_wasted_count",
+                # FAR-1421 claim→dispatch latency provenance.
+                "trigger_id",
+                "dispatch_phase",
+                "dispatch_phase_entered_at",
             )
 
             def __init__(self, model) -> None:
@@ -365,6 +369,71 @@ class TestRecordRunFacts:
         await analytics_mod.record_run_facts(session, run)
 
         assert captured["values"]["batch_id"] is None
+
+    async def test_writes_dispatch_latency_provenance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1421: the fact carries trigger_id + dispatch-phase provenance.
+
+        These are the fields ``avg_dispatch_latency_ms`` is bucketed from —
+        copied onto the fact at finalize so the analytics read never joins
+        ``runs`` (ADR 020) and the metric survives the run purge.
+        """
+        captured = self._capturing_insert(monkeypatch)
+        phase_entered_at = datetime(2026, 8, 6, 10, 30, 5, tzinfo=UTC)
+        run = _make_run(
+            owner_team_id="44444444-4444-4444-8444-444444444444",
+            pipeline_id="55555555-5555-4555-8555-555555555555",
+            trigger_id="99999999-9999-4999-8999-999999999999",
+            dispatch_phase="streaming",
+            dispatch_phase_entered_at=phase_entered_at,
+        )
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result("Platform"),
+                SimpleNamespace(first=lambda: ("CI", None)),
+                *_blob_read_results(),
+                _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
+                _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        values = captured["values"]
+        assert values["trigger_id"] == run.trigger_id
+        assert values["dispatch_phase"] == "streaming"
+        assert values["dispatch_phase_entered_at"] == phase_entered_at
+        # Re-finalization must correct the provenance in place, like every
+        # other fact column (ON CONFLICT DO UPDATE).
+        update_keys = set(captured["set_"])
+        assert {"trigger_id", "dispatch_phase", "dispatch_phase_entered_at"} <= update_keys
+
+    async def test_dispatch_latency_provenance_null_for_legacy_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run-shaped object without the phase attributes degrades to NULL.
+
+        ``trigger_id`` is NULL for manual runs and for runs that predate the
+        phase columns — the bucket then falls back to ``started_at`` (the
+        metric's documented NULL-phase path) rather than raising.
+        """
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run()  # no trigger_id / dispatch_phase attributes
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        values = captured["values"]
+        assert values["trigger_id"] is None
+        assert values["dispatch_phase"] is None
+        assert values["dispatch_phase_entered_at"] is None
 
     async def test_failure_is_swallowed_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Team/pipeline ids make the snapshot-dimension reads run (they are
@@ -723,6 +792,55 @@ class TestBackfillFactsRepairsFirst:
             await maintenance_mod.backfill_facts(session, date(2026, 8, 12))
         maintenance_mod.repair_stale_facts.assert_awaited_once()
         assert session.execute.await_count == 0, "no INSERT runs when the repair raises"
+
+
+class TestBackfillFactsProvenanceColumns:
+    """FAR-1421: the daily backfill carries the claim→dispatch provenance.
+
+    ``INSERT ... FROM SELECT`` maps the name list onto the SELECT's columns BY
+    POSITION, so a name added on one side only silently writes the wrong value
+    into the wrong column (or fails at the DB). This pins both halves.
+    """
+
+    @staticmethod
+    def _capturing_from_select(monkeypatch: pytest.MonkeyPatch) -> dict:
+        captured: dict = {}
+
+        class _FakeInsert:
+            def __init__(self, model) -> None:
+                captured["model"] = model
+
+            def from_select(self, names, select_stmt) -> _FakeInsert:
+                captured["names"] = list(names)
+                captured["select"] = select_stmt
+                return self
+
+            def on_conflict_do_nothing(self, index_elements=None) -> _FakeInsert:
+                captured["index_elements"] = index_elements
+                return self
+
+        monkeypatch.setattr(maintenance_mod, "pg_insert", _FakeInsert)
+        return captured
+
+    async def test_provenance_columns_are_selected_and_mapped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured = self._capturing_from_select(monkeypatch)
+        insert_result = MagicMock()
+        insert_result.rowcount = 1
+        session = _session(execute_side_effect=[insert_result])
+        monkeypatch.setattr(maintenance_mod, "repair_stale_facts", AsyncMock(return_value=0))
+
+        await maintenance_mod.backfill_facts(session, date(2026, 8, 12))
+
+        names = [c.name for c in captured["names"]]
+        for column in ("trigger_id", "dispatch_phase", "dispatch_phase_entered_at"):
+            assert column in names, f"{column} missing from the INSERT ... SELECT name list"
+        # Positional alignment: from_select maps names onto the SELECT's
+        # columns in order, so both lists must be identical, in the same order.
+        selected = [c.name for c in captured["select"].selected_columns]
+        assert selected == names, (
+            "the INSERT name list must align positionally with the SELECT columns — "
+            "a drift writes the wrong value into the wrong column"
+        )
 
 
 class TestBackfillLedger:

@@ -112,6 +112,7 @@ class AnalyticsGroupBy(StrEnum):
 
 class AnalyticsDimension(StrEnum):
     TRIGGER_TYPE = "trigger_type"
+    TRIGGER_ID = "trigger_id"
     STATUS = "status"
     PIPELINE = "pipeline"
     FOLDER = "folder"
@@ -208,6 +209,7 @@ def team_scope_condition(
 # lookup is the allowlist; a non-enum value can never reach here.
 _DIMENSION_COLUMNS: dict[AnalyticsDimension, Any] = {
     AnalyticsDimension.TRIGGER_TYPE: RunDailyFact.trigger_type,
+    AnalyticsDimension.TRIGGER_ID: RunDailyFact.trigger_id,
     AnalyticsDimension.STATUS: RunDailyFact.status,
     AnalyticsDimension.PIPELINE: RunDailyFact.pipeline_id,
     AnalyticsDimension.FOLDER: RunDailyFact.folder_id,
@@ -315,6 +317,42 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
             )
         ).label("avg_capacity_wait_ms"),
         sa.func.avg(RunDailyFact.queue_wait_ms).label("avg_queue_wait_ms"),
+        # FAR-1421 claim→dispatch latency — DEFINITION (named in code, and the
+        # one used by every caller of this surface):
+        #
+        #   avg_dispatch_latency_ms = dispatch_phase_entered_at - created_at
+        #                             (fall back to started_at - created_at when
+        #                              the phase timestamp is NULL)
+        #
+        # The NULL-phase case is the documented one: pre-FAR-1421 facts, runs
+        # that never durably entered a post-claim phase, and facts backfilled
+        # from purged runs all carry a NULL phase and measure creation →
+        # execution start instead. A NULL on BOTH sides (or a NULL created_at)
+        # yields no sample — avg ignores NULLs, so the bucket mean never
+        # collapses to 0.
+        #
+        # The narrower claim→first-node figure (``first_node_dispatched``) is
+        # deliberately NOT used: that phase is not in DURABLE_PHASES yet, so it
+        # never lands on the run and could never reach the fact. It becomes
+        # available as a stricter source once it is written durably — no schema
+        # change needed for that follow-up.
+        sa.func.avg(
+            sa.case(
+                (
+                    sa.and_(
+                        RunDailyFact.created_at.is_not(None),
+                        sa.func.coalesce(RunDailyFact.dispatch_phase_entered_at, RunDailyFact.started_at).is_not(None),
+                    ),
+                    sa.func.extract(
+                        "epoch",
+                        sa.func.coalesce(RunDailyFact.dispatch_phase_entered_at, RunDailyFact.started_at)
+                        - RunDailyFact.created_at,
+                    )
+                    * 1000.0,
+                ),
+                else_=None,
+            )
+        ).label("avg_dispatch_latency_ms"),
         sa.func.avg(RunDailyFact.final_idle_ms).label("avg_final_idle_ms"),
         sa.func.avg(RunDailyFact.output_bytes).label("avg_output_bytes"),
     ]
@@ -760,6 +798,8 @@ def _empty_bucket() -> dict[str, Any]:
         "capacity_wait_n": 0,
         "queue_wait_sum": 0.0,
         "queue_wait_n": 0,
+        "dispatch_latency_sum": 0.0,
+        "dispatch_latency_n": 0,
         "final_idle_sum": 0.0,
         "final_idle_n": 0,
         "output_bytes_sum": 0.0,
@@ -812,6 +852,12 @@ def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
     if avg_queue_wait is not None:
         bucket["queue_wait_sum"] += float(avg_queue_wait) * cnt
         bucket["queue_wait_n"] += cnt
+    avg_dispatch_latency = getattr(row, "avg_dispatch_latency_ms", None)
+    if avg_dispatch_latency is not None:
+        # Same count-weighting as queue_wait: the SQL avg already ignores NULL
+        # samples, so the bucket mean re-weights by the row's run count.
+        bucket["dispatch_latency_sum"] += float(avg_dispatch_latency) * cnt
+        bucket["dispatch_latency_n"] += cnt
     avg_final_idle = getattr(row, "avg_final_idle_ms", None)
     if avg_final_idle is not None:
         bucket["final_idle_sum"] += float(avg_final_idle) * cnt
@@ -854,13 +900,16 @@ def _bucket_dim_keys(
 
 def _bucket_averages(
     b: dict[str, Any] | None,
-) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
     avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
     avg_capacity_wait = (b["capacity_wait_sum"] / b["capacity_wait_n"]) if b and b["capacity_wait_n"] else None
     avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
+    avg_dispatch_latency = (
+        (b["dispatch_latency_sum"] / b["dispatch_latency_n"]) if b and b["dispatch_latency_n"] else None
+    )
     avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
     avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
-    return (avg_dur, avg_capacity_wait, avg_queue_wait, avg_final_idle, avg_output_bytes)
+    return (avg_dur, avg_capacity_wait, avg_queue_wait, avg_dispatch_latency, avg_final_idle, avg_output_bytes)
 
 
 def _format_iso(tkey: date | datetime) -> str:
@@ -872,7 +921,9 @@ def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any 
     complete = b["complete"] if b else 0
     cost = float(b["cost"]) if b and b["cost"] is not None else None
     tokens = b["tokens"] if b else None
-    avg_dur, avg_capacity_wait, avg_queue_wait, avg_final_idle, avg_output_bytes = _bucket_averages(b)
+    avg_dur, avg_capacity_wait, avg_queue_wait, avg_dispatch_latency, avg_final_idle, avg_output_bytes = (
+        _bucket_averages(b)
+    )
     success_rate = (complete / count) if count else None
     return {
         "date": _format_iso(tkey),
@@ -887,6 +938,9 @@ def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any 
         "capacity_failure_count": b["capacity_failure"] if b else 0,
         "avg_capacity_wait_ms": round(avg_capacity_wait, 1) if avg_capacity_wait is not None else None,
         "avg_queue_wait_ms": round(avg_queue_wait, 1) if avg_queue_wait is not None else None,
+        # FAR-1421 claim→dispatch latency (see the select's DEFINITION block):
+        # dispatch_phase_entered_at - created_at, else started_at - created_at.
+        "avg_dispatch_latency_ms": round(avg_dispatch_latency, 1) if avg_dispatch_latency is not None else None,
         "avg_final_idle_ms": round(avg_final_idle, 1) if avg_final_idle is not None else None,
         "avg_output_bytes": round(avg_output_bytes, 1) if avg_output_bytes is not None else None,
     }
@@ -947,6 +1001,7 @@ def bucket_rows(
 # row (used when no snapshot label exists, e.g. folder_id).
 _DIMENSION_KEY_ATTR: dict[AnalyticsDimension, str] = {
     AnalyticsDimension.TRIGGER_TYPE: "trigger_type",
+    AnalyticsDimension.TRIGGER_ID: "trigger_id",
     AnalyticsDimension.STATUS: "status",
     AnalyticsDimension.PIPELINE: "pipeline_id",
     AnalyticsDimension.FOLDER: "folder_id",
