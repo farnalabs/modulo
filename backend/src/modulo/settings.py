@@ -806,6 +806,39 @@ class Settings(BaseSettings):
     modulo_health_migrations_timeout_seconds: float = Field(
         default=0.0, alias="MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS", ge=0.0, le=60
     )
+    # database-hygiene sub-check (FAR-1445). Unlike its neighbours this
+    # override defaults to a NON-zero 1s: the probe is a single read of the
+    # in-memory statistics views, so anything above a second means the
+    # database is already failing the `database` check — a longer budget buys
+    # nothing and only risks adding to the /healthz/ready tail (the endpoint
+    # that 504'd on the 5s gateway budget). 0 still falls back to the global
+    # MODULO_HEALTH_TIMEOUT_SECONDS like every other per-check override.
+    modulo_health_db_hygiene_timeout_seconds: float = Field(
+        default=1.0, alias="MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS", ge=0.0, le=60
+    )
+    # Dead-tuple floor for the database-hygiene check: a dead-tuple RATIO is
+    # only acted on once the table carries at least this many dead rows.
+    # Rationale (FAR-1445): a small table that is momentarily 90% dead is
+    # ordinary churn — bulk-delete then autovacuum's next pass — and cannot
+    # cost meaningful IO, so ratio alone would cry wolf. 10,000 is ~200x
+    # autovacuum_vacuum_threshold (50) yet still 36x BELOW the 361,302 dead
+    # tuples the runs table carried during the bloat incident, so the
+    # incident still trips it with enormous margin.
+    modulo_health_db_hygiene_min_dead_tuples: int = Field(
+        default=10_000, alias="MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES", ge=0
+    )
+    # Dead-tuple ratio at/above which a table (already over the dead-tuple
+    # floor) is reported degraded. Rationale (FAR-1445): autovacuum's own
+    # default trigger is 20% dead (autovacuum_vacuum_scale_factor=0.2), so a
+    # table in the 20-40% band is normal operation that autovacuum is about
+    # to service — alerting there would fire constantly. 0.60 is 3x that
+    # trigger: reaching it means autovacuum has missed the table through
+    # several consecutive trigger crossings, a real hygiene failure. It still
+    # leaves 37 points of headroom before the 97% the incident reached, so
+    # the check never has to wait for catastrophe.
+    modulo_health_db_hygiene_dead_ratio: float = Field(
+        default=0.60, alias="MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO", ge=0.0, le=1.0
+    )
 
     # ------------------------------------------------------------------
     # In-process worker-liveness watchdog (postmortem 2026-08-09, FAR-121)

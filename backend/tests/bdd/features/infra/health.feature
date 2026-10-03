@@ -21,6 +21,13 @@ Feature: Infrastructure health checks
     And the readiness overall status is "degraded"
     And the check "redis" has status "degraded"
 
+  Scenario: Database hygiene degraded reports without gating readiness
+    Given the db hygiene check is degraded
+    When I GET the readiness endpoint /healthz/ready
+    Then the response status is 200
+    And the readiness overall status is "degraded"
+    And the check "db_hygiene" has status "degraded"
+
   Scenario: Readiness returns 503 when a gate is unavailable
     Given the database check is unavailable
     When I GET the readiness endpoint /healthz/ready

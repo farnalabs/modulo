@@ -16,14 +16,17 @@ from modulo.api.main import app
 from modulo.api.routes.health import (
     _LOOP_LAG_DEGRADED_MS,
     CheckResult,
+    DbHygieneReading,
     _check_checkpointer,
     _check_database,
+    _check_db_hygiene,
     _check_fleet_saq_workers,
     _check_fleet_system_crons,
     _check_migrations,
     _check_redis,
     _check_saq_workers,
     _check_system_crons,
+    _grade_db_hygiene,
     _live_worker_hostnames,
     _per_check_timeout,
 )
@@ -133,6 +136,7 @@ class TestReadiness:
             ),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -154,6 +158,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -173,6 +178,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -193,6 +199,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -217,6 +224,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -238,6 +246,7 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -262,6 +271,7 @@ class TestHttpTimeout:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -1349,6 +1359,7 @@ class TestEventLoopStallGuard:
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -1373,6 +1384,7 @@ class TestEventLoopStallGuard:
             patch("modulo.api.routes.health._check_redis", new=_stalling_redis_check),
             patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
@@ -1415,3 +1427,426 @@ class TestEventLoopStallGuard:
         assert script.get_heads.call_count == 2, (
             "an empty (uncached) load must re-parse on the next probe, not be served from cache"
         )
+
+
+# --- FAR-1445: database-hygiene sub-check --------------------------------
+#
+# Two thresholds (both settings) and one routing guarantee: hygiene can move
+# the overall readiness status to "degraded" but can NEVER produce
+# "unavailable", so it can never take the endpoint to 503.
+
+#: Realistic healthy reading — nothing over the dead-tuple floor, freeze age
+#: four orders of magnitude under the ceiling.
+_HYGIENE_HEALTHY_ROW: dict[str, object] = {
+    "freeze_max_age": 200_000_000,
+    "frozen_age": 4_821,
+    "relname": None,
+    "n_live_tup": None,
+    "n_dead_tup": None,
+    "dead_ratio": None,
+}
+
+#: The FAR-1445 incident's own numbers: the runs table at 361,302 dead
+#: tuples against 10,411 live (97% bloat, last_autovacuum = never), which
+#: went unnoticed for months and surfaced only as 504-ing readiness.
+_HYGIENE_INCIDENT_ROW: dict[str, object] = {
+    "freeze_max_age": 200_000_000,
+    "frozen_age": 4_821,
+    "relname": "runs",
+    "n_live_tup": 10_411,
+    "n_dead_tup": 361_302,
+    "dead_ratio": 0.972,
+}
+
+
+def _reading(
+    *,
+    frozen_age: int = 4_821,
+    freeze_max_age: int = 200_000_000,
+    worst_table: str | None = None,
+    n_live_tup: int | None = None,
+    n_dead_tup: int | None = None,
+    dead_ratio: float | None = None,
+) -> DbHygieneReading:
+    """Build a reading from EXPLICIT literals — never derived from the guards."""
+    return DbHygieneReading(
+        frozen_age=frozen_age,
+        freeze_max_age=freeze_max_age,
+        worst_table=worst_table,
+        n_live_tup=n_live_tup,
+        n_dead_tup=n_dead_tup,
+        dead_ratio=dead_ratio,
+    )
+
+
+def _grade(
+    reading: DbHygieneReading,
+    *,
+    min_dead_tuples: int = 10_000,
+    dead_ratio_threshold: float = 0.60,
+) -> tuple[str, str]:
+    status, detail = _grade_db_hygiene(
+        reading,
+        min_dead_tuples=min_dead_tuples,
+        dead_ratio_threshold=dead_ratio_threshold,
+    )
+    return status, detail
+
+
+class _FakeHygieneResult:
+    """Result double exposing just the ``mappings().first()`` read the probe does."""
+
+    def __init__(self, row: dict[str, object] | None) -> None:
+        self._row = row
+
+    def mappings(self) -> "_FakeHygieneResult":
+        return self
+
+    def first(self) -> dict[str, object] | None:
+        return self._row
+
+
+class _FakeHygieneEngine:
+    """Engine double returning a canned hygiene row (mirrors _FakeMigrationEngine)."""
+
+    def __init__(self, row: dict[str, object] | None) -> None:
+        self._row = row
+        self.seen_params: dict[str, object] | None = None
+
+    def connect(self) -> Self:
+        return self
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def execute(self, _stmt: object, params: dict[str, object] | None = None) -> _FakeHygieneResult:
+        self.seen_params = params
+        return _FakeHygieneResult(self._row)
+
+
+class _ExplodingHygieneEngine:
+    """Engine double whose probe raises — the check-could-not-run path."""
+
+    def connect(self) -> Self:
+        return self
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def execute(self, _stmt: object, params: dict[str, object] | None = None) -> _FakeHygieneResult:
+        raise RuntimeError("statistics views unreadable")
+
+
+class TestDbHygieneGradingBoundaries:
+    """Threshold boundaries — every boundary pinned as an explicit literal.
+
+    The numbers are written out, never recomputed from the expression the
+    production code uses: a test that mirrors the guard only proves the guard
+    agrees with itself.
+    """
+
+    # --- absolute dead-tuple floor (default 10,000) ---------------------
+
+    def test_ratio_only_dead_rows_below_floor_are_ok(self) -> None:
+        """99.99% dead but only 9,999 dead rows — churn, not bloat → ok."""
+        status, detail = _grade(
+            _reading(worst_table="small_events", n_live_tup=1, n_dead_tup=9_999, dead_ratio=0.9999),
+        )
+        assert status == "ok"
+        assert "9,999" in detail
+
+    def test_dead_rows_exactly_at_floor_are_degraded(self) -> None:
+        status, detail = _grade(
+            _reading(worst_table="small_events", n_live_tup=1, n_dead_tup=10_000, dead_ratio=0.9999),
+        )
+        assert status == "degraded"
+        assert "10,000" in detail
+
+    def test_dead_rows_above_floor_are_degraded(self) -> None:
+        status, _detail = _grade(
+            _reading(worst_table="small_events", n_live_tup=1, n_dead_tup=10_001, dead_ratio=0.9999),
+        )
+        assert status == "degraded"
+
+    # --- dead-tuple ratio (default 0.60) --------------------------------
+
+    def test_ratio_just_below_threshold_is_ok(self) -> None:
+        """59.99% dead on a table well over the floor → within thresholds."""
+        status, detail = _grade(
+            _reading(worst_table="runs", n_live_tup=40_001, n_dead_tup=60_000, dead_ratio=0.5999),
+        )
+        assert status == "ok"
+        assert "within thresholds" in detail
+
+    def test_ratio_exactly_at_threshold_is_degraded(self) -> None:
+        status, detail = _grade(
+            _reading(worst_table="runs", n_live_tup=40_000, n_dead_tup=60_000, dead_ratio=0.60),
+        )
+        assert status == "degraded"
+        assert "60% threshold" in detail
+        assert "runs" in detail
+
+    def test_ratio_just_above_threshold_is_degraded(self) -> None:
+        status, _detail = _grade(
+            _reading(worst_table="runs", n_live_tup=40_000, n_dead_tup=60_001, dead_ratio=0.6001),
+        )
+        assert status == "degraded"
+
+    def test_dead_rows_over_floor_but_ratio_under_threshold_is_ok(self) -> None:
+        """400k dead rows on a 1M-row table is under the 60% threshold — the
+        floor alone must not flag a table autovacuum services normally."""
+        status, _detail = _grade(
+            _reading(worst_table="huge", n_live_tup=600_000, n_dead_tup=400_000, dead_ratio=0.40),
+        )
+        assert status == "ok"
+
+    # --- freeze (wraparound) age against the server's own ceiling -------
+
+    def test_freeze_age_just_below_warning_tier_is_ok(self) -> None:
+        status, detail = _grade(_reading(frozen_age=99_999_999, freeze_max_age=200_000_000))
+        assert status == "ok"
+        assert "freeze age 99,999,999/200,000,000" in detail
+
+    def test_freeze_age_exactly_at_warning_tier_is_degraded(self) -> None:
+        status, detail = _grade(_reading(frozen_age=100_000_000, freeze_max_age=200_000_000))
+        assert status == "degraded"
+        assert "100,000,000" in detail
+        assert "autovacuum_freeze_max_age" in detail
+
+    def test_freeze_age_just_above_warning_tier_is_degraded(self) -> None:
+        status, _detail = _grade(_reading(frozen_age=100_000_001, freeze_max_age=200_000_000))
+        assert status == "degraded"
+
+    def test_freeze_age_at_the_ceiling_is_degraded(self) -> None:
+        status, detail = _grade(_reading(frozen_age=200_000_000, freeze_max_age=200_000_000))
+        assert status == "degraded"
+        assert "AT/ABOVE autovacuum_freeze_max_age" in detail
+
+    def test_disabled_freeze_ceiling_is_reported_not_graded(self) -> None:
+        """autovacuum_freeze_max_age = 0 disables the forcing — say so rather
+        than divide by it or read the database as clean."""
+        status, detail = _grade(_reading(frozen_age=1_000_000, freeze_max_age=0))
+        assert status == "ok"
+        assert "autovacuum_freeze_max_age disabled" in detail
+
+    # --- the regression this check exists for ---------------------------
+
+    def test_incident_bloat_numbers_are_flagged(self) -> None:
+        """Negative control: the FAR-1445 incident's own row must be caught.
+
+        10,411 live / 361,302 dead (97.2% dead) on ``runs`` sat unnoticed
+        for months and only surfaced as 504-ing readiness — this is the
+        exact state the check exists to report.
+        """
+        status, detail = _grade(
+            _reading(worst_table="runs", n_live_tup=10_411, n_dead_tup=361_302, dead_ratio=0.972),
+        )
+        assert status == "degraded"
+        assert "runs" in detail
+        assert "361,302" in detail
+        assert "371,713" in detail
+        assert "97.2% dead" in detail
+
+    def test_healthy_database_grades_ok(self) -> None:
+        status, detail = _grade(_reading())
+        assert status == "ok"
+        assert "no table over the 10,000-dead floor" in detail
+        assert "freeze age 4,821/200,000,000" in detail
+
+    def test_grading_can_never_produce_unavailable(self) -> None:
+        """Structural guarantee: the return type excludes ``unavailable``, so
+        a hygiene report can never 503 /healthz/ready on its own."""
+        from typing import get_type_hints
+
+        return_hint = get_type_hints(_grade_db_hygiene)["return"]
+        allowed = set(return_hint.__args__[0].__args__)
+        assert allowed == {"ok", "degraded"}
+
+
+class TestDbHygieneCheck:
+    """``_check_db_hygiene`` end-to-end over a canned query result."""
+
+    async def _run(
+        self, row: dict[str, object] | None, **settings_updates: object
+    ) -> tuple[CheckResult, _FakeHygieneEngine]:
+        settings = _make_settings().model_copy(update=settings_updates)
+        engine = _FakeHygieneEngine(row)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=engine),
+        ):
+            return await _check_db_hygiene(), engine
+
+    async def test_healthy_database_grades_ok(self) -> None:
+        result, _engine = await self._run(_HYGIENE_HEALTHY_ROW)
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "freeze age 4,821/200,000,000" in result.detail
+        assert result.latency_ms is not None
+
+    async def test_incident_bloat_grades_degraded_and_names_the_table(self) -> None:
+        result, _engine = await self._run(_HYGIENE_INCIDENT_ROW)
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "runs" in result.detail
+        assert "361,302" in result.detail
+
+    async def test_probe_binds_the_configured_dead_tuple_floor(self) -> None:
+        result, engine = await self._run(_HYGIENE_HEALTHY_ROW)
+        assert result.status == "ok"
+        assert engine.seen_params == {"min_dead": 10_000}
+
+    async def test_probe_binds_an_operator_lowered_floor(self) -> None:
+        settings_updates = {"modulo_health_db_hygiene_min_dead_tuples": 500}
+        result, engine = await self._run(_HYGIENE_HEALTHY_ROW, **settings_updates)
+        assert result.status == "ok"
+        assert engine.seen_params == {"min_dead": 500}
+
+    async def test_uses_shared_engine_pool_not_a_fresh_connection(self) -> None:
+        """FAR-1445 cost contract: one pooled-engine read, never a per-probe
+        connection (the FAR-1426 failure mode on the checkpointer probe)."""
+        settings = _make_settings()
+        engine = _FakeHygieneEngine(_HYGIENE_HEALTHY_ROW)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=engine) as engine_factory,
+        ):
+            result = await _check_db_hygiene()
+        engine_factory.assert_called_once_with(settings)
+        assert result.status == "ok"
+
+    async def test_timeout_reports_degraded_never_unavailable(self) -> None:
+        settings_updates = {"modulo_health_db_hygiene_timeout_seconds": 0.2}
+        with (
+            patch(
+                "modulo.api.routes.health.get_settings",
+                return_value=_make_settings().model_copy(update=settings_updates),
+            ),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+        ):
+            result = await _check_db_hygiene()
+        assert result.status == "degraded"
+        assert "timed out after 0.2s" in (result.detail or "").lower()
+        assert result.latency_ms is not None
+        assert result.latency_ms < 60_000
+
+    async def test_probe_failure_reports_degraded_never_unavailable(self) -> None:
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_ExplodingHygieneEngine()),
+        ):
+            result = await _check_db_hygiene()
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "could not run" in result.detail
+
+    def test_settings_defaults(self) -> None:
+        settings = _make_settings()
+        assert settings.modulo_health_db_hygiene_timeout_seconds == 1.0
+        assert settings.modulo_health_db_hygiene_min_dead_tuples == 10_000
+        assert settings.modulo_health_db_hygiene_dead_ratio == pytest.approx(0.60)
+
+    def test_db_hygiene_defaults_to_its_own_small_budget(self) -> None:
+        """Unlike its neighbours this override defaults to 1s, not 0: the
+        probe is one statistics-view read, so it must not inherit the 5s
+        global budget that the 504-ing gateway endpoint already runs on."""
+        settings = _make_settings().model_copy(update={"modulo_health_timeout_seconds": 2.5})
+        assert _per_check_timeout(settings, "modulo_health_db_hygiene_timeout_seconds") == 1.0
+
+    def test_per_check_timeout_falls_back_to_global_when_cleared(self) -> None:
+        """0 keeps the documented escape hatch every other override has."""
+        settings = _make_settings().model_copy(
+            update={
+                "modulo_health_timeout_seconds": 2.5,
+                "modulo_health_db_hygiene_timeout_seconds": 0.0,
+            }
+        )
+        assert _per_check_timeout(settings, "modulo_health_db_hygiene_timeout_seconds") == 2.5
+
+    def test_per_check_timeout_override_wins(self) -> None:
+        settings = _make_settings().model_copy(
+            update={
+                "modulo_health_timeout_seconds": 2.5,
+                "modulo_health_db_hygiene_timeout_seconds": 0.5,
+            }
+        )
+        assert _per_check_timeout(settings, "modulo_health_db_hygiene_timeout_seconds") == 0.5
+
+
+class TestDbHygieneAggregation:
+    """FAR-1445: a hygiene finding degrades the report, never the status code."""
+
+    def test_degraded_hygiene_keeps_http_200_and_overall_degraded(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_db_hygiene",
+                AsyncMock(return_value=_degraded_check('DEAD-TUPLE BLOAT: worst table "runs"')),
+            ),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        # The Fly service check and every deploy gate key on the status CODE:
+        # a hygiene report must never take the machine out of rotation.
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert body["checks"]["db_hygiene"]["status"] == "degraded"
+        assert body["checks"]["database"]["status"] == "ok"
+
+    def test_healthy_hygiene_keeps_overall_ok(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["checks"]["db_hygiene"]["status"] == "ok"
+
+    def test_hygiene_cannot_supply_the_503(self, client: TestClient) -> None:
+        """Even the worst hygiene outcome leaves the 503 to the real gates:
+        with hygiene degraded AND every other gate ok, the endpoint is 200."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_db_hygiene",
+                AsyncMock(return_value=CheckResult(status="degraded", detail="DEAD-TUPLE BLOAT: runs")),
+            ),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        assert resp.status_code == 200
+        assert resp.json()["status"] != "unavailable"
