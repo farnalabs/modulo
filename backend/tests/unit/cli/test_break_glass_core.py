@@ -3,6 +3,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -521,6 +522,75 @@ class TestEngineFactory:
         factory_one = bg.get_break_glass_session_factory(settings)
         factory_two = bg.get_break_glass_session_factory(settings)
         assert factory_one is factory_two
+
+
+class TestEngineSslPosture:
+    """FAR-1441: the break-glass engine honours the URL's sslmode instead of
+    hardcoding ssl=False (which silently downgrades sslmode=require)."""
+
+    def _isolate(self, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """Reset the module-level engine/factory caches (restored on teardown)."""
+        import modulo.cli.break_glass as bg
+
+        for name in ("_bg_engine", "_bg_engine_url", "_bg_factory", "_bg_factory_url"):
+            monkeypatch.setattr(bg, name, None, raising=False)
+        return bg
+
+    @pytest.mark.parametrize(
+        ("url", "expected_ssl"),
+        [
+            pytest.param("postgresql+asyncpg://bg:bg@h:5432/modulo", False, id="no-sslmode-explicit-false"),
+            pytest.param(
+                "postgresql+asyncpg://bg:bg@h:5432/modulo?sslmode=disable", False, id="disable-explicit-false"
+            ),
+        ],
+    )
+    def test_plaintext_posture_passes_explicit_false(
+        self, monkeypatch: pytest.MonkeyPatch, url: str, expected_ssl: bool
+    ) -> None:
+        bg = self._isolate(monkeypatch)
+        with patch.object(bg, "create_async_engine", return_value=MagicMock()) as create:
+            engine = bg.get_break_glass_engine(SimpleNamespace(modulo_break_glass_database_url=url))
+
+        assert engine is create.return_value
+        _, kwargs = create.call_args
+        assert kwargs["connect_args"] == {"timeout": 10, "ssl": expected_ssl}
+        assert "sslmode" not in str(create.call_args[0][0])
+
+    def test_require_mode_reaches_asyncpg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        bg = self._isolate(monkeypatch)
+        with patch.object(bg, "create_async_engine", return_value=MagicMock()) as create:
+            engine = bg.get_break_glass_engine(
+                SimpleNamespace(modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require")
+            )
+            cached = bg.get_break_glass_engine(
+                SimpleNamespace(modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require")
+            )
+        assert engine is cached
+        create.assert_called_once()
+        _, kwargs = create.call_args
+        assert kwargs["connect_args"]["ssl"] == "require"
+        assert "sslmode" not in str(create.call_args[0][0])
+
+    def test_downgrading_mode_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        bg = self._isolate(monkeypatch)
+        with patch.object(bg, "create_async_engine") as create, pytest.raises(ValueError, match="sslmode"):
+            bg.get_break_glass_engine(
+                SimpleNamespace(modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=prefer")
+            )
+        create.assert_not_called()
+        # Fail-closed leaves no engine cached — the next invocation raises again.
+        assert bg._bg_engine is None
+
+    def test_non_postgres_url_gets_no_ssl_arg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        bg = self._isolate(monkeypatch)
+        with patch.object(bg, "create_async_engine", return_value=MagicMock()) as create:
+            engine = bg.get_break_glass_engine(
+                SimpleNamespace(modulo_break_glass_database_url="sqlite+aiosqlite:///tmp/breakglass.db")
+            )
+        assert engine is create.return_value
+        _, kwargs = create.call_args
+        assert "ssl" not in kwargs["connect_args"]
 
 
 class TestRenderAndContextHelpers:
