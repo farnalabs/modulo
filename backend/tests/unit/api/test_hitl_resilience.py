@@ -1,5 +1,6 @@
 """Unit tests: SQLAlchemyError→503 and NotTeamMemberError→403 on HITL API routes."""
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
@@ -8,12 +9,16 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import InvalidRequestError, PendingRollbackError, SQLAlchemyError
 
+from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY
+from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.hitl_answer_validation import AnswerValidationError
 from modulo.api.main import app
-from modulo.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audit
+from modulo.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audit, _run_hitl_manager
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
@@ -1496,3 +1501,312 @@ def _audit_session_double() -> MagicMock:
     begin_cm = MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False))
     session.begin = MagicMock(return_value=begin_cm)
     return session
+
+
+# ---------------------------------------------------------------------------
+# FAR-1408: session-contract violations (InvalidRequestError) must be 500,
+# never 503, on EVERY route-local ``except SQLAlchemyError`` arm in hitl.py.
+#
+# ``handle_db_errors``' own InvalidRequestError→500 arm never sees these: the
+# route-local arms catch the exception first, so before this sweep a local
+# ``autobegin=False`` misuse answered ``503 "Database error. Please try
+# again."`` — a retry-inviting message for a non-retryable programming bug.
+# ``set_rls_org`` is the FIRST statement inside every one of those try blocks,
+# so raising from it reaches each arm directly.
+# ---------------------------------------------------------------------------
+
+_INVALID_REQUEST_MSG = "Autobegin is disabled on this Session"
+
+# (method, url, payload, expected session-contract log key) — one entry per
+# route-local ``except SQLAlchemyError`` arm, plus every route sharing the
+# ``_run_hitl_manager`` arm.
+_SESSION_CONTRACT_CASES = [
+    pytest.param(
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+        {"expiry_minutes": 15},
+        "hitl.claim_review.session_contract_error",
+        id="claim",
+    ),
+    pytest.param(
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+        {"claim_token": "test-token", "notes": "approved"},
+        "hitl._run_hitl_manager.session_contract_error",
+        id="approve",
+    ),
+    pytest.param(
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve-with-modification",
+        {"claim_token": "test-token", "modified_output": {"key": "value"}, "notes": "modified"},
+        "hitl._run_hitl_manager.session_contract_error",
+        id="approve-with-modification",
+    ),
+    pytest.param(
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/reject",
+        {"claim_token": "test-token", "reason": "not needed"},
+        "hitl._run_hitl_manager.session_contract_error",
+        id="reject",
+    ),
+    pytest.param(
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/deliver-manual",
+        {"claim_token": "test-token", "output": {"result": "ok"}},
+        "hitl._run_hitl_manager.session_contract_error",
+        id="deliver-manual",
+    ),
+    pytest.param(
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/manual/gate-1/submit",
+        {"claim_token": "test-token", "output": {"result": "ok"}},
+        "hitl._run_hitl_manager.session_contract_error",
+        id="submit-manual",
+    ),
+    pytest.param(
+        "GET",
+        f"/api/v1/runs/{_RUN_ID}/hitl/pending",
+        None,
+        "hitl.list_run_pending_reviews.session_contract_error",
+        id="list-run-pending",
+    ),
+    pytest.param(
+        "GET",
+        "/api/v1/hitl/pending",
+        None,
+        "hitl.list_org_pending_reviews.session_contract_error",
+        id="list-org-pending",
+    ),
+    pytest.param(
+        "GET",
+        "/api/v1/hitl/reviews",
+        None,
+        "hitl.list_org_reviews.session_contract_error",
+        id="list-org-reviews",
+    ),
+]
+
+
+def _call(client: TestClient, method: str, url: str, payload: dict[str, Any] | None) -> Any:
+    if method == "GET":
+        return client.get(url)
+    return client.post(url, json=payload)
+
+
+class TestSessionContractErrorIs500Not503:
+    """Every route-local SQLAlchemyError arm must special-case InvalidRequestError.
+
+    Covers all five arms: ``claim_review``, ``_run_hitl_manager`` (shared by
+    approve / approve-with-modification / reject / deliver-manual /
+    submit-manual) and the three list routes.
+    """
+
+    @pytest.mark.parametrize(("method", "url", "payload", "_log_key"), _SESSION_CONTRACT_CASES)
+    def test_session_contract_error_is_500_with_accurate_detail(
+        self,
+        client: TestClient,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+        _log_key: str,
+    ) -> None:
+        with patch(
+            "modulo.api.routes.hitl.set_rls_org",
+            new=AsyncMock(side_effect=InvalidRequestError(_INVALID_REQUEST_MSG)),
+        ):
+            resp = _call(client, method, url, payload)
+
+        assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR, resp.text
+        detail = resp.json()["detail"]
+        # The defect was a retry-INVITING detail on a non-retryable bug — pin
+        # the exact wording, not just the status.
+        assert detail == MSG_SESSION_CONTRACT, detail
+        assert "Database temporarily unavailable." not in detail, detail
+        assert "try again" not in detail.lower(), detail
+
+    @pytest.mark.parametrize(("method", "url", "payload", "log_key"), _SESSION_CONTRACT_CASES)
+    def test_session_contract_error_logs_the_programming_error_key(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+        log_key: str,
+    ) -> None:
+        """Logged LOUDLY under the distinct session-contract key — never as a DB outage.
+
+        The ``modulo.api.routes.hitl`` assertion is the control for the
+        ``db_error_reporting`` absence below: it proves caplog actually
+        captured this request's logging, so "no service_unavailable record"
+        is an observation rather than a harness that captured nothing.
+        """
+        with (
+            patch(
+                "modulo.api.routes.hitl.set_rls_org",
+                new=AsyncMock(side_effect=InvalidRequestError(_INVALID_REQUEST_MSG)),
+            ),
+            caplog.at_level(logging.ERROR),
+        ):
+            resp = _call(client, method, url, payload)
+
+        assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR, resp.text
+        hitl_messages = [r.getMessage() for r in caplog.records if r.name == "modulo.api.routes.hitl"]
+        assert log_key in hitl_messages, hitl_messages
+        # A session-contract violation must never be filed as a DB outage.
+        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        assert not records, f"a programming error must not write a service_unavailable record: {records}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1408 follow-up: ``PendingRollbackError`` is the TRANSIENT subclass of
+# ``InvalidRequestError``. It means an earlier statement failed and the session
+# was never rolled back — during a real outage that earlier fault is the cause —
+# so every route-local arm must keep the 503 + ``db_transient`` treatment rather
+# than answering the 500 session-contract reply.
+# ---------------------------------------------------------------------------
+
+_PENDING_ROLLBACK_MSG = "This Session's transaction has been rolled back due to a previous exception"
+
+
+class TestPendingRollbackErrorIs503Not500:
+    """The transient subclass keeps the 503 + structured record on every arm."""
+
+    @pytest.mark.parametrize(("method", "url", "payload", "_log_key"), _SESSION_CONTRACT_CASES)
+    def test_pending_rollback_is_503_with_the_transient_detail(
+        self,
+        client: TestClient,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+        _log_key: str,
+    ) -> None:
+        with patch(
+            "modulo.api.routes.hitl.set_rls_org",
+            new=AsyncMock(side_effect=PendingRollbackError(_PENDING_ROLLBACK_MSG)),
+        ):
+            resp = _call(client, method, url, payload)
+
+        assert resp.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, resp.text
+        detail = resp.json()["detail"]
+        assert detail == MSG_DB_ERROR_PLEASE_TRY
+        assert detail != MSG_SESSION_CONTRACT
+
+    @pytest.mark.parametrize(("method", "url", "payload", "log_key"), _SESSION_CONTRACT_CASES)
+    def test_pending_rollback_emits_the_structured_db_transient_record(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None,
+        log_key: str,
+    ) -> None:
+        with (
+            patch(
+                "modulo.api.routes.hitl.set_rls_org",
+                new=AsyncMock(side_effect=PendingRollbackError(_PENDING_ROLLBACK_MSG)),
+            ),
+            caplog.at_level(logging.ERROR),
+        ):
+            resp = _call(client, method, url, payload)
+
+        assert resp.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, resp.text
+        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        assert len(records) == 1, records
+        payload_record = records[0].__dict__["service_unavailable"]
+        assert payload_record["reason"] == "db_transient"
+        # The transient record's route label MUST be distinct from the
+        # session-contract 500's key, or the two are indistinguishable in the
+        # service-unavailable trail (FAR-1408 review observation 1).
+        expected_transient_key = log_key.removesuffix(".session_contract_error") + ".pending_rollback_error"
+        assert payload_record["route"] == expected_transient_key
+        assert payload_record["route"] != log_key
+        assert payload_record["exception_class"] == "PendingRollbackError"
+        assert payload_record["detail"] == "transient database error (PendingRollbackError)"
+
+
+# ---------------------------------------------------------------------------
+# FAR-907: ``require_answer`` is an enforcement flag — it must never be able
+# to silently switch its own enforcement off.
+# ---------------------------------------------------------------------------
+
+
+def _decision_session_double() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False))
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+def _decision_principal() -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        username="user",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+
+class TestRequireAnswerImpliesValidation:
+    async def test_require_answer_alone_still_runs_validation(self) -> None:
+        """``require_answer=True`` without ``validate_answer`` must validate.
+
+        Before the fix the flag was only forwarded inside
+        ``if validate_answer:``, so a caller passing it alone got NO
+        validation — a silent enforcement skip.
+        """
+        validator = AsyncMock(side_effect=AnswerValidationError("answer is required on a choice gate"))
+        with (
+            patch("modulo.api.routes.hitl.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.hitl.validate_hitl_answer", new=validator),
+            patch(
+                "modulo.api.routes.hitl.HITLManager",
+                return_value=MagicMock(approve=AsyncMock(return_value="decided")),
+            ),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await _run_hitl_manager(
+                _decision_session_double(),
+                _decision_principal(),
+                _RUN_ID,
+                "gate-1",
+                enforce_human_only=False,
+                require_sandbox=False,
+                mgr_method="approve",
+                decision_payload={},
+                answer={"kind": "choice", "option_id": "opt-1"},
+                require_answer=True,  # validate_answer deliberately omitted
+            )
+
+        # Behavioural pin: the rejection reached the caller (422), i.e. the
+        # validator ran; and the missing flag was implied, not dropped.
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+        assert "answer is required" in excinfo.value.detail
+        validator.assert_awaited_once()
+        assert validator.await_args.kwargs["require_answer"] is True
+
+    async def test_no_validation_flags_leave_validation_out(self) -> None:
+        """reject / deliver-manual / submit-manual pass neither flag — unchanged."""
+        validator = AsyncMock(return_value=None)
+        with (
+            patch("modulo.api.routes.hitl.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.hitl.validate_hitl_answer", new=validator),
+            patch(
+                "modulo.api.routes.hitl.HITLManager",
+                return_value=MagicMock(reject=AsyncMock(return_value="decided")),
+            ),
+        ):
+            result = await _run_hitl_manager(
+                _decision_session_double(),
+                _decision_principal(),
+                _RUN_ID,
+                "gate-1",
+                enforce_human_only=False,
+                require_sandbox=False,
+                mgr_method="reject",
+                decision_payload={},
+            )
+
+        assert result == "decided"
+        validator.assert_not_awaited()

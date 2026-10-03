@@ -1,8 +1,8 @@
 """Unit tests for the FAR-1088 (W2) durable dispatch-phase writer.
 
 The writer records post-claim phase entries (``loading_setup``,
-``setup_complete``, ``streaming``) durably on ``runs.dispatch_phase``. Four
-load-bearing properties are proven here:
+``setup_complete``, ``streaming``, ``first_node_dispatched``) durably on
+``runs.dispatch_phase``. Four load-bearing properties are proven here:
 
 1. Single-flight + coalescing (at most one in-flight write, latest wins).
 2. Bounded + fail-soft (timeout/error are logged and dropped, never raised).
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,10 +26,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import modulo.core.saq_worker as sw
+from modulo.core.pipeline_engine.event_broker import RunEventBroker
+from modulo.core.pipeline_engine.executor import PipelineExecutor, _StreamContext, _StreamState
 from modulo.core.pipeline_execution import (
     _PHASE_UPDATE_SQL,
     DURABLE_PHASES,
     PHASE_CLAIMED,
+    PHASE_FIRST_NODE_DISPATCHED,
     PHASE_GRAPH_COMPILE,
     PHASE_LOADING_SETUP,
     PHASE_SETUP_COMPLETE,
@@ -314,7 +318,7 @@ class TestSingleFlightCoalescing:
         """Outside the in-flight window every durable phase lands, in order."""
         eng = _FakeEngine(_fwd_row())
         writer = _writer(eng)
-        for phase in (PHASE_LOADING_SETUP, PHASE_SETUP_COMPLETE, PHASE_STREAMING):
+        for phase in (PHASE_LOADING_SETUP, PHASE_SETUP_COMPLETE, PHASE_STREAMING, PHASE_FIRST_NODE_DISPATCHED):
             writer.record(phase)
             await writer.flush()
             assert eng.row["dispatch_phase"] == phase
@@ -348,9 +352,14 @@ class TestSingleFlightCoalescing:
 class TestTrackerWiring:
     """The tracker records exactly DURABLE_PHASES when a writer is attached."""
 
-    def test_durable_phases_are_the_three_wired_phases(self) -> None:
+    def test_durable_phases_are_the_wired_phases(self) -> None:
         # Pin the scope: the claim floor ('claimed') is never re-written here.
-        assert frozenset({PHASE_LOADING_SETUP, PHASE_SETUP_COMPLETE, PHASE_STREAMING}) == DURABLE_PHASES
+        # FAR-1422: first_node_dispatched is durable — a run that STARTED a node
+        # must persist that fact, not look like it never dispatched anything.
+        assert (
+            frozenset({PHASE_LOADING_SETUP, PHASE_SETUP_COMPLETE, PHASE_STREAMING, PHASE_FIRST_NODE_DISPATCHED})
+            == DURABLE_PHASES
+        )
 
     @pytest.mark.asyncio
     async def test_tracker_records_each_durable_phase(self) -> None:
@@ -371,6 +380,13 @@ class TestTrackerWiring:
         await writer.flush()
         assert eng.row["dispatch_phase"] == PHASE_STREAMING
 
+        # FAR-1422: the first-node transition (executor on_first_progress site)
+        # is durable and lands AFTER streaming — the monotonic guard accepts it
+        # because it is entered later in wall-clock time.
+        tracker.enter_phase(PHASE_FIRST_NODE_DISPATCHED)
+        await writer.flush()
+        assert eng.row["dispatch_phase"] == PHASE_FIRST_NODE_DISPATCHED
+
     def test_non_durable_phases_are_not_written(self) -> None:
         eng = _FakeEngine(_fwd_row())
         writer = _writer(eng)
@@ -387,6 +403,105 @@ class TestTrackerWiring:
         tracker = DispatchPhaseTracker(run_id=_RUN_ID, org_id=_ORG_ID)
         tracker.enter_phase(PHASE_STREAMING)
         assert tracker.phase == PHASE_STREAMING
+
+
+class TestExecutorFirstNodeDispatchDurable:
+    """FAR-1422: the executor's first-node event records the durable phase.
+
+    The executor enters ``streaming`` before ``_stream_graph`` and calls
+    ``enter_phase("first_node_dispatched")`` where ``on_first_progress``
+    fires — the FIRST LangGraph event whose name is a node id. With a
+    durable writer attached, that transition must land on
+    ``runs.dispatch_phase`` so a run that STARTED a node and hung is
+    distinguishable from one stuck in pre-node setup.
+    """
+
+    @pytest.mark.asyncio
+    async def test_first_node_event_records_durable_phase(self) -> None:
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+        tracker = DispatchPhaseTracker(run_id=_RUN_ID, org_id=_ORG_ID)
+        tracker.durable_writer = writer
+
+        # The executor enters streaming BEFORE _stream_graph (executor.py).
+        tracker.enter_phase(PHASE_STREAMING)
+        await writer.flush()
+        assert eng.row["dispatch_phase"] == PHASE_STREAMING
+
+        executor = PipelineExecutor(MagicMock())
+        executor._dispatch_phase_tracker = tracker
+        progress: list[str] = []
+        executor.on_first_progress = lambda: progress.append("first")
+
+        run_uuid = uuid.uuid4()
+        ctx = _StreamContext(
+            node_ids={"node-a"},
+            guard=None,
+            completed_node_outputs=None,
+            run_trace_id=None,
+            broker=RunEventBroker(run_uuid),
+            run_id=run_uuid,
+            pipeline_id=None,
+            org_id=uuid.UUID(_ORG_ID),
+            node_token_budgets=None,
+            eval_definitions_by_node=None,
+            node_type_map=None,
+        )
+        state = _StreamState()
+
+        result = await executor._handle_stream_event(
+            state,
+            ctx,
+            {"event": "on_chain_start", "name": "node-a", "data": {}},
+        )
+
+        # Not a terminal event; first progress fired once; the tracker moved
+        # to first_node_dispatched AND the durable row followed it.
+        assert result is None
+        assert progress == ["first"]
+        assert tracker.phase == PHASE_FIRST_NODE_DISPATCHED
+        await writer.flush()
+        assert eng.row["dispatch_phase"] == PHASE_FIRST_NODE_DISPATCHED
+
+    @pytest.mark.asyncio
+    async def test_subsequent_node_event_does_not_re_enter_first_dispatch(self) -> None:
+        """Only the FIRST node event signals first-progress (fires once)."""
+        eng = _FakeEngine(_fwd_row())
+        writer = _writer(eng)
+        tracker = DispatchPhaseTracker(run_id=_RUN_ID, org_id=_ORG_ID)
+        tracker.durable_writer = writer
+
+        executor = PipelineExecutor(MagicMock())
+        executor._dispatch_phase_tracker = tracker
+        progress: list[str] = []
+        executor.on_first_progress = lambda: progress.append("first")
+
+        run_uuid = uuid.uuid4()
+        ctx = _StreamContext(
+            node_ids={"node-a", "node-b"},
+            guard=None,
+            completed_node_outputs=None,
+            run_trace_id=None,
+            broker=RunEventBroker(run_uuid),
+            run_id=run_uuid,
+            pipeline_id=None,
+            org_id=uuid.UUID(_ORG_ID),
+            node_token_budgets=None,
+            eval_definitions_by_node=None,
+            node_type_map=None,
+        )
+        state = _StreamState()
+
+        await executor._handle_stream_event(state, ctx, {"event": "on_chain_start", "name": "node-a", "data": {}})
+        await executor._handle_stream_event(state, ctx, {"event": "on_chain_start", "name": "node-b", "data": {}})
+
+        assert progress == ["first"]
+        assert tracker.phase == PHASE_FIRST_NODE_DISPATCHED
+        await writer.flush()
+        assert eng.row["dispatch_phase"] == PHASE_FIRST_NODE_DISPATCHED
+        # Exactly ONE write: only the first event entered the phase, so the
+        # second node event scheduled no additional durable record.
+        assert len(eng.attempts) == 1
 
 
 class TestExecuteRunWiresWriter:

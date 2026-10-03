@@ -622,19 +622,23 @@ def require_feature(feature_name: str) -> DependsParameter:
 
 
 def pg_connection_string(database_url: str) -> str:
-    """Strip SQLAlchemy prefix to get a psycopg-compatible URL.
+    """Strip the SQLAlchemy driver prefix to get a driver-native URL.
 
-    Preserves any existing sslmode parameter from the DATABASE_URL
-    (e.g. sslmode=require for Fly.io managed Postgres).
+    Any explicit ``sslmode`` already present in the URL is preserved
+    verbatim. When the URL carries no ``sslmode`` the URL is returned
+    unchanged so the driver applies its own default — libpq ``prefer``
+    (try TLS, fall back to plaintext). This helper must NEVER silently
+    force ``sslmode=disable`` (FAR-1426): forcing plaintext breaks every
+    real checkpointer connection built here (boot schema init, HITL
+    resume) on a deployment whose Postgres requires TLS. Note that a
+    "preserve the URL's sslmode" branch cannot save a settings-derived
+    URL either: Settings strips every ``sslmode`` from
+    ``settings.database_url`` before this function ever sees it
+    (``modulo.db.url_utils``).
     """
-    url = database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"
     )
-    if "sslmode" in url:
-        return url
-    if "?" in url:
-        return url + "&sslmode=disable"
-    return url + "?sslmode=disable"
 
 
 _engine: AsyncEngine | None = None

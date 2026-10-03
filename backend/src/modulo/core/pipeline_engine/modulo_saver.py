@@ -170,7 +170,7 @@ _MIGRATION_SQL: list[str] = [
 #: :data:`_AUTOVACUUM_TUNING_SQL` is rendered from this mapping by
 #: :func:`autovacuum_set_clause`, so ``setup()`` cannot drift from itself.
 #:
-#: Alembic revision ``0277_table_autovacuum_tuning`` carries the same values
+#: Alembic revision ``0279_table_autovacuum_tuning`` carries the same values
 #: for the ALREADY-DEPLOYED path (it runs before this module ever sees the
 #: database). It does not import this mapping: a migration is a frozen
 #: historical artefact and must not change behaviour when application
@@ -181,7 +181,7 @@ _MIGRATION_SQL: list[str] = [
 #: ``tests/unit/pipeline_engine/test_modulo_saver.py::TestCheckpointAutovacuumTwin``
 #: — edit one without the other and CI fails.
 #:
-#: Values are justified in migration 0277's module docstring (measured
+#: Values are justified in migration 0279's module docstring (measured
 #: production churn: ``checkpoints`` 9,436 MB / ``checkpoint_writes`` 5,893 MB
 #: with 2.18M lifetime deletes). Every value must be a BARE Postgres literal
 #: (numeric or boolean) — :func:`autovacuum_set_clause` emits it verbatim, so
@@ -190,7 +190,7 @@ _MIGRATION_SQL: list[str] = [
 #: ``autovacuum_vacuum_cost_delay`` is deliberately ABSENT: it defaults to
 #: 2 ms (PostgreSQL 12+), so pinning it would only re-state the default, and
 #: a per-table pin would silently override an operator who raised the delay
-#: globally to protect their own I/O budget. The cost figures in 0277's
+#: globally to protect their own I/O budget. The cost figures in 0279's
 #: docstring are therefore stated *at the default 2 ms delay*.
 CHECKPOINT_AUTOVACUUM_TUNING: dict[str, str] = {
     "autovacuum_vacuum_scale_factor": "0.02",
@@ -199,7 +199,7 @@ CHECKPOINT_AUTOVACUUM_TUNING: dict[str, str] = {
 }
 
 #: The tables carrying :data:`CHECKPOINT_AUTOVACUUM_TUNING`, in a fixed order
-#: so the startup log (and migration 0277's log) is deterministic.
+#: so the startup log (and migration 0279's log) is deterministic.
 CHECKPOINT_AUTOVACUUM_TABLES: tuple[str, ...] = ("checkpoints", "checkpoint_writes")
 
 
@@ -215,9 +215,9 @@ def autovacuum_set_clause(tuning: Mapping[str, str]) -> str:
 def _checkpoint_autovacuum_sql(table: str) -> str:
     """Boot-time tuning statement for one runtime-created checkpoint table.
 
-    This is the FRESH-INSTALL path that migration 0277 cannot reach:
+    This is the FRESH-INSTALL path that migration 0279 cannot reach:
     ``deploy/fly/entrypoint.sh`` runs ``alembic upgrade heads`` BEFORE
-    ``uvicorn`` starts, so on a brand-new database 0277 meets a schema with
+    ``uvicorn`` starts, so on a brand-new database 0279 meets a schema with
     no checkpoint tables, skips them, records itself applied and never
     replays. This statement runs at every application boot AFTER the CREATEs
     in :data:`_MIGRATION_SQL` (``MIGRATIONS`` orders them that way), which is
@@ -238,7 +238,7 @@ def _checkpoint_autovacuum_sql(table: str) -> str:
     Re-running is a no-op: ``ALTER TABLE ... SET`` merges the named options
     into any existing reloption set and re-SETTING the same value changes
     nothing (pinned by
-    ``tests/integration/test_migration_0277_table_autovacuum_tuning.py``).
+    ``tests/integration/test_migration_0279_table_autovacuum_tuning.py``).
     """
     clause = autovacuum_set_clause(CHECKPOINT_AUTOVACUUM_TUNING)
     return f'ALTER TABLE public."{table}" SET ({clause});'

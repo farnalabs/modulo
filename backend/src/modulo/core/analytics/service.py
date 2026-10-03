@@ -680,7 +680,13 @@ async def run_concurrency_query(
 
 # Raw fact rows are exported column-for-column (all fact columns, including the
 # FAR-102 enrichment). ``id``/``organisation_id``/``updated_at`` are omitted —
-# internal plumbing, not analytics surface.
+# internal plumbing, not analytics surface. Coverage is enforced structurally by
+# ``tests/unit/api/test_analytics_export_contract.py``: a new fact column fails
+# that test until it is exported (or explicitly classified as plumbing), and the
+# JSON response model must carry the same set.
+#
+# APPEND-ONLY: existing entries keep their positions so a positional CSV
+# consumer never sees a column shift; new columns land after ``created_at``.
 _EXPORT_COLUMNS: tuple[Any, ...] = (
     RunDailyFact.run_id,
     RunDailyFact.run_date,
@@ -709,6 +715,25 @@ _EXPORT_COLUMNS: tuple[Any, ...] = (
     RunDailyFact.output_bytes,
     RunDailyFact.rate_limited,
     RunDailyFact.created_at,
+    # Columns added after the export contract was first written were missing
+    # here (found by the export-contract guard alongside FAR-1421): the
+    # FAR-332 batch dimension, the FAR-134 instants + full queue wait, the
+    # FAR-583 byte total, the FAR-802 workspace-input count, the FAR-902
+    # enforcement counters, and the FAR-1421 claim→dispatch provenance.
+    RunDailyFact.batch_id,
+    RunDailyFact.telemetry_bytes,
+    RunDailyFact.dispatched_at,
+    RunDailyFact.started_at,
+    RunDailyFact.completed_at,
+    RunDailyFact.total_queue_wait_ms,
+    RunDailyFact.workspace_inputs_count,
+    RunDailyFact.enforcement_native_count,
+    RunDailyFact.enforcement_verbatim_count,
+    RunDailyFact.enforcement_repair_count,
+    RunDailyFact.enforcement_wasted_count,
+    RunDailyFact.trigger_id,
+    RunDailyFact.dispatch_phase,
+    RunDailyFact.dispatch_phase_entered_at,
 )
 
 _EXPORT_COLUMN_NAMES: tuple[str, ...] = tuple(c.name for c in _EXPORT_COLUMNS)

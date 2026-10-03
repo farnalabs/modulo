@@ -112,9 +112,11 @@ class TestChain:
         # 0274_policy_gate_pin_fingerprint_operator_control (FAR-967 chunk 10), then
         # 0275_run_cancel_reason_vocabulary (FAR-1406), then
         # 0276_runs_autovacuum_enabled (FAR-1419), then
-        # 0277_table_autovacuum_tuning (FAR-1442),
-        # now chain onto this migration, so the single head moved up five.
-        assert heads == ["0277_table_autovacuum_tuning"], f"expected a single head, got {heads}"
+        # 0277_run_daily_facts_trigger_dispatch_phase (FAR-1421), then
+        # 0278_runs_workspace_drift_sweep_index (FAR-1438), then
+        # 0279_table_autovacuum_tuning (FAR-1442),
+        # now chain onto this migration, so the single head moved up seven.
+        assert heads == ["0279_table_autovacuum_tuning"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

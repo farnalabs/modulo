@@ -21,7 +21,14 @@ from typing import Any
 import pydantic
 import pytest
 from fastapi import HTTPException, status
-from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import (
+    IntegrityError,
+    InvalidRequestError,
+    OperationalError,
+    PendingRollbackError,
+    ProgrammingError,
+    SQLAlchemyError,
+)
 
 from modulo.api.db_error_handling import handle_db_errors
 
@@ -373,3 +380,114 @@ class TestLockTimeoutMapping:
             await endpoint()
         assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         assert excinfo.value.detail == "Database temporarily unavailable."
+
+
+class TestInvalidRequestErrorMapping:
+    """``InvalidRequestError`` -> 500, never 503 (FAR-1408).
+
+    ``InvalidRequestError`` subclasses ``SQLAlchemyError``, so before this arm
+    existed a session-contract violation (a query issued on an
+    ``autobegin=False`` session outside ``session.begin()``) fell through to
+    the generic 503 backstop: the client was told "Database temporarily
+    unavailable." AND the structured ``db_transient`` service-unavailability
+    record was written — a LOCAL programming error filed as a database outage.
+    That misclassification is what made FAR-1408 look like an infra incident
+    for five days.
+    """
+
+    async def test_invalid_request_error_maps_to_500_not_503(self) -> None:
+        endpoint = _endpoint(InvalidRequestError("Autobegin is disabled on this Session"))
+        with pytest.raises(HTTPException) as excinfo:
+            await endpoint()
+        assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        detail = excinfo.value.detail
+        assert detail != "Database temporarily unavailable.", detail
+        assert "outside an active transaction" in detail, detail
+
+    async def test_invalid_request_error_does_not_emit_the_structured_503_record(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The ``db_transient`` reason trail must stay clean of programming errors."""
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await _endpoint(InvalidRequestError("Autobegin is disabled on this Session"))()
+
+        assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        assert not records, f"InvalidRequestError must not write a service_unavailable record: {records}"
+
+    async def test_invalid_request_error_logs_as_a_session_contract_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """It IS still logged (loudly) — just under the programming-error key."""
+        with (
+            caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"),
+            pytest.raises(HTTPException),
+        ):
+            await _endpoint(InvalidRequestError("Autobegin is disabled on this Session"))()
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert "test.endpoint.session_contract_error" in messages
+
+    async def test_other_sqlalchemy_errors_still_map_to_503(self) -> None:
+        """The new arm is a refinement of the base, not a replacement for it."""
+        endpoint = _endpoint(SQLAlchemyError("connection lost"))
+        with pytest.raises(HTTPException) as excinfo:
+            await endpoint()
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert excinfo.value.detail == "Database temporarily unavailable."
+
+
+class TestPendingRollbackErrorMapping:
+    """``PendingRollbackError`` -> 503 with the transient record (FAR-1408 follow-up).
+
+    ``PendingRollbackError`` subclasses ``InvalidRequestError``, but unlike a
+    plain session-contract violation it signals a TRANSIENT fault: an earlier
+    statement failed and the session was never rolled back, so the next
+    statement refuses to run. During a genuine outage that earlier fault
+    (server disconnect, serialization failure, pool timeout) is usually the
+    real cause, so this must keep the 503 + structured ``db_transient``
+    treatment rather than the 500 programming-error arm.
+    """
+
+    _MSG = "This Session's transaction has been rolled back due to a previous exception"
+
+    async def test_pending_rollback_maps_to_503_not_500(self) -> None:
+        endpoint = _endpoint(PendingRollbackError(self._MSG))
+        with pytest.raises(HTTPException) as excinfo:
+            await endpoint()
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert excinfo.value.detail == "Database temporarily unavailable."
+        assert (
+            excinfo.value.detail != "Internal server error: a database session was used outside an active transaction."
+        )
+
+    async def test_pending_rollback_emits_the_structured_503_record(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            caplog.at_level(logging.ERROR),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await _endpoint(PendingRollbackError(self._MSG))()
+
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.ERROR
+        payload = record.__dict__["service_unavailable"]
+        assert payload["reason"] == "db_transient"
+        assert payload["route"] == "test.endpoint"
+        assert payload["exception_class"] == "PendingRollbackError"
+        assert payload["detail"] == "transient database error (PendingRollbackError)"
+
+    async def test_pending_rollback_logs_under_its_own_key(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"),
+            pytest.raises(HTTPException),
+        ):
+            await _endpoint(PendingRollbackError(self._MSG))()
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert "test.endpoint.pending_rollback_error" in messages

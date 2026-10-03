@@ -9,6 +9,7 @@ worker-local and invisible to the health check) â€” these tests lock that i
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,18 @@ from modulo.api.routes.health import (
 )
 from modulo.core import cron_helpers as ch
 from modulo.settings import Settings
+
+
+@pytest.fixture(autouse=True)
+def _reset_repo_heads_cache() -> Generator[None, None, None]:
+    """FAR-1439: ``_check_migrations`` memoizes the parsed alembic heads in a
+    process-wide cache; reset it around every test so one test's canned heads
+    can never leak into another test's assertions."""
+    from modulo.api.routes import health as health_mod
+
+    health_mod._REPO_HEADS_CACHE = None
+    yield
+    health_mod._REPO_HEADS_CACHE = None
 
 
 def _make_settings(redis_url: str = "redis://localhost:6379/0") -> Settings:
@@ -99,6 +112,7 @@ class TestCheckDispatcherReconcile:
         assert result.status == "ok"
         assert result.detail is not None
         assert "scanned=3" in result.detail
+        assert "rows_deferred=0" in result.detail
 
     @pytest.mark.asyncio
     async def test_stale_run_degraded(self) -> None:
