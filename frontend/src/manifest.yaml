@@ -5590,6 +5590,7 @@ features:
             - "[x] The product analytics page shows usage and adoption metrics for system administrators"
             - "[x] Consent and enforcement toggles are configurable per instance"
             - "[x] Metrics scheduling ships: a jittered daily metrics-dump SAQ system cron (core/product_analytics/metrics_dump.py) gates the per-instance dump window on the stored jitter offset and intersects it with the consented validity window, then delivers the batch to the vendor ingest endpoint with a stable persisted watermark"
+            - "[x] The transparency endpoint (GET /api/v1/product-analytics/transparency) derives the instance's data-residency posture: egress_allowed is true ONLY when the instance-level switch AND an explicit 'all' consent are both on (core/product_analytics/consent.py), so telemetry egress is fail-closed by default (personas/marcus-ciso.feature)"
             - "[ ] An in-product analytics export/administration surface (self-serve downloadable org metrics, configurable reporting schedule, or an in-app analytics warehouse) is not shipped — telemetry export is vendor-bound"
         deferrals:
             - "In-product analytics export and scheduling administration is tracked under feat-product-analytics; a self-hosted analytics warehouse is feat-analytics scope"

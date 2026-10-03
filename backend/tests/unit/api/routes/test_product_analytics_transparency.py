@@ -120,6 +120,7 @@ class TestDefaults:
             "consent_level": "off",
             "instance_enabled": False,
             "enforcement_enabled": False,
+            "egress_allowed": False,
             "warning": None,
         }
         _restore_overrides()
@@ -196,6 +197,48 @@ class TestAggregation:
             body = _request(client)
         assert body["instance_enabled"] is True
         assert body["enforcement_enabled"] is False
+        _restore_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Egress posture (the derived field)
+# ---------------------------------------------------------------------------
+
+
+class TestEgressPosture:
+    @pytest.mark.parametrize(
+        ("instance_enabled", "consent_level", "expected_egress"),
+        [
+            # Telemetry egress is opt-in on both axes: the instance-level
+            # master switch AND an explicit "all" consent level must be on.
+            (False, "off", False),
+            (False, "all", False),
+            (True, "off", False),
+            (True, "all", True),
+        ],
+    )
+    def test_egress_requires_instance_switch_and_consent(
+        self,
+        instance_enabled: bool,
+        consent_level: str,
+        expected_egress: bool,
+    ) -> None:
+        client = _client()
+
+        async def _get(session: object, key: str) -> MagicMock | None:
+            values = {
+                "product_analytics_enabled": instance_enabled,
+                "product_analytics_consent_level": consent_level,
+            }
+            if key in values:
+                return _config(values[key])
+            return None
+
+        with patch.object(pat_module, "get_config", side_effect=_get):
+            body = _request(client)
+        assert body["consent_level"] == consent_level
+        assert body["instance_enabled"] is instance_enabled
+        assert body["egress_allowed"] is expected_egress
         _restore_overrides()
 
 

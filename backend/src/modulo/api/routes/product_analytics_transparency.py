@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.product_analytics.consent import is_egress_allowed
 from modulo.db.crud.system_config import get_config
 
 _CODE_PRODUCT_ANALYTICS_MANAGE = "system.config.manage"
@@ -30,6 +31,7 @@ class TransparencyResponse(BaseModel):
     consent_level: str = "off"
     instance_enabled: bool = False
     enforcement_enabled: bool = False
+    egress_allowed: bool = False
     warning: str | None = None
 
 
@@ -112,5 +114,6 @@ async def get_transparency(
         consent_level=consent_level,
         instance_enabled=instance_enabled,
         enforcement_enabled=enforcement_enabled,
+        egress_allowed=is_egress_allowed(instance_enabled, consent_level),
         warning=warning,
     )

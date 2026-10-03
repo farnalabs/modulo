@@ -14,8 +14,10 @@ unit-tests:
   - backend/tests/unit/product_analytics/test_metrics_dump.py
   - backend/tests/unit/product_analytics/test_metrics_ingest.py
   - backend/tests/unit/product_analytics/test_routes.py
+  - backend/tests/unit/api/routes/test_product_analytics_transparency.py
 bdd:
   - backend/tests/bdd/features/product_analytics/metrics_ingest.feature
+  - backend/tests/bdd/features/personas/marcus-ciso.feature
 depends-on:
   - feat-license
 status: partial
@@ -45,6 +47,14 @@ an eligible tier.
       (`core/product_analytics/license_enforcement.py`, `test_license_enforcement.py`)
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
       (`api/routes/product_analytics_identity.py`, `product_analytics_transparency.py`)
+- [x] The transparency endpoint derives the instance's data-residency posture:
+      `egress_allowed` is true ONLY when the instance-level master switch AND an
+      explicit `all` consent are BOTH on (`core/product_analytics/consent.py`),
+      so telemetry egress is fail-closed by default and opt-in is the single
+      allowed path — the Marcus CISO data-residency journey now drives this real
+      transparency surface (`personas/marcus-ciso.feature`,
+      `api/routes/product_analytics_transparency.py`,
+      `tests/unit/api/routes/test_product_analytics_transparency.py`)
 
 ## Known Gaps
 
@@ -52,6 +62,24 @@ an eligible tier.
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
 
 ## QA History
+- 2026-10-03: **Improve Architecture product-map walk** — closed the CISO
+  data-residency persona gap (`personas/marcus-ciso.feature`, pinned
+  `@awaiting-implementation` since 2026-08): the scenario now executes against
+  the REAL transparency endpoint (`GET /api/v1/product-analytics/transparency`)
+  through a minimal FastAPI app (handler, permission gate, pydantic response and
+  the real `is_egress_allowed` seam all run; only the `get_config` DB seam and
+  the auth principal are patched — steps in `backend/tests/bdd/steps/test_personas.py`).
+  Product delta closing the wire gap the scenario describes: the transparency
+  response now carries `egress_allowed`, derived through the SAME
+  `is_egress_allowed` seam as the consent response (instance master switch AND
+  explicit `all` consent), so the data-residency posture is explicitly visible
+  on the transparency/administration surface instead of being a consent-only
+  read. The pin was removed from `PINNED_AWAITING_IMPLEMENTATION` and the
+  scenario now executes in CI; unit coverage added in
+  `tests/unit/api/routes/test_product_analytics_transparency.py`
+  (`TestEgressPosture`, matrix-parametrised over both axes). The `feat-product-analytics`
+  manifest registry gained the shipped egress-posture behaviour line; the tracker
+  `bdd:` citations now include the persona journey.
 - 2026-09-29: **Improve Architecture product-map walk** — reconciled the
   tracker frontmatter `status:` with the manifest `feat-product-analytics`
   registry: the entry now reads `status: partial` (matching the manifest's
