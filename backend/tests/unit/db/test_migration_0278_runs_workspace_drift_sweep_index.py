@@ -169,7 +169,7 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0277(self) -> None:
+    def test_single_head_is_0278(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
 
