@@ -29,16 +29,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, nullslast, select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import InvalidRequestError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import MSG_SESSION_CONTRACT, handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
     get_db_session,
@@ -543,6 +543,45 @@ async def _validate_choice_answer(
 
 
 # ---------------------------------------------------------------------------
+# FAR-1408: session-contract (InvalidRequestError) -> 500, at route level
+# ---------------------------------------------------------------------------
+
+
+def _raise_session_contract_error(log_key: str, exc: InvalidRequestError) -> NoReturn:
+    """Report a session-contract violation caught inside a route-local arm.
+
+    ``InvalidRequestError`` subclasses ``SQLAlchemyError``, so each of this
+    module's route-local ``except SQLAlchemyError`` arms would otherwise catch
+    it FIRST and answer ``503 MSG_DB_ERROR_PLEASE_TRY`` ("Database error.
+    Please try again.") — a retry-inviting reply to a non-retryable local
+    programming bug. ``handle_db_errors`` cannot save us: it only sees
+    exceptions that ESCAPE the route, and these arms never let it out.
+
+    Same reasoning as ``db_error_handling._translate_wrapped_exception``'s
+    ``InvalidRequestError`` arm, which this mirrors: 500 with
+    ``MSG_SESSION_CONTRACT`` (no "temporarily unavailable", no retry
+    invitation), logged under a distinct programming-error key, and NO
+    ``log_service_unavailable("db_transient", ...)`` record.
+
+    Shared by all five arms so the status, detail and log shape cannot drift
+    per site — only ``log_key`` varies. ``NoReturn`` keeps mypy's flow
+    analysis correct for the caller's except-chain.
+
+    Logging note: this is ``logger.exception``'s exact behaviour (ERROR level
+    + the raised exception's traceback) spelled as ``error(..., exc_info=exc)``
+    because the call sits in a helper rather than lexically inside an
+    ``except`` block — ``exc`` IS the active exception here, so the emitted
+    record carries the same traceback, and ruff's LOG004 does not have to be
+    silenced.
+    """
+    logger.error(log_key, exc_info=exc)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=MSG_SESSION_CONTRACT,
+    ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Claim
 # ---------------------------------------------------------------------------
 
@@ -640,6 +679,8 @@ async def claim_review(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.claim_review.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
@@ -716,9 +757,20 @@ async def _run_hitl_manager(
     and forwarded to the manager as ``answer``, so the validated contract and
     the committed decision are consistent by construction. ``require_answer``
     is forwarded to the validator unchanged (approve / approve-with-modification
-    both require a declared choice to be answered).
+    both require a declared choice to be answered), and it IMPLIES
+    ``validate_answer`` — see the note directly below: an enforcement
+    flag must never be able to silently switch its own enforcement off.
     """
     audit_action = action or mgr_method
+    # FAR-907: ``require_answer`` is an ENFORCEMENT flag, so it must never be
+    # able to disable the enforcement it belongs to. Until now the flag was
+    # only forwarded inside ``if validate_answer:``, so a caller passing
+    # ``require_answer=True`` on its own got NO validation at all — a silent
+    # enforcement skip, the exact failure class FAR-907 exists to prevent.
+    # Imply validation instead of failing the request: the caller's intent
+    # ("this answer is mandatory") is unambiguous, and turning it into a 500
+    # would break the route rather than honour it.
+    validate_answer = validate_answer or require_answer
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -776,6 +828,8 @@ async def _run_hitl_manager(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl._run_hitl_manager.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl._run_hitl_manager")
         raise HTTPException(
@@ -1223,6 +1277,8 @@ async def list_run_pending_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.list_run_pending_reviews.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_run_pending_reviews")
         raise HTTPException(
@@ -1306,6 +1362,8 @@ async def list_org_pending_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.list_org_pending_reviews.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_org_pending_reviews")
         raise HTTPException(
@@ -1417,6 +1475,8 @@ async def list_org_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
+    except InvalidRequestError as exc:
+        _raise_session_contract_error("hitl.list_org_reviews.session_contract_error", exc)
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_org_reviews")
         raise HTTPException(

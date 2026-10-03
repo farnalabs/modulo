@@ -36,7 +36,12 @@ _MSG_LOCK_TIMEOUT = (
 # through to the generic 503 arm below, so a route-level bug was reported as a
 # database outage (and logged via ``log_service_unavailable("db_transient")``),
 # which cost five days of misdiagnosis.
-_MSG_SESSION_CONTRACT = (
+#
+# PUBLIC (not module-private) because the same misclassification exists in the
+# route-local ``except SQLAlchemyError`` arms, which never reach
+# ``handle_db_errors`` at all — e.g. every ``hitl.py`` route arm imports this
+# constant rather than re-typing the literal (FAR-1408).
+MSG_SESSION_CONTRACT = (
     "Internal server error: a database session was used outside an active transaction. "
     "This is a server-side bug, not a database outage; retrying will not help."
 )
@@ -91,7 +96,7 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         _log.exception("%s.session_contract_error", log_prefix)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_SESSION_CONTRACT,
+            detail=MSG_SESSION_CONTRACT,
         ) from None
     except SQLAlchemyError as exc:
         if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
