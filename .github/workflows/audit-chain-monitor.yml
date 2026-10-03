@@ -1,0 +1,329 @@
+name: "Audit chain continuity monitor"
+
+# FAR-1466: watch our OWN audit chain on app.modulo.run so a lapse is caught
+# early instead of at audit time. Modelled on uptime-monitor.yml - same Linear
+# ticket-on-failure path, same `if: failure()` pattern, same fail-open
+# behaviour when a credential is absent.
+#
+# Deliberate cadence: every 6h, NOT more often. GitHub drops high-frequency
+# cron events on high-activity repos (see the merge-queue */15 lesson in the
+# workspace guidance) - a */10 cron would silently stop firing, which is
+# exactly the blind spot this monitor exists to close.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-audit-chain:
+    name: Check app.modulo.run audit chain continuity
+    runs-on: ubicloud-standard-2
+    steps:
+      # Check 1 - integrity: recompute the hash chain server-side.
+      # Endpoint verified: backend/src/modulo/api/routes/audit.py:32
+      # (router prefix "/api/v1/admin/audit") + :146 (GET "/verify").
+      # Auth header verified, not guessed: the historical smoke-test job
+      # polled app.modulo.run with `Authorization: Bearer ${MODULO_SMOKE_TEST_API_KEY}`
+      # (commit 2b435ff5a, "ci: fail fast ... smoke test API key is
+      # unauthorized"), and API keys travel over the same Bearer scheme
+      # (backend/src/modulo/auth/dependencies.py:176-223 resolves the
+      # `mk_` prefix out of the Bearer token; cli/apply/executor.py:103 sets
+      # `Authorization: Bearer <api_key>`).
+      - name: Check 1 - verify audit chain integrity
+        id: integrity
+        shell: bash
+        env:
+          MODULO_SMOKE_TEST_API_KEY: ${{ secrets.MODULO_SMOKE_TEST_API_KEY }}
+        run: |
+          # Fail-open: without the key there is nothing to authenticate with.
+          # Warn and exit 0 exactly like uptime-monitor.yml does for its key -
+          # a missing credential must not red-queue the workflow.
+          if [ -z "$MODULO_SMOKE_TEST_API_KEY" ]; then
+            echo "::warning::MODULO_SMOKE_TEST_API_KEY not set - skipping audit-chain integrity check (FAR-1466)."
+            exit 0
+          fi
+
+          BODY_FILE="$(mktemp)"
+
+          # Short retry loop so one transient blip does not raise a false
+          # ticket, but an auth failure (401/403) is NOT retried - it cannot
+          # heal by waiting, and retrying would just delay the alert.
+          OK=false
+          HTTP_CODE="000"
+          for i in 1 2 3; do
+            HTTP_CODE=$(curl -sS -m 20 -o "$BODY_FILE" -w "%{http_code}" \
+              -H "Authorization: Bearer ${MODULO_SMOKE_TEST_API_KEY}" \
+              "https://app.modulo.run/api/v1/admin/audit/verify" 2>/dev/null) || HTTP_CODE="000"
+            if [ "$HTTP_CODE" = "200" ]; then
+              OK=true
+              break
+            fi
+            if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+              break
+            fi
+            echo "verify fetch $i returned HTTP ${HTTP_CODE} - retrying in 5s"
+            sleep 5
+          done
+
+          if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            echo "::error::Audit verify auth failed (HTTP ${HTTP_CODE}): MODULO_SMOKE_TEST_API_KEY is invalid/expired, or the key lacks audit.manage (backend/src/modulo/auth/permissions.py:180 maps audit.manage to the admin role). Rotate or re-grant the secret (FAR-1466)."
+            echo "integrity_detail=GET /api/v1/admin/audit/verify returned HTTP ${HTTP_CODE} (auth/permission)" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+
+          if [ "$OK" != "true" ] || [ ! -s "$BODY_FILE" ]; then
+            echo "::error::GET /api/v1/admin/audit/verify unreachable or empty after 3 attempts (HTTP ${HTTP_CODE}) (FAR-1466)"
+            echo "integrity_detail=verify endpoint unreachable after 3 attempts (HTTP ${HTTP_CODE})" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+
+          # Parse the body. Safe on unparseable input: jq's error() exits
+          # non-zero when .valid is missing or not a boolean, and we alert on
+          # that instead of crashing the workflow. Note `jq -e` alone is NOT
+          # usable here - it also exits non-zero on the legitimate value
+          # `false`, which would mask a real chain break as "unparseable".
+          if ! VALID=$(jq -r '
+            if (.valid | type) == "boolean" then (.valid | tostring)
+            else error("missing or non-boolean .valid") end
+          ' "$BODY_FILE" 2>/dev/null); then
+            echo "::error::GET /api/v1/admin/audit/verify response is not a verify result (FAR-1466)"
+            echo "integrity_detail=verify response body not parseable (missing boolean .valid)" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+
+          if [ "$VALID" != "true" ]; then
+            # Known limitation worth reading before triaging a ticket:
+            # verify_chain() returns valid=false whenever the chain is
+            # TRUNCATED - i.e. total_events > VERIFY_MAX_EVENTS (10000,
+            # backend/src/modulo/core/audit_logger/__init__.py:30,462). So an
+            # org past 10k events fails this check even with an intact prefix.
+            # That is still worth alerting on (the product can no longer prove
+            # the whole chain), and the dedup below caps it at ONE open ticket.
+            DETAIL=$(jq -r '
+              [
+                "valid=\(.valid)",
+                "total_events=\(.total_events)",
+                "checked_events=\(.checked_events)",
+                "truncated=\(.truncated)",
+                "first_gap_index=\(.first_gap_index)",
+                "first_tampered_id=\(.first_tampered_id)",
+                "chain_head_match=\(.chain_head_match)",
+                "chain_count_mismatch=\(.chain_count_mismatch)"
+              ] + (if .detail then ["detail=\(.detail)"] else [] end)
+              | join("; ")
+            ' "$BODY_FILE" 2>/dev/null || echo "verify result unparseable")
+            echo "::error::Audit chain FAILED verification on app.modulo.run: ${DETAIL} (FAR-1466)"
+            echo "integrity_detail=${DETAIL}" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+          rm -f "$BODY_FILE"
+          echo "audit chain verifies OK (checked_events reported by /verify)"
+
+      # Check 2 - continuity: the newest audit event must be < 24h old.
+      # Endpoint verified: audit.py:39 (GET "" on prefix "/api/v1/admin/audit")
+      # with limit=1 (LIST_MIN_LIMIT=1, audit_logger/__init__.py:33), ordered
+      # `created_at DESC, id DESC` (audit_logger/__init__.py:633), timestamp
+      # field `created_at` (audit_logger/__init__.py:103, timezone-aware per
+      # db/models/base.py:19-21).
+      #
+      # `if: success() || failure()` (not the default gating) so a check-1
+      # failure does not hide check-2's state - one ticket carries both.
+      #
+      # KNOWN LIMITATION (deliberate, refine-or-retire): app.modulo.run runs
+      # the whole dogfood on crons, so >= 24h of zero audit activity is itself
+      # suspicious - but a genuinely quiet period could false-positive. This
+      # half should be refined (or retired) once the product signal in
+      # FAR-1465 exists; the 24h threshold is a heuristic, not a contract.
+      - name: Check 2 - newest audit event within 24h
+        id: continuity
+        if: success() || failure()
+        shell: bash
+        env:
+          MODULO_SMOKE_TEST_API_KEY: ${{ secrets.MODULO_SMOKE_TEST_API_KEY }}
+        run: |
+          if [ -z "$MODULO_SMOKE_TEST_API_KEY" ]; then
+            echo "::warning::MODULO_SMOKE_TEST_API_KEY not set - skipping audit-chain continuity check (FAR-1466)."
+            exit 0
+          fi
+
+          BODY_FILE="$(mktemp)"
+
+          OK=false
+          HTTP_CODE="000"
+          for i in 1 2 3; do
+            HTTP_CODE=$(curl -sS -m 20 -o "$BODY_FILE" -w "%{http_code}" \
+              -H "Authorization: Bearer ${MODULO_SMOKE_TEST_API_KEY}" \
+              "https://app.modulo.run/api/v1/admin/audit?limit=1" 2>/dev/null) || HTTP_CODE="000"
+            if [ "$HTTP_CODE" = "200" ]; then
+              OK=true
+              break
+            fi
+            if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+              break
+            fi
+            echo "audit list fetch $i returned HTTP ${HTTP_CODE} - retrying in 5s"
+            sleep 5
+          done
+
+          if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            echo "::error::Audit list auth failed (HTTP ${HTTP_CODE}): MODULO_SMOKE_TEST_API_KEY is invalid/expired, or the key lacks audit.manage (FAR-1466)."
+            echo "continuity_detail=GET /api/v1/admin/audit returned HTTP ${HTTP_CODE} (auth/permission)" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+
+          if [ "$OK" != "true" ] || [ ! -s "$BODY_FILE" ]; then
+            echo "::error::GET /api/v1/admin/audit unreachable or empty after 3 attempts (HTTP ${HTTP_CODE}) (FAR-1466)"
+            echo "continuity_detail=audit list endpoint unreachable after 3 attempts (HTTP ${HTTP_CODE})" >> "$GITHUB_OUTPUT"
+            rm -f "$BODY_FILE"
+            exit 1
+          fi
+
+          TOTAL=$(jq -r 'if (.total | type) == "number" then (.total | tostring) else "unknown" end' "$BODY_FILE" 2>/dev/null || echo "unknown")
+          NEWEST=$(jq -r '
+            if (.items | type) != "array" then "BAD_BODY"
+            elif (.items | length) == 0 then "NO_EVENTS"
+            elif (.items[0].created_at | type) != "string" then "NO_TIMESTAMP"
+            else .items[0].created_at end
+          ' "$BODY_FILE" 2>/dev/null || echo "BAD_BODY")
+          rm -f "$BODY_FILE"
+
+          if [ "$NEWEST" = "NO_EVENTS" ]; then
+            # Zero audit events for the org is not "quiet" - it means the
+            # chain has nothing in it at all, which this monitor must flag.
+            echo "::error::app.modulo.run reports ZERO audit events (total=${TOTAL}) - no chain to watch (FAR-1466)"
+            echo "continuity_detail=zero audit events reported (total=${TOTAL})" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if [ "$NEWEST" = "BAD_BODY" ] || [ "$NEWEST" = "NO_TIMESTAMP" ]; then
+            echo "::error::GET /api/v1/admin/audit response is not an event list (FAR-1466)"
+            echo "continuity_detail=audit list response missing items[0].created_at (total=${TOTAL})" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Age the newest event. Python rather than `date -d`: created_at is
+          # timezone-aware (or, defensively, naive - treated as UTC), and we
+          # must not let a naive-vs-UTC parse difference turn into a false
+          # 24h alarm.
+          if ! AGE=$(python3 -c '
+          import sys
+          from datetime import datetime, timezone
+          raw = sys.argv[1]
+          try:
+              ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+          except ValueError:
+              sys.exit(2)
+          if ts.tzinfo is None:
+              ts = ts.replace(tzinfo=timezone.utc)
+          print(int((datetime.now(timezone.utc) - ts).total_seconds()))
+          ' "$NEWEST" 2>/dev/null); then
+            echo "::error::Newest audit event timestamp is unparseable: ${NEWEST} (FAR-1466)"
+            echo "continuity_detail=newest audit event timestamp unparseable: ${NEWEST}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if [ "$AGE" -gt 86400 ]; then
+            HOURS=$((AGE / 3600))
+            echo "::error::Newest audit event on app.modulo.run is ${HOURS}h old (>24h): ${NEWEST} - audit activity has lapsed (FAR-1466)"
+            echo "continuity_detail=newest audit event ${NEWEST} is ${HOURS}h old (>24h); total=${TOTAL}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "newest audit event ${NEWEST} is $((AGE / 60))min old - continuity OK"
+
+      - name: Open Linear ticket on audit-chain lapse
+        if: failure()
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          INTEGRITY_DETAIL: ${{ steps.integrity.outputs.integrity_detail }}
+          CONTINUITY_DETAIL: ${{ steps.continuity.outputs.continuity_detail }}
+        run: |
+          # Fail-open: only file a Linear ticket when a key is configured.
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts)."
+            exit 0
+          fi
+
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # Compose title + detail from whichever check(s) failed.
+          if [ -n "$INTEGRITY_DETAIL" ] && [ -n "$CONTINUITY_DETAIL" ]; then
+            TITLE="AUDIT-CHAIN LAPSE: integrity and continuity checks failed on app.modulo.run (FAR-1466)"
+            DESC="Automated audit-chain monitor detected BOTH a chain-integrity failure and an activity lapse at ${TS}. Integrity: ${INTEGRITY_DETAIL}. Continuity: ${CONTINUITY_DETAIL}."
+          elif [ -n "$INTEGRITY_DETAIL" ]; then
+            TITLE="AUDIT-CHAIN LAPSE: audit chain failed verification on app.modulo.run (FAR-1466)"
+            DESC="Automated audit-chain monitor found the audit chain does not verify at ${TS}. Observed: ${INTEGRITY_DETAIL}. Endpoint: GET /api/v1/admin/audit/verify. Note verify_chain() also returns valid=false when the chain is truncated past VERIFY_MAX_EVENTS (10000) - check truncated/total_events before assuming tampering."
+          elif [ -n "$CONTINUITY_DETAIL" ]; then
+            TITLE="AUDIT-CHAIN LAPSE: no audit event in the last 24h on app.modulo.run (FAR-1466)"
+            DESC="Automated audit-chain monitor found no recent audit activity at ${TS}. Observed: ${CONTINUITY_DETAIL}. Endpoint: GET /api/v1/admin/audit?limit=1 (newest-first). Known limitation: a genuinely quiet period can false-positive - this heuristic should be refined or retired once the FAR-1465 product signal exists."
+          else
+            # Neither check reported detail (some other step failed) - still
+            # open a ticket rather than losing the failure signal.
+            TITLE="AUDIT-CHAIN LAPSE: audit-chain monitor job failed on app.modulo.run (FAR-1466)"
+            DESC="Automated audit-chain monitor job failed at ${TS} without a check-level detail (see the run log)."
+          fi
+
+          # Dedup: do not stack a new ticket every 6h while one is already
+          # open. Query Linear for an issue whose title contains the stable
+          # marker, then keep only (a) this team's issues and (b) OPEN ones -
+          # state type backlog/unstarted/started is Linear's definition of
+          # open. The team + state predicates are applied HERE in jq rather
+          # than in the GraphQL filter: it keeps the query to one comparator
+          # shape (title contains) and an erroring filter cannot be mistaken
+          # for "no existing ticket".
+          # Simplification, deliberately: the marker is matched with
+          # `contains` rather than an exact title, and ANY open match
+          # suppresses creation - a closed/resolved ticket does not, so a
+          # fresh lapse after an earlier fix still alerts.
+          DEDUP_BODY=$(jq -n '{
+            query: "query { issues(filter: { title: { contains: \"AUDIT-CHAIN LAPSE\" } }, first: 50) { nodes { identifier title state { type } team { id } } } }"
+          }')
+          if DEDUP_RESP=$(curl -sS -m 20 -X POST "https://api.linear.app/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -d "$DEDUP_BODY" 2>/dev/null); then
+            OPEN_COUNT=$(printf '%s' "$DEDUP_RESP" | jq -r --arg teamId "ae855baf-6439-4980-97fb-38da80129485" '
+              (((.data // {}) | (.issues // {}) | (.nodes // []))
+                | map(select(((.team // {}).id // "") == $teamId))
+                | map(select(
+                    (.state.type // "") == "backlog"
+                    or (.state.type // "") == "unstarted"
+                    or (.state.type // "") == "started"
+                  ))
+                | length) | tostring
+            ' 2>/dev/null || echo "0")
+            if [ "${OPEN_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+              EXISTING=$(printf '%s' "$DEDUP_RESP" | jq -r '
+                (((.data // {}) | (.issues // {}) | (.nodes // []))[0].identifier // "unknown")
+              ' 2>/dev/null || echo "unknown")
+              echo "::warning::AUDIT-CHAIN LAPSE alert ticket already open (${EXISTING}) - skipping creation."
+              exit 0
+            fi
+          else
+            # Fail toward ALERTING: if the dedup query itself fails we still
+            # attempt creation (a duplicate ticket beats a lost alert).
+            echo "::warning::Dedup query failed - proceeding to create the ticket without dedup confirmation."
+          fi
+
+          BODY=$(jq -n --arg ts "$TS" --arg title "$TITLE" --arg desc "$DESC" '{
+            query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
+            variables: { i: {
+              teamId: "ae855baf-6439-4980-97fb-38da80129485",
+              title: $title,
+              description: $desc
+            } }
+          }')
+          curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$BODY" || echo "::warning::Failed to create Linear ticket"
