@@ -21,6 +21,7 @@ import logging
 import threading
 from typing import Any
 
+from sqlalchemy import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.audit_logger.append_only import register_append_only_guard
@@ -93,7 +94,13 @@ def _build_engine(
     # reliably support extended-protocol reuse) — the Fly/HAProxy compat knobs.
     connect_args: dict[str, Any] = {"timeout": 10}
     url = settings.database_url
-    if db_type == "postgres":
+    # Guard on the URL's ACTUAL driver scheme, not on ``settings.modulo_db``:
+    # ``modulo_db`` is an independent knob defaulting to "postgres", so a
+    # SQLite-configured process (schema generation, local dev) would otherwise
+    # pass this branch and ``split_postgres_sslmode`` would fail the boot
+    # (FAR-1440 schema-freshness defect). SQLite/MySQL keep ``timeout`` only —
+    # their drivers have no ``ssl``/``statement_cache_size`` knobs.
+    if str(make_url(url).drivername).startswith("postgres"):
         from modulo.db.url_utils import split_postgres_sslmode
 
         url, ssl_arg = split_postgres_sslmode(url)

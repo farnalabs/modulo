@@ -283,3 +283,34 @@ class TestSystemEngineIsFallback:
         finally:
             deps._SYSTEM_ASYNC_ENGINE = saved_engine
             deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag
+
+    def test_sqlite_system_url_builds_without_asyncpg_connect_args(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A SQLite system URL must NOT go through the asyncpg ssl translation
+        (FAR-1440: split_postgres_sslmode rejects non-Postgres schemes, and the
+        aiosqlite driver has no ssl/statement_cache_size connect args)."""
+        from unittest.mock import patch
+
+        import sqlalchemy.ext.asyncio as sa_asyncio
+
+        from modulo.api import dependencies as deps
+
+        class _SqliteSettings:
+            modulo_system_database_url = "sqlite+aiosqlite:///system-test.db"
+
+        monkeypatch.setattr(deps, "get_settings", lambda: _SqliteSettings())
+        saved_engine = deps._SYSTEM_ASYNC_ENGINE
+        saved_flag = deps._SYSTEM_ENGINE_IS_FALLBACK
+        deps._SYSTEM_ASYNC_ENGINE = None
+        deps._SYSTEM_ENGINE_IS_FALLBACK = False
+        try:
+            with patch.object(sa_asyncio, "create_async_engine") as mock_create:
+                assert deps.system_engine_is_fallback() is False
+            kw = mock_create.call_args.kwargs
+            assert mock_create.call_args.args[0] == "sqlite+aiosqlite:///system-test.db"
+            assert kw["connect_args"] == {"timeout": 10, "command_timeout": deps._SYSTEM_DB_COMMAND_TIMEOUT_SECONDS}
+            assert "ssl" not in kw["connect_args"]
+            assert "statement_cache_size" not in kw["connect_args"]
+            assert deps._SYSTEM_ASYNC_ENGINE is mock_create.return_value
+        finally:
+            deps._SYSTEM_ASYNC_ENGINE = saved_engine
+            deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag

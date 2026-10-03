@@ -210,6 +210,24 @@ class TestBuildEngine:
         kw = mock_create.call_args[1]
         assert kw["connect_args"] == {"timeout": 10}
 
+    def test_sqlite_url_with_default_postgres_dbtype_still_boots(self, session_mod: Any) -> None:
+        """The schema-freshness / gen_openapi defect (FAR-1440): process boots with
+        a SQLite DATABASE_URL while modulo_db stays at its "postgres" default.
+        The ssl translation must key off the URL's real driver scheme —
+        no ValueError, and no ssl connect arg for aiosqlite."""
+        with (
+            patch("modulo.db.session.get_settings", return_value=_settings("postgres", SQLITE_URL)),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+        ):
+            engine = session_mod._build_engine()
+
+        kw = mock_create.call_args[1]
+        assert kw["url"] == SQLITE_URL
+        assert kw["connect_args"] == {"timeout": 10}
+        assert "ssl" not in kw["connect_args"]
+        assert mock_create.return_value is engine
+
     def test_mariadb_pool_knobs_without_asyncpg_knobs(self, session_mod: Any) -> None:
         """MariaDB gets a real pool but must NOT get the asyncpg-only ssl/statement_cache args."""
         with (
