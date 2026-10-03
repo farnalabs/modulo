@@ -3,7 +3,8 @@
 Postgres' autovacuum defaults gate a vacuum on 50 dead rows PLUS 20% of a
 table's live rows (``autovacuum_vacuum_scale_factor = 0.20``), and cap the
 scan rate at ``vacuum_cost_limit`` / ``autovacuum_vacuum_cost_delay`` =
-200 units / 20 ms = ~10,000 cost units/s (~4-8 MB/s). Measured on
+200 units / 2 ms = ~100,000 cost units/s (~40-80 MB/s; the 2 ms delay
+default is PostgreSQL 12+, it was 20 ms in PostgreSQL 11). Measured on
 production 2026-10-03, those defaults are wrong for Modulo's table shape:
 
 * ``checkpoints`` - 9,436 MB, 180,374 lifetime deletes;
@@ -31,14 +32,21 @@ So this module asserts, against REAL Postgres (testcontainers):
 * the FRESH-database path - the whole chain straight to 0277 on a
   brand-new database, where the checkpoint tables do NOT exist yet
   (alembic runs before ``ModuloPostgresSaver.setup()``), so the
-  existence-gated ALTER must skip them (loudly, via NOTICE) instead of
-  failing the chain;
+  existence-gated ALTER must skip them instead of failing the chain (the
+  NOTICE it raises does NOT reach the migration log - alembic's SQLAlchemy
+  notices are logged at INFO under alembic.ini's WARN level - so the skip
+  is expected-and-invisible here, and the startup path below is the fix);
 * the FRESH-INSTALL boot path - the one this migration originally got
   wrong: alembic has already recorded 0277 with the tables absent, then the
   application's first ``ModuloPostgresSaver.setup()`` runs. It must create
   the tables AND land the tuning on them (the migration will never replay),
   twice in a row (idempotent). Run against real Postgres through the real
-  ``setup()``/psycopg path, not a re-implementation of it.
+  ``setup()``/psycopg path, not a re-implementation of it;
+* the OBSERVABILITY of a failed startup tuning statement - psycopg3
+  discards server notices (no notice handler is registered), so an in-SQL
+  ``RAISE WARNING`` reaches nobody. A tuning statement that raises must
+  produce a WARNING **log record** naming the table, and the loop must
+  continue to the next statement.
 
 No assertion depends on autovacuum's wall-clock scheduling - the tests
 prove the CONFIGURATION, never that a background worker happened to run.
@@ -50,6 +58,7 @@ The private-database fixture mirrors ``test_migration_0276_runs_autovacuum.py``.
 from __future__ import annotations
 
 import asyncio
+import logging
 import selectors
 import threading
 import uuid
@@ -67,7 +76,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from modulo.core.pipeline_engine.modulo_saver import (
+    _AUTOVACUUM_TUNING_SQL,
+    _MIGRATION_SQL,
+    CHECKPOINT_AUTOVACUUM_TABLES,
+    ModuloPostgresSaver,
+)
 
 pytestmark = [pytest.mark.integration]
 
@@ -80,10 +94,14 @@ PREV_REV = "0276_runs_autovacuum_enabled"
 #: Values, justified from the measured production churn (see the migration
 #: docstring): 0.02/0.01 on the multi-GB checkpoint tables cut the
 #: dead-tuple budget 10x below the default 0.20/0.10 and refresh planner
-#: stats 10x sooner; cost_limit 10000 @ cost_delay 2 ms raises the scan
-#: rate ~500x over the default 200 @ 20 ms so a full pass over 9,436 MB
-#: finishes in seconds; ``runs`` (80 MB, high churn) gets a tighter
-#: 0.05/0.02 gate plus a restated ``autovacuum_enabled = true``.
+#: stats 10x sooner; cost_limit 10000 against the 2 ms cost_delay default
+#: (PostgreSQL 12+) raises the scan rate ~50x over the default 200 @ 2 ms
+#: (100,000 -> 5,000,000 units/s, ~40-80 MB/s -> ~2 GB/s), so a full pass
+#: over 9,436 MB finishes in seconds instead of ~2-4 minutes.
+#: ``autovacuum_vacuum_cost_delay`` is deliberately NOT pinned - it already
+#: defaults to 2 ms, so pinning it would be a no-op. ``runs`` (80 MB, high
+#: churn) gets a tighter 0.05/0.02 gate plus a restated
+#: ``autovacuum_enabled = true``.
 _EXPECTED_RELOPTIONS: dict[str, dict[str, str]] = {
     "runs": {
         "autovacuum_enabled": "true",
@@ -94,13 +112,11 @@ _EXPECTED_RELOPTIONS: dict[str, dict[str, str]] = {
         "autovacuum_vacuum_scale_factor": "0.02",
         "autovacuum_analyze_scale_factor": "0.01",
         "autovacuum_vacuum_cost_limit": "10000",
-        "autovacuum_vacuum_cost_delay": "2",
     },
     "checkpoint_writes": {
         "autovacuum_vacuum_scale_factor": "0.02",
         "autovacuum_analyze_scale_factor": "0.01",
         "autovacuum_vacuum_cost_limit": "10000",
-        "autovacuum_vacuum_cost_delay": "2",
     },
 }
 
@@ -110,7 +126,6 @@ _TUNED_KEYS: tuple[str, ...] = (
     "autovacuum_vacuum_scale_factor",
     "autovacuum_analyze_scale_factor",
     "autovacuum_vacuum_cost_limit",
-    "autovacuum_vacuum_cost_delay",
 )
 
 
@@ -448,6 +463,23 @@ async def _apply_setup(db_url: str) -> None:
         await saver.setup()
 
 
+async def _apply_setup_with(db_url: str, migrations: list[str]) -> None:
+    """Run ``setup()`` with an EXPLICIT statement list, over the real psycopg path.
+
+    The saver instance shadows the class-level ``MIGRATIONS`` so a test can
+    hand ``setup()`` a deliberately failing statement without mutating module
+    state (the helper runs on the dedicated selector loop, so instance
+    scoping keeps it race-free).
+    """
+    async with ModuloPostgresSaver.from_conn_string(
+        db_url.replace("postgresql+asyncpg://", "postgresql://", 1),
+        organisation_id=uuid.uuid4(),
+        fernet_key=Fernet.generate_key().decode(),
+    ) as saver:
+        saver.MIGRATIONS = migrations
+        await saver.setup()
+
+
 class TestFreshInstallBoot:
     async def test_first_boot_tunes_tables_the_migration_never_saw(
         self,
@@ -496,5 +528,114 @@ class TestFreshInstallBoot:
             _run_on_selector_loop(_apply_setup(fresh_chain_db_url))
             for table in _EXPECTED_RELOPTIONS:
                 await _assert_table_tuned(engine, table)
+        finally:
+            await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# MAJOR-1: a failed or skipped startup tuning statement must reach the LOG
+# ---------------------------------------------------------------------------
+
+_SAVER_LOGGER = "modulo.core.pipeline_engine.modulo_saver"
+
+
+def _tuning_failure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """WARNING records from the saver's own logger that carry a ``table``.
+
+    ``table`` is the ``extra=`` key :meth:`ModuloPostgresSaver.setup` attaches
+    only to a tuning failure, so this selects exactly the records under test
+    without matching on message text.
+    """
+    return [
+        record
+        for record in caplog.records
+        if record.name == _SAVER_LOGGER and record.levelno == logging.WARNING and hasattr(record, "table")
+    ]
+
+
+class TestSetupTuningFailureIsLogged:
+    async def test_absent_table_logs_a_warning_and_the_loop_continues(
+        self,
+        fresh_chain_db_url: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """MAJOR-1: psycopg3 drops server notices, so Python must log the skip.
+
+        The statements run over the REAL ``setup()``/psycopg path (no
+        re-implementation): handing ``setup()`` the tuning statements WITHOUT
+        the CREATEs leaves every target table absent on this fresh
+        alembic-only database, so each ``ALTER TABLE`` raises
+        ``UndefinedTable`` - the "table is absent" shape a customer install
+        can hit. Before the fix that error was swallowed inside a plpgsql
+        ``DO`` block whose ``RAISE WARNING`` psycopg3 discards (no notice
+        handler is registered) and ``setup()`` returned as if all were well.
+
+        Assertions that can FAIL:
+        * exactly one WARNING record per tuning statement - a ``setup()``
+          that aborted after the first failure would produce 1, not 2, so
+          this proves the loop continued;
+        * each record names its table (``extra={"table": ...}``);
+        * no exception escaped ``setup()`` (the run completed);
+        * nothing was silently created or tuned.
+        """
+        engine = create_async_engine(fresh_chain_db_url, poolclass=NullPool)
+        try:
+            with caplog.at_level(logging.WARNING, logger=_SAVER_LOGGER):
+                _run_on_selector_loop(_apply_setup_with(fresh_chain_db_url, list(_AUTOVACUUM_TUNING_SQL)))
+
+            records = _tuning_failure_records(caplog)
+            assert len(records) == len(_AUTOVACUUM_TUNING_SQL)
+            assert {record.table for record in records} == set(CHECKPOINT_AUTOVACUUM_TABLES)
+            for record in records:
+                # The real psycopg error text names the missing relation.
+                assert record.table in record.error
+
+            for table in ("checkpoints", "checkpoint_writes"):
+                assert not await _table_exists(engine, table), (
+                    f"{table} must be untouched - only the tuning statements were replayed"
+                )
+        finally:
+            await engine.dispose()
+
+    async def test_one_failing_tuning_statement_does_not_skip_the_other_table(
+        self,
+        fresh_chain_db_url: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """MAJOR-1's second half: a failure must not cost the NEXT table its tuning.
+
+        Real ``setup()``/psycopg path, schema DDL included: the ``checkpoints``
+        tuning statement is retargeted at a relation that does not exist (it
+        raises), while the ``checkpoint_writes`` statement is left intact. The
+        run must log ONE warning naming the missing relation AND still land
+        the tuning on ``checkpoint_writes`` — a ``setup()`` that aborted at
+        the first failure would leave ``checkpoint_writes`` with server
+        defaults, failing the last assertion.
+
+        ``checkpoints`` itself was created by the DDL and must remain UNTUNED:
+        that is the negative control proving the failure was real, not a
+        no-op that happened to leave the right state behind.
+        """
+        engine = create_async_engine(fresh_chain_db_url, poolclass=NullPool)
+        try:
+            checkpoints_sql, writes_sql = _AUTOVACUUM_TUNING_SQL
+            ghost_sql = checkpoints_sql.replace('public."checkpoints"', 'public."ghost_checkpoints"')
+            assert ghost_sql != checkpoints_sql  # the substitution must actually retarget the statement
+
+            with caplog.at_level(logging.WARNING, logger=_SAVER_LOGGER):
+                _run_on_selector_loop(_apply_setup_with(fresh_chain_db_url, [*_MIGRATION_SQL, ghost_sql, writes_sql]))
+
+            records = _tuning_failure_records(caplog)
+            assert len(records) == 1
+            assert records[0].table == "ghost_checkpoints"
+            assert "ghost_checkpoints" in records[0].error
+
+            # The DDL ran: both real tables exist...
+            for table in ("checkpoints", "checkpoint_writes"):
+                assert await _table_exists(engine, table), f"{table} was not created by setup()"
+            # ...the FAILED statement left its table untuned (negative control)...
+            await _assert_no_tuning(engine, "checkpoints")
+            # ...and the statement AFTER the failure still landed (the point).
+            await _assert_table_tuned(engine, "checkpoint_writes")
         finally:
             await engine.dispose()

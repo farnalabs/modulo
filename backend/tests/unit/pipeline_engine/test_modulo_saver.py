@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import json
+import logging
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -18,7 +19,11 @@ from modulo.core.pipeline_engine.modulo_saver import (
     CHECKPOINT_AUTOVACUUM_TABLES,
     CHECKPOINT_AUTOVACUUM_TUNING,
     ModuloPostgresSaver,
+    _autovacuum_tuning_target,
 )
+
+#: The saver's own logger — MAJOR-1's fix must emit records HERE.
+_SAVER_LOGGER = "modulo.core.pipeline_engine.modulo_saver"
 
 
 class _AsyncIter:
@@ -133,6 +138,105 @@ class TestSetup:
         create_checkpoints = [c for c in calls if "CREATE TABLE" in c and "checkpoints" in c]
         assert len(create_checkpoints) > 0
         assert "organisation_id UUID NOT NULL" in create_checkpoints[0]
+
+
+def _tuning_failure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """WARNING records from the saver's logger carrying the ``table`` extra."""
+    return [
+        record
+        for record in caplog.records
+        if record.name == _SAVER_LOGGER and record.levelno == logging.WARNING and hasattr(record, "table")
+    ]
+
+
+def _saver_with_failing_cursor(mock_conn, *, fail_on) -> ModuloPostgresSaver:
+    """A saver whose ``execute`` raises for statements matched by ``fail_on``."""
+    saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+    cursor = AsyncMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock(return_value=False)
+
+    async def _execute(sql, *args, **kwargs):
+        if fail_on(sql):
+            raise RuntimeError("simulated statement failure")
+
+    cursor.execute = AsyncMock(side_effect=_execute)
+    saver._cursor = MagicMock(return_value=cursor)
+    return saver
+
+
+class TestSetupFailureIsObservable:
+    """MAJOR-1 (FAR-1442): setup()'s failure policy must be visible in Python.
+
+    ``setup()`` runs over psycopg3, which discards server NOTICEs/WARNINGs
+    unless a notice handler is registered — none is registered anywhere in
+    ``backend/src`` — so an in-SQL ``RAISE WARNING`` reaches nobody. The
+    logging site must therefore be this method itself.
+    """
+
+    async def test_tuning_failure_emits_a_warning_record_and_the_loop_continues(self, mock_conn, caplog):
+        saver = _saver_with_failing_cursor(mock_conn, fail_on=lambda sql: sql in _AUTOVACUUM_TUNING_SQL)
+
+        with caplog.at_level(logging.WARNING, logger=_SAVER_LOGGER):
+            await saver.setup()
+
+        records = _tuning_failure_records(caplog)
+        # One record PER tuning statement: a setup() that aborted after the
+        # first failure would produce 1, not len(_AUTOVACUUM_TUNING_SQL).
+        assert len(records) == len(_AUTOVACUUM_TUNING_SQL)
+        assert {record.table for record in records} == set(CHECKPOINT_AUTOVACUUM_TABLES)
+        for record in records:
+            assert record.error == "simulated statement failure"
+        # Every statement was attempted despite the failures.
+        assert saver._cursor.return_value.execute.await_count == len(saver.MIGRATIONS)
+
+    async def test_schema_ddl_failure_still_propagates(self, mock_conn):
+        """A broken schema must NOT be downgraded to a warning.
+
+        ``main.py`` logs ``startup.checkpointer_init_failed`` (with the
+        traceback) and withholds ``startup.checkpointer_initialised`` only
+        when ``setup()`` RAISES — swallowing a CREATE failure would make the
+        boot claim a schema it never got.
+        """
+        saver = _saver_with_failing_cursor(mock_conn, fail_on=lambda sql: "CREATE TABLE" in sql)
+
+        with pytest.raises(RuntimeError, match="simulated statement failure"):
+            await saver.setup()
+
+    async def test_successful_setup_logs_no_tuning_warning(self, mock_conn, caplog):
+        """The happy path must stay quiet — a log that always fires proves nothing."""
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        saver._cursor = MagicMock(return_value=cursor)
+
+        with caplog.at_level(logging.WARNING, logger=_SAVER_LOGGER):
+            await saver.setup()
+
+        assert not _tuning_failure_records(caplog)
+
+    def test_tuning_statements_cannot_swallow_errors_in_sql(self):
+        """No in-SQL ``RAISE``/``EXCEPTION``: the error must reach ``setup()``.
+
+        A plpgsql ``DO`` block that catches its own ALTER failure converts a
+        Python exception (which would be logged) into a server WARNING (which
+        psycopg3 drops) — the exact silent-skip MAJOR-1 covers.
+        """
+        for statement in _AUTOVACUUM_TUNING_SQL:
+            upper = statement.upper()
+            assert "DO $$" not in upper
+            assert "RAISE" not in upper
+            assert "EXCEPTION" not in upper
+
+    def test_tuning_target_discriminates_tuning_from_schema_ddl(self):
+        """``_autovacuum_tuning_target`` decides log-and-continue vs re-raise."""
+        for statement, table in zip(_AUTOVACUUM_TUNING_SQL, CHECKPOINT_AUTOVACUUM_TABLES, strict=True):
+            assert _autovacuum_tuning_target(statement) == table
+        schema_ddl = ModuloPostgresSaver.MIGRATIONS[: -len(_AUTOVACUUM_TUNING_SQL)]
+        assert schema_ddl  # the loop below must actually exercise DDL statements
+        for ddl in schema_ddl:
+            assert _autovacuum_tuning_target(ddl) is None
 
 
 class TestAgetTuple:

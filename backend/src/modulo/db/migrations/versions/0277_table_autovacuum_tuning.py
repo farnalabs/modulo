@@ -42,18 +42,31 @@ Why the defaults are wrong for this table shape
   ~120 MB on ``checkpoint_writes``).
 * **The default cost throttle is the other half of the failure.** The
   effective autovacuum scan rate is ``autovacuum_vacuum_cost_limit`` /
-  ``autovacuum_vacuum_cost_delay``. The defaults resolve to
-  ``vacuum_cost_limit`` (200 units) per 20 ms = **10,000 cost units/s**,
-  which at ~10-20 units of work per 8 kB heap page is only ~4-8 MB/s - a
-  single full pass over 9,436 MB therefore takes tens of minutes, so the
-  next round of dead tuples arrives before the last pass finished. That is
-  precisely the "autovacuum cannot keep up" shape behind the measured
-  bloat. For the two multi-GB checkpoint tables this migration raises the
-  per-wake budget 50x (200 -> 10,000) and cuts the sleep 10x (20 ms ->
-  2 ms): 5,000,000 units/s, i.e. ~500x the default scan rate. The setting
-  is still a throttle (the worker still sleeps every 2 ms once 10,000 units
-  of work are done) - it is bounded, not unthrottled - but a full pass over
-  9.4 GB now finishes in seconds rather than tens of minutes.
+  ``autovacuum_vacuum_cost_delay``. Since PostgreSQL 12 the delay default
+  has been **2** ms (it was 20 ms through PostgreSQL 11; the release notes
+  for 12 carry "Reduce the default value of autovacuum_vacuum_cost_delay to
+  2ms"), and ``autovacuum_vacuum_cost_limit`` defaults to -1, i.e. it
+  inherits ``vacuum_cost_limit``'s **200**. The defaults therefore resolve
+  to 200 units per 2 ms = **100,000 cost units/s**, which at ~10-20 units
+  of work per 8 kB heap page is ~40-80 MB/s - a single full pass over
+  9,436 MB therefore takes ~2-4 minutes, and both checkpoint tables are
+  written on every superstep of every run, so dead tuples keep arriving
+  while the pass runs. That matters because the gate fix above makes vacuum
+  cycles ~10x more FREQUENT: each cycle now holds an autovacuum worker for
+  those minutes on a table permitted only ~190 MB of slack - a budget a
+  table being written every superstep can re-blow while the pass is still
+  running. For the two multi-GB checkpoint tables this migration raises the
+  per-wake budget 50x (200 -> 10,000) against the default 2 ms delay:
+  10,000 units / 2 ms = **5,000,000 units/s** (~2 GB/s at 20 cost units
+  per page) - **~50x the default scan rate**, so a full pass over 9.4 GB
+  finishes in seconds instead of 2-4 minutes. The setting is still a
+  throttle (the worker sleeps 2 ms each time 10,000 units of work are
+  done) - bounded, not unthrottled - just a much looser bound, which is
+  the point for two relations measured in GB. Note what is NOT here:
+  ``autovacuum_vacuum_cost_delay`` is left unpinned on purpose. It already
+  defaults to 2 ms, so re-stating it would be a no-op dressed up as a
+  tuning change, and pinning it per-table would silently override an
+  operator who raised the delay globally to protect their own I/O budget.
 * **``runs`` needs a tighter factor, not cost tuning.** It is only 80 MB
   (measured post-VACUUM), so cost throttling is irrelevant at that size -
   what hurts is churn: it takes heavy insert/update traffic plus retention
@@ -97,10 +110,16 @@ are created at application startup by ``ModuloPostgresSaver.setup()``
 finished (``deploy/fly/entrypoint.sh`` runs ``alembic upgrade heads`` before
 ``uvicorn`` starts). On a brand-new database this revision therefore meets
 a schema in which the checkpoint tables do not exist yet, so each ALTER is
-guarded by ``to_regclass`` and **RAISEs a NOTICE** when it skips - the skip
-is observable in the migration log, never silent. On every already-deployed
-database (tables created at first boot long before this revision ran) the
-guard passes and the tuning lands.
+guarded by ``to_regclass`` and skips (``RAISE NOTICE``) instead of failing
+the chain. That skip is EXPECTED on a fresh install, but it is NOT visible
+in the migration log: alembic runs through SQLAlchemy, whose psycopg dialect
+logs server notices at INFO, while ``backend/alembic.ini`` holds the root
+and ``sqlalchemy`` loggers at WARN - so the record is dropped. Nothing here
+depends on the notice being read: the fresh-install gap is closed by the
+startup path below, which logs its own failures from Python (the one
+logging site that works over psycopg3). On every already-deployed database
+(tables created at first boot long before this revision ran) the guard
+passes and the tuning lands.
 
 The fresh-install gap is closed by the startup path, not by this revision
 ------------------------------------------------------------------------
@@ -113,9 +132,14 @@ relations in the product. ``ModuloPostgresSaver`` now carries the SAME
 tuning statements (rendered from
 ``modulo.core.pipeline_engine.modulo_saver.CHECKPOINT_AUTOVACUUM_TUNING``)
 at the end of the list ``setup()`` executes, ordered after the CREATEs, so
-every boot - fresh or deployed - applies it. This revision keeps its own
-ALTERs because they are what lands the tuning on an already-deployed
-database at migration time, before the application's next boot.
+every boot - fresh or deployed - applies it. Those startup statements are
+plain ``ALTER TABLE``s (no in-SQL ``RAISE WARNING``): ``setup()`` catches a
+failed or skipped one, logs a WARNING naming the table and the error from
+Python, and continues with the next statement, because psycopg3 discards
+server notices unless a notice handler is registered - none is - so an
+in-SQL warning would reach nobody. This revision keeps its own ALTERs
+because they are what lands the tuning on an already-deployed database at
+migration time, before the application's next boot.
 
 Why the values are mirrored rather than shared by import
 --------------------------------------------------------
@@ -144,8 +168,8 @@ its existing value changes nothing), and a fresh database that does have
 the tables simply re-states defaults-plus-tuning.
 
 Downgrade RESETs exactly the options this revision added (``runs``: the two
-scale factors; the checkpoint tables: both scale factors plus the two cost
-knobs), which is a no-op when an option is absent. It deliberately does NOT
+scale factors; the checkpoint tables: both scale factors plus the cost
+limit), which is a no-op when an option is absent. It deliberately does NOT
 ``RESET autovacuum_enabled`` on ``runs``: that reloption belongs to 0276,
 so after downgrading to 0276 the schema must equal what 0276 left -
 ``autovacuum_enabled=true`` with no tuning - and re-disabling autovacuum is
@@ -187,8 +211,7 @@ def _checkpoint_set(table: str) -> str:
         f'ALTER TABLE public."{table}" SET ('
         "autovacuum_vacuum_scale_factor = 0.02, "
         "autovacuum_analyze_scale_factor = 0.01, "
-        "autovacuum_vacuum_cost_limit = 10000, "
-        "autovacuum_vacuum_cost_delay = 2); "
+        "autovacuum_vacuum_cost_limit = 10000); "
         "ELSE "
         f"RAISE NOTICE '0277_table_autovacuum_tuning: skipping {table} - "
         "table does not exist yet (created by ModuloPostgresSaver.setup() "
@@ -205,8 +228,7 @@ def _checkpoint_reset(table: str) -> str:
         f'ALTER TABLE public."{table}" RESET ('
         "autovacuum_vacuum_scale_factor, "
         "autovacuum_analyze_scale_factor, "
-        "autovacuum_vacuum_cost_limit, "
-        "autovacuum_vacuum_cost_delay); "
+        "autovacuum_vacuum_cost_limit); "
         "END IF; END $$;"
     )
 
