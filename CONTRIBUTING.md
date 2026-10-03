@@ -15,10 +15,10 @@
 
 ## Welcome
 
-Modulo is a self-hosted agent governance platform for building governed,
-repeatable AI-assisted software delivery pipelines. It provides a composable
-pipeline of atomic AI agents that automate work between existing tools like
-GitHub, GitLab, and Slack.
+Modulo is a self-hosted Agentic Delivery Governance platform for building
+governed, repeatable AI-assisted software delivery pipelines. It provides a
+composable pipeline of atomic AI agents that automate work between existing
+tools like GitHub, GitLab, and Slack.
 
 We're glad you're here. Be respectful, constructive, and assume good faith.
 

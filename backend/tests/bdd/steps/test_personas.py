@@ -1,9 +1,12 @@
 """Step definitions for persona feature files (Priya Platform Engineer, Marcus CISO)."""
 
+import asyncio
 import hashlib
 import hmac
 import json
+import sqlite3 as _sqlite3
 import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +21,14 @@ from modulo.core.audit_logger.append_only import (
 )
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.base import Base
+
+# SQLite cannot natively bind ``uuid.UUID`` — the DBAPI raises
+# ProgrammingError. Register a hex adapter (process-global, consulted at bind
+# time) so the ADR 047 raw-``text()`` reads in ``_verify_identity``
+# (``SELECT 1 FROM accounts WHERE id = :aid``) work against the in-memory
+# aiosqlite DB: SQLAlchemy's ``Uuid`` type on SQLite stores the 32-char hex
+# form, which is exactly what ``uuid.UUID.hex`` yields.
+_sqlite3.register_adapter(uuid.UUID, lambda value: value.hex)
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -536,6 +547,292 @@ def no_cross_org_access(ctx, request):
 @then("RLS is enforced at the database level")
 def rls_enforced_db_level(request):
     request.node._rls_enforced = True
+
+
+# ===========================================================================
+# Marcus: goal-marcus-offboarding (ADR 047 — immediate access revocation)
+# ===========================================================================
+
+#: Secret used to mint Bob's real tokens. Decode only re-verifies against this
+#: value, so a fixed test constant is fine (must be >= the Settings minimum).
+_MARCUS_OFFBOARD_SECRET = "m" * 32
+_MARCUS_OFFBOARD_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000081")
+_MARCUS_OFFBOARD_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000082")
+
+
+def _marcus_offboard_settings():
+    from modulo.settings import Settings
+
+    return Settings(
+        database_url="sqlite+aiosqlite:///./test.db",
+        secret_key=_MARCUS_OFFBOARD_SECRET,
+        fernet_key="b" * 32,
+    )
+
+
+async def _marcus_offboard_mint(request) -> None:
+    """Seed the REAL DB (Account/Organisation/OrgMembership/TokenFamily) and mint
+    REAL access + refresh tokens for engineer-bob against it — one in-memory
+    aiosqlite engine backs every session, so the ADR 047 re-reads see the rows.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from modulo.auth.jwt import (
+        create_access_token,
+        create_refresh_token,
+        decode_principal,
+    )
+    from modulo.db.models.account import Account
+    from modulo.db.models.org_membership import OrgMembership
+    from modulo.db.models.organisation import Organisation
+    from modulo.db.models.token_family import TokenFamily
+
+    # One STATIC connection backs every session across the separate
+    # ``asyncio.run`` calls of the journey steps, so the in-memory DB is
+    # shared (the documented async-SQLite in-memory pattern; also used by
+    # tests/unit/db/test_journey_api.py): seeding, removal and the ADR 047
+    # re-reads all see the same rows.
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    family_id = uuid.uuid4()
+
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            lambda sync: Base.metadata.create_all(
+                sync,
+                tables=[
+                    Account.__table__,
+                    Organisation.__table__,
+                    OrgMembership.__table__,
+                    TokenFamily.__table__,
+                ],
+            )
+        )
+    async with factory() as session, session.begin():
+        session.add_all(
+            [
+                Organisation(
+                    id=_MARCUS_OFFBOARD_ORG_ID,
+                    name="Acme",
+                    slug="acme",
+                    status="active",
+                ),
+                Account(
+                    id=_MARCUS_OFFBOARD_ACCOUNT_ID,
+                    email="engineer-bob@example.com",
+                    display_name="Engineer Bob",
+                    auth_provider="local",
+                    active=True,
+                    must_change_password=False,
+                    is_system_admin=False,
+                    preferences={},
+                ),
+                OrgMembership(
+                    account_id=_MARCUS_OFFBOARD_ACCOUNT_ID,
+                    organisation_id=_MARCUS_OFFBOARD_ORG_ID,
+                    role="operator",
+                ),
+                TokenFamily(
+                    family_id=family_id,
+                    account_id=_MARCUS_OFFBOARD_ACCOUNT_ID,
+                    organisation_id=_MARCUS_OFFBOARD_ORG_ID,
+                    max_sequence=0,
+                ),
+            ]
+        )
+
+    request.node._offboard_engine = engine
+    request.node._offboard_factory = factory
+    request.node._offboard_family_id = family_id
+    request.node._offboard_access_token = create_access_token(
+        subject="engineer-bob@example.com",
+        secret_key=_MARCUS_OFFBOARD_SECRET,
+        organisation_id=str(_MARCUS_OFFBOARD_ORG_ID),
+        account_id=str(_MARCUS_OFFBOARD_ACCOUNT_ID),
+        org_role="operator",
+        client_kind="browser",
+    )
+    request.node._offboard_refresh_token = create_refresh_token(
+        subject="engineer-bob@example.com",
+        secret_key=_MARCUS_OFFBOARD_SECRET,
+        organisation_id=str(_MARCUS_OFFBOARD_ORG_ID),
+        account_id=str(_MARCUS_OFFBOARD_ACCOUNT_ID),
+        org_role="operator",
+        token_family=str(family_id),
+        token_sequence=0,
+        client_kind="browser",
+    )
+    request.node._offboard_principal = decode_principal(request.node._offboard_access_token, _MARCUS_OFFBOARD_SECRET)
+
+
+def _marcus_as_uuid(value):
+    return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+
+
+@contextmanager
+def _marcus_uuid_bound_role_read():
+    """Normalise the ``str`` ids the JWT paths pass to ``resolve_role_from_membership``.
+
+    On Postgres asyncpg coerces a ``str`` id against a ``Uuid()`` column; the
+    SQLite test engine's ``Uuid()`` bind processor instead calls ``value.hex``
+    and rejects a ``str``. The role lookup is still the REAL query (only the
+    bound id type is normalised), so the ADR 047 ``deactivated_at IS NULL``
+    filter and its deny semantics are unchanged.
+    """
+    from modulo.db.crud import org_membership as _org_membership
+
+    real_resolve = _org_membership.resolve_role_from_membership
+
+    async def _resolve(session, account_id, organisation_id):
+        return await real_resolve(session, _marcus_as_uuid(account_id), _marcus_as_uuid(organisation_id))
+
+    with patch.object(_org_membership, "resolve_role_from_membership", _resolve):
+        yield
+
+
+async def _marcus_resolve_offboard(request, coro_factory) -> object:
+    """Run ``coro_factory()`` with the offboarding engine wired into the auth
+    dependency seam (``get_or_create_engine`` / ``get_or_create_session_factory``),
+    so ``_verify_identity``'s ADR 047 live-role re-read hits the REAL rows.
+    """
+    with (
+        patch(
+            "modulo.api.dependencies.get_or_create_engine",
+            return_value=request.node._offboard_engine,
+        ),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=request.node._offboard_factory,
+        ),
+        _marcus_uuid_bound_role_read(),
+    ):
+        return await coro_factory()
+
+
+@given('user "engineer-bob" has an active JWT session')
+def marcus_bob_active_jwt_session(request):
+    from modulo.auth.dependencies import get_current_tenant_user
+
+    asyncio.run(_marcus_offboard_mint(request))
+
+    async def _baseline() -> None:
+        live = await _marcus_resolve_offboard(
+            request, lambda: get_current_tenant_user(request.node._offboard_principal)
+        )
+        assert live.org_role == "operator"
+
+    # Prove the token is genuinely valid BEFORE the removal — the real tenant
+    # dependency resolves Bob's live role to operator against the real rows.
+    asyncio.run(_baseline())
+
+
+@when("Bob is removed from the organisation")
+def marcus_bob_removed_from_org(request):
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from modulo.db.models.org_membership import OrgMembership
+
+    async def _remove() -> None:
+        async with request.node._offboard_factory() as session, session.begin():
+            membership = (
+                await session.execute(
+                    select(OrgMembership).where(
+                        OrgMembership.account_id == _MARCUS_OFFBOARD_ACCOUNT_ID,
+                        OrgMembership.organisation_id == _MARCUS_OFFBOARD_ORG_ID,
+                    )
+                )
+            ).scalar_one()
+            # The real soft-deactivation ADR 047 filters on: a removed
+            # member's org_memberships row has deactivated_at set, so no
+            # live role resolves and the JWT is rejected on the next call.
+            membership.deactivated_at = datetime.now(UTC)
+
+    asyncio.run(_remove())
+
+
+@then("Bob's JWT is invalidated on next API call")
+def marcus_bob_jwt_invalidated(request):
+    from modulo.auth.dependencies import (
+        OrganisationMembershipNotFound,
+        get_current_tenant_user,
+    )
+
+    async def _attempt() -> None:
+        await _marcus_resolve_offboard(request, lambda: get_current_tenant_user(request.node._offboard_principal))
+
+    with pytest.raises(OrganisationMembershipNotFound) as exc_info:
+        asyncio.run(_attempt())
+    assert exc_info.value.status_code == 401
+
+
+@then("Bob cannot list pipelines or view runs")
+def marcus_bob_cannot_list(request):
+    from types import SimpleNamespace
+
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from modulo.auth.dependencies import (
+        OrganisationMembershipNotFound,
+        get_current_tenant_user_or_api_key,
+    )
+
+    async def _attempt() -> None:
+        # pipeline.list and run.list resolve their principal through
+        # get_current_tenant_user_or_api_key (JWT branch) BEFORE the handler
+        # runs, so this 401 is the exact seam both list surfaces mount.
+        await _marcus_resolve_offboard(
+            request,
+            lambda: get_current_tenant_user_or_api_key(
+                HTTPAuthorizationCredentials(
+                    scheme="Bearer",
+                    credentials=request.node._offboard_access_token,
+                ),
+                SimpleNamespace(secret_key=_MARCUS_OFFBOARD_SECRET),
+            ),
+        )
+
+    with pytest.raises(OrganisationMembershipNotFound) as exc_info:
+        asyncio.run(_attempt())
+    assert exc_info.value.status_code == 401
+
+
+@then("Bob's refresh tokens are revoked")
+def marcus_bob_refresh_revoked(request):
+    from fastapi import HTTPException as FastAPIHTTPException
+    from sqlalchemy import select
+
+    from modulo.api.routes.auth import _advance_refresh_sequence, _parse_refresh_token
+    from modulo.db.models.token_family import TokenFamily
+
+    async def _attempt() -> None:
+        settings = _marcus_offboard_settings()
+        claims = _parse_refresh_token(request.node._offboard_refresh_token, settings)
+        with _marcus_uuid_bound_role_read():
+            async with request.node._offboard_factory() as session:
+                with pytest.raises(FastAPIHTTPException) as exc_info:
+                    await _advance_refresh_sequence(session, claims, settings)
+        assert exc_info.value.status_code == 401
+        assert "no longer has access" in exc_info.value.detail
+        # A removed member's refresh is refused BEFORE the family sequence
+        # advances, so the family stays untouched (and, unlike a globally
+        # deactivated account, is not blacklisted).
+        async with request.node._offboard_factory() as session:
+            row = (
+                await session.execute(
+                    select(TokenFamily).where(TokenFamily.family_id == request.node._offboard_family_id)
+                )
+            ).scalar_one()
+        assert row.max_sequence == 0
+        assert row.is_blacklisted is False
+
+    asyncio.run(_attempt())
 
 
 # ===========================================================================
