@@ -975,6 +975,29 @@ regression that silently weakens the suite:
   (``if cond: break`` — the conditional early-exit idiom) leaves the assert
   live, because the branch is not taken in every iteration, and function/
   class top-level bodies stay owned by the unreachable-assert lens
+- an ``assert`` whose test expression *is* — or ``not``-wraps — a call to a
+  built-in mutable-container method that mutates in place and returns ``None``
+  (``list.append``/``extend``/``insert``/``remove``/``reverse``/``sort``/
+  ``clear``, ``dict.update``/``clear``, ``set.add``/``discard``/``remove``/
+  ``clear``/``update`` and the ``intersection_update``/``difference_update``/
+  ``symmetric_difference_update`` variants, plus the ``bytearray`` and
+  ``collections.deque`` twins ``appendleft``/``extendleft``/``rotate``).
+  ``assert x.append(y)`` evaluates as ``assert None``, so it ALWAYS FAILS (the
+  test stays red even when the mutation succeeded), and the ``not``-wrapped
+  twin ALWAYS PASSES regardless of what the mutation did — a silent false green
+  a mutation-testing run trusts as real coverage. What a mutator returns says
+  nothing about the container's contents, so these almost always meant ``assert
+  x`` (non-emptiness), ``assert y in x`` (membership), or ``assert x ==
+  expected`` (contents). This is the container-mutator twin of the
+  mock-verification-assert lens, which owns the identical ``None``-returning
+  hazard for the ``assert_called*``/``assert_awaited*`` family. Only the two
+  whole-expression positions (bare and ``not``-wrapped) are checked: a mutator
+  call inside a larger expression or a comparison — including the deliberate
+  ``assert x.append(y) is None`` check that pins the documented ``None`` return
+  — is left alone, as is a call whose receiver is not a pure stable expression
+  (``factory().append(y)``, whose type cannot be known statically) and the
+  value-returning siblings (``pop``/``get``/``setdefault``/``popitem``/
+  ``count``/``index``), which legitimately carry a value
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -13646,3 +13669,170 @@ def test_control_transfer_lens_flags_dead_asserts():
     )
     found = _superseded_assert_violations(ast.parse(split))
     assert [lineno for lineno, _ in found] == [5], f"live/dead split wrong: {found}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: None-returning container mutator as the assert expression
+# ---------------------------------------------------------------------------
+_NONE_RETURNING_MUTATOR_METHODS = frozenset(
+    {
+        "append",
+        "appendleft",
+        "extend",
+        "extendleft",
+        "insert",
+        "remove",
+        "reverse",
+        "sort",
+        "rotate",
+        "clear",
+        "update",
+        "add",
+        "discard",
+        "intersection_update",
+        "difference_update",
+        "symmetric_difference_update",
+    }
+)
+"""Built-in mutable-container methods that mutate in place and return ``None``.
+
+``list``/``bytearray`` contribute ``append``/``extend``/``insert``/``remove``/
+``reverse``/``sort``/``clear``; ``dict`` contributes ``update``/``clear``;
+``set`` contributes ``add``/``discard``/``remove``/``clear``/``update`` and the
+in-place ``*_update`` operators; ``collections.deque`` contributes
+``appendleft``/``extendleft``/``rotate``. Every one of them returns ``None``,
+so a bare (or ``not``-wrapped) ``assert`` over the call pins ``None``'s
+truthiness instead of the mutation's effect. The value-returning siblings —
+``pop``/``get``/``setdefault``/``popitem``/``count``/``index`` — are
+deliberately absent because they legitimately carry a value to assert on."""
+
+
+def _none_returning_mutator_hit(node: ast.AST) -> tuple[ast.AST, str] | None:
+    """Return ``(receiver, method_name)`` for a None-returning mutator call, or
+    ``None`` when ``node`` is not one.
+
+    The receiver must be a *pure stable expression* (a name, attribute path,
+    subscript, or container literal — the ``_stable_dump`` set) so the method
+    name is the only thing assumed: a call receiver (``factory().append(x)``)
+    has an unknowable type and is left alone, and a method call that is not in
+    the curated None-returning set is never implicated."""
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _NONE_RETURNING_MUTATOR_METHODS
+        and _stable_dump(node.func.value) is not None
+    ):
+        return node.func.value, node.func.attr
+    return None
+
+
+def _none_returning_mutator_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression *is* — or ``not``-wraps — a call to a built-in in-place mutator
+    that returns ``None``.
+
+    Only the two whole-expression positions are checked, so a mutator call that
+    appears inside a larger expression or a comparison (the deliberate ``assert
+    x.append(y) is None`` check) is never implicated, mirroring the
+    mock-verification-assert lens."""
+    found: list[tuple[int, str]] = []
+
+    for node in _all_nodes(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        negated = isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not)
+        target = node.test.operand if negated else node.test
+        hit = _none_returning_mutator_hit(target)
+        if hit is None:
+            continue
+        _receiver, method = hit
+        verdict = "always PASSES" if negated else "always FAILS"
+        found.append(
+            (
+                node.lineno,
+                (
+                    f"assert {'not ' if negated else ''}{ast.unparse(node.test)} — "
+                    f"{method}() mutates in place and returns None, so the assertion tests "
+                    f"None's truthiness and {verdict}; assert on the container's contents or "
+                    "the mutated value instead"
+                ),
+            )
+        )
+    return found
+
+
+def test_no_none_returning_mutator_asserts():
+    """An ``assert`` whose expression is a call to a built-in in-place mutator
+    (``assert items.append(item)``, ``assert state.update(payload)``,
+    ``assert seen.add(token)``) evaluates as ``assert None``: the bare spelling
+    ALWAYS FAILS (the test stays red even when the mutation succeeded) and the
+    ``not``-wrapped spelling ALWAYS PASSES no matter what the mutation did — a
+    silent false green a mutation-testing run trusts as real coverage. The
+    method's return value says nothing about the container's contents, so these
+    almost always meant ``assert x`` (non-emptiness), ``assert y in x``
+    (membership), or ``assert x == expected`` (contents). This is the
+    container-mutator twin of the mock-verification-assert lens, which owns the
+    identical None-returning hazard for ``assert_called*``/``assert_awaited*``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _none_returning_mutator_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assert(s) over a None-returning container mutator.\n"
+        "An in-place mutator (append/extend/sort/update/add/...) returns None, so "
+        "'assert x.append(y)' is always False and 'assert not x.append(y)' is always True. "
+        "Assert on the container's contents or the mutated value instead.\n" + "\n".join(violations)
+    )
+
+
+def test_none_returning_mutator_lens_flags_none_result():
+    """Synthetic positive/negative control for the None-returning-mutator lens:
+    it must flag a bare/``not``-wrapped assert over any curated in-place mutator
+    in any pure-receiver spelling (name, attribute path, subscript, container
+    literal), and ignore comparisons that pin the ``None`` return deliberately,
+    value-returning methods, call receivers of unknowable type, and mutation
+    calls embedded in larger expressions."""
+    positive_sources = [
+        "def test_foo():\n    assert items.append(item)\n",
+        "def test_foo():\n    assert not items.append(item)\n",
+        "def test_foo():\n    assert state.update(payload)\n",
+        "def test_foo():\n    assert seen.add(token)\n",
+        "def test_foo():\n    assert queue.appendleft(job)\n",
+        "def test_foo():\n    assert buf.extend(chunk)\n",
+        "def test_foo():\n    assert rows.sort()\n",
+        "def test_foo():\n    assert ledger['entries'].append(entry)\n",
+        "def test_foo():\n    assert container.items.append(item)\n",
+        "def test_foo():\n    assert [].append(item)\n",
+        "def test_foo():\n    assert not values.difference_update(other)\n",
+        "async def test_foo():\n    assert not pending.discard(item)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _none_returning_mutator_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert items.append(item) is None\n",
+        "def test_foo():\n    assert items.append(item) == expected\n",
+        "def test_foo():\n    assert items.append(item) is not None\n",
+        "def test_foo():\n    assert items.pop()\n",
+        "def test_foo():\n    assert mapping.setdefault('k', v)\n",
+        "def test_foo():\n    assert mapping.get('k')\n",
+        "def test_foo():\n    assert counts.count(x)\n",
+        "def test_foo():\n    assert ''.join(parts)\n",
+        "def test_foo():\n    assert factory().append(item)\n",
+        "def test_foo():\n    assert items.append(item) and other\n",
+        "def test_foo():\n    assert items.append(item) if flag else other\n",
+        "def test_foo():\n    assert items.append\n",
+        "def test_foo():\n    items.append(item)\n    assert item in items\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _none_returning_mutator_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+    split = "def test_foo():\n    assert items\n    assert items.clear()\n"
+    found = _none_returning_mutator_assert_violations(ast.parse(split))
+    assert [lineno for lineno, _ in found] == [3], f"live/dead split wrong: {found}"
