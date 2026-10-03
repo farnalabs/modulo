@@ -454,7 +454,7 @@ class TestScanChain:
         ):
             resp = client.get(self.URL)
         assert resp.status_code == 200
-        assert resp.text == ""
+        assert not resp.text
 
     def test_scan_invalid_format_is_422(self, client: TestClient) -> None:
         resp = client.get(f"{self.URL}?format=xml")
