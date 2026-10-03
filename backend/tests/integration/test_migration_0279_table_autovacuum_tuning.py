@@ -15,10 +15,10 @@ production 2026-10-03, those defaults are wrong for Modulo's table shape:
 
 So this module asserts, against REAL Postgres (testcontainers):
 
-* the NEGATIVE CONTROL - the tuned reloptions are absent BEFORE 0278, and
+* the NEGATIVE CONTROL - the tuned reloptions are absent BEFORE 0279, and
   the post-migration assertion FAILS against that pre-migration state, so
   the test discriminates rather than passing vacuously;
-* the REAL alembic upgrade of 0278 lands every expected reloption value on
+* the REAL alembic upgrade of 0279 lands every expected reloption value on
   all three tables (``checkpoints``/``checkpoint_writes`` are created first
   via ``ModuloPostgresSaver._MIGRATION_SQL``, exactly as a deployed
   database has them), and re-running the revision is a no-op;
@@ -29,7 +29,7 @@ So this module asserts, against REAL Postgres (testcontainers):
   ``autovacuum_enabled=true`` on ``runs`` sits alongside the new tuning);
 * the downgrade RESETs exactly what the upgrade added while leaving
   0276's ``autovacuum_enabled=true`` in place;
-* the FRESH-database path - the whole chain straight to 0278 on a
+* the FRESH-database path - the whole chain straight to 0279 on a
   brand-new database, where the checkpoint tables do NOT exist yet
   (alembic runs before ``ModuloPostgresSaver.setup()``), so the
   existence-gated ALTER must skip them instead of failing the chain (the
@@ -37,7 +37,7 @@ So this module asserts, against REAL Postgres (testcontainers):
   notices are logged at INFO under alembic.ini's WARN level - so the skip
   is expected-and-invisible here, and the startup path below is the fix);
 * the FRESH-INSTALL boot path - the one this migration originally got
-  wrong: alembic has already recorded 0278 with the tables absent, then the
+  wrong: alembic has already recorded 0279 with the tables absent, then the
   application's first ``ModuloPostgresSaver.setup()`` runs. It must create
   the tables AND land the tuning on them (the migration will never replay),
   twice in a row (idempotent). Run against real Postgres through the real
@@ -86,10 +86,10 @@ from modulo.core.pipeline_engine.modulo_saver import (
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0278_table_autovacuum_tuning"
+MIGRATION_REV = "0279_table_autovacuum_tuning"
 PREV_REV = "0276_runs_autovacuum_enabled"
 
-#: The exact reloption set 0278 must leave on each table.
+#: The exact reloption set 0279 must leave on each table.
 #:
 #: Values, justified from the measured production churn (see the migration
 #: docstring): 0.02/0.01 on the multi-GB checkpoint tables cut the
@@ -203,7 +203,7 @@ async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
     checkpoint tables - the shape of every already-deployed database: the
     application booted (``ModuloPostgresSaver.setup()`` created the LangGraph
     checkpoint tables) long before this revision arrives."""
-    db_name, iso_url = await _new_private_db(db_url, "m0278_pre")
+    db_name, iso_url = await _new_private_db(db_url, "m0279_pre")
     try:
         _migrate(iso_url, PREV_REV)
 
@@ -226,9 +226,9 @@ async def fresh_chain_db_url(db_url: str) -> AsyncGenerator[str, None]:
     """A brand-new private database migrated ALL the way to ``MIGRATION_REV``.
 
     On this path the checkpoint tables do not exist (alembic runs before
-    ``ModuloPostgresSaver.setup()``), so 0278 must skip them rather than
+    ``ModuloPostgresSaver.setup()``), so 0279 must skip them rather than
     fail the chain."""
-    db_name, iso_url = await _new_private_db(db_url, "m0278_fresh")
+    db_name, iso_url = await _new_private_db(db_url, "m0279_fresh")
     try:
         _migrate(iso_url, MIGRATION_REV)
         yield iso_url
@@ -272,7 +272,7 @@ async def _alembic_version(engine: AsyncEngine) -> str:
 async def _assert_table_tuned(engine: AsyncEngine, table: str) -> None:
     """Every expected reloption on ``table`` must be present with its exact value.
 
-    This is the assertion that FAILS against the pre-0278 state - the
+    This is the assertion that FAILS against the pre-0279 state - the
     negative control below."""
     expected = _EXPECTED_RELOPTIONS[table]
     actual = await _reloptions(engine, table)
@@ -294,8 +294,8 @@ class TestUpgrade:
         """The failure and its fix, in one sequence against real Postgres.
 
         NEGATIVE CONTROL first: the post-migration assertion must FAIL
-        against the pre-0278 state (so the test discriminates), then the
-        REAL alembic upgrade of 0278 must make it pass on all three tables,
+        against the pre-0279 state (so the test discriminates), then the
+        REAL alembic upgrade of 0279 must make it pass on all three tables,
         and re-running the revision must be a no-op."""
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
         try:
@@ -432,7 +432,7 @@ class TestFreshDatabase:
 
 
 # ---------------------------------------------------------------------------
-# The fresh-install boot path - the shape 0278 alone could not fix
+# The fresh-install boot path - the shape 0279 alone could not fix
 # ---------------------------------------------------------------------------
 
 _saver_loop: asyncio.AbstractEventLoop | None = None
@@ -449,7 +449,7 @@ def _run_on_selector_loop(coro: Any) -> Any:
     global _saver_loop
     if _saver_loop is None or _saver_loop.is_closed():
         _saver_loop = asyncio.SelectorEventLoop(selectors.SelectSelector())
-        threading.Thread(target=_saver_loop.run_forever, name="m0278-saver-loop", daemon=True).start()
+        threading.Thread(target=_saver_loop.run_forever, name="m0279-saver-loop", daemon=True).start()
     return asyncio.run_coroutine_threadsafe(coro, _saver_loop).result(timeout=120)
 
 
@@ -490,8 +490,8 @@ class TestFreshInstallBoot:
         Boot order (``deploy/fly/entrypoint.sh``): ``alembic upgrade heads``
         FIRST, then ``uvicorn``, whose lifespan runs
         ``ModuloPostgresSaver.setup()``. On a brand-new database alembic
-        records 0278 while the checkpoint tables do not exist, its guarded
-        ALTER skips them, and 0278 never replays - so without the tuning in
+        records 0279 while the checkpoint tables do not exist, its guarded
+        ALTER skips them, and 0279 never replays - so without the tuning in
         ``setup()`` the two multi-GB tables would keep Postgres' DEFAULT
         autovacuum settings forever. That is the customer-facing case for a
         self-hosted install, so it is driven here end to end: migration
@@ -500,7 +500,7 @@ class TestFreshInstallBoot:
         """
         engine = create_async_engine(fresh_chain_db_url, poolclass=NullPool)
         try:
-            # 1. The broken shape: 0278 is recorded, the tables are absent.
+            # 1. The broken shape: 0279 is recorded, the tables are absent.
             assert await _alembic_version(engine) == MIGRATION_REV
             for table in ("checkpoints", "checkpoint_writes"):
                 assert not await _table_exists(engine, table), (
@@ -517,7 +517,7 @@ class TestFreshInstallBoot:
             _run_on_selector_loop(_apply_setup(fresh_chain_db_url))
 
             # 3. THE FIX: the tables exist AND carry the tuning. Only
-            #    setup() could have done this - 0278 is already recorded.
+            #    setup() could have done this - 0279 is already recorded.
             for table in ("checkpoints", "checkpoint_writes"):
                 assert await _table_exists(engine, table), f"{table} was not created by setup()"
                 await _assert_table_tuned(engine, table)
