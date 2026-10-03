@@ -44,6 +44,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
+_CHAIN_HEAD_MIGRATION = "0279_table_autovacuum_tuning"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
@@ -170,9 +171,9 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0279(self) -> None:
+    def test_single_head_is_0279_table_autovacuum_tuning(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == ["0279_table_autovacuum_tuning"], f"expected a single head, got {heads}"
+        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0277_run_daily_facts_trigger_dispatch_phase(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
