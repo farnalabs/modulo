@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import threading
+import time
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from typing import Self
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.main import app
 from modulo.api.routes.health import (
+    _LOOP_LAG_DEGRADED_MS,
     CheckResult,
     _check_checkpointer,
     _check_database,
@@ -47,6 +50,18 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_repo_heads_cache() -> Generator[None, None, None]:
+    """FAR-1439: ``_check_migrations`` memoizes the parsed alembic heads in a
+    process-wide cache; reset it around every test so one test's canned (or
+    real) heads can never leak into another test's assertions."""
+    from modulo.api.routes import health as health_mod
+
+    health_mod._REPO_HEADS_CACHE = None
+    yield
+    health_mod._REPO_HEADS_CACHE = None
+
+
 def _ok_check(name: str = "ok") -> CheckResult:
     return CheckResult(status="ok", latency_ms=1.0, detail=f"{name} reachable")
 
@@ -57,6 +72,38 @@ def _degraded_check(detail: str = "degraded") -> CheckResult:
 
 def _unavailable_check(detail: str = "unavailable") -> CheckResult:
     return CheckResult(status="unavailable", latency_ms=5000.0, detail=detail)
+
+
+# --- FAR-1439 event-loop stall guard doubles -------------------------------
+# Both doubles are deliberately PLAIN module-level functions: the test-suite
+# scanner flags ``time.sleep`` anywhere inside an ``async def`` body, and the
+# thread-identity probe must be callable from async tests without living in
+# them.
+
+#: Threads ``ScriptDirectory.get_heads`` was invoked from, per test.
+_GET_HEADS_THREAD_IDS: list[int] = []
+
+
+def _recorded_get_heads() -> set[str]:
+    """``get_heads`` double that records which thread it ran on."""
+    _GET_HEADS_THREAD_IDS.append(threading.get_ident())
+    return {"0001"}
+
+
+#: Duration of the simulated sync block in ``_stall_event_loop``.
+_STALL_SECONDS = 0.4
+
+
+def _stall_event_loop() -> None:
+    """Simulate the FAR-1439 bug class: a synchronous call that blocks the
+    event loop for a measured duration (literal sleep, hang-simulation)."""
+    time.sleep(_STALL_SECONDS)
+
+
+async def _stalling_redis_check() -> CheckResult:
+    """Redis-check double that blocks the loop before answering."""
+    _stall_event_loop()
+    return _ok_check("redis")
 
 
 class TestReadiness:
@@ -323,8 +370,13 @@ class TestPerCheckTimeouts:
         settings = _make_settings().model_copy(update={"modulo_health_migrations_timeout_seconds": 0.2})
         with (
             patch("modulo.api.routes.health.get_settings", return_value=settings),
+            # ScriptDirectory patched so the probe does not spawn a real
+            # (lingering) migration-tree parse in a worker thread — this
+            # test is about the DB-hang timeout, not the parse (FAR-1439).
+            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
             patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
+            script_cls.from_config.return_value.get_heads.return_value = {"0001"}
             result = await _check_migrations()
         assert result.status == "degraded"
         assert "timed out after 0.2s" in result.detail.lower()
@@ -1187,3 +1239,156 @@ class TestMigrationsDivergence:
         assert result.detail is not None
         assert "could not run" in result.detail.lower()
         log.exception.assert_called_once()
+
+
+class TestEventLoopStallGuard:
+    """FAR-1439: the ~2.4s event-loop stall on ``/healthz/ready``.
+
+    Root cause: ``_check_migrations`` ran alembic's
+    ``ScriptDirectory.from_config()`` + ``get_heads()`` — a synchronous
+    parse/execute of every migration module — inline in the async probe on
+    every readiness request, freezing the whole event loop for the parse's
+    duration (measured: loop heartbeat lag == parse duration).  These tests
+    pin both halves of the fix: the parse runs in a worker thread and is
+    served from a process-wide cache afterwards, and a sync block on the
+    loop surfaces on the advisory ``event_loop_lag`` check.
+    """
+
+    async def test_heads_parse_runs_in_worker_thread_not_on_event_loop(self) -> None:
+        """``get_heads()`` must not execute on the event-loop thread.
+
+        A regression to the inline synchronous parse runs it on exactly the
+        thread the loop runs on, freezing every other readiness sub-check
+        for the parse's duration (~2.4s in production).
+        """
+        _GET_HEADS_THREAD_IDS.clear()
+        loop_thread = threading.get_ident()
+        script = MagicMock()
+        script.get_heads.side_effect = _recorded_get_heads
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch(
+                "modulo.api.routes.health.get_or_create_engine",
+                return_value=_fake_migrations_engine(["0001"]),
+            ),
+            patch(
+                "modulo.api.routes.health.check_migration_divergence",
+                return_value=DivergenceCheckResult(
+                    diverged=False,
+                    db_revisions={"0001"},
+                    repo_revisions={"0001"},
+                    orphaned_revisions=set(),
+                    detail="clean",
+                ),
+            ),
+        ):
+            result = await _check_migrations()
+        assert result.status == "ok"
+        assert _GET_HEADS_THREAD_IDS, "get_heads never ran — the probe did not parse the migration tree"
+        assert _GET_HEADS_THREAD_IDS[0] != loop_thread, (
+            "get_heads() ran on the event-loop thread; the alembic parse must go through "
+            "asyncio.to_thread so it can never block /healthz/ready (FAR-1439)"
+        )
+
+    async def test_heads_parsed_once_then_served_from_process_cache(self) -> None:
+        """Second and later probes must reuse the process-wide heads cache."""
+        script = MagicMock()
+        script.get_heads.return_value = {"0001"}
+        clean = DivergenceCheckResult(
+            diverged=False,
+            db_revisions={"0001"},
+            repo_revisions={"0001"},
+            orphaned_revisions=set(),
+            detail="clean",
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch(
+                "modulo.api.routes.health.get_or_create_engine",
+                return_value=_fake_migrations_engine(["0001"]),
+            ),
+            patch("modulo.api.routes.health.check_migration_divergence", return_value=clean),
+        ):
+            first = await _check_migrations()
+            second = await _check_migrations()
+        assert first.status == "ok"
+        assert second.status == "ok"
+        assert script.get_heads.call_count == 1, (
+            "second probe re-parsed the migration tree instead of using the process cache"
+        )
+
+    def test_readiness_reports_advisory_event_loop_lag_check_when_healthy(self, client: TestClient) -> None:
+        """A stall-free probe surfaces an ok ``event_loop_lag`` check."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        assert resp.status_code == 200
+        lag = resp.json()["checks"]["event_loop_lag"]
+        assert lag["status"] == "ok"
+        assert lag["latency_ms"] is not None
+        assert lag["latency_ms"] < _LOOP_LAG_DEGRADED_MS
+        assert "responsive" in lag["detail"]
+
+    def test_readiness_surfaces_sync_loop_stall_as_degraded_event_loop_lag(self, client: TestClient) -> None:
+        """A synchronous call blocking the loop mid-probe — the FAR-1439
+        failure mode — must surface on the advisory ``event_loop_lag`` check
+        and must NOT gate readiness."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", new=_stalling_redis_check),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        body = resp.json()
+        lag = body["checks"]["event_loop_lag"]
+        assert lag["status"] == "degraded"
+        assert lag["latency_ms"] is not None
+        assert lag["latency_ms"] >= _LOOP_LAG_DEGRADED_MS
+        assert "STALL" in lag["detail"]
+        # Advisory only: the stall must not flip overall readiness or gate.
+        assert resp.status_code == 200
+        assert body["status"] == "ok"
+
+    def test_empty_heads_are_not_cached_so_the_parse_is_retried(self) -> None:
+        """A parse yielding no heads must return empty and stay UNcached.
+
+        ``_load_repo_heads`` caches only successful NON-EMPTY loads (mirroring
+        ``migration_guard._load_repo_revisions``), so a transient parse that
+        yields an empty head set is retried on the next probe rather than
+        pinned in the process-wide cache for the process's lifetime.
+        """
+        from modulo.api.routes import health as health_mod
+
+        script = MagicMock()
+        script.get_heads.return_value = set()
+        with patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script):
+            first = health_mod._load_repo_heads(_make_settings())
+            second = health_mod._load_repo_heads(_make_settings())
+        assert first == set()
+        assert second == set()
+        assert health_mod._REPO_HEADS_CACHE is None, (
+            "an empty head set must not populate the process-wide cache — a transient parse "
+            "failure has to be retried on the next probe (FAR-1439)"
+        )
+        assert script.get_heads.call_count == 2, (
+            "an empty (uncached) load must re-parse on the next probe, not be served from cache"
+        )
