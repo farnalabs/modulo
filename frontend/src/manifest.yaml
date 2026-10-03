@@ -3106,6 +3106,30 @@ elements:
       - testid: pipeline-editor-save
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-save-as-composite
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-close
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-archive
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-unarchive
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-empty-delete
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-run-dialog-close
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-run-dialog-cancel
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-edge-panel-close
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-hitl-review-window
         type: input
         dynamic_testid: false
