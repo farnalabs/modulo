@@ -10,6 +10,12 @@ pending-reset + ``RunRetryPolicyError`` re-raise the in-execute retry path
 uses. These tests drive the REAL hook → decision → executor-helper chain with
 only the DB/session seams mocked (prove-the-fix: every test fails without the
 wiring, because the watchdog would terminal-fail unconditionally).
+
+FAR-1463 adds the observability half: a firing is recorded durably on
+``runs.node_deadline_watchdog_fired_count`` BEFORE the retry consult, so it is
+counted on BOTH outcomes — the re-dispatch (which otherwise leaves no
+analytics fingerprint, because the fenced pending-reset nulls ``error_code``)
+and the terminal fail.
 """
 
 from __future__ import annotations
@@ -247,6 +253,132 @@ async def test_deadline_kill_terminal_fails_without_timeout_coverage():
     assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
     assert box.requested is False
     executor._fenced_pending_reset.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1463 — a watchdog FIRING is recorded whether it re-dispatches or
+# terminal-fails (the re-dispatch path otherwise leaves no fingerprint)
+# ---------------------------------------------------------------------------
+
+
+def _firing_order_recorder(order: list[str]) -> AsyncMock:
+    """Recorder double that appends ``"record"`` so call ORDER vs the outcome
+    (reset / terminal fail) is assertable — durable-first is the contract."""
+    return AsyncMock(side_effect=lambda *_a, **_k: order.append("record"))
+
+
+async def test_deadline_kill_records_firing_before_redispatch():
+    """A firing is durably recorded ONCE, BEFORE the re-dispatch — the branch
+    that otherwise leaves ZERO analytics fingerprints, because the fenced
+    pending-reset nulls ``error_code`` (FAR-1423's "0 terminalisations
+    misread as 0 firings").
+
+    Prove-the-fix: without the ``_record_node_deadline_watchdog_firing`` call
+    in ``_fail_overdue_node`` the recorder is never awaited and ``order`` never
+    contains ``"record"`` — both assertions fail.
+    """
+    executor = _make_executor_mock(attempt_count=1)
+    order: list[str] = []
+
+    def _reset(**_kwargs: Any) -> int:
+        order.append("reset")
+        return 1
+
+    executor._fenced_pending_reset = AsyncMock(side_effect=_reset)
+    fail = AsyncMock()
+    record = _firing_order_recorder(order)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["timeout"], "max_retries": 1})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    record.assert_awaited_once()
+    # Recorded FIRST, so the count is durable before the run is demoted.
+    assert order == ["record", "reset"]
+    fail.assert_not_awaited()
+    assert box.requested is True
+
+
+async def test_deadline_kill_records_firing_before_terminal_fail():
+    """The SAME recording happens when the kill terminal-fails (no ``timeout``
+    coverage here): recorded once, first, and the run then fails with
+    ``node_deadline_exceeded`` exactly as before.
+
+    Together the two tests pin the FAR-1463 contract: a firing is recorded
+    whether it re-dispatches or terminal-fails.
+    """
+    executor = _make_executor_mock(attempt_count=1)
+    order: list[str] = []
+
+    def _fail(*_a: Any, **_k: Any) -> bool:
+        order.append("fail")
+        return True
+
+    fail = AsyncMock(side_effect=_fail)
+    record = _firing_order_recorder(order)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["stall"], "max_retries": 2})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    record.assert_awaited_once()
+    assert order == ["record", "fail"]
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+
+
+async def test_standdown_deadline_kill_records_no_firing():
+    """A kill that STANDS DOWN (the run finished / the executor finished) is
+    not a firing: no recording, so a finished run is never counted."""
+    executor = _make_executor_mock(attempt_count=1)
+
+    async def _already_done() -> None:
+        return None
+
+    exec_task = asyncio.create_task(_already_done())
+    await exec_task
+    fail = AsyncMock(return_value=True)
+    record = _firing_order_recorder([])
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["timeout"], "max_retries": 1})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        # run_done_event set — the watchdog stands down before consulting the hook.
+        done.set()
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
+    record.assert_not_awaited()
+    fail.assert_not_awaited()
+    assert box.requested is False
 
 
 async def test_deadline_kill_never_redispatches_finished_run():
