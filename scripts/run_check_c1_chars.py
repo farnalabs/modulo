@@ -36,7 +36,7 @@ _ALLOWLIST = {
 _BOM = b"\xef\xbb\xbf"
 
 
-def _read_bytes(path: str) -> bytes:
+def _read_bytes(path: str | Path) -> bytes:
     with Path(path).open("rb") as fh:
         return fh.read()
 
@@ -108,7 +108,7 @@ def main() -> int:
     return 0
 
 
-def _write_bytes(path: str, data: bytes) -> None:
+def _write_bytes(path: str | Path, data: bytes) -> None:
     with Path(path).open("wb") as fh:
         fh.write(data)
 
