@@ -725,7 +725,8 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"enqueue_failed_capped={stats.get('enqueue_failed_capped', 0)}, "
         f"capacity_deferred={stats.get('capacity_deferred', 0)}, "
         f"terminalize_capped={stats.get('terminalize_capped', 0)}, "
-        f"facts_deferred={stats.get('facts_deferred', 0)}"
+        f"facts_deferred={stats.get('facts_deferred', 0)}, "
+        f"rows_deferred={stats.get('rows_deferred', 0)}"
     )
 
 
