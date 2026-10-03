@@ -1,4 +1,4 @@
-"""Unit tests for migration 0277_runs_workspace_drift_sweep_index.
+"""Unit tests for migration 0278_runs_workspace_drift_sweep_index.
 
 Structural — load the migration module and assert its contract without a
 database, and pin the four-way agreement behind FAR-1438:
@@ -14,8 +14,10 @@ database, and pin the four-way agreement behind FAR-1438:
 A future change to any one of them (a new terminal status, a changed flag
 condition, a re-keyed index) fails here instead of silently orphaning the
 index and dropping the sweep back to a full-table scan of ``runs`` every
-60 seconds. Also pins the chain (0277 -> ``0276_runs_autovacuum_enabled`` as
-the single linear head) and the ``ORDER BY id`` / ``LIMIT 200`` access shape
+60 seconds. Also pins the chain
+(``0277_run_daily_facts_trigger_dispatch_phase`` ->
+``0278_runs_workspace_drift_sweep_index`` as the single linear head) and the
+``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
 They run without a database.
@@ -38,9 +40,9 @@ from modulo.core.cron_helpers import _sweep_workspace_input_drift_flags
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0277_runs_workspace_drift_sweep_index"
+_MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0276_runs_autovacuum_enabled"
+_DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
@@ -171,7 +173,7 @@ class TestChain:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0276_runs_autovacuum_enabled(self) -> None:
+    def test_down_revision_is_0277_run_daily_facts_trigger_dispatch_phase(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:

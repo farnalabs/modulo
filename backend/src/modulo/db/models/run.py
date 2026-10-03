@@ -262,7 +262,7 @@ class Run(OrgScoped):
         # passes the filter and the (id) key serves ORDER BY id as a plain
         # ordered scan stopping at LIMIT 200. Migration 0277; parity with the
         # sweep predicate is guarded by
-        # tests/unit/db/test_migration_0277_runs_workspace_drift_sweep_index.py.
+        # tests/unit/db/test_migration_0278_runs_workspace_drift_sweep_index.py.
         Index(
             "ix_runs_workspace_drift_sweep",
             "id",

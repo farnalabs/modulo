@@ -17,7 +17,8 @@ Lenses:
   0274_policy_gate_pin_fingerprint_operator_control chains onto 0273, and
   0275_run_cancel_reason_vocabulary chains onto 0274, and
   0276_runs_autovacuum_enabled chains onto 0275, and
-  0277_runs_workspace_drift_sweep_index chains onto 0276 as the
+  0277_run_daily_facts_trigger_dispatch_phase chains onto 0276, and
+  0278_runs_workspace_drift_sweep_index chains onto 0277 as the
   current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -44,7 +45,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0277_runs_workspace_drift_sweep_index"
+_HEAD_MIGRATION = "0278_runs_workspace_drift_sweep_index"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

@@ -1,6 +1,6 @@
 """Partial index for the workspace-input drift sweep predicate (FAR-1438).
 
-Revision ID: 0277_runs_workspace_drift_sweep_index
+Revision ID: 0278_runs_workspace_drift_sweep_index
 Revises: 0276_runs_autovacuum_enabled
 Create Date: 2026-10-03
 
@@ -38,7 +38,7 @@ Design notes:
   terminal status to ``modulo.db.models.run.TERMINAL_STATUSES`` without
   widening this predicate strands the new status outside the index (the sweep
   would seq-scan for it) — guarded by
-  ``tests/unit/db/test_migration_0277_runs_workspace_drift_sweep_index.py``,
+  ``tests/unit/db/test_migration_0278_runs_workspace_drift_sweep_index.py``,
   which compiles the sweep's real SELECT and compares it against this
   predicate, the ``Run`` model declaration, and the status vocabulary.
 * Additive index only — no column/table changes, no behavior change to the
@@ -55,8 +55,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0277_runs_workspace_drift_sweep_index"
-down_revision: str | None = "0276_runs_autovacuum_enabled"
+revision: str = "0278_runs_workspace_drift_sweep_index"
+down_revision: str | None = "0277_run_daily_facts_trigger_dispatch_phase"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
