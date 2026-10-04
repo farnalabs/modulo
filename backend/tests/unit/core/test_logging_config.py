@@ -328,6 +328,24 @@ class TestErrorTrackingLogHandlerEmit:
             org_id_var.reset(token)
         assert handler._pending_tasks == 0
 
+    def test_no_org_id_drop_is_announced_not_silent(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A record that cannot be persisted must leave a trace (FAR-1417).
+
+        ``error_events.organisation_id`` is NOT NULL with an FK + RLS, so the
+        row genuinely cannot be written without an organisation — but the
+        handler's whole purpose is preserving diagnostics, so the drop is
+        logged instead of being a bare ``return``.
+        """
+        handler = ErrorTrackingLogHandler()
+        token = org_id_var.set(None)
+        try:
+            with caplog.at_level(logging.WARNING, logger="modulo.core.logging_config"):
+                handler.emit(_record(level=logging.ERROR))
+        finally:
+            org_id_var.reset(token)
+        assert any("no_org_context" in r.getMessage() for r in caplog.records)
+        assert handler._pending_tasks == 0
+
     def test_backlog_full_drops_record(self, caplog: pytest.LogCaptureFixture) -> None:
         handler = ErrorTrackingLogHandler()
         handler._pending_tasks = handler._backlog_limit

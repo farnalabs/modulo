@@ -33,6 +33,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
+from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import RunEvent, get_registry
 from modulo.db.crud.run import get_run
@@ -153,6 +154,21 @@ async def run_websocket(
         account_id=uuid.UUID(payload.get("account_id") or payload.get("user_id")),
         org_role=payload["org_role"],
     )
+    # FAR-1417: bind the resolved organisation so every ERROR below reaches
+    # error_events. WebSocket scopes do not traverse BaseHTTPMiddleware, so
+    # neither the correlation middleware nor CatchAllMiddleware's re-bind ever
+    # runs for this route — the principal is the only place the org is known.
+    #
+    # Scope is the SOCKET's ASGI task, not a `finally` here: uvicorn runs each
+    # websocket in `create_task(run_asgi())` (and each HTTP request in a fresh
+    # `contextvars.Context()`), so this value dies with the connection and can
+    # never be attributed to another socket or request. An in-body reset would
+    # be wrong anyway — `handle_db_errors` (the route's outermost decorator)
+    # logs its ERROR records OUTSIDE this frame, so resetting before the
+    # exception propagates would drop exactly the escaping-error records this
+    # bind exists to capture (test_route_introspection also pins that
+    # decorator as the registered endpoint's outermost wrapper).
+    org_id_var.set(str(principal.organisation_id))
 
     # Guard against absurd replay-range values.
     if since_event_seq < 0:
