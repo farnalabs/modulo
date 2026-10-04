@@ -1,0 +1,56 @@
+# Modulo health watchdog - Gatus configuration.
+#
+# Consumed by the `watchdog` service in docker-compose.yml (mounted at
+# /config/config.yaml; also baked into the image so a bare `docker run` of the
+# derived image monitors Modulo rather than upstream's demo endpoints).
+#
+# Environment substitution: Gatus expands `${VAR}` BEFORE the file is parsed as
+# YAML, so the six variables below are the same ones the app uses for HITL
+# email alerts - one SMTP setup serves both. Unset variables expand to an empty
+# value, which is the supported "monitoring on, alerting off" default.
+#
+# Port is deliberately UNQUOTED. With SMTP_PORT unset it expands to an empty
+# scalar, YAML reads that as null, and Gatus rejects the provider with
+# "port must be between 1 and 65535" - a warning, not a crash. A quoted empty
+# string (`port: ""`) instead makes Gatus panic at startup
+# ("cannot unmarshal !!str `` into int", exit code 2) - verified against
+# twinproduction/gatus:v5.37.0.
+#
+# Value caveats (both are Gatus behaviour, verified against v5.37.0):
+#   * a literal `$` in any value must be written `$$` (Gatus's documented rule);
+#   * substitution happens pre-parse, so a `"` or `\` inside SMTP_PASSWORD
+#     would break the YAML parse and stop the container. The startup line
+#     reports a disabled/alerting state either way - see entrypoint.sh.
+
+alerting:
+  email:
+    from: "${EMAIL_FROM}"
+    username: "${SMTP_USERNAME}"
+    password: "${SMTP_PASSWORD}"
+    host: "${SMTP_HOST}"
+    port: ${SMTP_PORT}
+    to: "${ALERT_EMAIL_TO}"
+
+endpoints:
+  - name: Modulo backend readiness
+    url: http://backend:8000/healthz/ready
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      # BOTH conditions are load-bearing. /healthz/ready answers HTTP 200 with
+      # "status": "degraded" when a non-gating sub-check is degraded (and 503
+      # only for "unavailable"), so a status-code-only check passes exactly the
+      # failure this watchdog exists to catch. Verified against the live route
+      # handler and against Gatus v5.37.0: a 200 body of {"status":"degraded"}
+      # fails `[BODY].status == ok` while `[STATUS] == 200` alone passes.
+      # The body value is written unquoted - `[BODY].status == "ok"` compares
+      # against the quotes literally and never matches (verified on v5.37.0).
+      - "[STATUS] == 200"
+      - "[BODY].status == ok"
+    alerts:
+      - type: email
+        description: "Modulo backend is unhealthy (http://backend:8000/healthz/ready)"
+        failure-threshold: 3
+        success-threshold: 2
+        send-on-resolved: true
