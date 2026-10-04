@@ -1481,6 +1481,27 @@ def test_fold_stored_clamped_keeps_exact_zero() -> None:
     assert node_dict["model_cost_usd"] == 0.0
 
 
+def test_fold_stored_clamped_sub_floor_stamps_rejection_before_pop() -> None:
+    """FAR-1308 third stamp site: outputs-pruned stored-union row.
+
+    The node's ``outputs`` were pruned (``output_obj is None`` → branch 3), so
+    the stored union value is the only surviving candidate. When it is a
+    positive sub-floor report ``clamp_reported`` refuses it (real, unpatched
+    boundary), the fold must stamp ``sub_floor_rejected`` BEFORE popping the
+    cost fields — otherwise the legacy row resurfaces as a false
+    ``agent_not_reported`` with no way to tell a refused report from silence.
+    """
+    node_dict: dict[str, Any] = {
+        "model_cost_usd": 0.0000005,
+        "sandbox_by_map": True,
+    }
+    _fold_stored_clamped(node_dict)
+    assert node_dict.get("model_cost_rejected") is True
+    assert node_dict.get("model_cost_rejection_reason") == "sub_floor_rejected"
+    # Boundary unchanged: the refused value is still popped, never counted.
+    assert "model_cost_usd" not in node_dict
+
+
 # ---------------------------------------------------------------------------
 # _record_node_schema_drift
 # ---------------------------------------------------------------------------

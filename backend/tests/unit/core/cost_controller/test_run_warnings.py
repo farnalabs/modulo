@@ -544,3 +544,55 @@ def test_mixed_zero_and_sub_floor_nodes_prefer_no_false_silence() -> None:
     )
     # At least one rejected node exists -> never the false "not reported".
     assert breakdown[0]["missing_self_report_reason"] != "agent_not_reported"
+
+
+def test_zero_and_sub_floor_candidates_stamp_zero_report_unproven() -> None:
+    """FAR-1308 PRECEDENCE: an exact zero wins over a sub-floor candidate.
+
+    One sandbox-eligible node presents BOTH refusal candidates at once —
+    ``model_cost_usd: 0.0`` (exact zero) and ``model_cost_raw_usd: 0.0000005``
+    (positive, below ``MAX_REPORTABLE_USD_MIN``). ``_classify_refusal_reason``
+    must return ``zero_report_unproven``: the exact zero is the older, more
+    specific FAR-1305 claim, so it is checked FIRST. Reordering the two
+    ``if`` checks makes this stamp ``sub_floor_rejected`` and fails here.
+
+    The trust boundary is untouched either way — the report is refused and
+    only the LABEL differs.
+    """
+    usage = {"node1": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}
+    outputs = {
+        "node1": {
+            "model_cost_usd": 0.0,
+            "model_cost_raw_usd": SUB_FLOOR_COST,
+            "token_usage": {"input": 35170, "output": 3669, "total": 38839},
+        }
+    }
+    telemetry = {
+        "node1": {
+            "status": "completed",
+            "wall_clock_time_ms": 12_050,
+            "model_tokens_input": 35170,
+            "model_tokens_output": 3669,
+            "model_tokens_total": 38839,
+        }
+    }
+    union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    entry = union["node1"]
+    assert entry.get("model_cost_rejected") is True
+    assert entry.get("model_cost_rejection_reason") == "zero_report_unproven"
+    # The boundary is UNCHANGED: the refused report is still not counted.
+    assert "model_cost_usd" not in entry
+
+
+def test_rejection_reasons_defaults_legacy_marker_to_zero_report_unproven() -> None:
+    """A pre-FAR-1308 marker (rejected, NO reason string) reads as a zero report.
+
+    ``model_cost_rejected: True`` without ``model_cost_rejection_reason`` could
+    only ever have been written by pre-FAR-1308 code, whose single refusal class
+    was the unproven explicit zero — so the default must be
+    ``zero_report_unproven``, never a fabricated ``sub_floor_rejected`` and
+    never an absent entry (which would fall back to the false
+    ``agent_not_reported``).
+    """
+    enriched: dict[str, dict[str, object]] = {"n1": {"model_cost_rejected": True}}
+    assert _rejection_reasons(enriched) == {"n1": "zero_report_unproven"}
