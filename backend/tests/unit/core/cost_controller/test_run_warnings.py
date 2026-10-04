@@ -21,7 +21,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown
+from modulo.core.cost_controller.breakdown.aggregate import (
+    _dominant_rejection_reason,
+    _missing_self_report_reason,
+    build_cost_breakdown,
+)
 from modulo.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     RunCostTelemetry,
@@ -596,3 +600,28 @@ def test_rejection_reasons_defaults_legacy_marker_to_zero_report_unproven() -> N
     """
     enriched: dict[str, dict[str, object]] = {"n1": {"model_cost_rejected": True}}
     assert _rejection_reasons(enriched) == {"n1": "zero_report_unproven"}
+
+
+def test_missing_self_report_reason_non_model_key_is_agent_not_reported() -> None:
+    """Only the model-cost fold is eligible for a rejection marker.
+
+    Any other report_key keeps the default even when reasons are threaded —
+    the marker is stamped by the model-cost trust boundary alone.
+    """
+    assert _missing_self_report_reason("wall_clock_usd", set(), {"n1": "sub_floor_rejected"}) == "agent_not_reported"
+    assert _missing_self_report_reason("model_tokens_usd", {"n1"}, None) == "agent_not_reported"
+
+
+def test_dominant_rejection_reason_unknown_vocabulary_falls_back() -> None:
+    """Values outside the closed vocabulary never escalate into a refusal label."""
+    assert _dominant_rejection_reason({}) == "agent_not_reported"
+    assert _dominant_rejection_reason({"n1": "agent_not_reported"}) == "agent_not_reported"
+    assert _dominant_rejection_reason({"n1": "something_unclassifiable"}) == "agent_not_reported"
+
+
+def test_dominant_rejection_reason_prefers_zero_over_sub_floor() -> None:
+    """A mixed refusal keeps the older, more specific zero-unproven label."""
+    assert (
+        _dominant_rejection_reason({"n1": "sub_floor_rejected", "n2": "zero_report_unproven"}) == "zero_report_unproven"
+    )
+    assert _dominant_rejection_reason({"n1": "sub_floor_rejected"}) == "sub_floor_rejected"

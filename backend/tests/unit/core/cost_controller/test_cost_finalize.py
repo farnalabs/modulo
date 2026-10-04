@@ -962,6 +962,37 @@ def test_is_exact_zero_false_for_nonzero() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _is_sub_floor — FAR-1308 sub-floor report detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_sub_floor_true_for_positive_below_floor() -> None:
+    from modulo.core.cost_controller.finalize import _is_sub_floor
+
+    assert _is_sub_floor(0.0000005)
+    assert _is_sub_floor("0.0000005")
+
+
+def test_is_sub_floor_false_for_non_sub_floor_values() -> None:
+    from modulo.core.cost_controller.finalize import _is_sub_floor
+
+    # A bool is never a numeric report (exercises the isinstance guard).
+    assert not _is_sub_floor(True)
+    assert not _is_sub_floor(False)
+    # Zero and at/above the floor are NOT sub-floor; they are handled elsewhere.
+    assert not _is_sub_floor(0)
+    assert not _is_sub_floor(0.000001)
+    assert not _is_sub_floor(1)
+    # Negative or non-finite values are refused for a different reason.
+    assert not _is_sub_floor(-0.0000005)
+    assert not _is_sub_floor(float("nan"))
+    assert not _is_sub_floor(float("inf"))
+    # Non-numeric input is not a report at all.
+    assert not _is_sub_floor("abc")
+    assert not _is_sub_floor(None)
+
+
+# ---------------------------------------------------------------------------
 # _is_abort_error — whole-tx abort detection
 # ---------------------------------------------------------------------------
 
