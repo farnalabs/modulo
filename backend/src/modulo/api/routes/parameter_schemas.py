@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.parameter_schema import (
     create_schema,
     get_schema,
@@ -320,7 +322,13 @@ async def list_parameter_schemas_endpoint(
     )
 
 
-@router.post("/parameter-schemas", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/parameter-schemas",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("parameter_schema_created", "parameter_schema", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_CREATE)
 async def create_parameter_schema_endpoint(
     req: SchemaCreate,
@@ -413,7 +421,12 @@ async def get_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.put("/parameter-schemas/{schema_id}")
+@router.put(
+    "/parameter-schemas/{schema_id}",
+    dependencies=[
+        Depends(audited("parameter_schema_updated", "parameter_schema", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_UPDATE)
 async def update_parameter_schema_endpoint(
     schema_id: uuid.UUID,
@@ -469,7 +482,12 @@ async def update_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.delete("/parameter-schemas/{schema_id}")
+@router.delete(
+    "/parameter-schemas/{schema_id}",
+    dependencies=[
+        Depends(audited("parameter_schema_deleted", "parameter_schema", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_DELETE)
 async def delete_parameter_schema_endpoint(
     schema_id: uuid.UUID,
@@ -514,7 +532,12 @@ async def delete_parameter_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.post("/parameter-schemas/{schema_id}/restore")
+@router.post(
+    "/parameter-schemas/{schema_id}/restore",
+    dependencies=[
+        Depends(audited("parameter_schema_restored", "parameter_schema", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_RESTORE)
 async def restore_parameter_schema_endpoint(
     schema_id: uuid.UUID,
@@ -758,6 +781,7 @@ async def list_parameter_sets_endpoint(
 @router.post(
     "/parameter-schemas/{schema_id}/sets",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("parameter_set_created", "parameter_set", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_CREATE_SET)
 async def create_parameter_set_endpoint(
@@ -856,7 +880,10 @@ async def get_parameter_set_endpoint(
     return SetResponse.model_validate(ps)
 
 
-@router.put("/parameter-schemas/{schema_id}/sets/{set_id}")
+@router.put(
+    "/parameter-schemas/{schema_id}/sets/{set_id}",
+    dependencies=[Depends(audited("parameter_set_updated", "parameter_set", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
 async def update_parameter_set_endpoint(
     schema_id: uuid.UUID,
@@ -916,6 +943,7 @@ async def update_parameter_set_endpoint(
 
 @router.delete(
     "/parameter-schemas/{schema_id}/sets/{set_id}",
+    dependencies=[Depends(audited("parameter_set_deleted", "parameter_set", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_DELETE_SET)
 async def delete_parameter_set_endpoint(
@@ -965,7 +993,10 @@ async def delete_parameter_set_endpoint(
     return SetResponse.model_validate(ps)
 
 
-@router.post("/parameter-schemas/{schema_id}/sets/{set_id}/restore")
+@router.post(
+    "/parameter-schemas/{schema_id}/sets/{set_id}/restore",
+    dependencies=[Depends(audited("parameter_set_restored", "parameter_set", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)
 async def restore_parameter_set_endpoint(
     schema_id: uuid.UUID,
