@@ -48,6 +48,8 @@ function fullProfile(over: Record<string, unknown> = {}) {
     initialisation_strategy: 'blank',
     persistence_policy: 'retained',
     status: 'active',
+    owner_team_id: null,
+    visibility: 'org',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     ...over,
@@ -124,6 +126,7 @@ describe('EnvironmentProfileForm — create mode', () => {
       network_policy: 'outbound',
       initialisation_strategy: 'git_clone',
       persistence_policy: 'ephemeral',
+      visibility: 'org',
     })
     expect(routerPush).toHaveBeenCalledWith('/environment-profiles')
   })
@@ -207,6 +210,24 @@ describe('EnvironmentProfileForm — create mode', () => {
     expect(routerPush).not.toHaveBeenCalled()
   })
 
+  it('create failure with a non-Error rejection falls back to the generic save error', async () => {
+    postMock.mockRejectedValue('quota exhausted (non-Error)')
+    const wrapper = mountForm()
+    await flush()
+
+    await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
+    // FAR-587 made provider_type required (no default) - select it so submit reaches the API.
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'local_docker'
+    await nextTick()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(wrapper.text()).toContain('Failed to save profile')
+    expect(routerPush).not.toHaveBeenCalled()
+  })
+
   it('back and cancel buttons navigate back to the list', async () => {
     const wrapper = mountForm()
     await flush()
@@ -264,6 +285,25 @@ describe('EnvironmentProfileForm — edit mode', () => {
     expect(payload.name).toBe('Renamed')
     expect(payload.provider_type).toBe('e2b')
     expect(routerPush).toHaveBeenCalledWith('/environment-profiles')
+  })
+
+  it('edit: echoes the loaded team-scoped visibility instead of flipping it to org', async () => {
+    const teamProfile = fullProfile({ visibility: 'team', owner_team_id: 'team-777' })
+    getMock.mockResolvedValue(teamProfile)
+    putMock.mockResolvedValue(teamProfile)
+    const wrapper = mountForm()
+    await flush()
+
+    await wrapper.find('[data-testid="envprofile-form-name"]').setValue('Renamed')
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    const [, payload] = putMock.mock.calls[0]
+    // The form does not own visibility: it must echo the loaded value so a
+    // team-scoped profile (owner_team_id preserved by the backend's
+    // exclude_unset update) is never silently made org-visible.
+    expect(payload.visibility).toBe('team')
+    expect(payload.owner_team_id).toBeUndefined()
   })
 
   it('edit: fetch failure shows the store error and leaves the form blank', async () => {

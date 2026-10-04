@@ -226,10 +226,12 @@ _MCP_BREAKDOWN_KEYS = frozenset(
         "amount_usd",
         "basis",
         "missing_self_report",
-        # FAR-1305: which of the two missing-self-report states applies —
-        # "agent_not_reported" (no cost key presented) vs
-        # "zero_report_unproven" (an explicit $0.00 was presented and refused).
-        # Sanitised as a string by _sanitize_cost_breakdown_entry like any other.
+        # FAR-1305/FAR-1308: which of the THREE missing-self-report states
+        # applies — "agent_not_reported" (no cost key presented),
+        # "zero_report_unproven" (an explicit $0.00 was presented and refused),
+        # or "sub_floor_rejected" (a positive value below the countable floor
+        # was presented and refused). Sanitised as a string by
+        # _sanitize_cost_breakdown_entry like any other.
         "missing_self_report_reason",
         "error",
         "total_clamped",
@@ -350,6 +352,11 @@ def _format_breakdown_line(entry: dict[str, Any]) -> str:
         # the agent did report, the trust boundary rejected it as unproven.
         if entry.get("missing_self_report_reason") == "zero_report_unproven":
             parts.append("(reported $0.00, rejected as unproven)")
+        elif entry.get("missing_self_report_reason") == "sub_floor_rejected":
+            # FAR-1308: a positive value below the countable floor was
+            # presented and refused - the agent DID report, so this must
+            # never render as "not reported".
+            parts.append("(reported a value below the countable minimum)")
         else:
             parts.append("(not reported)")
     if entry.get("error"):
@@ -2669,7 +2676,11 @@ async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
         "(hour/day/week) with per-bucket count, cost, tokens, duration, success rate, "
         "failure and stall counts, queue wait, claim→dispatch latency "
         "(`avg_dispatch_latency_ms` = dispatch_phase_entered_at - created_at, else "
-        "started_at - created_at), final idle, and output size. "
+        "started_at - created_at), final idle, output size, and node-deadline "
+        "watchdog firings (`node_deadline_watchdog_fired_count` = firings summed "
+        "across the bucket; > 0 means the watchdog fired — recorded whether the kill "
+        "re-dispatched or terminal-failed, so a value > 0 with no matching "
+        "`error_code=node_deadline_exceeded` means the kill re-dispatched). "
         "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
         "and error_code for filtering/grouping by failure code. `dimension` groups the "
         "series by a key — `trigger_type`, `trigger_id`, `status`, `pipeline`, `folder`, "

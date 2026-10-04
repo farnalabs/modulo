@@ -1645,6 +1645,48 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('renders distinct text for a SUB-FLOOR rejected report (sub_floor_rejected), not "not reported"', async () => {
+    // FAR-1308: the agent DID report a positive model cost below the countable
+    // floor — the trust boundary refused it as implausibly small. Claiming
+    // "not reported" would be a false statement, exactly as for $0.00.
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          formula_applied: 'reported',
+          rate_usd: null,
+          basis: { reported: 0, node_count: 0 },
+          missing_self_report: true,
+          missing_self_report_reason: 'sub_floor_rejected',
+        },
+      ],
+    })
+
+    // Distinct badge — neither the muted "not reported" chip nor the $0 chip.
+    const subFloor = wrapper.find('[data-testid="run-detail-sub-floor-rejected"]')
+    expect(subFloor.exists()).toBe(true)
+    expect(subFloor.text()).toBe('below minimum')
+    expect(wrapper.find('[data-testid="run-detail-not-reported"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-zero-rejected"]').exists()).toBe(false)
+
+    // Distinct basis line — must not repeat the "no cost reported" claim.
+    const rows = wrapper.findAll('tbody tr')
+    const targetRow = rows.find((r) => r.text().includes('Model cost'))!
+    expect(targetRow.exists()).toBe(true)
+    const basisCell = targetRow.findAll('td')[3]
+    expect(basisCell.text()).toContain('below the minimum')
+    expect(basisCell.text()).not.toContain('No model cost reported by the agent')
+    expect(basisCell.text()).not.toContain('Agent reported $0.00')
+
+    // Still a CLEAR non-billing state: dash, never a phantom $0.000000.
+    expect(targetRow.findAll('td')[1].text()).toBe('—')
+    wrapper.unmount()
+  })
+
   it('keeps the plain "not reported" text when the reason is agent_not_reported', async () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),
@@ -1825,6 +1867,38 @@ describe('RunDetailView', () => {
     const entry = wrapper.find('[data-testid="run-detail-warnings-strip-unreported-cost"]')
     expect(entry.exists()).toBe(true)
     expect(entry.text()).toContain('were not reported by the agent')
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-rejected-zero-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows a distinct warnings strip entry for a sub-floor rejected report (sub_floor_rejected)', async () => {
+    // FAR-1308: the strip is driven by the missing_self_report BOOLEAN, so a
+    // refused sub-floor report was lumped in with "not reported by the agent".
+    // It gets its own message and neither of the other two entries appears.
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          missing_self_report: true,
+          missing_self_report_reason: 'sub_floor_rejected',
+        },
+      ],
+    })
+
+    const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
+    expect(strip.exists()).toBe(true)
+
+    const subFloor = wrapper.find('[data-testid="run-detail-warnings-strip-sub-floor-cost"]')
+    expect(subFloor.exists()).toBe(true)
+    expect(subFloor.text()).toContain('below the minimum')
+
+    // The false claim must not appear anywhere in the strip.
+    expect(strip.text()).not.toContain('were not reported by the agent')
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-unreported-cost"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="run-detail-warnings-strip-rejected-zero-cost"]').exists()).toBe(false)
     wrapper.unmount()
   })

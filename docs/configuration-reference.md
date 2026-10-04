@@ -501,10 +501,19 @@ per-check override is set to a positive value.
 | `MODULO_HEALTH_REDIS_TIMEOUT_SECONDS` | No | `0` | Redis check timeout; `0` = use global |
 | `MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS` | No | `0` | Checkpointer schema check timeout; `0` = use global |
 | `MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS` | No | `0` | Alembic migration check timeout; `0` = use global |
+| `MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS` | No | `1` | Database-hygiene check timeout (seconds); `0` = use global |
+| `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor — a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
+| `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO` | No | `0.60` | Database-hygiene: worst-table dead-tuple ratio at/above which a table over the floor grades `degraded` (`0`–`1`) |
 
-A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations)
-or `unavailable` (database) with a "timed out after Ns" detail message instead of
-blocking readiness indefinitely.
+A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations/
+db_hygiene) or `unavailable` (database) with a "timed out after Ns" detail message
+instead of blocking readiness indefinitely.
+
+The database-hygiene sub-check's two thresholds (`MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES`,
+`MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO`) are grading settings, not timeouts: the check
+reports the worst table from `pg_stat_user_tables` plus this database's freeze age
+against `autovacuum_freeze_max_age`, and grades `degraded` (never `unavailable`, so it
+never 503s readiness on its own) when either threshold is breached.
 
 ---
 

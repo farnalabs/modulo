@@ -168,3 +168,4 @@ minimumReleaseAgeExclude:
   - '@sentry/replay@10.76.0'
   - '@sentry/replay-canvas@10.76.0'
   - '@sentry/vue@10.76.0'
+  - '@lucide/vue@1.52.0'

@@ -875,7 +875,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > fire-once claim — the manifest tracked it but `notifications/notifications.md`
 > lagged; behaviour line + citations added. `feat-runs` (FAR-1305): the
 > truthful `missing_self_report_reason` (`agent_not_reported` vs
-> `zero_report_unproven`) — manifest tracked it but `build/runs.md` lagged;
+> `zero_report_unproven`; a third state, `sub_floor_rejected`, was added
+> 2026-10-04 by FAR-1308) — manifest tracked it but `build/runs.md` lagged;
 > behaviour line + citations added. `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-30):** closed the feature-graph gap left by

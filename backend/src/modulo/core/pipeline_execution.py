@@ -1323,6 +1323,57 @@ async def _await_progress(
     return not (run_done_event.is_set() or exec_task.done())
 
 
+async def _record_node_deadline_watchdog_firing(
+    aengine: AsyncEngine,
+    run_id: str,
+    org_id: str,
+) -> None:
+    """Best-effort durable record that the node-deadline watchdog FIRED (FAR-1463).
+
+    Increments ``runs.node_deadline_watchdog_fired_count`` on its own
+    connection, org-scoped and committed immediately, so the value is durable
+    BEFORE either outcome runs: the shared retry consult that may re-dispatch
+    (``_maybe_watchdog_retry``) or the ``fail_run_terminal`` that writes the
+    daily fact. Recording unconditionally — before the consult, not inside the
+    hook — is what makes BOTH outcomes count: a re-dispatch leaves zero other
+    fingerprint because the fenced pending-reset nulls ``error_code``
+    (FAR-1423's "0 terminalisations misread as 0 firings").
+
+    The increment survives the re-dispatch it precedes: neither the atomic
+    claim (``_CLAIM_UPDATE_SQL``) nor the fenced pending-reset names this
+    column, so it is intact when the run is re-claimed — unlike
+    ``dispatch_phase``, which every re-claim resets to 'claimed'.
+
+    Fail-soft WITH a log: a write failure must never prevent the watchdog from
+    reaching a terminal state (same contract as the durable phase writer).
+    ``asyncio.CancelledError`` is re-raised — worker/job shutdown is not ours
+    to swallow.
+    """
+    try:
+        async with aengine.connect() as c:
+            # RLS org context — the runs policy matches zero rows without it.
+            await c.execute(
+                text(_SQL_SET_ORG_ID),
+                {"val": org_id},
+            )
+            await c.execute(
+                text(
+                    "UPDATE runs SET node_deadline_watchdog_fired_count = node_deadline_watchdog_fired_count + 1 "
+                    "WHERE id=:rid AND organisation_id=:oid"
+                ),
+                {"rid": run_id, "oid": org_id},
+            )
+            await c.commit()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.watchdog_firing_record_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
 async def _fail_overdue_node(
     aeng: AsyncEngine,
     run_id: str,
@@ -1348,6 +1399,13 @@ async def _fail_overdue_node(
     + ``RunRetryPolicyError`` re-raise → SAQ job retry) instead of
     terminal-failing it. No coverage / exhausted budget / any hook failure
     keeps today's unconditional terminal fail.
+
+    FAR-1463: before that consult the kill records itself durably
+    (``_record_node_deadline_watchdog_firing`` — best-effort increment of
+    ``runs.node_deadline_watchdog_fired_count``), so a firing is observable in
+    analytics whether it re-dispatches or terminal-fails, and the marker
+    survives the re-dispatch (neither the claim nor the pending-reset touches
+    the column).
     """
     exceeded = [nid for nid, (dl, _to) in node_deadlines.items() if dl <= time.monotonic()]
     exceeded.sort(key=lambda nid: node_deadlines[nid][0])
@@ -1365,6 +1423,12 @@ async def _fail_overdue_node(
     exec_task.cancel()
     if stall_requested is not None:
         stall_requested.set()
+    # FAR-1463: record the FIRING itself, unconditionally and durably, BEFORE
+    # the retry consult — so the marker lands on the re-dispatch branch too
+    # (where the fenced pending-reset nulls ``error_code`` and no other
+    # fingerprint survives) and on the terminal-fail branch below. Committed
+    # before either outcome runs, so the fact writer always sees it.
+    await _record_node_deadline_watchdog_firing(aeng, run_id, org_id)
     if await _maybe_watchdog_retry(
         retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
     ):

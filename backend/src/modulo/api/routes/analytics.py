@@ -102,6 +102,12 @@ class AnalyticsBucket(BaseModel):
     avg_dispatch_latency_ms: float | None = None
     avg_final_idle_ms: float | None = None
     avg_output_bytes: float | None = None
+    # FAR-1463: node-deadline watchdog firings summed across the bucket's runs
+    # (0 when nothing fired — a firing is recorded whether the kill
+    # re-dispatched or terminal-failed, so this is the observability signal the
+    # error_code dimension could never show: a re-dispatched firing nulls
+    # error_code). Count-field semantics: never NULL, 0 for an empty bucket.
+    node_deadline_watchdog_fired_count: int = 0
 
 
 class AnalyticsResponse(BaseModel):
@@ -281,6 +287,9 @@ class AnalyticsExportItem(BaseModel):
     trigger_id: str | None = None
     dispatch_phase: str | None = None
     dispatch_phase_entered_at: str | None = None
+    # FAR-1463: node-deadline watchdog firings per run — the raw per-run
+    # counterpart of the bucket's summed metric.
+    node_deadline_watchdog_fired_count: int | None = None
     created_at: str
 
 

@@ -213,6 +213,25 @@ class RunDailyFact(OrgScoped):
     enforcement_wasted_count: Mapped[int | None] = mapped_column(
         Integer, comment="total wasted attempts (schema rejection only, FAR-902)"
     )
+    # FAR-1463: absolute node-deadline watchdog firings — copied from
+    # ``Run.node_deadline_watchdog_fired_count`` at finalize (and by the
+    # ``backfill_facts`` select) so the analytics read path NEVER joins
+    # ``runs`` (ADR 020) and the marker survives the 90-day run purge.
+    #
+    # ``>= 1`` = the watchdog fired at least once for this run — recorded
+    # WHETHER OR NOT the kill re-dispatched (the re-dispatch path nulls
+    # ``error_code``, so this column is the only fingerprint it leaves). A
+    # genuine terminal failure with no firing carries 0; a run that never
+    # dispatched a node carries 0 (the node-deadline watchdog cannot fire
+    # without an in-flight node) — so the three cases are separable without
+    # log access. NULL for facts written before this column existed
+    # (pre-FAR-1463 firings were never recorded anywhere).
+    node_deadline_watchdog_fired_count: Mapped[int | None] = mapped_column(
+        Integer,
+        comment=(
+            "node-deadline watchdog firings — from Run.node_deadline_watchdog_fired_count (NULL for pre-FAR-1463 facts)"
+        ),
+    )
 
     team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])
     pipeline: Mapped["Pipeline | None"] = relationship(foreign_keys=[pipeline_id])

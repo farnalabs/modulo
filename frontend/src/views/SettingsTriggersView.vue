@@ -43,7 +43,19 @@
       </p>
     </div>
 
-    <LoadingSpinner v-if="!loaded" />
+    <!-- STATE-3 (ux-conformance): a determinate-shaped table skeleton, not an
+         indeterminate spinner — the column count and headers are known up front,
+         so the placeholder mirrors the real layout and avoids a layout shift
+         when the rows arrive. Composed from the shared TableSkeleton, and the
+         column count is derived from TABLE_COLUMNS so it can never silently
+         desync from the real table. -->
+    <TableSkeleton
+      v-if="!loaded"
+      :columns="TABLE_COLUMNS.length"
+      :rows="5"
+      :aria-label="$t('common.loading')"
+      data-testid="settings-triggers-loading"
+    />
 
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
 
@@ -59,12 +71,14 @@
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
             <tr>
-              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.pipeline') }}</th>
-              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.type') }}</th>
-              <th class="px-4 py-3 capitalize">{{ $t('views.SettingsTriggersView.status') }}</th>
-              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.last_fired') }}</th>
-              <th class="px-4 py-3">{{ $t('views.SettingsTriggersView.next_fire') }}</th>
-              <th class="px-4 py-3 text-right">{{ $t('views.SettingsTriggersView.actions') }}</th>
+              <th
+                v-for="col in TABLE_COLUMNS"
+                :key="col"
+                class="px-4 py-4"
+                :class="col === 'actions' ? 'text-right' : 'text-left'"
+              >
+                {{ $t(`views.SettingsTriggersView.${col}`) }}
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -505,10 +519,10 @@ import { useCurrentUser } from '../composables/useCurrentUser'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import TableActions from '../components/shared/TableActions.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
@@ -517,6 +531,11 @@ import Select from '../components/shared/AppSelect.vue'
 const planStore = usePlanStore()
 const { t } = useI18n()
 const { jwtPayload, isOperator } = useCurrentUser()
+
+// Single source of truth for the triggers table shape. The loading skeleton
+// iterates this exactly like the real table's <th> row, so adding or removing a
+// column keeps the placeholder in lock-step instead of drifting (STATE-3).
+const TABLE_COLUMNS = ['pipeline', 'type', 'status', 'last_fired', 'next_fire', 'actions'] as const
 
 const isOrgAdmin = computed(() => jwtPayload.value?.org_role === 'admin')
 // FAR-191: the re-enable action is operator-or-above (backend trigger.update
