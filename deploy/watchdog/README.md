@@ -35,6 +35,10 @@ Both bases are pinned (no `latest`/`stable`): `twinproduction/gatus:v5.37.0`
 (tag verified on the Docker Hub tags API, published 2026-09-24) and
 `alpine:3.20`.
 
+The image runs as an unprivileged `gatus` user: the binary is static, the
+dashboard binds the unprivileged port 8080, the config is read-only, and no
+`storage` backend is configured, so root is never needed.
+
 ## Quiet degradation without credentials
 
 The compose deployment ships no SMTP configuration by default, so the default

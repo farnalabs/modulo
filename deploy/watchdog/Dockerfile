@@ -25,6 +25,14 @@ FROM twinproduction/gatus:v5.37.0 AS upstream
 
 FROM alpine:3.20
 
+# Run unprivileged. Nothing here needs root: /gatus is static and binds the
+# unprivileged port 8080, the config is mounted/baked read-only, and Gatus
+# persists to disk only when a `storage` backend is configured (none is).
+# Dropping root also clears the "alpine base runs as root" static finding
+# (docker:S6471). The user is created with busybox adduser/addgroup, so there is
+# still no `apk add` and no network dependency beyond the two base images.
+RUN addgroup -S gatus && adduser -S -G gatus -H -s /sbin/nologin gatus
+
 # /gatus is a static Go binary (upstream's own base is scratch), so it runs
 # unchanged on Alpine.
 COPY --from=upstream /gatus /gatus
@@ -44,5 +52,8 @@ ENV GATUS_LOG_LEVEL=INFO \
     PORT=8080
 
 WORKDIR /
+
+# Drop privileges for the runtime process (see the adduser note above).
+USER gatus
 
 ENTRYPOINT ["/bin/busybox", "sh", "/entrypoint.sh"]

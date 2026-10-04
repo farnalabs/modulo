@@ -139,6 +139,26 @@ def test_watchdog_compose_port_is_loopback_only():
     assert ports == ["127.0.0.1:8082:8080"]
 
 
+def test_watchdog_image_drops_root_in_the_final_stage():
+    """The runtime container must not run as root (Sonar docker:S6471).
+
+    The alpine base defaults to root; an unprivileged ``USER`` in the final
+    stage is what keeps the image out of that finding, so guard it structurally
+    rather than relying on a one-off fix.
+    """
+    final_stage: list[str] = []
+    for line in _DOCKERFILE_PATH.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("FROM "):
+            final_stage = []
+        final_stage.append(stripped)
+
+    user_directives = [line for line in final_stage if line.startswith("USER ")]
+    assert user_directives, "final image stage must drop root with a USER directive"
+    last_user = user_directives[-1].split(None, 1)[1].strip()
+    assert last_user not in {"root", "0", "root:root"}, f"final stage still runs as {last_user}"
+
+
 def test_watchdog_image_bases_are_pinned_to_specific_tags():
     from_lines = [
         line.split()[1]
