@@ -1497,12 +1497,13 @@ async def evaluate_readiness() -> ReadinessResponse:
 @router.get("/healthz/ready")
 @handle_db_errors("health.readiness")
 async def readiness(response: Response) -> ReadinessResponse:
-    """HTTP wrapper over :func:`evaluate_readiness` — 503 only when unavailable.
-
-    The degradation semantics live in ``evaluate_readiness`` (the shared
-    implementation); this wrapper only maps the aggregate status onto the
-    HTTP status code the Fly service check and every deploy gate key on.
-    """
+    # Thin HTTP wrapper over evaluate_readiness (FAR-1446): the degradation
+    # semantics live in the shared implementation (also called by the
+    # health_readiness_alert system cron); this wrapper only maps the
+    # aggregate status onto the HTTP status code the Fly service check and
+    # every deploy gate key on. Deliberately NO docstring — FastAPI would
+    # publish it as the OpenAPI operation description and stale
+    # frontend/src/lib/api/schema.ts.
     result = await evaluate_readiness()
     if result.status == "unavailable":
         response.status_code = 503
