@@ -514,6 +514,30 @@ class TestEngineFactory:
         engine_other = bg.get_break_glass_engine(other)
         assert engine_other is not engine_one
 
+    def test_engine_translates_sslmode_for_tls_deploy(self) -> None:
+        """FAR-1440: a ``?sslmode=require`` break-glass URL must not be forced
+        to plaintext (nor passed raw to asyncpg, which TypeErrors)."""
+        import modulo.cli.break_glass as bg
+
+        saved_engine = bg._bg_engine
+        saved_url = bg._bg_engine_url
+        try:
+            bg._bg_engine = None
+            bg._bg_engine_url = None
+            settings = SimpleNamespace(
+                modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require"
+            )
+            mock_engine = MagicMock()
+            with patch.object(bg, "create_async_engine", return_value=mock_engine) as mock_create:
+                assert bg.get_break_glass_engine(settings) is mock_engine
+
+            args, kwargs = mock_create.call_args
+            assert args[0] == "postgresql+asyncpg://bg:bg@h:5432/db"
+            assert kwargs["connect_args"]["ssl"] == "require"
+        finally:
+            bg._bg_engine = saved_engine
+            bg._bg_engine_url = saved_url
+
     def test_factory_cached_per_url(self) -> None:
         import modulo.cli.break_glass as bg
 

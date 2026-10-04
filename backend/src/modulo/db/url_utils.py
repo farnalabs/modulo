@@ -137,6 +137,33 @@ def split_postgres_sslmode(url: str) -> tuple[str, str | bool]:
     return clean, ssl
 
 
+def split_engine_sslmode(url: str) -> tuple[str, str | bool | None]:
+    """Translate ``sslmode`` for a SQLAlchemy async engine, or leave it alone.
+
+    The ONE gate every asyncpg engine factory routes through (FAR-1440): a
+    Postgres-family URL is split by :func:`split_postgres_sslmode`; any other
+    scheme is returned unchanged with ``None``, signalling "not an asyncpg
+    engine URL — pass no ``ssl``/``statement_cache_size`` connect args" so
+    SQLite/MySQL boot paths keep their driver defaults.
+
+    Callers MUST pass ``ssl`` only when it is not ``None``::
+
+        engine_url, ssl = split_engine_sslmode(raw_url)
+        if ssl is not None:
+            connect_args["ssl"] = ssl
+            connect_args["statement_cache_size"] = 0
+
+    Routing every factory through this one function is what keeps the TLS
+    posture uniform: a factory that does its own scheme check can silently
+    drift (the FAR-1440 defect, where several orphan factories kept passing a
+    preserved ``sslmode`` straight to asyncpg and raised ``TypeError`` at
+    first connect).
+    """
+    if not urlsplit(url).scheme.startswith("postgres"):
+        return url, None
+    return split_postgres_sslmode(url)
+
+
 def derive_system_database_url(runtime_url: str) -> str:
     """Derive the modulo_system URL from the runtime DATABASE_URL.
 

@@ -621,10 +621,21 @@ def _get_system_engine() -> AsyncEngine:
         if settings.modulo_system_database_url:
             from sqlalchemy.ext.asyncio import create_async_engine
 
+            from modulo.db.url_utils import split_engine_sslmode
+
+            # FAR-1440: the system URL preserves the operator's ``sslmode``, so
+            # translate it into asyncpg's ``ssl`` connect arg (absent/disable →
+            # explicit plaintext; require/verify-* kept fail-closed). Passing
+            # the raw URL straight through raises TypeError at first connect.
+            system_url, system_ssl_arg = split_engine_sslmode(settings.modulo_system_database_url)
+            system_connect_args: dict[str, Any] = {}
+            if system_ssl_arg is not None:
+                system_connect_args["ssl"] = system_ssl_arg
+                system_connect_args["statement_cache_size"] = 0
             _SYSTEM_ENGINE = create_async_engine(
-                settings.modulo_system_database_url,
+                system_url,
                 pool_pre_ping=True,
-                connect_args={"ssl": False, "statement_cache_size": 0},
+                connect_args=system_connect_args,
             )
         else:
             _log.error(

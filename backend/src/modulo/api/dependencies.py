@@ -630,11 +630,10 @@ def pg_connection_string(database_url: str) -> str:
     (try TLS, fall back to plaintext). This helper must NEVER silently
     force ``sslmode=disable`` (FAR-1426): forcing plaintext breaks every
     real checkpointer connection built here (boot schema init, HITL
-    resume) on a deployment whose Postgres requires TLS. Note that a
-    "preserve the URL's sslmode" branch cannot save a settings-derived
-    URL either: Settings strips every ``sslmode`` from
-    ``settings.database_url`` before this function ever sees it
-    (``modulo.db.url_utils``).
+    resume) on a deployment whose Postgres requires TLS. Settings now
+    PRESERVES an operator's ``sslmode`` on Postgres URLs (FAR-1440, see
+    ``modulo.db.url_utils``), so a settings-derived URL reaches this
+    helper with its ``sslmode`` intact and libpq honours it directly.
     """
     return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"

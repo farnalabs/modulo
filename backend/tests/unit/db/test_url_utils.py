@@ -16,7 +16,12 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
+from modulo.db.url_utils import (
+    derive_system_database_url,
+    fix_database_url,
+    split_engine_sslmode,
+    split_postgres_sslmode,
+)
 
 # ---------------------------------------------------------------------------
 # fix_database_url — prefix rewrites + per-family sslmode handling
@@ -180,6 +185,58 @@ def test_split_postgres_sslmode_rejects_unsafe_or_unknown(url: str, bad_mode: st
 def test_split_postgres_sslmode_refuses_non_postgres_scheme(url: str) -> None:
     with pytest.raises(ValueError, match="scheme"):
         split_postgres_sslmode(url)
+
+
+# ---------------------------------------------------------------------------
+# split_engine_sslmode — the shared engine-factory gate (FAR-1440)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_url", "expected_ssl"),
+    [
+        pytest.param(
+            "postgresql+asyncpg://u:p@h/db?sslmode=require",
+            "postgresql+asyncpg://u:p@h/db",
+            "require",
+            id="postgres_require_translated",
+        ),
+        pytest.param(
+            "postgresql+asyncpg://u:p@h/db",
+            "postgresql+asyncpg://u:p@h/db",
+            False,
+            id="postgres_absent_defaults_plaintext",
+        ),
+        pytest.param(
+            "postgresql+psycopg://u:p@h/db?sslmode=verify-full",
+            "postgresql+psycopg://u:p@h/db",
+            "verify-full",
+            id="psycopg_scheme_translated",
+        ),
+        pytest.param(
+            "sqlite+aiosqlite:///./test.db?sslmode=require",
+            "sqlite+aiosqlite:///./test.db?sslmode=require",
+            None,
+            id="sqlite_passes_through_untouched",
+        ),
+        pytest.param(
+            "mysql+aiomysql://u:p@h/db",
+            "mysql+aiomysql://u:p@h/db",
+            None,
+            id="mysql_passes_through_untouched",
+        ),
+    ],
+)
+def test_split_engine_sslmode_gates_on_driver_scheme(
+    url: str, expected_url: str, expected_ssl: str | bool | None
+) -> None:
+    assert split_engine_sslmode(url) == (expected_url, expected_ssl)
+
+
+def test_split_engine_sslmode_still_rejects_unsafe_postgres_mode() -> None:
+    # The shared gate must not weaken the fail-closed posture.
+    with pytest.raises(ValueError, match="sslmode"):
+        split_engine_sslmode("postgresql+asyncpg://u:p@h/db?sslmode=prefer")
 
 
 # ---------------------------------------------------------------------------

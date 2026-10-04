@@ -986,7 +986,15 @@ def _build_database_probes(
         async def _go() -> bool:
             from sqlalchemy.ext.asyncio import create_async_engine
 
-            engine = create_async_engine(database_url)
+            from modulo.db.url_utils import split_engine_sslmode
+
+            # FAR-1440: the composed DATABASE_URL preserves ``sslmode`` end to
+            # end, so translate it before building the probe engine — the raw
+            # URL raises TypeError at first connect on a TLS deploy, which the
+            # doctor would misreport as "not at head".
+            engine_url, ssl_arg = split_engine_sslmode(database_url)
+            connect_args: dict[str, Any] = {"ssl": ssl_arg} if ssl_arg is not None else {}
+            engine = create_async_engine(engine_url, connect_args=connect_args)
             try:
                 return bool(await db_is_at_migration_head(engine))
             finally:

@@ -27,6 +27,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.models.scheduled_report import ScheduledReport
+from modulo.db.url_utils import split_engine_sslmode
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -100,12 +101,18 @@ def _get_engine() -> AsyncEngine:
         with _ENGINE_LOCK:
             if _ENGINE is None:
                 settings = get_settings()
+                # FAR-1440: guard on the URL's ACTUAL driver scheme, not the
+                # independent ``modulo_db`` knob, and translate the preserved
+                # ``sslmode`` into asyncpg's ``ssl`` connect arg — the raw URL
+                # raises TypeError at first connect once Settings stops
+                # stripping sslmode.
+                engine_url, ssl_arg = split_engine_sslmode(settings.database_url)
                 connect_args: dict[str, Any] = {"timeout": 10}
-                if settings.modulo_db.lower() == "postgres":
-                    connect_args["ssl"] = False
+                if ssl_arg is not None:
+                    connect_args["ssl"] = ssl_arg
                     connect_args["statement_cache_size"] = 0
                 _ENGINE = create_async_engine(
-                    settings.database_url,
+                    engine_url,
                     pool_pre_ping=True,
                     connect_args=connect_args,
                     pool_recycle=3600,
