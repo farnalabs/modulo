@@ -2892,6 +2892,21 @@ async def _update_pipeline_graph_impl(
     # as-is (the MCP role is resolved at the tool boundary).
     _mcp_is_guardrail_admin = _ctx_role_val() == "admin"
 
+    # FAR-1471: attribute the MCP graph write to the caller's ACCOUNT id, so
+    # ``pipeline.graph_updated`` records a real ``changed_by`` instead of
+    # null. Every production auth path (API key, OAuth JWT, browser
+    # principal) sets ``_ctx_user_id`` to the credential's owning account; a
+    # session without one resolves to None and the event honestly records an
+    # unattributed write rather than a bogus id — the same posture
+    # ``_review_hitl_impl`` uses for its audit actor. Passing the id does NOT
+    # widen privilege: ``resolve_effective_privilege`` returns False for
+    # ``caller_type == "mcp"`` before it ever looks at ``account_id``, and
+    # the guardrail strip guard only re-reads the live role for ``"rest"``.
+    try:
+        graph_account_id: uuid.UUID | None = _ctx_user_id_val()
+    except McpAuthContextError:
+        graph_account_id = None
+
     # Validate graph structure using Pydantic models (same as REST endpoint)
     from pydantic import ValidationError as _PydanticValidationError
 
@@ -2996,6 +3011,7 @@ async def _update_pipeline_graph_impl(
                 edges=edges,
                 is_privileged=is_privileged,
                 caller_type="mcp",
+                account_id=graph_account_id,
                 is_guardrail_admin=_mcp_is_guardrail_admin,
             )
             if result is None:
