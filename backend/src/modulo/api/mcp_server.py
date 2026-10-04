@@ -350,6 +350,11 @@ def _format_breakdown_line(entry: dict[str, Any]) -> str:
         # the agent did report, the trust boundary rejected it as unproven.
         if entry.get("missing_self_report_reason") == "zero_report_unproven":
             parts.append("(reported $0.00, rejected as unproven)")
+        elif entry.get("missing_self_report_reason") == "sub_floor_rejected":
+            # FAR-1308: a positive value below the countable floor was
+            # presented and refused - the agent DID report, so this must
+            # never render as "not reported".
+            parts.append("(reported a value below the countable minimum)")
         else:
             parts.append("(not reported)")
     if entry.get("error"):
