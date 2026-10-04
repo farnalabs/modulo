@@ -717,9 +717,12 @@ Compose files (`docker-compose*.yml` at the repo root; the non-default ones live
 
 ### Kubernetes (Helm)
 
-The Kubernetes/Helm example deployment configs were removed – they were never
-exercised by CI or used in production. Self-hosting is via Docker Compose
-(`deploy/compose/docker-compose.prod.yml`); the managed deployment path is Fly.io.
+A maintained, vendor-neutral Helm chart ships at `deploy/helm/modulo/`
+(validated end-to-end on EKS, FAR-1052, 2026-09-23). It deploys the Modulo
+stack; the Kubernetes runtime provider that runs agent workspaces as pods is
+not built yet (FAR-1051), so agents still execute via the Docker/E2B
+providers. Docker Compose (`deploy/compose/docker-compose.prod.yml`) remains
+the default self-hosted install; the managed deployment path is Fly.io.
 
 ### Redis dependency
 
