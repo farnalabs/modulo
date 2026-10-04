@@ -79,9 +79,16 @@ export default function pipelineCrud(data) {
       const res = http.post(`${BASE_URL}/pipelines`, payload, params);
       pipelineCreateTrend.add(res.timings.duration);
 
+      // Only a 201 carries a JSON body; guard the parse so a non-JSON error
+      // body (e.g. a 5xx HTML page) fails a check instead of aborting the VU.
+      let createdBody = {};
+      if (res.status === 201) {
+        createdBody = JSON.parse(res.body);
+      }
+
       const passed = check(res, {
         'create pipeline status 201': (r) => r.status === 201,
-        'create pipeline has id': (r) => JSON.parse(r.body).id !== undefined,
+        'create pipeline has id': () => typeof createdBody.id === 'string' && createdBody.id.length > 0,
       });
 
       if (!passed) {
@@ -89,7 +96,7 @@ export default function pipelineCrud(data) {
         return;
       }
 
-      pipelineId = JSON.parse(res.body).id;
+      pipelineId = createdBody.id;
     });
 
     if (!pipelineId) return;
