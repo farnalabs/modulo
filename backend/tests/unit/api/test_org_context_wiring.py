@@ -18,7 +18,9 @@ real ASGI app (real ``CorrelationIdMiddleware`` + ``CatchAllMiddleware``, real
 The two QA-gated follow-up surfaces (same defect class) are covered by
 ``TestMcpAuthSurface`` (MCP ``McpAuthMiddleware``) and
 ``TestRunWebSocketSurface`` (the run-streaming WebSocket, whose scope never
-traverses ``BaseHTTPMiddleware``).
+traverses ``BaseHTTPMiddleware``); ``TestMcpAuthFailureArms`` covers the four
+MCP ``mcp.auth.db_unavailable`` arms, including the one case where the org is
+genuinely unknown and the drop is correct.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -477,3 +480,215 @@ class TestRunWebSocketSurface:
         assert sink.orgs == [str(_ORG_WS)]
         # Still scoped to the connection task: the caller's context is clean.
         assert org_id_var.get() is None
+
+
+# ---------------------------------------------------------------------------
+# MAJOR (iteration 3) — MCP auth-FAILURE arms: bind before the DB read whose
+# org is already resolved; leave the org-lookup failure itself unbound.
+# ---------------------------------------------------------------------------
+
+
+def _mcp_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/tools/call",
+            "headers": [(b"authorization", f"Bearer {_MCP_API_KEY}".encode())],
+            "query_string": b"",
+            "scheme": "http",
+            "client": ("127.0.0.1", 8000),
+            "server": ("localhost", 8000),
+        }
+    )
+
+
+def _oauth_claims() -> Any:
+    """OAuth claims carrying a REAL org (the resolution those arms rely on)."""
+    return SimpleNamespace(
+        organisation_id=_ORG_MCP,
+        account_id=_USER_MCP,
+        scopes=["trigger:run"],
+        client_id="client-1",
+        token_family="fam",
+        token_sequence=1,
+    )
+
+
+def _org_resolving_factory() -> MagicMock:
+    """A session factory whose first statement already resolves the key's org.
+
+    Models the ``lookup_api_key_org`` SECURITY DEFINER step succeeding, so any
+    later failure in ``_authenticate_api_key`` is a case where the org IS known.
+    """
+    session = MagicMock()
+    session.begin = MagicMock()
+    session.begin.return_value = _async_cm(None)
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=_ORG_MCP)
+    session.execute = AsyncMock(return_value=result)
+    return MagicMock(return_value=_async_cm(session))
+
+
+class TestMcpAuthFailureArms:
+    """The four ``mcp.auth.db_unavailable`` arms (FAR-1417 iteration 3).
+
+    Each test drives the REAL failing function and asserts the ERROR record the
+    handler forwards — never the contextvar set by hand. One test per arm plus
+    the deliberate non-bind for the lookup failure itself.
+    """
+
+    async def test_api_key_db_failure_after_the_org_lookup_is_attributed(
+        self,
+        capture: object,
+        sink: _RecordingSink,
+    ) -> None:
+        """Arm 1 (mcp_server.py ``_authenticate_api_key``) — org resolved first.
+
+        The lookup already returned the org; a failure from the re-validation
+        below it (``_session``/``validate_api_key``/live-role/flag reads) must
+        be attributed, not dropped.
+        """
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from modulo.api.mcp_server import _authenticate_api_key
+
+        request = _mcp_request()
+        with (
+            patch("modulo.api.mcp_server._get_session_factory", return_value=_org_resolving_factory()),
+            patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
+            patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")),
+        ):
+            handled, err = await _authenticate_api_key(request, _MCP_API_KEY)
+            await _drain()
+
+        assert handled is False
+        assert err is not None
+        assert err.status_code == 503
+        assert "mcp.auth.db_unavailable" in sink.messages
+        assert sink.orgs == [str(_ORG_MCP)]
+        assert request.state.organisation_id == str(_ORG_MCP)
+
+    async def test_api_key_lookup_failure_is_not_fabricated(
+        self,
+        capture: object,
+        sink: _RecordingSink,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Arm 1, the org-determining step — deliberately NO bind.
+
+        Here the failing statement IS ``lookup_api_key_org``: no organisation
+        exists yet, so the record must be the announced drop rather than a
+        guess. Pins the "do not fabricate" half of the verdict.
+        """
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from modulo.api.mcp_server import _authenticate_api_key
+        from modulo.core.logging_config import org_id_var
+
+        request = _mcp_request()
+        session = MagicMock()
+        session.begin = MagicMock()
+        session.begin.return_value = _async_cm(None)
+        session.execute = AsyncMock(side_effect=SQLAlchemyError("lookup down"))
+        factory = MagicMock(return_value=_async_cm(session))
+
+        with (
+            patch("modulo.api.mcp_server._get_session_factory", return_value=factory),
+            patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
+        ):
+            handled, err = await _authenticate_api_key(request, _MCP_API_KEY)
+            await _drain()
+
+        assert handled is False
+        assert err is not None
+        assert err.status_code == 503
+        assert "mcp.auth.db_unavailable" not in sink.messages
+        assert not sink.messages
+        assert any("no_org_context" in record.getMessage() for record in caplog.records)
+        assert org_id_var.get() is None
+        assert getattr(request.state, "organisation_id", None) is None
+
+    async def test_jwt_fallback_db_failure_is_attributed(
+        self,
+        capture: object,
+        sink: _RecordingSink,
+    ) -> None:
+        """Arm 2 (``_authenticate_oauth_jwt`` regular-JWT fallback).
+
+        ``principal.organisation_id`` is decoded locally BEFORE the live-role
+        read, so the read's failure has an org to attribute to.
+        """
+        from jwt import InvalidTokenError as JWTError
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from modulo.api.mcp_server import _authenticate_oauth_jwt
+
+        request = _mcp_request()
+        principal = SimpleNamespace(
+            username="u",
+            organisation_id=_ORG_MCP,
+            account_id=_USER_MCP,
+            org_role="admin",
+            is_system_admin=False,
+        )
+        with (
+            patch("modulo.api.mcp_server.decode_oauth_access_token", side_effect=JWTError("not oauth")),
+            patch("modulo.auth.jwt.decode_principal", return_value=principal),
+            patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")),
+        ):
+            handled, err, claims = await _authenticate_oauth_jwt(request, "tok", MagicMock(secret_key="k"))
+            await _drain()
+
+        assert handled is False
+        assert err is not None
+        assert err.status_code == 503
+        assert claims is None
+        assert "mcp.auth.db_unavailable" in sink.messages
+        assert sink.orgs == [str(_ORG_MCP)]
+        assert request.state.organisation_id == str(_ORG_MCP)
+
+    async def test_token_family_check_db_failure_is_attributed(
+        self,
+        capture: object,
+        sink: _RecordingSink,
+    ) -> None:
+        """Arm 3 (``_verify_oauth_token_family``) — org is on the decoded claims.
+
+        This frame has no ``request`` object, so only the contextvar carrier
+        is available (and sufficient: the record is logged right here).
+        """
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from modulo.api.mcp_server import _verify_oauth_token_family
+        from modulo.core.logging_config import org_id_var
+
+        with patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")):
+            resp = await _verify_oauth_token_family("tok", _oauth_claims())
+            await _drain()
+
+        assert resp is not None
+        assert resp.status_code == 503
+        assert "mcp.auth.db_unavailable" in sink.messages
+        assert sink.orgs == [str(_ORG_MCP)]
+        assert org_id_var.get() == str(_ORG_MCP)
+
+    async def test_finalize_oauth_db_failure_is_attributed(
+        self,
+        capture: object,
+        sink: _RecordingSink,
+    ) -> None:
+        """Arm 4 (``_finalize_oauth_principal``) — org is on the decoded claims."""
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from modulo.api.mcp_server import _finalize_oauth_principal
+
+        request = _mcp_request()
+        with patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")):
+            resp = await _finalize_oauth_principal(request, "tok", _oauth_claims(), AsyncMock())
+            await _drain()
+
+        assert resp.status_code == 503
+        assert "mcp.auth.db_unavailable" in sink.messages
+        assert sink.orgs == [str(_ORG_MCP)]
+        assert request.state.organisation_id == str(_ORG_MCP)
