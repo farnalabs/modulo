@@ -45,6 +45,14 @@ class ApiKeyInvalidError(PermissionError):
         super().__init__(detail)
 
 
+class ApiKeyGrantsUnavailableError(Exception):
+    """The ``api_key_grants`` flag could not be read for a grant-bearing key.
+
+    Distinct from ``ApiKeyInvalidError``: the key may be perfectly valid, so
+    callers answer 503 (retry) rather than 401. Still fail-closed (never allows).
+    """
+
+
 class ApiKeyScopeError(ValueError):
     """Raised when a mint or update payload carries an invalid key scope."""
 
@@ -64,14 +72,22 @@ FLAG_API_KEY_GRANTS = "api_key_grants"
 USER_KEY_MAX_TTL_DAYS = 90
 
 
-async def api_key_grants_enabled(org_id: uuid.UUID) -> bool:
-    """Resolve the per-org ``api_key_grants`` flag. Fail-closed: any error is OFF."""
+async def api_key_grants_enabled(org_id: uuid.UUID, *, strict: bool = False) -> bool:
+    """Resolve the per-org ``api_key_grants`` flag.
+
+    Default (mint/UI paths): any read error is OFF (fail-closed). ``strict=True``
+    (enforcement path for grant-bearing keys) raises
+    ``ApiKeyGrantsUnavailableError`` instead, so a transient read failure is not
+    mistaken for "flag OFF" (401 invalid key) — it must surface as 503.
+    """
     try:
         return bool(await get_registry().resolve_flag(FLAG_API_KEY_GRANTS, org_id=org_id))
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.warning("feature_flag.api_key_grants_read_failed", exc_info=True)
+        if strict:
+            raise ApiKeyGrantsUnavailableError from None
         return False
 
 
@@ -83,11 +99,17 @@ async def resolve_key_grants(key: OrgApiKey) -> frozenset[str] | None:
     non-NULL grant-set (including the explicit empty deny-all) with the flag
     OFF raises ``ApiKeyInvalidError`` — the key is DENIED rather than silently
     widened to its full role bundle (revoke-don't-broaden, the FAR-620 pattern).
+    A malformed (non-str, non-NULL) value is DENIED too, never read as legacy.
+    A flag-read failure raises ``ApiKeyGrantsUnavailableError`` (503, fail-closed).
     """
+    # getattr: duck-typed key fakes without the column read as legacy (real rows always have it).
     raw = getattr(key, "grants", None)
-    if not isinstance(raw, str):
+    if raw is None:
         return None
-    if not await api_key_grants_enabled(key.organisation_id):
+    if not isinstance(raw, str):
+        _log.error("api_key.grants_malformed", extra={"key_id": str(key.id)})
+        raise ApiKeyInvalidError
+    if not await api_key_grants_enabled(key.organisation_id, strict=True):
         _log.info("api_key.grants_key_denied_flag_off", extra={"key_id": str(key.id)})
         raise ApiKeyInvalidError
     return parse_grants(raw)

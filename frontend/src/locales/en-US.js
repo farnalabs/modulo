@@ -2244,7 +2244,7 @@ export default {
       "grants_title": "Permissions",
       "grants_restrict_label": "Restrict this key to specific permissions",
       "grants_role_bundle_hint": "Off: the key gets every permission of its role (default).",
-      "grants_restricted_hint": "On: the key can only do the permissions you tick below.",
+      "grants_restricted_hint": "On: the key can only do the permissions you tick below. Note: over MCP, all read-only tools are controlled by the single resource.read_only permission, not by the finer read permissions (those apply to the REST API).",
       "grants_select_at_least_one": "Select at least one permission, or turn restriction off.",
       "grants_group_pipeline": "Pipelines",
       "grants_group_run": "Runs",

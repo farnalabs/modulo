@@ -371,6 +371,9 @@ def grants_permit(grants: frozenset[str] | None, permission: str) -> bool:
     """
     if grants is None:
         return True
+    if not isinstance(grants, frozenset):
+        # Malformed value: fail closed (never treat as unrestricted).
+        return False
     return permission in grants and is_delegable(permission)
 
 

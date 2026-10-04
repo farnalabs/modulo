@@ -1909,4 +1909,38 @@ describe('SettingsMcpView', () => {
     await flushPromises()
     expect(postMock).not.toHaveBeenCalled()
   })
+
+  it('resets stale grant state when reopening the dialog and ignores a stale response', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(true)
+
+    // Reopen with a fetch that never resolves: previous picker state must be gone.
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return new Promise(() => {})
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await nextTick()
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
+
+    // A slow first fetch must not overwrite a newer one.
+    let resolveSlow: (v: unknown) => void = () => {}
+    const slow = new Promise((r) => { resolveSlow = r })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return slow
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') {
+        return Promise.resolve({ data: { enabled: false, permissions: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    resolveSlow({ data: grantablePayload, error: undefined })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
+  })
 })

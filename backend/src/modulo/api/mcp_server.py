@@ -72,6 +72,7 @@ from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
+    ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
     api_key_grants_enabled,
     resolve_key_grants,
@@ -93,7 +94,7 @@ from modulo.auth.oauth import (
     decode_oauth_access_token,
     scopes_required_role,
 )
-from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.analytics.builder import (
     AnalyticsDimension,
@@ -532,6 +533,8 @@ def _ctx_may_manage_cost() -> bool:
     """
     from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
 
+    if not grants_permit(_ctx_key_grants.get(None), _CODE_COST_MANAGE):
+        return False
     try:
         assert_org_role(_ctx_role_val(), resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
     except PermissionDenied:
@@ -1000,6 +1003,12 @@ async def _validate_api_key_live(token: str, org_id: uuid.UUID) -> bool:
             degraded=True,
             key_id=key.id,
         )
+    # FAR-1477: re-run the grant resolver on every re-validation so flag-OFF
+    # (or a malformed value) kills a grant-bearing key on a long-lived
+    # connection, and the cached grant-set is refreshed. ApiKeyInvalidError /
+    # ApiKeyGrantsUnavailableError propagate -> validate_current_auth denies.
+    key_grants = await resolve_key_grants(key)
+    _ctx_key_grants.set(key_grants)
     _ctx_role.set(clamped)
     _ctx_team_id.set(key.team_id)
     return True
@@ -1346,6 +1355,14 @@ async def _authenticate_api_key(
         return False, Response(
             '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
             status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    except ApiKeyGrantsUnavailableError:
+        # FAR-1477: grant flag unreadable -> fail closed as 503 (retryable), not 401.
+        _log.warning("mcp.api_key_grants_unavailable")
+        return False, Response(
+            '{"error":"service_unavailable","detail":"API key grants temporarily unavailable"}',
+            status_code=503,
             media_type=_CT_APPLICATION_JSON,
         )
     except (SQLAlchemyError, TimeoutError) as exc:
@@ -2984,14 +3001,16 @@ async def _update_pipeline_graph_impl(
         _set_mutation_row_lock_timeout,
     )
 
-    is_privileged = _is_privileged(_ctx_role_val())
+    is_privileged = _is_privileged(_ctx_role_val(), _ctx_key_grants.get(None))
 
     # FAR-309 PR A review: the guardrail-binding strip guard lives in the
     # SERVICE LAYER (replace_pipeline_graph, under the row lock) so the MCP
     # surface inherits it — no separate call-site check. The admin flag is
     # resolved from the caller's org role; for MCP the service layer uses it
     # as-is (the MCP role is resolved at the tool boundary).
-    _mcp_is_guardrail_admin = _ctx_role_val() == "admin"
+    _mcp_is_guardrail_admin = _ctx_role_val() == "admin" and grants_permit(
+        _ctx_key_grants.get(None), "guardrail.manage"
+    )
 
     # FAR-1471: attribute the MCP graph write to the caller's ACCOUNT id, so
     # ``pipeline.graph_updated`` records a real ``changed_by`` instead of
@@ -7254,11 +7273,14 @@ async def set_hitl_email_alerts(
         "ONLY at creation — store it immediately, it is never returned again. "
         "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner'. A key "
         "cannot be minted above the caller's live org role. Optional 'grants' "
-        "(list of permission names, e.g. ['pipeline.read']) restricts the key to "
-        "exactly those permissions instead of its full role bundle; omit it for "
-        "the legacy role bundle, pass [] to deny everything. Requires the "
-        "org's api_key_grants flag; grants must be delegable and within your "
-        "own live capability."
+        "(list of permission names, e.g. ['pipeline.list', 'pipeline.graph.read']) "
+        "restricts the key to exactly those permissions instead of its full role "
+        "bundle; omit it for the legacy role bundle, pass [] to deny everything. "
+        "Requires the org's api_key_grants flag; grants must be delegable and "
+        "within your own live capability. NOTE: over MCP, every read-only tool is "
+        "gated by the single coarse key 'resource.read_only' (include it to allow "
+        "MCP reads; fine-grained read keys like 'pipeline.list' do NOT apply to "
+        "MCP read tools), whereas REST enforces the fine-grained keys exactly."
     ),
 )
 @_RETRY_DB

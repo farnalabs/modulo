@@ -704,9 +704,17 @@ function dismissKeyCreatedDialog() {
  * failure (older backend, 403, network) just hides the picker so key creation
  * keeps working exactly as before.
  */
+let grantsLoadSeq = 0
 async function loadGrantablePermissions() {
+  // Reset first so a stale previous result never shows (or sends) grants for
+  // an org whose flag has since flipped; the sequence guard drops responses
+  // from an earlier, slower fetch that resolve after a newer one started.
+  grantsEnabled.value = false
+  grantablePermissions.value = []
+  const seq = ++grantsLoadSeq
   try {
     const { data, error: err } = await api.GET('/api/v1/api-keys/grantable-permissions')
+    if (seq !== grantsLoadSeq) return
     if (err || !data || !data.enabled) {
       grantsEnabled.value = false
       grantablePermissions.value = []
@@ -715,6 +723,7 @@ async function loadGrantablePermissions() {
     grantablePermissions.value = data.permissions
     grantsEnabled.value = data.permissions.length > 0
   } catch {
+    if (seq !== grantsLoadSeq) return
     grantsEnabled.value = false
     grantablePermissions.value = []
   }

@@ -226,6 +226,7 @@ async def get_current_tenant_user_or_api_key(
         from modulo.auth.api_key import (
             _MK_PREFIX,
             _PREFIX_LEN,
+            ApiKeyGrantsUnavailableError,
             ApiKeyInvalidError,
             resolve_key_grants,
             validate_api_key,
@@ -288,6 +289,12 @@ async def get_current_tenant_user_or_api_key(
                 key_grants = await resolve_key_grants(key)
         except ApiKeyInvalidError:
             raise InvalidToken from None
+        except ApiKeyGrantsUnavailableError:
+            # Grant flag unreadable: fail closed with 503 (retryable), not 401.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key grants temporarily unavailable.",
+            ) from None
         except SQLAlchemyError:
             _log.warning("auth.api_key_verify_failed", exc_info=True)
             raise HTTPException(

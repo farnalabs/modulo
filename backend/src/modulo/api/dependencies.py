@@ -104,8 +104,8 @@ async def _assert_tenant_permission(
         # bundle(live_role). Deny-only and kill-switch-INELIGIBLE (a grant-set
         # only ever narrows). ``key_grants is None`` (JWTs, legacy keys) is a no-op.
         try:
-            key_grants = getattr(principal, "key_grants", None)
-            assert_grant(key_grants if isinstance(key_grants, frozenset) else None, permission)
+            # grants_permit fails closed on a malformed (non-None, non-frozenset) value.
+            assert_grant(principal.key_grants, permission)
         except PermissionDenied as exc:
             logger.warning(
                 _CODE_PERMISSION_DENIED,
@@ -186,6 +186,8 @@ def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None
     required = resolve_required(permission)
     try:
         assert_org_role(principal.org_role, required, permission, kill_switch_eligible=False)
+        # FAR-1477: a grant-bearing key must also hold the In-Dev permission.
+        assert_grant(principal.key_grants, permission)
     except PermissionDenied as exc:
         logger.warning(
             _CODE_PERMISSION_DENIED,

@@ -55,7 +55,7 @@ from modulo.api.team_scope import (
     validate_owner_team_for_create,
 )
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+from modulo.auth.permissions import PermissionDenied, assert_org_role, grants_permit, resolve_required
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
@@ -168,18 +168,26 @@ _MAX_GRAPH_EDGES = 1000
 
 # ADR 047 service-layer backstop: operator+ is "privileged" (privilege is
 # required to weaken/remove an existing HITL gate via a graph write).
+_CODE_GRAPH_UPDATE = "pipeline.graph.update"
+_CODE_GUARDRAIL_MANAGE = "guardrail.manage"  # nosec B105 — permission key, not a credential
 _OPERATOR_LEVEL = org_role_level("operator")
 _ADMIN_LEVEL = org_role_level("admin")
 
 
-def _is_privileged(role: str | None) -> bool:
+def _is_privileged(role: str | None, key_grants: frozenset[str] | None = None) -> bool:
     """Resolve the is_privileged flag from an org role (operator+ -> True).
+
+    FAR-1477: an API key carrying a grant-set (``key_grants is not None``) is
+    privileged only if it ALSO holds ``pipeline.graph.update`` (effective =
+    grants INTERSECT live-role bundle). ``None`` = no grant-set, unchanged.
 
     Uses the flag-independent numeric hierarchy (team_rbac), NOT the
     kill-switched assert_org_role path, so the HITL guard stays live even
     when authz.enforce is disabled.
     """
     if role is None:
+        return False
+    if not grants_permit(key_grants, _CODE_GRAPH_UPDATE):
         return False
     return org_role_level(role) >= _OPERATOR_LEVEL
 
@@ -200,6 +208,8 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     """
     if principal.org_role is None:
         return False
+    if not grants_permit(principal.key_grants, _CODE_GUARDRAIL_MANAGE):
+        return False
     return org_role_level(principal.org_role) >= _ADMIN_LEVEL
 
 
@@ -211,6 +221,8 @@ def _may_manage_cost(principal: TenantPrincipal) -> bool:
     (``assert_org_role``) — never an ad-hoc role comparison. Fail-closed: a
     missing/unknown role raises ``PermissionDenied`` and resolves to False.
     """
+    if not grants_permit(principal.key_grants, _CODE_COST_MANAGE):
+        return False
     try:
         assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
     except PermissionDenied:
@@ -2672,7 +2684,7 @@ async def replace_pipeline_graph_endpoint(
                 org_id=principal.organisation_id,
                 nodes=node_data,
                 edges=[_edge_data_to_dict(edge) for edge in edge_data],
-                is_privileged=_is_privileged(principal.org_role),
+                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
                 caller_type="rest",
                 account_id=principal.account_id,
                 is_guardrail_admin=_is_guardrail_admin(principal),
@@ -3021,7 +3033,7 @@ async def _apply_graph_update(
         org_id=org_id,
         nodes=node_data,
         edges=[_edge_data_to_dict(edge) for edge in edge_data],
-        is_privileged=_is_privileged(principal.org_role),
+        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
@@ -4089,7 +4101,7 @@ async def rollback_snapshot_endpoint(
                 pipeline_id,
                 snapshot_id,
                 account_id=principal.account_id,
-                is_privileged=_is_privileged(principal.org_role),
+                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
                 caller_type="rest",
                 is_guardrail_admin=_is_guardrail_admin(principal),
             )
@@ -4396,7 +4408,7 @@ async def _save_locked_graph(
         org_id,
         nodes,
         edges,
-        is_privileged=_is_privileged(principal.org_role),
+        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),

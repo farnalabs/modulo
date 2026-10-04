@@ -400,6 +400,7 @@ class TestValidateApiKeyLive(_AuthContext):
     def _key(self, role: str = "operator") -> MagicMock:
         key = MagicMock()
         key.role = role
+        key.grants = None
         key.id = _USER_ID
         key.team_id = None
         key.account_id = _USER_ID
@@ -515,6 +516,7 @@ def _mock_api_key(role: str = "operator", run_id: uuid.UUID | None = None) -> Ma
     key = MagicMock()
     key.id = _USER_ID
     key.role = role
+    key.grants = None
     key.organisation_id = _ORG_ID
     key.account_id = _USER_ID
     key.team_id = None

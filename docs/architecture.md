@@ -638,6 +638,17 @@ key, so no 90-day user-key TTL) and runs the same mint cap and flag gate as
 REST. The Settings > MCP create-key dialog offers a grant picker, sourced from
 `GET /api/v1/api-keys/grantable-permissions` (delegable permissions only,
 empty with the flag OFF); it omits `grants` unless the user restricts the key.
+Privilege helpers that gate admin/operator-only extras inside a route (cost
+breaker, guardrail strip, HITL weakening, In-Dev reveal) also require the
+matching permission (`cost.manage`, `guardrail.manage`, `pipeline.graph.update`,
+`*.list.in_dev`) in the grant-set when the key carries one; a malformed
+grant value is denied, never read as unrestricted. A transient failure reading
+the flag for a grant-bearing key answers 503 (not 401); NULL-grants keys never
+read the flag. Long-lived MCP connections re-run the grant resolver on every
+re-validation. **Known REST/MCP asymmetry (open design question):** over MCP
+every read-only tool is gated by the single coarse `resource.read_only` key,
+not the fine-grained REST read keys (`pipeline.list`, `pipeline.graph.read`,
+...), so MCP reads are all-or-nothing per grant-set; REST enforces the fine keys.
 
 
 ### Row-Level Security
