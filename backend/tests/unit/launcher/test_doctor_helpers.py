@@ -226,7 +226,7 @@ def test_default_probes_service_probes_connect_with_mocks(tmp_path: Path, monkey
         return True
 
     monkeypatch.setattr(health_checks, "db_is_at_migration_head", _fake_at_head)
-    monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", lambda _url: _FakeEngine())
+    monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", lambda _url, **_kwargs: _FakeEngine())
 
     probes = default_probes(tmp_path, loaded_state)
     probes.probe_postgres()  # connect -> SELECT 1
