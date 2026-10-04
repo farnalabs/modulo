@@ -393,8 +393,11 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   (a claim takes a fresh TTL), and the moment a decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
   re-enters normal admission: approve resumes from the checkpoint through the
-  normal resume path, reject terminalises via the reject path. Each park is
-  logged loudly (`hitl_park.parked`).
+  normal resume path; reject routes to the gate's `reject_target`/reject edge
+  when one is configured, and when the gate declares no reject route the run
+  continues along the normal edge (the default is being changed so a rejection
+  terminates the run, FAR-1487). Each park is logged loudly
+  (`hitl_park.parked`).
 - **Queue coalescing (latest-wins):** for webhook deliveries with a stable
   work-item key (GitHub: `repository.full_name` + `pull_request.number`, or
   `issue.number`; anything else, no key, no coalescing), a new delivery folds

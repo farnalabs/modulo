@@ -3165,7 +3165,10 @@ export interface paths {
         put?: never;
         /**
          * Reject Review
-         * @description Reject an interrupted HITL gate and route to reject_target or fail.
+         * @description Reject an interrupted HITL gate and route to the gate's reject_target.
+         *
+         *     With no reject route configured on the gate, the run continues along the
+         *     normal path.
          */
         post: operations["reject_review_api_v1_runs__run_id__hitl__review_id__reject_post"];
         delete?: never;
