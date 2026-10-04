@@ -10348,6 +10348,8 @@ export interface components {
             team_id?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** ApiKeyCreatedResponse */
         ApiKeyCreatedResponse: {
@@ -10376,6 +10378,8 @@ export interface components {
              * @default org
              */
             scope: string;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** ApiKeyRevokeResponse */
         ApiKeyRevokeResponse: {
@@ -10399,6 +10403,8 @@ export interface components {
             expires_at?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** AppendMessageRequest */
         AppendMessageRequest: {
