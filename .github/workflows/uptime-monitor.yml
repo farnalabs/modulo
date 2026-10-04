@@ -12,6 +12,19 @@ jobs:
   check-prod-health:
     name: Check app.modulo.run health
     runs-on: ubicloud-standard-2
+    env:
+      # FAR-1446: the single definition of "open" shared by the dedup search
+      # (Open Linear ticket on outage) and the recovery search (Resolve Linear
+      # ticket on recovery), so the two steps can never disagree about what
+      # "open" means and no state type is silently skipped. Linear's
+      # non-terminal WorkflowStateType values are triage, backlog, unstarted
+      # and started; the terminal values (completed, canceled, duplicate) are
+      # deliberately omitted. A positive `in` list is used (not `nin`) because
+      # it is the proven repo pattern (deploy-staleness-check.yml,
+      # audit-chain-monitor.yml) and, unlike a `nin` filter, a rejected filter
+      # cannot be mistaken for "no existing ticket" and silently file a
+      # duplicate.
+      OPEN_STATE_TYPES: '["triage","backlog","unstarted","started"]'
     steps:
       - name: Probe /healthz/ready
         id: probe
@@ -146,11 +159,11 @@ jobs:
             DESC="Automated uptime monitor detected app.modulo.run/healthz/ready failing at ${TS}. Investigate Fly app status + recent deploys (FAR-400)."
           fi
 
-          # Dedup search (read-only): open = workflow state type not in
-          # {completed, canceled}. Exact title match on the FAR team.
-          SEARCH_BODY=$(jq -n --arg team "ae855baf-6439-4980-97fb-38da80129485" --arg title "$TITLE" '{
-            query: "query($team: ID!, $title: String!, $exclude: [String!]!){ issues(filter:{ team:{ id:{ eq: $team } }, title:{ eq: $title }, state:{ type:{ nin: $exclude } } }, orderBy: createdAt, first: 1){ nodes { id identifier } } }",
-            variables: { team: $team, title: $title, exclude: ["completed", "canceled"] }
+          # Dedup search (read-only): open = workflow state type in the shared
+          # OPEN_STATE_TYPES list. Exact title match on the FAR team.
+          SEARCH_BODY=$(jq -n --arg team "ae855baf-6439-4980-97fb-38da80129485" --arg title "$TITLE" --argjson states "$OPEN_STATE_TYPES" '{
+            query: "query($team: ID!, $title: String!, $states: [String!]!){ issues(filter:{ team:{ id:{ eq: $team } }, title:{ eq: $title }, state:{ type:{ in: $states } } }, orderBy: createdAt, first: 1){ nodes { id identifier } } }",
+            variables: { team: $team, title: $title, states: $states }
           }')
           SEARCH_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
             -H "Content-Type: application/json" \
@@ -184,8 +197,12 @@ jobs:
 
           # Distinguish "searched, none open" (create normally) from "search
           # itself failed" (warn, then still create - the evidence must not be
-          # dropped just because the dedup lookup was unavailable).
-          if [ -z "$SEARCH_RESP" ] || [ "$(printf '%s' "$SEARCH_RESP" | jq -r '.data != null' 2>/dev/null || echo false)" != "true" ]; then
+          # dropped just because the dedup lookup was unavailable). Check
+          # `.errors == null` explicitly: Linear can return HTTP 200 with a
+          # partial `{data:{issues:null}, errors:[...]}` body, which a bare
+          # `.data != null` guard would wrongly accept as "searched, none
+          # open" and silently file a duplicate.
+          if [ -z "$SEARCH_RESP" ] || ! printf '%s' "$SEARCH_RESP" | jq -e '.errors == null and .data.issues.nodes != null' >/dev/null 2>&1; then
             echo "::warning::Linear dedup search failed - creating the ticket without dedup (a duplicate may result)"
           fi
 
@@ -251,16 +268,18 @@ jobs:
           for TITLE in \
             "OUTAGE: app.modulo.run down (uptime monitor)" \
             "DEGRADED: app.modulo.run health sub-check(s) not ok (FAR-1156)"; do
-            SEARCH_BODY=$(jq -n --arg team "ae855baf-6439-4980-97fb-38da80129485" --arg title "$TITLE" '{
-              query: "query($team: ID!, $title: String!, $exclude: [String!]!){ issues(filter:{ team:{ id:{ eq: $team } }, title:{ eq: $title }, state:{ type:{ nin: $exclude } } }, orderBy: createdAt, first: 100){ nodes { id identifier } } }",
-              variables: { team: $team, title: $title, exclude: ["completed", "canceled"] }
+            # Same shared OPEN_STATE_TYPES definition as the dedup search, so
+            # the two steps can never disagree about what "open" means.
+            SEARCH_BODY=$(jq -n --arg team "ae855baf-6439-4980-97fb-38da80129485" --arg title "$TITLE" --argjson states "$OPEN_STATE_TYPES" '{
+              query: "query($team: ID!, $title: String!, $states: [String!]!){ issues(filter:{ team:{ id:{ eq: $team } }, title:{ eq: $title }, state:{ type:{ in: $states } } }, orderBy: createdAt, first: 100){ nodes { id identifier } } }",
+              variables: { team: $team, title: $title, states: $states }
             }')
             SEARCH_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
               -H "Content-Type: application/json" \
               -H "Authorization: $LINEAR_API_KEY" \
               -d "$SEARCH_BODY" 2>/dev/null || true)
 
-            if [ -z "$SEARCH_RESP" ] || [ "$(printf '%s' "$SEARCH_RESP" | jq -r '.data != null' 2>/dev/null || echo false)" != "true" ]; then
+            if [ -z "$SEARCH_RESP" ] || ! printf '%s' "$SEARCH_RESP" | jq -e '.errors == null and .data.issues.nodes != null' >/dev/null 2>&1; then
               echo "::warning::Linear recovery search failed for \"${TITLE}\" - open tickets (if any) were not resolved this run"
               continue
             fi
