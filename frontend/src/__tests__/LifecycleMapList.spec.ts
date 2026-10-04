@@ -241,6 +241,31 @@ describe('LifecycleMapList responsive layout (FAR-635)', () => {
     expect(classes).not.toContain('items-center')
     expect(classes).not.toContain('justify-between')
   })
+
+  it('renders the New Map icon and label inside the PageHeader right slot', async () => {
+    // Render the Button's default slot (a plain `Button: true` stub swallows
+    // it) so the header action's icon + translated label actually execute.
+    const ButtonStub = {
+      template: '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+      props: ['disabled'],
+    }
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          ErrorAlert: true,
+          EmptyState: true,
+          Button: ButtonStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const newBtn = wrapper.find('[data-testid="lifecycle-map-list-new"]')
+    expect(newBtn.exists()).toBe(true)
+    expect(newBtn.text()).toContain('New Map')
+    expect(newBtn.find('svg').exists()).toBe(true)
+  })
 })
 
 describe('LifecycleMapList loading state', () => {
