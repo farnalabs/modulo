@@ -34,11 +34,11 @@ from typing import Any, Literal, NoReturn
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, nullslast, select
-from sqlalchemy.exc import InvalidRequestError, PendingRollbackError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import PendingRollbackError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT, handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
@@ -544,73 +544,59 @@ async def _validate_choice_answer(
 
 
 # ---------------------------------------------------------------------------
-# FAR-1408: session-contract (InvalidRequestError) -> 500, at route level;
-# its TRANSIENT subclass PendingRollbackError -> 503 (with the db_transient
-# record), mirroring db_error_handling._translate_wrapped_exception.
+# FAR-1408 / FAR-1464: route-local SQLAlchemyError arms.
+#
+# The session-contract (InvalidRequestError -> 500) half of the old local
+# ``_raise_session_contract_error`` now lives in the SHARED guard
+# ``db_error_handling.raise_session_contract_error`` (FAR-1464 de-duplication:
+# one copy, used by every converted route arm). Each ``except SQLAlchemyError``
+# arm below calls it FIRST.
+#
+# The TRANSIENT half stays local: ``PendingRollbackError`` (the transient
+# subclass of InvalidRequestError) must keep the structured ``db_transient``
+# record with a route label distinct from the session-contract key
+# (FAR-1408 review observation 1, pinned by test_hitl_resilience) — the
+# shared guard deliberately never calls ``log_service_unavailable``, so the
+# record is emitted here, in the dedicated arm below.
 # ---------------------------------------------------------------------------
 
 
-def _raise_session_contract_error(log_key: str, exc: InvalidRequestError) -> NoReturn:
-    """Report a session exception caught inside a route-local arm.
+def _raise_pending_rollback_error(exc: PendingRollbackError, log_key: str) -> NoReturn:
+    """Report a ``PendingRollbackError`` caught on a route-local arm.
 
-    ``InvalidRequestError`` subclasses ``SQLAlchemyError``, so each of this
-    module's route-local ``except SQLAlchemyError`` arms would otherwise catch
-    it FIRST and answer ``503 MSG_DB_ERROR_PLEASE_TRY`` ("Database error.
-    Please try again.") — a retry-inviting reply to a non-retryable local
-    programming bug. ``handle_db_errors`` cannot save us: it only sees
-    exceptions that ESCAPE the route, and these arms never let it out.
+    ``PendingRollbackError`` IS an ``InvalidRequestError``, but it signals a
+    TRANSIENT fault: an earlier statement failed and the session was never
+    rolled back, so the next statement refuses to run — and during a genuine
+    outage that earlier fault (server disconnect, serialization failure, pool
+    timeout) is usually the real cause. Filing it as a non-retryable 500 would
+    invert the FAR-1408 misclassification on a common path, so it maps to 503
+    (``MSG_DB_ERROR_PLEASE_TRY``) with the structured ``db_transient`` record,
+    exactly like the pre-FAR-1464 local helper did.
 
-    For a plain ``InvalidRequestError`` this mirrors
-    ``db_error_handling._translate_wrapped_exception``'s
-    ``InvalidRequestError`` arm: 500 with ``MSG_SESSION_CONTRACT`` (no
-    "temporarily unavailable", no retry invitation), logged under a distinct
-    programming-error key, and NO ``log_service_unavailable("db_transient",
-    ...)`` record.
+    ``log_key`` is the BASE route key (e.g. ``"hitl.claim_review"``); the
+    record's route label is ``<log_key>.pending_rollback_error`` — deliberately
+    distinct from the session-contract 500's ``<log_key>.session_contract_error``
+    so the two are never confused in the service-unavailable trail.
 
-    ``PendingRollbackError`` is the one subclass exempt from that mapping. It
-    IS an ``InvalidRequestError``, but it signals a TRANSIENT fault: an earlier
-    statement failed and the session was never rolled back, so the next
-    statement refuses to run — and during a genuine outage that earlier fault
-    (server disconnect, serialization failure, pool timeout) is usually the
-    real cause. Filing it as a non-retryable 500 would invert the FAR-1408
-    misclassification on a common path, so it maps to 503 with the structured
-    ``db_transient`` record, exactly like the ``SQLAlchemyError`` backstop.
+    Shared by all five arms so the status, detail and record shape cannot
+    drift per site. ``NoReturn`` keeps mypy's flow analysis correct for the
+    caller's except-chain.
 
-    Shared by all five arms so the status, detail and log shape cannot drift
-    per site — only ``log_key`` varies. ``NoReturn`` keeps mypy's flow
-    analysis correct for the caller's except-chain.
-
-    Logging note: this is ``logger.exception``'s exact behaviour (ERROR level
-    + the raised exception's traceback) spelled as ``error(..., exc_info=exc)``
-    because the call sits in a helper rather than lexically inside an
-    ``except`` block — ``exc`` IS the active exception here, so the emitted
-    record carries the same traceback, and ruff's LOG004 does not have to be
-    silenced.
+    Logging note: ``error(..., exc_info=exc)`` is ``logger.exception``'s exact
+    behaviour (ERROR level + the raised exception's traceback) spelled for a
+    call sitting in a helper rather than lexically inside an ``except`` block.
     """
-    if isinstance(exc, PendingRollbackError):
-        # ``log_key`` ends in ``.session_contract_error`` (the caller's label).
-        # A PendingRollbackError is NOT a session-contract violation — it is the
-        # transient subclass — so relabel the key's suffix to
-        # ``.pending_rollback_error`` on the ``db_transient`` record. Without
-        # this the record carries the SAME route label a session-contract 500
-        # would use, and the two are indistinguishable in the service-
-        # unavailable trail (FAR-1408 review observation 1).
-        transient_key = log_key.removesuffix(".session_contract_error") + ".pending_rollback_error"
-        logger.error(transient_key, exc_info=exc)
-        log_service_unavailable(
-            "db_transient",
-            exc,
-            route=transient_key,
-            detail="transient database error (PendingRollbackError)",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    logger.error(log_key, exc_info=exc)
+    transient_key = f"{log_key}.pending_rollback_error"
+    logger.error(transient_key, exc_info=exc)
+    log_service_unavailable(
+        "db_transient",
+        exc,
+        route=transient_key,
+        detail="transient database error (PendingRollbackError)",
+    )
     raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail=MSG_SESSION_CONTRACT,
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=MSG_DB_ERROR_PLEASE_TRY,
     ) from exc
 
 
@@ -712,9 +698,10 @@ async def claim_review(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
-    except InvalidRequestError as exc:
-        _raise_session_contract_error("hitl.claim_review.session_contract_error", exc)
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, "hitl.claim_review")
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "hitl.claim_review")
         logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -861,9 +848,10 @@ async def _run_hitl_manager(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
-    except InvalidRequestError as exc:
-        _raise_session_contract_error("hitl._run_hitl_manager.session_contract_error", exc)
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, "hitl._run_hitl_manager")
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "hitl._run_hitl_manager")
         logger.exception("hitl._run_hitl_manager")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1310,9 +1298,10 @@ async def list_run_pending_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
-    except InvalidRequestError as exc:
-        _raise_session_contract_error("hitl.list_run_pending_reviews.session_contract_error", exc)
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, "hitl.list_run_pending_reviews")
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "hitl.list_run_pending_reviews")
         logger.exception("hitl.list_run_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1395,9 +1384,10 @@ async def list_org_pending_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
-    except InvalidRequestError as exc:
-        _raise_session_contract_error("hitl.list_org_pending_reviews.session_contract_error", exc)
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, "hitl.list_org_pending_reviews")
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "hitl.list_org_pending_reviews")
         logger.exception("hitl.list_org_pending_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1508,9 +1498,10 @@ async def list_org_reviews(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
-    except InvalidRequestError as exc:
-        _raise_session_contract_error("hitl.list_org_reviews.session_contract_error", exc)
+    except PendingRollbackError as exc:
+        _raise_pending_rollback_error(exc, "hitl.list_org_reviews")
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "hitl.list_org_reviews")
         logger.exception("hitl.list_org_reviews")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
