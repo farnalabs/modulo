@@ -16,7 +16,8 @@ condition, a re-keyed index) fails here instead of silently orphaning the
 index and dropping the sweep back to a full-table scan of ``runs`` every
 60 seconds. Also pins the chain
 (``0277_run_daily_facts_trigger_dispatch_phase`` ->
-``0278_runs_workspace_drift_sweep_index`` as the single linear head) and the
+``0278_runs_workspace_drift_sweep_index`` ->
+``0279_table_autovacuum_tuning`` as the single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
@@ -43,6 +44,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
+_CHAIN_HEAD_MIGRATION = "0279_table_autovacuum_tuning"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
@@ -169,9 +171,9 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0278(self) -> None:
+    def test_single_head_is_0279_table_autovacuum_tuning(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
+        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0277_run_daily_facts_trigger_dispatch_phase(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

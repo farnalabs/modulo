@@ -22,6 +22,13 @@ from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy.exc import ProgrammingError
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
+#: Organisation whose context an ERROR record is attributed to. Set ONLY at
+#: the points where the organisation becomes known — the auth/principal
+#: resolution dependencies (``modulo.auth.dependencies.bind_principal_context``,
+#: plus its catch-all re-bind in ``api/middleware/catch_all.py``) and the SAQ
+#: worker's ``before_process`` hook (``core/saq_worker.py``). A record logged
+#: while this is ``None`` cannot be persisted (``error_events.organisation_id``
+#: is NOT NULL, FK + RLS), so it is dropped with a WARNING — never silently.
 org_id_var: ContextVar[str | None] = ContextVar("org_id", default=None)
 
 _log = logging.getLogger(__name__)
@@ -121,6 +128,18 @@ class ErrorTrackingLogHandler(logging.Handler):
 
         org_id = org_id_var.get()
         if org_id is None:
+            # No resolvable organisation: ``error_events.organisation_id`` is
+            # NOT NULL with an FK to ``organisations`` (plus RLS), so the row
+            # cannot be written. The record still reaches the stdout JSON
+            # handler, but this handler exists precisely to preserve
+            # diagnostics — dropping it must leave a trace. Residual (FAR-1417):
+            # pre-auth / boot / HMAC-webhook errors logged before any principal
+            # is resolved are stdout-only; persisting them would need a
+            # system/unknown organisation (schema decision, reported).
+            _log.warning(
+                "ErrorTrackingLogHandler.no_org_context — record not persisted to error_events",
+                extra={"record_name": record.name, "record_level": record.levelname},
+            )
             return
 
         limit = getattr(self, "_backlog_limit", 20)
@@ -164,6 +183,14 @@ class ErrorTrackingLogHandler(logging.Handler):
 
             org_id = org_id_var.get()
             if org_id is None:
+                # Defensive re-read inside the forwarding task: the value was
+                # non-None when emit() scheduled it (the task copies emit's
+                # context), so this is only reachable by a direct call. Never
+                # swallow it silently — see emit()'s no-org branch.
+                _log.warning(
+                    "ErrorTrackingLogHandler.no_org_context — record not persisted to error_events",
+                    extra={"record_name": record.name, "record_level": record.levelname},
+                )
                 return
             try:
                 org_uuid = uuid.UUID(org_id)
