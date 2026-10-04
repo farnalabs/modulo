@@ -18,13 +18,15 @@ Feature: Marcus — CISO at a Regulated Organisation
     Then each event's hash is derived from the previous event's hash
     And tampering with any event breaks the chain for all subsequent events
 
-  @goal-marcus-data-residency @awaiting-implementation
+  @goal-marcus-data-residency
   Scenario: Marcus confirms no data leaves the organisation's infrastructure
     Given Modulo is deployed in a self-hosted configuration
     When I inspect outbound network connections
     Then no agent output, source code, or credentials leave the VPC
     And no telemetry is sent to external services
     And the only outbound connections are to configured connector endpoints
+    When the organisation explicitly consents to telemetry on a telemetry-enabled instance
+    Then opt-in consent on an enabled instance is the only path that allows telemetry egress
 
   @goal-marcus-human-only-gates
   Scenario: Marcus enforces human-only decisions on critical gates

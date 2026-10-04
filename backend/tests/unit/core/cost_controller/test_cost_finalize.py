@@ -962,6 +962,37 @@ def test_is_exact_zero_false_for_nonzero() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _is_sub_floor — FAR-1308 sub-floor report detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_sub_floor_true_for_positive_below_floor() -> None:
+    from modulo.core.cost_controller.finalize import _is_sub_floor
+
+    assert _is_sub_floor(0.0000005)
+    assert _is_sub_floor("0.0000005")
+
+
+def test_is_sub_floor_false_for_non_sub_floor_values() -> None:
+    from modulo.core.cost_controller.finalize import _is_sub_floor
+
+    # A bool is never a numeric report (exercises the isinstance guard).
+    assert not _is_sub_floor(True)
+    assert not _is_sub_floor(False)
+    # Zero and at/above the floor are NOT sub-floor; they are handled elsewhere.
+    assert not _is_sub_floor(0)
+    assert not _is_sub_floor(0.000001)
+    assert not _is_sub_floor(1)
+    # Negative or non-finite values are refused for a different reason.
+    assert not _is_sub_floor(-0.0000005)
+    assert not _is_sub_floor(float("nan"))
+    assert not _is_sub_floor(float("inf"))
+    # Non-numeric input is not a report at all.
+    assert not _is_sub_floor("abc")
+    assert not _is_sub_floor(None)
+
+
+# ---------------------------------------------------------------------------
 # _is_abort_error — whole-tx abort detection
 # ---------------------------------------------------------------------------
 
@@ -1479,6 +1510,27 @@ def test_fold_stored_clamped_keeps_exact_zero() -> None:
     ):
         _fold_stored_clamped(node_dict)
     assert node_dict["model_cost_usd"] == 0.0
+
+
+def test_fold_stored_clamped_sub_floor_stamps_rejection_before_pop() -> None:
+    """FAR-1308 third stamp site: outputs-pruned stored-union row.
+
+    The node's ``outputs`` were pruned (``output_obj is None`` → branch 3), so
+    the stored union value is the only surviving candidate. When it is a
+    positive sub-floor report ``clamp_reported`` refuses it (real, unpatched
+    boundary), the fold must stamp ``sub_floor_rejected`` BEFORE popping the
+    cost fields — otherwise the legacy row resurfaces as a false
+    ``agent_not_reported`` with no way to tell a refused report from silence.
+    """
+    node_dict: dict[str, Any] = {
+        "model_cost_usd": 0.0000005,
+        "sandbox_by_map": True,
+    }
+    _fold_stored_clamped(node_dict)
+    assert node_dict.get("model_cost_rejected") is True
+    assert node_dict.get("model_cost_rejection_reason") == "sub_floor_rejected"
+    # Boundary unchanged: the refused value is still popped, never counted.
+    assert "model_cost_usd" not in node_dict
 
 
 # ---------------------------------------------------------------------------

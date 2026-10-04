@@ -17,7 +17,14 @@
       </div>
     </header>
 
-    <div v-if="loading" class="space-y-4" role="status" :aria-label="$t('common.loading')" data-testid="admin-error-detail-loading">
+    <div
+      v-if="loading"
+      class="space-y-4"
+      role="status"
+      aria-busy="true"
+      :aria-label="$t('common.loading')"
+      data-testid="admin-error-detail-loading"
+    >
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div v-for="n in 3" :key="'summary-' + n" class="card p-4">
           <div class="h-3 w-20 animate-pulse rounded bg-muted" />
@@ -25,12 +32,12 @@
         </div>
       </div>
       <div class="card p-4">
-        <div class="h-5 w-32 animate-pulse rounded bg-muted" />
-        <div class="mt-3 h-9 w-64 animate-pulse rounded bg-muted" />
+        <SkeletonBlock height-class="h-5 w-32" />
+        <SkeletonBlock class="mt-3" height-class="h-9 w-64" />
       </div>
       <div class="card p-4">
-        <div class="h-5 w-48 animate-pulse rounded bg-muted" />
-        <div class="mt-2 h-16 w-full animate-pulse rounded bg-muted" />
+        <SkeletonBlock height-class="h-5 w-48" />
+        <SkeletonBlock class="mt-2" height-class="h-16 w-full" />
       </div>
     </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDetail" />
@@ -179,7 +186,7 @@
       <div class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.raw_events', { count: eventsTotal }) }}</h2>
         <div v-if="eventsLoading" class="space-y-2 py-2" role="status" :aria-label="$t('common.loading')" data-testid="admin-error-detail-events-loading">
-          <div v-for="n in 3" :key="'event-skeleton-' + n" class="h-12 w-full animate-pulse rounded bg-muted" />
+          <SkeletonBlock v-for="n in 3" :key="'event-skeleton-' + n" height-class="h-12 w-full" />
         </div>
         <EmptyState
           v-else-if="events.length === 0"
@@ -241,6 +248,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'

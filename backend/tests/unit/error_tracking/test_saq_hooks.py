@@ -362,12 +362,14 @@ class TestAfterProcess:
 
 
 class TestGetEnginePrepPing:
+    base_url = "postgresql+asyncpg://worker:pw@db:5432/modulo"
+
     def test_engine_created_with_pool_pre_ping(self) -> None:
         saved = saq_hooks._ENGINE
         try:
             saq_hooks._ENGINE = None
             settings_mock = MagicMock()
-            settings_mock.modulo_db = "postgres"
+            settings_mock.database_url = self.base_url
             mock_engine = MagicMock()
             with (
                 patch.object(saq_hooks, "_ENGINE", None),
@@ -379,5 +381,66 @@ class TestGetEnginePrepPing:
             assert kwargs["pool_pre_ping"] is True
             assert kwargs["connect_args"]["statement_cache_size"] == 0
             assert kwargs["connect_args"]["ssl"] is False
+        finally:
+            saq_hooks._ENGINE = saved
+
+    def test_honours_sslmode_require(self) -> None:
+        """FAR-1441: sslmode=require must reach asyncpg as ssl='require'
+        (TLS required, fail-closed), never silently downgraded to ssl=False."""
+        saved = saq_hooks._ENGINE
+        try:
+            saq_hooks._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.database_url = self.base_url + "?sslmode=require"
+            mock_engine = MagicMock()
+            with (
+                patch.object(saq_hooks, "_ENGINE", None),
+                patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch("modulo.settings.get_settings", return_value=settings_mock),
+            ):
+                saq_hooks._get_engine()
+            url_arg, kwargs = mock_create.call_args
+            assert kwargs["connect_args"]["ssl"] == "require"
+            # asyncpg rejects sslmode inside the DSN — it must live only in ssl.
+            assert "sslmode" not in str(url_arg)
+        finally:
+            saq_hooks._ENGINE = saved
+
+    def test_fails_closed_on_downgrading_sslmode(self) -> None:
+        """sslmode=prefer/allow refuse the engine loudly — no silent downgrade."""
+        saved = saq_hooks._ENGINE
+        try:
+            saq_hooks._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.database_url = self.base_url + "?sslmode=prefer"
+            with (
+                patch.object(saq_hooks, "_ENGINE", None),
+                patch.object(saq_hooks, "create_async_engine"),
+                patch("modulo.settings.get_settings", return_value=settings_mock),
+                pytest.raises(ValueError, match="sslmode"),
+            ):
+                saq_hooks._get_engine()
+            assert saq_hooks._ENGINE is None
+        finally:
+            saq_hooks._ENGINE = saved
+
+    def test_non_postgres_url_gets_no_asyncpg_args(self) -> None:
+        """The ssl/timeout/statement_cache_size connect args and pool knobs are
+        Postgres-only: a non-Postgres driver URL passes through with none of
+        them."""
+        saved = saq_hooks._ENGINE
+        try:
+            saq_hooks._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.database_url = "sqlite+aiosqlite:///tmp/errorhooks.db"
+            mock_engine = MagicMock()
+            with (
+                patch.object(saq_hooks, "_ENGINE", None),
+                patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch("modulo.settings.get_settings", return_value=settings_mock),
+            ):
+                saq_hooks._get_engine()
+            _, kwargs = mock_create.call_args
+            assert kwargs == {"url": "sqlite+aiosqlite:///tmp/errorhooks.db"}
         finally:
             saq_hooks._ENGINE = saved

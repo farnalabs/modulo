@@ -2,11 +2,12 @@
 
 Supports ``features/infra/health.feature`` — the liveness/readiness endpoint
 contract: ``/healthz`` is advisory-only, ``/healthz/ready`` aggregates the
-non-advisory checks (database, redis, checkpointer, migrations, SAQ workers,
-system crons) plus the FAR-199 dispatcher-reconcile tier, and 503s whenever
-any gate is unavailable. Self-contained: each scenario builds a fresh app
-over the real health router with only the per-check probes patched to a known
-status, so no live Postgres/Redis/browser is required.
+non-advisory checks (database, redis, checkpointer, migrations, database
+hygiene, SAQ workers, system crons) plus the FAR-199 dispatcher-reconcile
+tier, and 503s whenever any gate is unavailable. Self-contained: each
+scenario builds a fresh app over the real health router with only the
+per-check probes patched to a known status, so no live Postgres/Redis/browser
+is required.
 """
 
 from contextlib import ExitStack
@@ -39,6 +40,7 @@ _CHECK_PROBES = (
     "redis",
     "checkpointer",
     "migrations",
+    "db_hygiene",
     "saq_workers",
     "system_crons",
     "dispatcher_reconcile",

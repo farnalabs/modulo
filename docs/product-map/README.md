@@ -875,7 +875,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > fire-once claim — the manifest tracked it but `notifications/notifications.md`
 > lagged; behaviour line + citations added. `feat-runs` (FAR-1305): the
 > truthful `missing_self_report_reason` (`agent_not_reported` vs
-> `zero_report_unproven`) — manifest tracked it but `build/runs.md` lagged;
+> `zero_report_unproven`; a third state, `sub_floor_rejected`, was added
+> 2026-10-04 by FAR-1308) — manifest tracked it but `build/runs.md` lagged;
 > behaviour line + citations added. `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-30):** closed the feature-graph gap left by
@@ -963,6 +964,28 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > sequence advances so the family stays untouched. Removed the scenario from
 > `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`);
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-03):** reconciled four human-readable trackers
+> with behaviour the manifest registry carries but the feature-graph entries
+> lagged behind — shipped behaviour that a reader of the graph (or Assistant's
+> docs indexer) could not find. `feat-analytics` (`analytics/analytics.md`):
+> the FAR-1421 claim→dispatch latency metric (`avg_dispatch_latency_ms` with
+> the `started_at` fallback and NULL-never-0 semantics, provenance copied onto
+> `run_daily_facts` so the read never joins `runs`) plus the
+> `test_analytics_export_contract.py` citation. `feat-triggers`
+> (`triggers/trigger-engine.md`): the FAR-1387 cron no-delivery streak engine
+> (notify-only trip by default, opt-in `no_delivery_auto_deactivate`, 48h
+> minimum window, `cron_trigger.*` audit types) and the FAR-1405 streak-badge
+> rule (`STREAK_COVERED_TRIGGER_TYPES`; "Deactivated" wording driven by backend
+> state, never trigger type). `feat-core-saml-integration`
+> (`auth/saml-integration.md`): the FAR-1010/FAR-1011 cross-org assertion
+> audience containment and per-provider ACS Destination/Recipient pinning
+> (`_enforce_audience_restriction`), citing
+> `test_saml_audience_containment.py` / `test_saml_per_org_regression.py` /
+> `test_sso.py`. `feat-lifecycle-maps` (`pipelines/lifecycle-maps.md`): the
+> FAR-654/FAR-742 journey-display double gating (`lifecycle_map_journeys` flag
+> AND the per-visit "Show work items" checkbox, default OFF), citing
+> `LifecycleMapView.spec.ts`. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

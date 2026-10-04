@@ -19,9 +19,17 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: changelog-classify-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# NO workflow-level concurrency (deliberate; mirrors fast-lane-classify.yml).
+# Opening a PR fires `opened`, and the auto-applied `agent-generated` label
+# fires a near-simultaneous `labeled`, so two runs enter this workflow at once.
+# With `cancel-in-progress: true` the newer run cancelled the earlier one,
+# leaving a CANCELLED check-run on the head SHA. That superseded duplicate is
+# counted as a failure by both the PR Reviewer (pr-reviewer-agent-prompt.md:
+# every non-success/non-skip/non-neutral conclusion is FAILED) and the merge
+# queue (`checks_pass`: every check-run must be `success`), so a fully green
+# PR was blocked and a Branch Fixer run was dispatched for a non-failure
+# (observed 2026-10-04 on PR #1253). Letting every run complete keeps each
+# check-run `success`; this classifier takes seconds, so the extra run is cheap.
 
 jobs:
   changelog-classify:

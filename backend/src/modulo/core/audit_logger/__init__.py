@@ -11,12 +11,13 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.sanitize_log import sanitise_log_value
@@ -34,6 +35,23 @@ LIST_MIN_LIMIT = 1
 LIST_MAX_LIMIT = 1000
 BATCH_MAX_SIZE = 100
 
+# Server-side scan export (the ``export_chain`` deferral companion): the scan
+# streams the WHOLE org chain in ONE response, so there is no offset/limit
+# knob — the server keyset-paginates over the stable ``(created_at ASC, id ASC)``
+# order in fixed ``page_size`` batches, keeping memory bounded for any org size.
+SCAN_KEYSET_PAGE_SIZE = 1000
+SCAN_CSV_COLUMNS = (
+    "created_at",
+    "id",
+    "event_type",
+    "actor_user_id",
+    "resource_type",
+    "resource_id",
+    "request_id",
+    "previous_hash",
+    "payload_json",
+)
+
 __all__ = [
     "append_audit_event",
     "append_audit_event_isolated",
@@ -41,6 +59,7 @@ __all__ = [
     "get_audit_events_batch",
     "get_chain_head",
     "list_audit_events",
+    "stream_export_chain",
     "verify_chain",
 ]
 
@@ -572,6 +591,63 @@ async def export_chain(
         "page": safe_page,
         "page_size": safe_page_size,
     }
+
+
+async def stream_export_chain(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    event_type: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    resource_type: str | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    page_size: int = SCAN_KEYSET_PAGE_SIZE,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield the WHOLE org audit chain as event dicts in one scan.
+
+    The deferral companion to ``export_chain``: the same typed filters and org
+    scoping, but no ``page``/``page_size`` pagination — the server keyset-
+    paginates internally over the stable ``(created_at ASC, id ASC)`` order in
+    fixed ``page_size`` batches, so memory stays bounded for any org size while
+    the caller receives the entire result set as a single stream. One session
+    and one transaction span the whole scan (a point-in-time snapshot against
+    concurrent appends); the RLS org context is set on that session, never on a
+    caller-influenced one.
+    """
+    safe_page_size = max(1, page_size)
+    cursor_created_at: datetime | None = None
+    cursor_id: uuid.UUID | None = None
+
+    base_query = _apply_filters(
+        select(AuditEvent),
+        org_id,
+        event_type=event_type,
+        actor_user_id=actor_user_id,
+        resource_type=resource_type,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        while True:
+            query = base_query
+            if cursor_created_at is not None and cursor_id is not None:
+                query = query.where(
+                    (AuditEvent.created_at > cursor_created_at)
+                    | ((AuditEvent.created_at == cursor_created_at) & (AuditEvent.id > cursor_id))
+                )
+            query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).limit(safe_page_size)
+            result = await session.execute(query)
+            page: list[Any] = list(result.scalars())
+            for event in page:
+                yield _audit_event_to_dict(event)
+            if len(page) < safe_page_size:
+                break
+            last = page[-1]
+            cursor_created_at = last.created_at
+            cursor_id = last.id
 
 
 async def list_audit_events(

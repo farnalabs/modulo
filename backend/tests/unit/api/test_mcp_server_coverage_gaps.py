@@ -290,6 +290,18 @@ class TestMcpSanitizerHelpers:
         errored = _format_breakdown_line({"component": "c", "error": "bad math"})
         assert "(bad math)" in errored
 
+    def test_format_breakdown_line_renders_sub_floor_truthfully(self) -> None:
+        """FAR-1308: a sub-floor report is a REPORT - never "(not reported)"."""
+        line = _format_breakdown_line(
+            {
+                "component": "c",
+                "missing_self_report": True,
+                "missing_self_report_reason": "sub_floor_rejected",
+            }
+        )
+        assert "(reported a value below the countable minimum)" in line
+        assert "not reported" not in line
+
 
 class TestRoleCapCounter:
     def test_record_and_read_role_cap_count(self) -> None:

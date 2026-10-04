@@ -31,7 +31,9 @@ jobs:
       # FAR-1156: the status-code probe above only fails on non-2xx, but
       # /healthz/ready returns HTTP 200 with top-level "status":"ok" while
       # individual sub-checks report "degraded" (the aggregate only rolls up
-      # the six gating checks, and even those stay HTTP 200 at the "degraded"
+      # the SEVEN gating checks - database, redis, checkpointer, migrations,
+      # db_hygiene, saq_workers, system_crons - plus dispatcher_reconcile at
+      # its unavailable tier, and even those stay HTTP 200 at the "degraded"
       # tier - only "unavailable" flips the status code to 503). Parse the
       # BODY and fail when any non-excluded sub-check is not "ok", so this
       # class of failure reaches the same alerting path as a full outage

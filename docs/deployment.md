@@ -371,9 +371,20 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 
 ### Docker Compose (single-server, multi-user)
 
+```bash
+docker compose -f deploy/compose/docker-compose.prod.yml up
 ```
-curl https://modulo.run/install.sh | bash
-# or: docker compose -f deploy/compose/docker-compose.prod.yml up
+
+The native single-install script is a *different* path — it installs a
+self-contained bundle (own Python runtime, PostgreSQL, Redis) for a workstation
+or single machine without Docker; it does not bootstrap this Compose stack.
+Download it to a file and run it rather than streaming it into a shell:
+`install.sh` verifies every download's sha256 before executing anything, and a
+`curl ... | bash` pipe skips that verification entirely.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
+bash modulo-install.sh
 ```
 
 | Component | How it runs |
@@ -388,11 +399,26 @@ Redis is required: the dispatcher enqueues every run to SAQ's Redis queue and cr
 
 ### Kubernetes (production, multi-replica)
 
-The Kubernetes/Helm example deployment configs were removed – they were never
-exercised by CI or used in production. Modulo's only managed deployment path is
-Fly.io. For self-hosting, use the Docker Compose configuration
-(`deploy/compose/docker-compose.prod.yml`). Kubernetes/Helm support can be re-added later as a
-properly maintained example config.
+A maintained, vendor-neutral Helm chart ships in this repository at
+`deploy/helm/modulo/`. It deploys the **Modulo stack** — backend API, SAQ
+runner and system workers, frontend, and an optional in-cluster Redis, against
+an external PostgreSQL — and includes ResourceQuota, LimitRange, optional HPA,
+ingress and namespace templates. `deploy/helm/modulo/values.eks.example.yaml`
+is a validated EKS example (RDS, ElastiCache, ALB), and the chart was deployed
+end-to-end on a real EKS cluster on 2026-09-23 (FAR-1052); see
+`deploy/helm/modulo/README.md` §Validation Status for exactly what was proven
+and which follow-ups remain open.
+
+**Stack versus runtime provider.** The chart installs the stack, not the agent
+runtime. The Kubernetes *runtime provider* — which runs agent workspaces as
+pods — is not available yet (tracked as FAR-1051). On Kubernetes today, agents
+therefore still execute through the Docker or E2B runtime providers; the K8s
+runtime provider is the recommended future shape.
+
+**Supported paths remain unchanged:** Docker Compose
+(`deploy/compose/docker-compose.prod.yml`) is the default server/production
+install, and the native install (`scripts/install.sh`) is the workstation
+path. Modulo's own managed deployment runs on Fly.io.
 
 ---
 

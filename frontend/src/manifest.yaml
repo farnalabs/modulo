@@ -3539,6 +3539,12 @@ elements:
         type: element
         dynamic_testid: false
     /runs/:id:
+      - testid: run-detail-breadcrumb-runs
+        type: link
+        dynamic_testid: false
+      - testid: run-detail-copy-run-id
+        type: button
+        dynamic_testid: false
       - testid: run-detail-share-summary
         type: button
         dynamic_testid: false
@@ -3753,6 +3759,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: run-detail-zero-rejected
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-sub-floor-rejected
         type: element
         dynamic_testid: false
       - testid: run-detail-not-reported
@@ -4910,6 +4919,9 @@ elements:
       - testid: settings-triggers-pause-error
         type: element
         dynamic_testid: false
+      - testid: settings-triggers-loading
+        type: element
+        dynamic_testid: false
       - testid: settings-triggers-streak
         type: element
         dynamic_testid: false
@@ -5212,12 +5224,12 @@ features:
             - "[x] POST /batch-detail returns full details for up to 100 event ids (BATCH_MAX_SIZE), skipping silently only invalid-UUID entries, so cross-page bulk selection works"
             - "[x] GET /export returns paginated JSON (page / page_size clamped to 1..1000, ordered created_at ASC) with the same filters and a total, driving the admin CSV/JSONL export"
             - "[x] /batch-detail and /export additionally require the audit_viewer feature (no view without the flag); every audit endpoint needs audit.manage"
+            - "[x] GET /scan is the server-side scan export companion to /export (same filters, audit_viewer + audit.manage gates, org-scoped RLS): it streams the WHOLE matching event set in ONE response (NDJSON by default, or a Content-Disposition CSV attachment with the scan columns) with no offset/limit pagination — the server keyset-paginates over the stable (created_at ASC, id ASC) order in fixed page-size batches so memory stays bounded for any org size, and an invalid user_id is 422 while pre-stream DB errors surface as a proper status (backend/src/modulo/core/audit_logger/__init__.py stream_export_chain, backend/src/modulo/api/routes/audit.py scan_chain_endpoint, test_audit_scan_route.py, TestScanChain in test_audit.py)"
 
             # Frontend (AdminAuditLogView, /admin/audit)
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
         deferrals:
             - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events — there is no incremental from-chain-head verify for very long chains
-            - The export surface is paginated JSON only (no server-side streaming / scan export for the whole org in one response)
     feat-connectors:
         description: External tool connectors
         status: covered
@@ -5590,6 +5602,7 @@ features:
             - "[x] The product analytics page shows usage and adoption metrics for system administrators"
             - "[x] Consent and enforcement toggles are configurable per instance"
             - "[x] Metrics scheduling ships: a jittered daily metrics-dump SAQ system cron (core/product_analytics/metrics_dump.py) gates the per-instance dump window on the stored jitter offset and intersects it with the consented validity window, then delivers the batch to the vendor ingest endpoint with a stable persisted watermark"
+            - "[x] The transparency endpoint (GET /api/v1/product-analytics/transparency) derives the instance's data-residency posture: egress_allowed is true ONLY when the instance-level switch AND an explicit 'all' consent are both on (core/product_analytics/consent.py), so telemetry egress is fail-closed by default (personas/marcus-ciso.feature)"
             - "[ ] An in-product analytics export/administration surface (self-serve downloadable org metrics, configurable reporting schedule, or an in-app analytics warehouse) is not shipped — telemetry export is vendor-bound"
         deferrals:
             - "In-product analytics export and scheduling administration is tracked under feat-product-analytics; a self-hosted analytics warehouse is feat-analytics scope"
@@ -5618,7 +5631,7 @@ features:
             - "[x] Pressing Analyze creates a NEW assistant session titled with the run label, seeds it with the run identity (run, pipeline, status), the error (code, detail capped at 4000 chars, failing node when per-node telemetry recorded one) and a root-cause-analysis request, opens the Assistant panel, and streams the reply through the existing POST /api/v1/assistant/sessions/{session_id}/stream path - no new backend endpoint; a busy Assistant (stream already running) blocks a second press with its own tooltip and an aria-live status line reports starting/started/failed"
             # Run-level cost warnings (missing self-report surfacing)
             - "[x] A self_reported cost component with at least one eligible sandbox node but no agent report is a CLEAR non-billing state: its breakdown entry stays visible (source self_reported, missing_self_report true) but never renders as a normal $0.000000 money line in the run detail breakdown (no numeric basis, no phantom reported=0/node_count=0)"
-            - "[x] missing_self_report_reason distinguishes the two missing states truthfully (FAR-1305): agent_not_reported when no cost key was ever presented, zero_report_unproven when a node DID present an explicit model_cost_usd 0.0 but the trust boundary refused it as unproven (token usage not all-zero); the run detail basis line and source badge render distinct text for each, the run warnings strip emits a separate entry per state (unreported-cost vs rejected-zero-cost, never claiming a rejected zero was 'not reported by the agent'), the compute_run_warnings fallback message says the $0.00 was rejected as unproven rather than unreported, the reason is exported on the MCP breakdown wire via _MCP_BREAKDOWN_KEYS, and which reports are accepted is unchanged"
+            - "[x] missing_self_report_reason distinguishes the three missing states truthfully (FAR-1305, FAR-1308): agent_not_reported when no cost key was ever presented, zero_report_unproven when a node DID present an explicit model_cost_usd 0.0 but the trust boundary refused it as unproven (token usage not all-zero), sub_floor_rejected when a node presented a POSITIVE model_cost_usd below the countable floor (MAX_REPORTABLE_USD_MIN, e.g. 0.0000005) and the boundary refused it as implausibly small - the agent reported in both refused cases, so neither may be labelled 'not reported'; the run detail source chip, basis line and run warnings strip render distinct text per state (unreported-cost vs rejected-zero-cost vs sub-floor-cost, never claiming a refused report was 'not reported by the agent'), compute_run_warnings emits a distinct fallback message per reason, the reason is exported on the MCP breakdown wire via _MCP_BREAKDOWN_KEYS, the per-node marker carries model_cost_rejection_reason alongside the backward-compatible model_cost_rejected boolean, and which reports are accepted is unchanged"
             - "[x] The run detail response (GET /api/v1/runs/{id}) surfaces a structured warnings list ({\"code\", \"severity\", \"message\"}) derived from the run's cost_breakdown; a missing agent model-cost self-report emits code missing_self_report with severity warning"
             - "[x] The runs-list item (GET /api/v1/runs) carries warnings_count so the runs table renders a warning badge without loading the full run (computed from a single deferred cost_breakdown load, never N+1)"
             - "[x] The run detail page surfaces run-level warnings in a single top strip (id=warnings) that scrolls into view when navigated from the list badge (?warn=1) or a #warnings deep link"

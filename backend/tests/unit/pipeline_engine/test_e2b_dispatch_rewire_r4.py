@@ -246,7 +246,7 @@ async def test_provider_full_dispatch_runs_the_abc_call_sequence(monkeypatch: py
     # ...and the agent command really went through the ABC stream with the
     # dispatch envs (MODULO_SCHEMA_DIR rides on the command env provider).
     assert dispatch.last_command is not None
-    assert dispatch.last_command[0] == "sh"
+    assert dispatch.last_command[0] == "bash"
     assert dispatch.last_environment is not None
     assert dispatch.last_environment["MODULO_SCHEMA_DIR"] == "/home/user/schemas"
 
@@ -823,7 +823,7 @@ async def test_provider_workspace_inputs_receive_the_abc_mediated_handle(
     assert dispatch.events.count("exec") == 4, dispatch.events
     # ...each a shell round-trip through exec_command.
     assert dispatch.last_command is not None
-    assert dispatch.last_command[0] == "sh"
+    assert dispatch.last_command[0] == "bash"
 
 
 # ---------------------------------------------------------------------------

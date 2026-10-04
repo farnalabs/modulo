@@ -48,6 +48,9 @@ from modulo.core.cost_controller import check_and_record_spend, check_pipeline_c
 from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown, clamp_reported
 from modulo.core.cost_controller.breakdown.constants import (
     COST_COLUMN_CAP,
+    MAX_REPORTABLE_USD_MIN,
+    MISSING_REASON_SUB_FLOOR_REJECTED,
+    MISSING_REASON_ZERO_REPORT_UNPROVEN,
     NODE_TYPE_SANDBOX_AGENT,
     TOTAL_CLAMPED_MARKER,
 )
@@ -464,16 +467,68 @@ def _is_exact_zero(value: Any) -> bool:
     return d.is_finite() and d == 0
 
 
+def _is_sub_floor(value: Any) -> bool:
+    """FAR-1308: TRUE iff the value is POSITIVE, finite and below the floor.
+
+    The trust-boundary class refused by ``_extract_reported_cost`` /
+    ``clamp_reported`` for being implausibly small — a report the agent DID
+    make, too small to count (``MAX_REPORTABLE_USD_MIN`` = 1e-6). A zero is
+    NOT sub-floor (it is classified by ``_is_exact_zero``); a negative or
+    non-finite value is refused for a different reason and is never stamped.
+    """
+    if isinstance(value, bool):
+        return False
+    try:
+        d = Decimal(str(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return False
+    return d.is_finite() and d > 0 and d < MAX_REPORTABLE_USD_MIN
+
+
+def _classify_refusal_reason(*presented: Any) -> str | None:
+    """FAR-1308: classify WHY a PRESENTED value was refused by the boundary.
+
+    Returns ``zero_report_unproven`` when any presented value coerces to
+    EXACTLY 0 (FAR-1305), ``sub_floor_rejected`` when any presented value is a
+    positive finite value below ``MAX_REPORTABLE_USD_MIN``, and ``None`` when
+    nothing classifiable was presented — ``None``/absent/bool/non-numeric/
+    negative/non-finite (the pre-FAR-1305 state for the first few: no marker,
+    so the breakdown keeps its legacy ``agent_not_reported`` label; a NEGATIVE
+    value is refused for a reason this vocabulary does not name and is
+    deliberately left unmarked rather than mislabelled).
+
+    Exact zero is checked FIRST: a node presenting both a zero and a sub-floor
+    candidate (raw vs clamped) is an exact-zero report — that is the older,
+    more specific FAR-1305 claim.
+
+    DIAGNOSTIC ONLY: classification never feeds the money math and never
+    changes which reports are accepted — it only picks the truthful LABEL.
+    """
+    if any(_is_exact_zero(value) for value in presented):
+        return MISSING_REASON_ZERO_REPORT_UNPROVEN
+    if any(_is_sub_floor(value) for value in presented):
+        return MISSING_REASON_SUB_FLOOR_REJECTED
+    return None
+
+
 def _stamp_rejected_zero(node_dict: dict[str, Any], *presented: Any) -> None:
-    """FAR-1305: record that a node PRESENTED an explicit exact-zero cost report
-    which the trust boundary REFUSED as unproven.
+    """FAR-1305/FAR-1308: record that a node PRESENTED a cost report value
+    which the trust boundary REFUSED, and WHY.
 
     *presented* are the candidate values the node offered (raw and/or clamped —
-    ``None`` for an absent key, which is never a zero). The marker is DIAGNOSTIC
-    ONLY: it never feeds the money math, never changes which reports are
-    accepted, and never reaches the totals — it exists so the breakdown can say
-    ``zero_report_unproven`` ("the agent reported $0.00 and we rejected it")
-    instead of the false ``agent_not_reported`` ("the agent stayed silent").
+    ``None`` for an absent key, which is never a refusal class). The markers are
+    DIAGNOSTIC ONLY: they never feed the money math, never change which reports
+    are accepted, and never reach the totals — they exist so the breakdown can
+    say ``zero_report_unproven`` ("the agent reported $0.00 and we rejected it")
+    or ``sub_floor_rejected`` ("the agent reported below the countable floor
+    and we rejected it") instead of the false ``agent_not_reported`` ("the
+    agent stayed silent").
+
+    Written markers:
+    * ``model_cost_rejected`` (bool, backward-compat — kept for readers that
+      only ask WHETHER a refusal happened);
+    * ``model_cost_rejection_reason`` (one of the two rejected-* strings above
+      — the WHY that reaches ``build_cost_breakdown``).
 
     Gated on ``sandbox_by_map``: only self-report-eligible nodes can have a
     self-report rejected. An already-stamped marker is left alone.
@@ -482,8 +537,11 @@ def _stamp_rejected_zero(node_dict: dict[str, Any], *presented: Any) -> None:
         return
     if node_dict.get("sandbox_by_map") is not True:
         return  # not a self-report-eligible node
-    if any(_is_exact_zero(value) for value in presented):
-        node_dict["model_cost_rejected"] = True
+    reason = _classify_refusal_reason(*presented)
+    if reason is None:
+        return  # nothing classifiable presented — no marker (legacy behaviour)
+    node_dict["model_cost_rejected"] = True
+    node_dict["model_cost_rejection_reason"] = reason
 
 
 def _presented_zero_values(raw_output: Any) -> tuple[Any, ...]:
@@ -504,17 +562,39 @@ def _presented_zero_values(raw_output: Any) -> tuple[Any, ...]:
     return tuple(values)
 
 
-def _rejected_zero_nodes(enriched: dict[str, dict[str, Any]]) -> set[str]:
-    """Node ids that presented an explicit zero self-report which was rejected.
+def _rejection_reasons(enriched: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Node id -> refusal reason for every node that presented a refused report.
 
     Derived from the ENRICHED union (the single source of truth for what was
     accepted) and consumed by ``build_cost_breakdown`` to pick the truthful
-    ``missing_self_report_reason`` (FAR-1305).
+    ``missing_self_report_reason`` (FAR-1305 zeros, FAR-1308 sub-floor).
+
+    A ``model_cost_rejected`` marker WITHOUT a reason (a row stamped by
+    pre-FAR-1308 code) is reported as ``zero_report_unproven`` — that is the
+    only refusal class that code could stamp, so the default is truthful for
+    stored rows written before the reason field existed.
+    """
+    reasons: dict[str, str] = {}
+    for node_id, entry in enriched.items():
+        if not isinstance(entry, dict) or entry.get("model_cost_rejected") is not True:
+            continue
+        reason = entry.get("model_cost_rejection_reason")
+        reasons[str(node_id)] = reason if isinstance(reason, str) else MISSING_REASON_ZERO_REPORT_UNPROVEN
+    return reasons
+
+
+def _rejected_zero_nodes(enriched: dict[str, dict[str, Any]]) -> set[str]:
+    """Node ids that presented an explicit zero self-report which was rejected.
+
+    A STRICT SUBSET of ``_rejection_reasons``: only ``zero_report_unproven``
+    nodes count here, so a caller that threads this boolean set alone can never
+    mislabel a sub-floor refusal as a rejected $0.00 (and vice versa —
+    ``_rejection_reasons`` carries both classes).
     """
     return {
-        str(node_id)
-        for node_id, entry in enriched.items()
-        if isinstance(entry, dict) and entry.get("model_cost_rejected") is True
+        node_id
+        for node_id, reason in _rejection_reasons(enriched).items()
+        if reason == MISSING_REASON_ZERO_REPORT_UNPROVEN
     }
 
 
@@ -538,6 +618,10 @@ def _fold_stored_clamped(node_dict: dict[str, Any]) -> None:
             node_dict["model_cost_clamped"] = bool(node_dict.get("model_cost_clamped", False))
             node_dict["model_cost_out_of_band_high"] = bool(node_dict.get("model_cost_out_of_band_high", False))
             return
+        # FAR-1308: the stored value was REFUSED — record WHY before popping so
+        # a legacy sub-floor stored row keeps a truthful label downstream
+        # (diagnostic only; the pop itself is unchanged).
+        _stamp_rejected_zero(node_dict, stored)
         _pop_model_cost_fields(node_dict)
         return
     clamped_val, _was_clamped, oob = folded
@@ -574,9 +658,10 @@ def _fold_from_output_obj(node_dict: dict[str, Any], output_obj: dict[str, Any])
             node_dict["model_cost_clamped"] = bool(output_obj.get("model_cost_clamped", False))
             node_dict["model_cost_out_of_band_high"] = bool(output_obj.get("model_cost_out_of_band_high", False))
             return
-        # FAR-1305: the report was REFUSED. If what was refused was an explicit
-        # exact zero, stamp the diagnostic marker FIRST (before the fields are
-        # popped) so the breakdown can tell "rejected $0.00" from "never
+        # FAR-1305/FAR-1308: the report was REFUSED. Stamp the diagnostic
+        # marker with the CLASSIFIED REASON (exact zero -> zero_report_unproven,
+        # positive sub-floor -> sub_floor_rejected) FIRST, before the fields are
+        # popped, so the breakdown can tell "rejected report" from "never
         # reported". Does not change what is accepted — only what is claimed.
         _stamp_rejected_zero(node_dict, fold_input, raw_field)
         _pop_model_cost_fields(node_dict)
@@ -722,13 +807,15 @@ def _enrich_union(
     for node_id, node_dict in union.items():
         output_obj = _node_output_dict(merged_outputs, node_id, merged_telemetry)
         map_type = _enrich_node_fields(node_dict, output_obj, node_type_map.get(node_id))
-        # FAR-1305 — stamp site 2. For split (P1) rows ``merged_outputs`` holds
-        # the PURE RETURN, i.e. the producer's raw ``output.json``: the only
-        # place an explicit ``model_cost_usd: 0.0`` survives, because producer-
-        # stage extraction already refused it and so never wrote the key into
-        # the telemetry envelope (``output_obj`` above therefore has no cost
-        # key, and ``_fold_from_output_obj`` never runs for this node). Stamp
-        # from the pure return when the fold accepted NO report.
+        # FAR-1305/FAR-1308 — stamp site 2. For split (P1) rows ``merged_outputs``
+        # holds the PURE RETURN, i.e. the producer's raw ``output.json``: the
+        # only place a REFUSED cost value survives, because producer-stage
+        # extraction already refused it (an unproven ``0.0``, a positive
+        # sub-floor value, ...) and so never wrote the key into the telemetry
+        # envelope (``output_obj`` above therefore has no cost key, and
+        # ``_fold_from_output_obj`` never runs for this node). Stamp from the
+        # pure return, with the classified reason, when the fold accepted NO
+        # report.
         if "model_cost_usd" not in node_dict and isinstance(merged_outputs, dict):
             _stamp_rejected_zero(node_dict, *_presented_zero_values(merged_outputs.get(node_id)))
         if output_obj is not None:
@@ -2300,6 +2387,7 @@ async def _build_enriched_state(
         live_components,
         settings=get_settings(),
         rejected_zero_nodes=_rejected_zero_nodes(enriched),
+        rejection_reasons=_rejection_reasons(enriched),
     )
     enriched = _write_back_node_cost(enriched, per_node_cost)
     total_tokens = _derive_total_tokens(enriched)

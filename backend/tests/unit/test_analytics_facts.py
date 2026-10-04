@@ -261,6 +261,8 @@ class TestRecordRunFacts:
                 "trigger_id",
                 "dispatch_phase",
                 "dispatch_phase_entered_at",
+                # FAR-1463 node-deadline watchdog firings.
+                "node_deadline_watchdog_fired_count",
             )
 
             def __init__(self, model) -> None:
@@ -434,6 +436,59 @@ class TestRecordRunFacts:
         assert values["trigger_id"] is None
         assert values["dispatch_phase"] is None
         assert values["dispatch_phase_entered_at"] is None
+
+    async def test_watchdog_firing_count_copied_onto_fact(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1463: the run's node-deadline watchdog firing count reaches the
+        fact — values AND the ON CONFLICT update — so a firing recorded on the
+        run (re-dispatch or terminal-fail) is queryable from analytics and
+        survives the run purge (ADR 020: no ``runs`` join on the read path).
+
+        Prove-the-fix: without the ``values``/``update_cols`` entries the fact
+        carries neither key and both assertions fail.
+        """
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run(
+            owner_team_id="44444444-4444-4444-8444-444444444444",
+            pipeline_id="55555555-5555-4555-8555-555555555555",
+            node_deadline_watchdog_fired_count=3,
+        )
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result("Platform"),
+                SimpleNamespace(first=lambda: ("CI", None)),
+                *_blob_read_results(),
+                _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
+                _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["node_deadline_watchdog_fired_count"] == 3
+        # Re-finalization corrects the count in place, like every other fact.
+        assert "node_deadline_watchdog_fired_count" in set(captured["set_"])
+
+    async def test_watchdog_firing_count_null_for_legacy_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run-shaped object without the column degrades to NULL rather than
+        raising — the fail-open contract every defensive ``getattr`` on this
+        writer upholds."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run()  # no node_deadline_watchdog_fired_count attribute
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["node_deadline_watchdog_fired_count"] is None
 
     async def test_failure_is_swallowed_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Team/pipeline ids make the snapshot-dimension reads run (they are

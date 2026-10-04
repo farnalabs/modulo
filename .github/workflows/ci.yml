@@ -250,6 +250,19 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           format: 'table'
+          # Pin the vulnerability DB to the canonical GHCR repository instead of
+          # relying on Trivy's default priority list
+          # [mirror.gcr.io/aquasec/trivy-db:2, ghcr.io/aquasecurity/trivy-db:2].
+          # The GCR mirror intermittently serves a 404 on the artifact layer
+          # (`unexpected status code 404 Not Found`), and Trivy's
+          # shouldTryOtherRepo() only falls through to the next repository on a
+          # transport error (TOOMANYREQUESTS) or BLOB_UNKNOWN - a plain 404 is
+          # neither, so it aborts on the first repo and never tries ghcr.io,
+          # failing this required check on a transient mirror outage (observed
+          # on PR #1253 head 8dbed89f: job 111383553258). Pinning to the
+          # canonical repo still allows a re-run to recover, but removes the
+          # flaky mirror from the critical path.
+          db-repository: 'ghcr.io/aquasecurity/trivy-db:2'
           skip-dirs: '**/.venv,**/node_modules,**/.git,**/.agents,**/.pytest_cache,**/dist,**/build'
 
   backend-test:
@@ -573,7 +586,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.2
+          version: 11.28.3
       - uses: actions/setup-node@v6
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -995,7 +1008,7 @@ jobs:
           enable-cache: true
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.2
+          version: 11.28.3
       - uses: actions/setup-node@v6
         with:
           node-version: "22"

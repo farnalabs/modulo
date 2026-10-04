@@ -168,14 +168,19 @@ describe('SettingsTriggersView', () => {
     expect(wrapper.text()).toContain('Triggers')
   })
 
-  it('shows loading spinner initially', async () => {
+  // STATE-3 (ux-conformance): the list page renders a determinate table
+  // skeleton, NOT an indeterminate spinner. The old assertion pinned
+  // `.animate-spin`, which the criterion forbids for a list/table page.
+  it('renders a table skeleton (not an indeterminate spinner) while loading', async () => {
     ;(api.GET as any).mockReturnValue(new Promise(() => {}))
 
     const wrapper = mount(SettingsTriggersView, {
       global: { stubs: { ...dialogStubs.reduce((a, k) => ({ ...a, [k]: true }), {}), FeatureGate: featureGateStub } },
     })
     await nextTick()
-    expect(wrapper.find('.animate-spin').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-triggers-loading"]').exists()).toBe(true)
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
   })
 
   it('FAR-169: rejects a polling interval below 60 client-side without calling the API', async () => {

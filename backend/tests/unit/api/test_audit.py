@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/admin/audit endpoints."""
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -389,6 +390,107 @@ class TestExportChain:
         assert data["total"] == 0
 
     def test_export_unauthorized(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.URL)
+        assert resp.status_code in (401, 403)
+
+
+class TestScanChain:
+    URL = "/api/v1/admin/audit/scan"
+
+    async def _event_stream(self, *_items: dict):
+        for item in _items:
+            yield item
+
+    def test_scan_returns_ndjson_stream(self, client: TestClient) -> None:
+        e1 = {"id": str(uuid.uuid4()), "event_type": "pipeline.run"}
+        e2 = {"id": str(uuid.uuid4()), "event_type": "user.login"}
+        with (
+            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1, e2)),
+            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/x-ndjson")
+        lines = resp.text.strip().splitlines()
+        assert len(lines) == 2
+
+        assert json.loads(lines[0])["event_type"] == "pipeline.run"
+        assert json.loads(lines[1])["event_type"] == "user.login"
+
+    def test_scan_builds_the_session_factory_for_real(self, client: TestClient) -> None:
+        """The real ``_audit_session_factory`` body runs (engine building patched).
+
+        ``_audit_session_factory(settings)`` must execute in the unit suite so
+        the sessionmaker-over-the-shared-engine construction stays covered; only
+        ``get_or_create_engine`` is mocked, exactly like the analytics route
+        tests, so no real engine is built.
+        """
+        e1 = {"id": str(uuid.uuid4()), "event_type": "pipeline.run"}
+        with (
+            patch("modulo.api.routes.audit.get_or_create_engine", return_value=MagicMock()),
+            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1)),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        assert json.loads(resp.text.strip().splitlines()[0])["event_type"] == "pipeline.run"
+
+    def test_scan_csv_is_an_attachment(self, client: TestClient) -> None:
+        e1 = {"id": str(uuid.uuid4()), "event_type": "pipeline.run"}
+        with (
+            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream(e1)),
+            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+        ):
+            resp = client.get(f"{self.URL}?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert resp.headers["content-disposition"].startswith('attachment; filename="audit-scan.csv"')
+        assert "event_type" in resp.text.splitlines()[0]
+        assert "pipeline.run" in resp.text
+
+    def test_scan_empty_stream_is_an_empty_body(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.audit.stream_export_chain", side_effect=lambda **_: self._event_stream()),
+            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        assert not resp.text
+
+    def test_scan_invalid_format_is_422(self, client: TestClient) -> None:
+        resp = client.get(f"{self.URL}?format=xml")
+        assert resp.status_code == 422
+
+    def test_scan_invalid_user_id_is_422(self, client: TestClient) -> None:
+        resp = client.get(f"{self.URL}?user_id=not-a-uuid")
+        assert resp.status_code == 422
+
+    def test_scan_forwards_filters(self, client: TestClient) -> None:
+        captured = {}
+
+        async def _fake(**kwargs):
+            captured.update(kwargs)
+            for item in ():
+                yield item
+
+        with (
+            patch("modulo.api.routes.audit.stream_export_chain", side_effect=_fake),
+            patch("modulo.api.routes.audit._audit_session_factory", return_value=object()),
+        ):
+            resp = client.get(
+                f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31"
+            )
+        assert resp.status_code == 200
+        assert captured.get("event_type") == "pipeline.run"
+        assert captured.get("actor_user_id") == _USER_ID
+        assert captured.get("resource_type") == "pipeline"
+        assert captured.get("from_date") == datetime(2025, 1, 1)
+        assert captured.get("to_date") == datetime(2025, 12, 31)
+
+    def test_scan_non_admin_returns_403(self, non_admin_client: TestClient) -> None:
+        resp = non_admin_client.get(self.URL)
+        assert resp.status_code == 403
+
+    def test_scan_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)
         assert resp.status_code in (401, 403)
 

@@ -3025,6 +3025,60 @@ class TestGetSystemEngine:
         finally:
             ch._SYSTEM_ENGINE = None
 
+    def test_honours_sslmode_require(self) -> None:
+        """FAR-1441: sslmode=require must reach asyncpg as ssl='require'
+        (TLS required, fail-closed), never silently downgraded to ssl=False."""
+        mock_settings = _settings(
+            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require"
+        )
+        ch._SYSTEM_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=mock_settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
+            ):
+                ch._get_system_engine()
+            _url_arg, kwargs = create_engine.call_args
+            assert kwargs["connect_args"]["ssl"] == "require"
+            # asyncpg rejects sslmode inside the DSN — it must live only in ssl.
+            assert "sslmode" not in str(create_engine.call_args[0][0])
+        finally:
+            ch._SYSTEM_ENGINE = None
+
+    def test_fails_closed_on_downgrading_sslmode(self) -> None:
+        """sslmode=prefer/allow refuse loudly — no silent plaintext downgrade."""
+        mock_settings = _settings(
+            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer"
+        )
+        ch._SYSTEM_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=mock_settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine"),
+                pytest.raises(ValueError, match="sslmode"),
+            ):
+                ch._get_system_engine()
+            assert ch._SYSTEM_ENGINE is None
+        finally:
+            ch._SYSTEM_ENGINE = None
+
+    def test_non_postgres_url_gets_no_ssl_args(self) -> None:
+        """The ssl/statement_cache_size connect args are asyncpg-only: a
+        non-Postgres system URL passes through with no asyncpg knobs."""
+        mock_settings = _settings(modulo_system_database_url="sqlite+aiosqlite:///tmp/system.db")
+        ch._SYSTEM_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=mock_settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
+            ):
+                ch._get_system_engine()
+            _url_arg, kwargs = create_engine.call_args
+            assert "ssl" not in kwargs["connect_args"]
+            assert "statement_cache_size" not in kwargs["connect_args"]
+        finally:
+            ch._SYSTEM_ENGINE = None
+
     def test_fails_closed_when_url_empty(self) -> None:
         mock_settings = _settings(modulo_system_database_url="")
         ch._SYSTEM_ENGINE = None  # reset singleton

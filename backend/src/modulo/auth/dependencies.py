@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ from modulo.auth.jwt import (
     decode_principal,
 )
 from modulo.auth.permissions import _clamp_role
+from modulo.core.logging_config import org_id_var
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -78,9 +79,53 @@ class SystemAdminRequired(HTTPException):
         )
 
 
+def bind_principal_context[PrincipalT: AuthenticatedPrincipal](
+    request: Request | None,
+    principal: PrincipalT,
+) -> PrincipalT:
+    """Publish a resolved principal's organisation where ERROR capture can see it (FAR-1417).
+
+    Two carriers, both needed:
+
+    * ``org_id_var`` (``core.logging_config``) — read synchronously by
+      ``ErrorTrackingLogHandler.emit`` for EVERY log record, so an ERROR
+      logged anywhere downstream of principal resolution is attributed to
+      this organisation and persisted to ``error_events``. Only callable from
+      the request's own task context, so it is visible to the route and its
+      exception handlers but NOT to outer middlewares.
+    * ``request.state.organisation_id`` / ``request.state.user_id`` — the
+      ASGI scope is shared by every middleware layer, so this is how an OUTER
+      middleware (``CatchAllMiddleware``) learns the organisation after the
+      request fails. It re-binds ``org_id_var`` from here before logging, and
+      ``_ingest_unhandled_error`` reads it directly.
+
+    Call this on every path that returns a principal, as soon as the
+    organisation is known. Monotonic: a principal without an organisation
+    (system-admin claim, pre-auth) never clears a value already bound by an
+    earlier dependency on the same request.
+
+    ``request`` is ``None`` when the caller is not a FastAPI-injected
+    dependency (direct/legacy calls, unit tests) — the contextvar is still
+    bound, only the scope carrier is skipped.
+    """
+    if principal.organisation_id is None:
+        return principal
+    org = str(principal.organisation_id)
+    org_id_var.set(org)
+    if request is not None:
+        request.state.organisation_id = org
+        request.state.user_id = str(principal.account_id)
+    return principal
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
     settings: Settings = Depends(get_settings),
+    # ``Request`` is injected by FastAPI (never a query param); it defaults to
+    # None only for direct, non-DI calls. The annotation MUST stay bare
+    # ``Request`` — ``Request | None`` is not special-cased by FastAPI and
+    # would be treated as a response model. Hence the ignore on the default.
+    request: Request = None,  # type: ignore[assignment]
 ) -> AuthenticatedPrincipal:
     """Decode the Bearer JWT and return its validated identity and tenant claims."""
     try:
@@ -92,7 +137,10 @@ async def get_current_user(
         )
         raise InvalidToken from exc
 
-    return principal
+    # EARLIEST point the organisation is known (the claim is decoded locally,
+    # so this does not depend on the database being reachable — a DB-outage 503
+    # logged later in the request still carries the org). FAR-1417.
+    return bind_principal_context(request, principal)
 
 
 async def get_current_tenant_user(
@@ -136,6 +184,9 @@ async def get_current_tenant_user(
 async def get_current_tenant_user_or_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
     settings: Settings = Depends(get_settings),
+    # Injected by FastAPI; None only for the direct (non-DI) calls in tests —
+    # see get_current_user for why the annotation must stay bare ``Request``.
+    request: Request = None,  # type: ignore[assignment]
 ) -> TenantPrincipal:
     """Tenant principal from either a user JWT or an org API key (``mk_``).
 
@@ -259,27 +310,30 @@ async def get_current_tenant_user_or_api_key(
                 },
             )
             raise OrganisationMembershipNotFound
-        return TenantPrincipal(
-            username=key.name,
-            organisation_id=key.organisation_id,
-            account_id=key.account_id,
-            org_role=clamped_role,
-            is_system_admin=False,
-            # FAR-681: thread the key's team scope into the principal so the
-            # team-gate dependency can enforce the boundary (a team-A-scoped
-            # key must not mutate team-B resources even when its OWNER is a
-            # member of team B). Org-wide keys carry team_id=None. getattr for
-            # duck-typed key fakes in existing tests (the real OrgApiKey row
-            # always carries the column).
-            team_id=getattr(key, "team_id", None),
-            # FAR-610: the credential is an org API key, not a browser-login
-            # JWT. human_only HITL gates deny API-key principals on decision
-            # actions; this marker is the mechanism that distinguishes them.
-            via_api_key=True,
-            # FAR-634: an API key is a programmatic credential by definition —
-            # the human_only enforcement's ``client_kind != browser`` rule
-            # subsumes the via_api_key check through this stamp.
-            client_kind=CLIENT_KIND_PROGRAMMATIC,
+        return bind_principal_context(
+            request,
+            TenantPrincipal(
+                username=key.name,
+                organisation_id=key.organisation_id,
+                account_id=key.account_id,
+                org_role=clamped_role,
+                is_system_admin=False,
+                # FAR-681: thread the key's team scope into the principal so the
+                # team-gate dependency can enforce the boundary (a team-A-scoped
+                # key must not mutate team-B resources even when its OWNER is a
+                # member of team B). Org-wide keys carry team_id=None. getattr for
+                # duck-typed key fakes in existing tests (the real OrgApiKey row
+                # always carries the column).
+                team_id=getattr(key, "team_id", None),
+                # FAR-610: the credential is an org API key, not a browser-login
+                # JWT. human_only HITL gates deny API-key principals on decision
+                # actions; this marker is the mechanism that distinguishes them.
+                via_api_key=True,
+                # FAR-634: an API key is a programmatic credential by definition —
+                # the human_only enforcement's ``client_kind != browser`` rule
+                # subsumes the via_api_key check through this stamp.
+                client_kind=CLIENT_KIND_PROGRAMMATIC,
+            ),
         )
 
     try:
@@ -291,7 +345,10 @@ async def get_current_tenant_user_or_api_key(
         )
         raise InvalidToken from exc
 
-    return await get_current_tenant_user(principal)
+    # This branch never reaches get_current_user (it decodes directly), so the
+    # org context is bound here — same carriers, same moment-as-soon-as-known.
+    tenant = await get_current_tenant_user(principal)
+    return bind_principal_context(request, tenant)
 
 
 async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:

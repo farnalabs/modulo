@@ -13,6 +13,7 @@ unit-tests:
   - backend/tests/unit/db/test_lifecycle_refs.py
   - backend/tests/integration/test_lifecycle_map_import_export.py
   - backend/tests/integration/test_lifecycle_map_concurrency.py
+  - frontend/src/__tests__/LifecycleMapView.spec.ts
 bdd:
   - backend/tests/bdd/features/lifecycle_maps/crud.feature
   - backend/tests/bdd/features/lifecycle_maps/versioning.feature
@@ -65,6 +66,16 @@ edges representing transitions between stages.
       version selection, import/export dialog, and journey detail views
       (`frontend/src/stores/lifecycleMaps.ts`,
       `frontend/src/__tests__/lifecycleMapLayout.spec.ts`)
+- [x] Journey display on the map detail view is double-gated (FAR-654 +
+      FAR-742): the journey cards on stage nodes, the Unattributed journeys
+      section, load-more pagination and the journey detail panel render only
+      when the default-OFF `lifecycle_map_journeys` feature flag AND the
+      per-visit "Show work items" checkbox (default unchecked) are both on —
+      with either gate off the view makes no journeys API call, passes an
+      empty journeys list to the renderer and hides all journey UI while
+      stages/edges render normally
+      (`frontend/src/views/lifecycle-map/LifecycleMapView.vue`,
+      `frontend/src/__tests__/LifecycleMapView.spec.ts`)
 
 ## Known Gaps
 
@@ -77,6 +88,17 @@ for real, so malformed-entry rejection is asserted end to end). The
 journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
 
 ## QA History
+
+- 2026-10-03: **Improve Architecture product-map walk** – closed the
+  `feat-lifecycle-maps` tracker lag left by FAR-654/FAR-742 (journey display
+  gating on the map detail view): the manifest `feat-lifecycle-maps` registry
+  carried the shipped double-gating behaviour (`lifecycle_map_journeys`
+  feature flag AND the per-visit "Show work items" checkbox, default OFF, with
+  the no-API-call / empty-journeys-list render path) but the human-readable
+  graph entry had no behaviour line and no frontend-test citation. Added the
+  checked behaviour plus the `LifecycleMapView.vue` code and
+  `LifecycleMapView.spec.ts` unit citations.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-09-20: **product-map review pass** — closed the "No BDD
   for lifecycle map journey detail view" gap. Registered
