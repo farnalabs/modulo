@@ -32,12 +32,12 @@
         </div>
       </div>
       <div class="card p-4">
-        <SkeletonBlock class="h-5 w-32" />
-        <SkeletonBlock class="mt-3 h-9 w-64" />
+        <SkeletonBlock height-class="h-5 w-32" />
+        <SkeletonBlock class="mt-3" height-class="h-9 w-64" />
       </div>
       <div class="card p-4">
-        <SkeletonBlock class="h-5 w-48" />
-        <SkeletonBlock class="mt-2 h-16 w-full" />
+        <SkeletonBlock height-class="h-5 w-48" />
+        <SkeletonBlock class="mt-2" height-class="h-16 w-full" />
       </div>
     </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDetail" />

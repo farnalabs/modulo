@@ -21,6 +21,8 @@ export interface EnvironmentProfile {
   initialisation_strategy: string
   persistence_policy: string
   status: string
+  owner_team_id: string | null
+  visibility: string
   created_at: string
   updated_at: string
 }

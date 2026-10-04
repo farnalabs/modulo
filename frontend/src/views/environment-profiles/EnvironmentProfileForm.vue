@@ -222,6 +222,11 @@ const form = reactive({
 
 const submitted = ref(false)
 const formError = ref<string | null>(null)
+// The form does not expose visibility (it is an org/team policy set elsewhere),
+// but the update payload must echo the loaded profile's value: the backend
+// applies `exclude_unset` updates, so hardcoding 'org' would silently flip a
+// team-scoped profile to org while its owner_team_id survived.
+const loadedVisibility = ref('org')
 
 const formTierLabel = computed(() => {
   const tier = runnerTierForProvider(form.provider_type)
@@ -244,6 +249,9 @@ async function handleSubmit() {
   if (!form.name.trim()) return
   if (!form.provider_type) return
 
+  const profileId = props.profileId || (route.params.id as string)
+  const isUpdate = !!(profileId && profileId !== 'new')
+
   const payload: ProfileCreatePayload = {
     name: form.name.trim(),
     description: form.description.trim() || null,
@@ -253,12 +261,11 @@ async function handleSubmit() {
     network_policy: form.network_policy,
     initialisation_strategy: form.initialisation_strategy,
     persistence_policy: form.persistence_policy,
-    visibility: 'org',
+    visibility: isUpdate ? loadedVisibility.value : 'org',
   }
 
   try {
-    const profileId = props.profileId || (route.params.id as string)
-    if (profileId && profileId !== 'new') {
+    if (isUpdate) {
       await store.updateProfile(profileId, payload)
     } else {
       await store.createProfile(payload)
@@ -283,6 +290,7 @@ onMounted(async () => {
       form.network_policy = p.network_policy
       form.initialisation_strategy = p.initialisation_strategy
       form.persistence_policy = p.persistence_policy
+      loadedVisibility.value = p.visibility
     }
   }
 })

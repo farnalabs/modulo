@@ -54,6 +54,8 @@ const profile = (overrides: Partial<EnvironmentProfile> = {}): EnvironmentProfil
   initialisation_strategy: 'lazy',
   persistence_policy: 'ephemeral',
   status: 'active',
+  owner_team_id: null,
+  visibility: 'org',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   ...overrides,
