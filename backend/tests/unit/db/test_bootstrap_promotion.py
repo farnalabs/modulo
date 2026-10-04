@@ -111,6 +111,148 @@ def test_promoted_main_warns_when_system_url_derivation_fails(
     assert "no usable password/userinfo" in err
 
 
+# ---------------------------------------------------------------------------
+# FAR-1441: split_postgres_sslmode + the admin bootstrap connect
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_url", "expected_ssl"),
+    [
+        pytest.param("postgres://u:p@h:5432/db", "postgres://u:p@h:5432/db", False, id="no-sslmode-explicit-false"),
+        pytest.param(
+            "postgres://u:p@h:5432/db?sslmode=disable", "postgres://u:p@h:5432/db", False, id="disable-explicit-false"
+        ),
+        pytest.param("postgres://u:p@h:5432/db?sslmode=require", "postgres://u:p@h:5432/db", "require", id="require"),
+        pytest.param(
+            "postgres://u:p@h:5432/db?sslmode=verify-ca", "postgres://u:p@h:5432/db", "verify-ca", id="verify-ca"
+        ),
+        pytest.param(
+            "postgres://u:p@h:5432/db?sslmode=verify-full", "postgres://u:p@h:5432/db", "verify-full", id="verify-full"
+        ),
+        pytest.param(
+            "postgres://u:p@h:5432/db?sslmode=REQUIRE", "postgres://u:p@h:5432/db", "require", id="uppercase-normalised"
+        ),
+        pytest.param(
+            "postgres://u:p@h:5432/db?connect_timeout=10&sslmode=require",
+            "postgres://u:p@h:5432/db?connect_timeout=10",
+            "require",
+            id="require-with-other-params-preserved",
+        ),
+        pytest.param(
+            "postgresql+asyncpg://u:p@h:5432/db?sslmode=require&application_name=boot",
+            "postgresql+asyncpg://u:p@h:5432/db?application_name=boot",
+            "require",
+            id="asyncpg-prefix-other-params-preserved",
+        ),
+    ],
+)
+def test_split_postgres_sslmode_translates(url: str, expected_url: str, expected_ssl: bool | str) -> None:
+    """FAR-1441: sslmode is translated to asyncpg's ssl kwarg, never stripped.
+
+    Absent/disable → explicit False (never asyncpg's fail-open ``prefer``
+    default); require/verify-* pass through (asyncpg fails closed); other
+    query params are preserved and sslmode is removed from the DSN.
+    """
+    assert bootstrap_module.split_postgres_sslmode(url) == (expected_url, expected_ssl)
+
+
+@pytest.mark.parametrize("mode", ["prefer", "allow", "verify-bogus", ""])
+def test_split_postgres_sslmode_rejects_downgrading_modes(mode: str) -> None:
+    """prefer/allow silently downgrade to plaintext — refused at boot."""
+    url = f"postgres://u:p@h:5432/db?sslmode={mode}"
+    with pytest.raises(ValueError, match="sslmode"):
+        bootstrap_module.split_postgres_sslmode(url)
+
+
+def test_split_postgres_sslmode_rejects_non_postgres_scheme() -> None:
+    with pytest.raises(ValueError, match="Postgres URL"):
+        bootstrap_module.split_postgres_sslmode("mysql://u:p@h:3306/db")
+
+
+class _FakeConn:
+    async def execute(self, *_a: object, **_k: object) -> str:
+        return "OK"
+
+    async def close(self) -> None:
+        return None
+
+
+def _capture_connect(store: list[tuple[tuple[object, ...], dict[str, object]]]) -> Any:
+    async def fake_connect(*args: object, **kwargs: object) -> Any:
+        store.append((args, kwargs))
+        return _FakeConn()
+
+    return fake_connect
+
+
+def _patch_bootstrap_env(monkeypatch: pytest.MonkeyPatch, admin_url: str) -> None:
+    monkeypatch.setenv("DATABASE_ADMIN_URL", admin_url)
+    monkeypatch.setenv("DATABASE_URL", "postgres://app:pw@db.internal:5432/modulo")
+    monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "")
+    monkeypatch.setattr(bootstrap_module, "_write_env_file", lambda _path, _content: None)
+
+
+def test_promoted_main_honours_sslmode_require_on_bootstrap_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1441: sslmode=require on DATABASE_ADMIN_URL reaches asyncpg as
+    ssl='require' — the bootstrap connect no longer hardcodes ssl=False."""
+    _patch_bootstrap_env(monkeypatch, "postgres://admin:pw@db.internal:5432/modulo?sslmode=require")
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(bootstrap_module.asyncpg, "connect", _capture_connect(captured))
+
+    bootstrap_module.main()
+
+    assert len(captured) == 1
+    args, kwargs = captured[0]
+    assert kwargs["ssl"] == "require"
+    assert "sslmode" not in str(args[0])
+
+
+def test_promoted_main_passes_explicit_false_when_sslmode_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sslmode=disable stays explicit plaintext (never asyncpg's ``prefer``)."""
+    _patch_bootstrap_env(monkeypatch, "postgres://admin:pw@db.internal:5432/modulo?sslmode=disable")
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(bootstrap_module.asyncpg, "connect", _capture_connect(captured))
+
+    bootstrap_module.main()
+
+    assert len(captured) == 1
+    _, kwargs = captured[0]
+    assert kwargs["ssl"] is False
+
+
+def test_promoted_main_passes_no_ssl_kwarg_for_non_postgres_admin_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_bootstrap_env(monkeypatch, "mysql://admin:pw@db.internal:3306/modulo")
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(bootstrap_module.asyncpg, "connect", _capture_connect(captured))
+
+    bootstrap_module.main()
+
+    assert len(captured) == 1
+    _, kwargs = captured[0]
+    assert "ssl" not in kwargs
+
+
+def test_promoted_main_fails_closed_on_downgrading_sslmode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sslmode=prefer refuses the boot loudly — no silent downgrade."""
+    _patch_bootstrap_env(monkeypatch, "postgres://admin:pw@db.internal:5432/modulo?sslmode=prefer")
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(bootstrap_module.asyncpg, "connect", _capture_connect(captured))
+
+    with pytest.raises(ValueError, match="sslmode"):
+        bootstrap_module.main()
+
+    assert not captured
+
+
 _IMPORT_LIGHT_SCRIPT = (
     "import sys\n"
     "import modulo.db.bootstrap\n"

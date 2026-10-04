@@ -1897,6 +1897,7 @@ def _get_system_async_engine() -> AsyncEngine:
     if _SYSTEM_ASYNC_ENGINE is None:
         settings = get_settings()
         if settings.modulo_system_database_url:
+            from sqlalchemy.engine import make_url
             from sqlalchemy.ext.asyncio import create_async_engine
 
             effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
@@ -1909,12 +1910,25 @@ def _get_system_async_engine() -> AsyncEngine:
                         "concurrency": settings.saq_worker_concurrency,
                     },
                 )
+            # FAR-1441: translate the operator's ``sslmode`` into asyncpg's
+            # ``ssl`` connect arg instead of hardcoding ``ssl=False`` (which
+            # silently downgrades ``sslmode=require``). Guard on the URL's
+            # ACTUAL driver scheme, not on any modulo_db knob: a non-Postgres
+            # system URL keeps only the asyncpg knobs it understands.
+            system_url = settings.modulo_system_database_url
+            connect_args: dict[str, Any] = {}
+            if str(make_url(system_url).drivername).startswith("postgres"):
+                from modulo.db.bootstrap import split_postgres_sslmode
+
+                system_url, ssl_arg = split_postgres_sslmode(system_url)
+                connect_args["ssl"] = ssl_arg
+                connect_args["statement_cache_size"] = 0
             _SYSTEM_ASYNC_ENGINE = create_async_engine(
-                settings.modulo_system_database_url,
+                system_url,
                 pool_pre_ping=True,
                 pool_size=effective_pool,
                 max_overflow=0,
-                connect_args={"ssl": False, "statement_cache_size": 0},
+                connect_args=connect_args,
             )
         else:
             _log.error(
