@@ -17,8 +17,9 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 60 seconds. Also pins the chain
 (``0277_run_daily_facts_trigger_dispatch_phase`` ->
 ``0278_runs_workspace_drift_sweep_index`` ->
-``0279_runs_node_deadline_watchdog_fired_count`` as the single linear head) and
-the ``ORDER BY id`` / ``LIMIT 200`` access shape
+``0279_table_autovacuum_tuning`` ->
+``0280_runs_node_deadline_watchdog_fired_count`` as the single linear head) and the
+``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
 They run without a database.
@@ -44,7 +45,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_HEAD_MIGRATION = "0279_runs_node_deadline_watchdog_fired_count"
+_CHAIN_HEAD_MIGRATION = "0280_runs_node_deadline_watchdog_fired_count"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
@@ -171,9 +172,9 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0279(self) -> None:
+    def test_single_head_is_0280_runs_node_deadline_watchdog_fired_count(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0277_run_daily_facts_trigger_dispatch_phase(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

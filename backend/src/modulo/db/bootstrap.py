@@ -22,6 +22,8 @@ import os
 import secrets as _secrets
 import sys
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
 
 import asyncpg
 
@@ -30,6 +32,59 @@ from modulo.db.url_utils import derive_system_database_url, fix_database_url
 __all__ = ["main"]
 
 _TMP_NAME_ATTEMPTS = 8
+
+# sslmode values asyncpg honours FAIL-CLOSED (the connection is refused unless
+# the server negotiates TLS) vs the explicit-plaintext value. ``prefer`` /
+# ``allow`` are absent by design: asyncpg translates them to CERT_NONE with a
+# silent plaintext retry, a downgrade posture this module refuses (FAR-1441).
+_REQUIRE_TLS_SSLMODES = frozenset({"require", "verify-ca", "verify-full"})
+_PLAINTEXT_SSLMODES = frozenset({"disable"})
+
+
+def split_postgres_sslmode(url: str) -> tuple[str, bool | str]:
+    """Extract ``sslmode`` from a Postgres URL into an asyncpg ``ssl`` value.
+
+    Local copy of :func:`modulo.db.url_utils.split_postgres_sslmode` (FAR-1440
+    introduces the shared helper; this module must stay SQLAlchemy-free, so it
+    carries the stdlib-only twin until the shared one lands). Semantics:
+
+    * absent / ``disable`` → ``(url_without_sslmode, False)`` — explicit
+      plaintext, never the asyncpg ``prefer`` driver default (which fails open
+      and broke Fly's private networks with ``ConnectionResetError``);
+    * ``require`` / ``verify-ca`` / ``verify-full`` → the same string — asyncpg
+      builds an SSLContext that FAILS CLOSED when TLS is required and the
+      server cannot provide it;
+    * ``prefer`` / ``allow`` / any other value → ``ValueError`` — they would
+      silently downgrade to plaintext, which is never permitted.
+
+    The returned URL is rebuilt without the ``sslmode`` param (asyncpg rejects
+    it in the DSN). Only Postgres-family schemes are accepted — callers gate on
+    the scheme, and anything else is refused loudly rather than silently
+    passing a bogus ``ssl`` arg (FAR-1441).
+    """
+    parts = urlsplit(url)
+    if not parts.scheme.startswith("postgres"):
+        raise ValueError(f"split_postgres_sslmode expects a Postgres URL, got scheme {parts.scheme!r}")
+    ssl: bool | str = False
+    kept: list[str] = []
+    for item in parts.query.split("&") if parts.query else []:
+        key, _, value = item.partition("=")
+        if key != "sslmode":
+            kept.append(item)
+            continue
+        mode = value.strip().lower().replace("_", "-")
+        if mode in _PLAINTEXT_SSLMODES:
+            ssl = False
+        elif mode in _REQUIRE_TLS_SSLMODES:
+            ssl = mode
+        else:
+            raise ValueError(
+                f"Unsupported sslmode={value!r}: use disable, require, "
+                "verify-ca or verify-full (prefer/allow silently downgrade "
+                "to plaintext and are not permitted)"
+            )
+    query = "&".join(kept)
+    return parts._replace(query=query).geturl(), ssl
 
 
 def _write_env_file(path: str, content: str) -> None:
@@ -78,7 +133,13 @@ def main() -> None:
     admin_url = fix_database_url(admin_url)
     os.environ["DATABASE_ADMIN_URL"] = admin_url
     if admin_url != original:
-        print("Fixed DATABASE_ADMIN_URL scheme + stripped sslmode")  # noqa: T201
+        # FAR-1441: sslmode is no longer silently stripped — it is extracted
+        # from the pre-fix URL and honoured on the admin connect below.
+        msg = (
+            "Fixed DATABASE_ADMIN_URL for the async driver "
+            "(scheme rewrite; sslmode, when present, is honoured via the ssl connect arg)"
+        )
+        print(msg)  # noqa: T201
 
     # Also fix DATABASE_URL (the runtime URL) for backwards compat
     runtime_url = os.environ.get("DATABASE_URL", "")
@@ -89,9 +150,12 @@ def main() -> None:
     # Step 2: Create alembic_version table with VARCHAR(255)
     # Branch migration IDs exceed the default VARCHAR(32).
 
-    async def _bootstrap() -> None:
-        pg_url = admin_url.replace("postgresql+asyncpg://", "postgres://")
-        conn = await asyncpg.connect(pg_url, ssl=False)
+    async def _bootstrap(admin_dsn: str, ssl_arg: bool | str | None) -> None:
+        pg_url = admin_dsn.replace("postgresql+asyncpg://", "postgres://")
+        connect_kwargs: dict[str, Any] = {}
+        if ssl_arg is not None:
+            connect_kwargs["ssl"] = ssl_arg
+        conn = await asyncpg.connect(pg_url, **connect_kwargs)
         try:
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS alembic_version (  version_num VARCHAR(255) NOT NULL PRIMARY KEY)"
@@ -100,8 +164,18 @@ def main() -> None:
         finally:
             await conn.close()
 
+    # FAR-1441: honour the operator's TLS posture on the admin bootstrap
+    # connection. The sslmode is read from the PRE-fix URL (fix_database_url
+    # rewrites the legacy scheme and strips what the driver cannot parse); a
+    # Postgres URL always gets an EXPLICIT ssl value (never asyncpg's
+    # fail-open ``prefer`` default), while a non-Postgres admin URL passes
+    # through unchanged with no ssl connect arg.
+    admin_dsn, admin_ssl = original, None
+    if urlsplit(original).scheme.startswith("postgres"):
+        admin_dsn, admin_ssl = split_postgres_sslmode(original)
+
     try:
-        asyncio.run(_bootstrap())
+        asyncio.run(_bootstrap(admin_dsn, admin_ssl))
     except Exception as exc:
         print(  # noqa: T201
             f"WARNING: Could not bootstrap alembic_version: [{type(exc).__name__}] {exc}",

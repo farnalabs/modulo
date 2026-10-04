@@ -18,8 +18,9 @@ Lenses:
   0276_runs_autovacuum_enabled chains onto 0275, and
   0277_run_daily_facts_trigger_dispatch_phase chains onto 0276, and
   0278_runs_workspace_drift_sweep_index chains onto 0277, and
-  0279_runs_node_deadline_watchdog_fired_count chains onto 0278 as the single
-  linear head. This migration was originally numbered 0268; main landed
+   0279_table_autovacuum_tuning chains onto 0278, and
+   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning as the single
+   linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
   so it was renumbered onto 0270.
@@ -61,7 +62,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0279_runs_node_deadline_watchdog_fired_count"
+_HEAD_MIGRATION = "0280_runs_node_deadline_watchdog_fired_count"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264

@@ -1,7 +1,7 @@
 """FAR-1463: node-deadline watchdog firing counters on ``runs`` + ``run_daily_facts``.
 
-Revision ID: 0279_runs_node_deadline_watchdog_fired_count
-Revises: 0278_runs_workspace_drift_sweep_index
+Revision ID: 0280_runs_node_deadline_watchdog_fired_count
+Revises: 0279_table_autovacuum_tuning
 Create Date: 2026-10-03
 
 FAR-1423 established that the absolute node-deadline watchdog (FAR-369) DOES
@@ -41,8 +41,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0279_runs_node_deadline_watchdog_fired_count"
-down_revision: str | None = "0278_runs_workspace_drift_sweep_index"
+revision: str = "0280_runs_node_deadline_watchdog_fired_count"
+down_revision: str | None = "0279_table_autovacuum_tuning"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
