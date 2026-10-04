@@ -20,16 +20,32 @@ reappear. Arms legitimately exempt are listed in ``_EXEMPT`` with a reason.
 Scope notes:
 
 * The predicate is "reports a 503": raises ``HTTPException(503)`` (directly or
-  via a module-local helper that does), RETURNS a starlette/fastapi ``Response``
-  with ``status_code=503``, or logs ``log_service_unavailable("db_transient",
-  ...)``. Arms that merely swallow, re-raise, or answer 4xx/500 are out of
-  scope — they cannot misreport an outage as a 503.
+  via a helper that does), RETURNS a starlette/fastapi ``Response`` with
+  ``status_code=503``, or logs ``log_service_unavailable("db_transient", ...)``.
+  Arms that merely swallow, re-raise, or answer 4xx/500 are out of scope —
+  they cannot misreport an outage as a 503.
+* Helper resolution is CROSS-MODULE within the scanned ``modulo.api`` tree
+  (iteration-2 fix): a helper reached via ``from modulo.api.<...> import <name>``
+  (incl. ``as`` aliases, relative imports, ``import modulo.api.<...>`` usage and
+  ``import *``) is resolved to its definition in the source module and the
+  503-predicate is computed as a fixed point over the whole import graph —
+  so an arm whose 503 comes from an imported helper is flagged exactly like a
+  module-local one. Helpers defined OUTSIDE the scanned tree (``modulo.core``,
+  ``modulo.db``, third-party) are unresolvable and are NOT treated as 503 —
+  documented boundary, not a silent gap; no current arm delegates its 503 to
+  a non-``modulo.api`` helper.
 * ``except PendingRollbackError`` arms are NOT scanned: that type is a strict
   SUBclass of ``InvalidRequestError``, so such an arm can only ever see
   PendingRollbackError instances — a plain session-contract violation never
   reaches it, and no guard can apply.
 * ``MissingGreenlet`` is a subclass of ``InvalidRequestError``; the guard
   delegates both to the shared classifier, which maps them to 500.
+
+The cross-module resolution is proven by the synthetic-tree tests at the
+bottom of this module: a 503-raising helper in one file, an UNGUARDED arm in
+another file delegating to it (both the ``from ... import`` and the
+``import ... as`` shapes) is flagged; the guarded shape and a module-local
+control behave the same way the real tree does.
 """
 
 from __future__ import annotations
@@ -38,6 +54,7 @@ import ast
 from pathlib import Path
 
 _API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "api"
+_API_PREFIX = "modulo.api"
 
 #: Files whose SQLAlchemyError arms are allowed to report a 503 WITHOUT the
 #: guard, mapped to the reason the exemption is legitimate (FAR-1464).
@@ -52,6 +69,7 @@ _EXEMPT = {
 _GUARD_NAME = "raise_session_contract_error"
 _RESPONSE_CLASSES = frozenset({"Response", "JSONResponse", "PlainTextResponse", "HTMLResponse", "RedirectResponse"})
 _HTTP_503_MARKERS = frozenset({"503", "HTTP_503_SERVICE_UNAVAILABLE"})
+_MAX_BINDING_CHASE = 10
 
 
 def _name_of(node: ast.expr | None) -> str | None:
@@ -99,47 +117,188 @@ def _logs_db_transient(node: ast.Call) -> bool:
     return isinstance(first, ast.Constant) and first.value == "db_transient"
 
 
-def _body_reports_503(body: list[ast.stmt], module_helpers_503: set[str]) -> bool:
-    """Does this statement list report a 503 to the client?
+def _dotted_parts(node: ast.expr | None) -> list[str] | None:
+    """``a.b.c`` -> ``["a", "b", "c"]``; None for non-dotted expressions."""
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute):
+        base = _dotted_parts(node.value)
+        return None if base is None else [*base, node.attr]
+    return None
 
-    Direct raise, return of a 503 Response, a structured ``db_transient``
-    record, or a call to a module-local helper known to raise a 503.
+
+def _body_shape(body: list[ast.stmt]) -> tuple[bool, list[ast.expr]]:
+    """ONE walk of a statement list: (directly reports a 503, call func exprs).
+
+    "Directly" = raises ``HTTPException(503)``, returns a 503 ``Response``, or
+    logs ``log_service_unavailable("db_transient", ...)``. The call funcs are
+    collected so helper-mediated 503s can be resolved against the import-graph
+    fixed point WITHOUT re-walking the AST every iteration (iteration-2
+    perf: the naive re-walk made this test take ~63s on the real tree).
     """
+    direct = False
+    call_funcs: list[ast.expr] = []
     for stmt in body:
         for sub in ast.walk(stmt):
-            if isinstance(sub, ast.Raise) and _raises_503(sub):
-                return True
-            if isinstance(sub, ast.Return) and _returns_503_response(sub):
-                return True
-            if isinstance(sub, ast.Call):
-                fn = _name_of(sub.func)
-                if fn in module_helpers_503:
-                    return True
+            if (isinstance(sub, ast.Raise) and _raises_503(sub)) or (
+                isinstance(sub, ast.Return) and _returns_503_response(sub)
+            ):
+                direct = True
+            elif isinstance(sub, ast.Call):
+                call_funcs.append(sub.func)
                 if _logs_db_transient(sub):
-                    return True
-    return False
+                    direct = True
+    return direct, call_funcs
 
 
-def _module_helpers_raising_503(tree: ast.Module) -> set[str]:
-    """Top-level functions in this module whose body reports a 503.
+def _module_of_rel(rel: str) -> str:
+    """Map a file path relative to the api root to its ``modulo.api...`` module name."""
+    parts = rel.split("/")
+    if parts[-1] == "__init__.py":
+        parts = parts[:-1]
+        return ".".join([_API_PREFIX, *parts]) if parts else _API_PREFIX
+    parts[-1] = parts[-1][: -len(".py")]
+    return ".".join([_API_PREFIX, *parts])
 
-    Route arms commonly delegate the 503 to a local
-    ``_raise_db_unavailable(...)``-style helper; callers of those helpers are
-    in scope exactly like direct raises.
+
+def _resolve_from_module(current_module: str, node: ast.ImportFrom) -> str | None:
+    """Absolute target module of a ``from ... import ...`` (level-aware)."""
+    if node.level:
+        package = current_module.split(".")[:-1]
+        keep = len(package) - (node.level - 1)
+        if keep <= 0:
+            return None
+        base = ".".join(package[:keep])
+        return f"{base}.{node.module}" if node.module else base
+    return node.module
+
+
+class _ApiIndex:
+    """Parsed snapshot of the scanned tree plus its import graph."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.trees: dict[str, ast.Module] = {}
+        self.rels: dict[str, str] = {}
+        self.defs: dict[str, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+        self.bindings: dict[str, dict[str, tuple[str, str]]] = {}
+        self.aliases: dict[str, dict[str, str]] = {}
+        self.stars: dict[str, list[str]] = {}
+        for path in sorted(root.rglob("*.py")):
+            rel = path.relative_to(root).as_posix()
+            module = _module_of_rel(rel)
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            self.trees[module] = tree
+            self.rels[module] = rel
+            self.defs.setdefault(module, {})
+            self.bindings.setdefault(module, {})
+            self.aliases.setdefault(module, {})
+            self.stars.setdefault(module, [])
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    self.defs[module][node.name] = node
+                elif isinstance(node, ast.ImportFrom):
+                    target = _resolve_from_module(module, node)
+                    if target is None:
+                        continue
+                    for alias in node.names:
+                        if alias.name == "*":
+                            self.stars[module].append(target)
+                        else:
+                            self.bindings[module][alias.asname or alias.name] = (target, alias.name)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith(_API_PREFIX):
+                            # import modulo.api.routes.admin [as adm]
+                            self.aliases[module][alias.asname or alias.name.split(".")[0]] = alias.name
+
+
+def _resolve_def_key(index: _ApiIndex, module: str, func: ast.expr) -> tuple[str, str] | None:
+    """Map a call's func expression to the (module, name) of its definition.
+
+    Resolves: local top-level defs; ``from ... import`` bindings (chained
+    re-exports, capped); ``import modulo.api.<...>`` aliases; dotted paths that
+    are themselves a known module; and ``import *`` targets. Returns None for
+    anything outside the scanned tree — unresolvable helpers are NOT treated
+    as 503 (documented boundary in the module docstring).
     """
-    defs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            defs[node.name] = node
-    flagged: set[str] = set()
+    parts = _dotted_parts(func)
+    if not parts:
+        return None
+    if len(parts) == 1:
+        name = parts[0]
+        if name in index.defs.get(module, {}):
+            return (module, name)
+        seen: set[tuple[str, str]] = set()
+        cur_mod, cur_name = module, name
+        for _ in range(_MAX_BINDING_CHASE):
+            binding = index.bindings.get(cur_mod, {}).get(cur_name)
+            if binding is None:
+                break
+            if binding in seen:
+                return None
+            seen.add(binding)
+            cur_mod, cur_name = binding
+            if cur_name in index.defs.get(cur_mod, {}):
+                return (cur_mod, cur_name)
+        for star_target in index.stars.get(module, []):
+            if name in index.defs.get(star_target, {}):
+                return (star_target, name)
+        return None
+    # Dotted: longest known-module prefix, then a def name in that module.
+    for i in range(len(parts) - 1, 0, -1):
+        candidate = ".".join(parts[:i])
+        if candidate in index.rels:
+            if parts[i] in index.defs.get(candidate, {}):
+                return (candidate, parts[i])
+            return None
+    head = parts[0]
+    rest = parts[1:]
+    base: str | None = index.aliases.get(module, {}).get(head)
+    if base is None:
+        binding = index.bindings.get(module, {}).get(head)
+        if binding is not None:
+            # ``from x import mod`` then ``mod.def(...)``: binding names a module
+            # when module+name maps to a file in the tree.
+            as_module = f"{binding[0]}.{binding[1]}"
+            if as_module in index.rels:
+                base = as_module
+    if base is None or not rest:
+        return None
+    sub = ".".join(rest[:-1])
+    target_module = f"{base}.{sub}" if sub else base
+    if target_module in index.rels and rest[-1] in index.defs.get(target_module, {}):
+        return (target_module, rest[-1])
+    return None
+
+
+def _compute_503_states(index: _ApiIndex) -> dict[tuple[str, str], bool]:
+    """Fixed point: which (module, def) definitions report a 503?
+
+    Monotone from "directly reports 503": a def reports a 503 when its body
+    directly does, or calls a helper that already resolves True — through
+    local defs OR imported names, across module boundaries, however deep the
+    chain. Each def's body is walked ONCE and each call's def-key resolved
+    ONCE; the iteration only re-evaluates cached keys against the flipping
+    state (the naive re-walk made this test take ~63s on the real tree).
+    """
+    shapes: dict[tuple[str, str], tuple[bool, list[tuple[str, str]]]] = {}
+    for m, defs in index.defs.items():
+        for name, fdef in defs.items():
+            direct, call_funcs = _body_shape(fdef.body)
+            resolved = [key for f in call_funcs if (key := _resolve_def_key(index, m, f)) is not None]
+            shapes[(m, name)] = (direct, resolved)
+    state = {key: direct for key, (direct, _resolved) in shapes.items()}
     changed = True
     while changed:
         changed = False
-        for name, fdef in defs.items():
-            if name not in flagged and _body_reports_503(fdef.body, flagged):
-                flagged.add(name)
+        for key, (direct, resolved) in shapes.items():
+            if state[key]:
+                continue
+            if direct or any(state.get(dep, False) for dep in resolved):
+                state[key] = True
                 changed = True
-    return flagged
+    return state
 
 
 def _except_type_names(handler: ast.ExceptHandler) -> list[str]:
@@ -165,25 +324,26 @@ def _leads_with_guard(handler: ast.ExceptHandler) -> bool:
     )
 
 
-def _iter_violations() -> list[str]:
+def _iter_violations(api_root: Path = _API_ROOT, exempt: dict[str, str] | None = None) -> list[str]:
+    exempt = _EXEMPT if exempt is None else exempt
+    index = _ApiIndex(api_root)
+    state = _compute_503_states(index)
     violations: list[str] = []
-    for path in sorted(_API_ROOT.rglob("*.py")):
-        rel = path.relative_to(_API_ROOT).as_posix()
-        if rel in _EXEMPT:
+    for module, rel in sorted(index.rels.items(), key=lambda item: item[1]):
+        if rel in exempt:
             continue
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError) as exc:  # pragma: no cover - repo is valid py
-            violations.append(f"  {rel}: cannot parse: {exc}")
-            continue
-        helpers_503 = _module_helpers_raising_503(tree)
+        tree = index.trees[module]
         for node in ast.walk(tree):
             if not isinstance(node, (ast.Try, ast.TryStar)):
                 continue
             for handler in node.handlers:
                 if "SQLAlchemyError" not in _except_type_names(handler):
                     continue
-                if not _body_reports_503(handler.body, helpers_503):
+                direct, call_funcs = _body_shape(handler.body)
+                if not direct and not any(
+                    (key := _resolve_def_key(index, module, func)) is not None and state.get(key, False)
+                    for func in call_funcs
+                ):
                     continue
                 if not _leads_with_guard(handler):
                     violations.append(
@@ -209,3 +369,121 @@ def test_every_exemption_is_a_real_file() -> None:  # pragma: no cover - bookkee
     """Allowlist hygiene: an exemption for a file that no longer exists is stale."""
     missing = [rel for rel in _EXEMPT if not (_API_ROOT / rel).exists()]
     assert not missing, f"stale _EXEMPT entries (file gone): {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Cross-module resolution proof (iteration-2 QA gate): a 503 that is raised in
+# ONE file and delegated to from ANOTHER file must be flagged exactly like a
+# module-local one. Synthetic two-file trees, unguarded vs guarded.
+# ---------------------------------------------------------------------------
+
+_CROSS_HELPER_SOURCE = """\
+from fastapi import HTTPException, status
+
+
+def boom() -> None:
+    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="down")
+"""
+
+_CROSS_ROUTE_FROM_IMPORT = """\
+from sqlalchemy.exc import SQLAlchemyError
+
+from modulo.api.cross_helper_503 import boom
+
+
+async def handler_from_import() -> None:
+    try:
+        await whatever()
+    except SQLAlchemyError:
+        boom()
+"""
+
+_CROSS_ROUTE_DOTTED_IMPORT = """\
+import modulo.api.cross_helper_503 as helper_alias
+from sqlalchemy.exc import SQLAlchemyError
+
+
+async def handler_dotted_import() -> None:
+    try:
+        await whatever()
+    except SQLAlchemyError:
+        helper_alias.boom()
+"""
+
+_CROSS_ROUTE_GUARDED = """\
+from sqlalchemy.exc import SQLAlchemyError
+
+from modulo.api.cross_helper_503 import boom
+
+
+async def handler_from_import() -> None:
+    try:
+        await whatever()
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "routes.cross_route.handler_from_import")
+        boom()
+"""
+
+_LOCAL_ROUTE = """\
+from fastapi import HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
+
+
+def local_boom() -> None:
+    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="down")
+
+
+async def handler_local() -> None:
+    try:
+        await whatever()
+    except SQLAlchemyError:
+        local_boom()
+"""
+
+
+def _write_synthetic_tree(root: Path, route_sources: dict[str, str]) -> None:
+    """Build a miniature modulo.api tree: helper file + route file(s)."""
+    (root / "routes").mkdir(parents=True, exist_ok=True)
+    (root / "cross_helper_503.py").write_text(_CROSS_HELPER_SOURCE, encoding="utf-8")
+    for rel, source in route_sources.items():
+        (root / rel).write_text(source, encoding="utf-8")
+
+
+def test_cross_module_delegating_503_helper_is_flagged_when_unguarded(tmp_path: Path) -> None:
+    """The iteration-2 hole: an arm delegating its 503 to an IMPORTED helper.
+
+    Both import shapes the scanner must follow — ``from modulo.api.X import f``
+    and ``import modulo.api.X as alias`` — must flag the unguarded arm in the
+    importing file, even though the 503 raise lives in a different file.
+    """
+    _write_synthetic_tree(
+        tmp_path,
+        {
+            "routes/cross_route.py": _CROSS_ROUTE_FROM_IMPORT + "\n\n" + _CROSS_ROUTE_DOTTED_IMPORT,
+        },
+    )
+    violations = _iter_violations(tmp_path, exempt={})
+
+    assert any("routes/cross_route.py" in v for v in violations), (
+        f"cross-module-delegated 503 was NOT flagged (the QA-gate hole): {violations}"
+    )
+    flagged_lines = sum(1 for v in violations if "routes/cross_route.py" in v)
+    assert flagged_lines == 2, f"both synthetic arms (from-import and dotted-import) must be flagged: {violations}"
+
+
+def test_cross_module_delegating_503_helper_is_clean_when_guarded(tmp_path: Path) -> None:
+    """The same synthetic shape with the guard first statement passes."""
+    _write_synthetic_tree(tmp_path, {"routes/cross_route.py": _CROSS_ROUTE_GUARDED})
+    violations = _iter_violations(tmp_path, exempt={})
+
+    assert not violations, f"guarded cross-module arm must be clean: {violations}"
+
+
+def test_module_local_delegating_503_helper_is_flagged_when_unguarded(tmp_path: Path) -> None:
+    """Control: the module-local delegation shape keeps being flagged."""
+    _write_synthetic_tree(tmp_path, {"routes/local_route.py": _LOCAL_ROUTE})
+    violations = _iter_violations(tmp_path, exempt={})
+
+    assert any("routes/local_route.py" in v for v in violations), (
+        f"module-local delegation must stay flagged: {violations}"
+    )
