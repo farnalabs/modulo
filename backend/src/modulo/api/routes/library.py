@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_in_dev_operator, require_permission
 from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node, resolve_and_reject_mask_sentinels
 from modulo.api.models.team_visibility import TeamVisibilityMixin
@@ -1076,7 +1076,8 @@ async def _analyse_bundle(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library._analyse_bundle")
         _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1453,7 +1454,8 @@ async def confirm_import_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library.confirm_import_endpoint")
         _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

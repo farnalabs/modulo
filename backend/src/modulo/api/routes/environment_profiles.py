@@ -20,7 +20,7 @@ from modulo.api.constants import (
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_provider import (
@@ -192,7 +192,8 @@ async def list_profiles(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "environment_profiles.list_profiles")
         _log.exception("environment_profiles.list_profiles")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -261,7 +262,8 @@ async def create_profile(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "environment_profiles.create_profile")
         _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -296,7 +298,8 @@ async def get_profile(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "environment_profiles.get_profile")
         _log.exception("environment_profiles.get_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -350,7 +353,8 @@ async def update_profile(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "environment_profiles.update_profile")
         _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -387,7 +391,8 @@ async def delete_profile(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "environment_profiles.delete_profile")
         _log.exception("environment_profiles.delete_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -421,7 +426,8 @@ async def restore_profile(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "environment_profiles.restore_profile")
         _log.exception("environment_profiles.restore_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

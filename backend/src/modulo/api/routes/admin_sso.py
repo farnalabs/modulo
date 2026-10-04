@@ -17,7 +17,7 @@ from modulo.api.constants import (
     MSG_INTERNAL_SERVER_ERROR,
     MSG_RESOURCE_ALREADY_EXISTS,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -243,6 +243,7 @@ async def get_providers(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.get_providers")
         _log.warning("SSO providers DB error on list: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -349,6 +350,7 @@ async def create_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.create_provider_endpoint")
         _log.warning("SSO providers DB error on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -431,6 +433,7 @@ async def update_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.update_provider_endpoint")
         _log.warning("SSO providers DB error on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -486,6 +489,7 @@ async def delete_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.delete_provider_endpoint")
         _log.warning("SSO providers DB error on delete: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -532,6 +536,7 @@ async def test_provider_connection(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.test_provider_connection")
         _log.warning("SSO providers DB error on test connection: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -772,6 +777,7 @@ async def toggle_provider_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.toggle_provider_endpoint")
         _log.warning("SSO providers DB error on toggle: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -839,6 +845,7 @@ async def set_group_mappings_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.set_group_mappings_endpoint")
         _log.warning("SSO providers DB error on set_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -879,6 +886,7 @@ async def get_group_mappings_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_sso.get_group_mappings_endpoint")
         _log.warning("SSO providers DB error on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -14,6 +14,7 @@ from modulo.api.constants import (
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_INTERNAL_SERVER_ERROR,
 )
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
@@ -81,7 +82,8 @@ async def list_housekeeping(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_housekeeping.list_housekeeping")
         _log.exception("admin_housekeeping.list")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -188,7 +190,8 @@ async def perform_cleanup(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_housekeeping.perform_cleanup")
         _log.exception("admin_housekeeping.cleanup")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -261,7 +264,8 @@ async def purge_checkpoints(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_housekeeping.purge_checkpoints")
         _log.exception("admin_housekeeping.purge_checkpoints.db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

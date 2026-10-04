@@ -183,6 +183,57 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         ) from None
 
 
+def raise_session_contract_error(exc: Exception, log_key: str) -> None:
+    """Raise HTTP 500 for a client-side session-contract violation
+    (``InvalidRequestError`` / ``MissingGreenlet``); RETURN for any other
+    exception so the caller's existing SQLAlchemyError handling continues.
+
+    FAR-1464: the misclassification FAR-1408 fixed on ``hitl.py``'s five
+    route-local arms existed across the whole route layer — a local
+    ``except SQLAlchemyError`` arm never reaches ``handle_db_errors``, so a
+    query issued outside the transaction on the ``autobegin=False`` DI session
+    (``InvalidRequestError``) was reported as ``503 "Database temporarily
+    unavailable."`` with ``reason=db_transient`` — a retry-inviting outage
+    reply for a non-retryable local programming bug. Every converted arm calls
+    this guard as its FIRST statement:
+
+    .. code-block:: python
+
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "admin.admin_create_team")
+            logger.exception("admin_create_team SQLAlchemyError", ...)
+            _raise_db_temporarily_unavailable()
+
+    * A session-contract violation is delegated to
+      ``_translate_wrapped_exception`` so the 500 status, the
+      ``MSG_SESSION_CONTRACT`` detail and the ``<log_key>.session_contract_error``
+      record have ONE source of truth (the shared classifier). That path never
+      calls ``log_service_unavailable`` — a programming error must not be
+      filed as a database outage.
+    * ``PendingRollbackError`` (the TRANSIENT subclass of
+      ``InvalidRequestError``) RETURNS: it is not a contract violation, so the
+      caller's own 503 handling runs exactly as before FAR-1464 (arm-specific
+      message, logging, and structured record where one exists). Returning is
+      what keeps every converted arm's transient behaviour byte-identical.
+    * Anything else (``OperationalError``, ``IntegrityError``, ...) RETURNS so
+      the caller's existing SQLAlchemyError handling — 503 message, log key,
+      structured records — continues unchanged.
+
+    The helper never calls ``log_service_unavailable("db_transient", ...)``.
+    Callers must invoke it from an ``except SQLAlchemyError`` arm (returning
+    falls through to that arm's own 503 logic); calling it from a narrower
+    ``except InvalidRequestError`` arm would swallow ``PendingRollbackError``.
+    """
+    if isinstance(exc, PendingRollbackError):
+        return
+    if isinstance(exc, InvalidRequestError):
+        # NoReturn: raises HTTP 500 (MSG_SESSION_CONTRACT) for a session-
+        # contract violation. ``MissingGreenlet`` is an ``InvalidRequestError``
+        # subclass, so it is covered here too.
+        _translate_wrapped_exception(exc, log_key)
+    return
+
+
 def handle_db_errors(
     log_prefix: str = "api",
 ) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:

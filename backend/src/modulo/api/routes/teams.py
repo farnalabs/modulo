@@ -18,7 +18,7 @@ from modulo.api.constants import (
     MSG_TEAM_NAME_ALREADY_EXISTS,
     MSG_TEAM_NOT_FOUND,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -392,7 +392,8 @@ async def my_teams_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.my_teams_endpoint")
         _log.exception("my_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -443,7 +444,8 @@ async def list_teams_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.list_teams_endpoint")
         _log.exception("list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -510,7 +512,8 @@ async def create_team_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.create_team_endpoint")
         _log.exception("create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -581,7 +584,8 @@ async def get_team_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.get_team_endpoint")
         _log.exception(
             "get_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -647,7 +651,8 @@ async def update_team_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.update_team_endpoint")
         _log.exception(
             "update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -757,7 +762,8 @@ async def delete_team_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.delete_team_endpoint")
         _log.exception(
             "delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -846,7 +852,8 @@ async def reassign_team_resources_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.reassign_team_resources_endpoint")
         _log.exception(
             "reassign_team_resources SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -899,7 +906,8 @@ async def list_members_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.list_members_endpoint")
         _log.exception(
             "list_members SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -971,7 +979,8 @@ async def add_member_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.add_member_endpoint")
         _log.exception(
             "add_member SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -1054,7 +1063,8 @@ async def remove_member_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.remove_member_endpoint")
         _log.exception(
             "remove_member SQLAlchemyError",
             extra={
@@ -1150,7 +1160,8 @@ async def change_member_role_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "teams.change_member_role_endpoint")
         _log.exception(
             "change_member_role SQLAlchemyError",
             extra={

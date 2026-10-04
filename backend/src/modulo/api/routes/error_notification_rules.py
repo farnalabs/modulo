@@ -18,7 +18,7 @@ from modulo.api.constants import (
     MSG_NO_ORGANISATION,
     MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, get_plan_context, require_permission
 from modulo.api.models.error_notification_rule import (
     ErrorNotificationRuleCreate,
@@ -98,6 +98,7 @@ async def list_notification_rules(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_notification_rules.list_notification_rules")
         _log.exception("error_notification_rules.list_notification_rules")
         _log.warning("error_tracking.list_rules_db_error")
         raise HTTPException(
@@ -195,6 +196,7 @@ async def create_notification_rule(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_notification_rules.create_notification_rule")
         _log.exception("error_notification_rules.create_notification_rule")
         _log.warning("error_tracking.create_rule_db_error")
         raise HTTPException(
@@ -355,6 +357,7 @@ async def delete_notification_rule(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_notification_rules.delete_notification_rule")
         _log.exception("error_notification_rules.delete_notification_rule")
         _log.warning("error_tracking.delete_rule_db_error")
         raise HTTPException(

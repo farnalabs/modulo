@@ -12,7 +12,7 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.license import (
@@ -176,7 +176,8 @@ async def get_license_status(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="License information is not available. Run database migrations to enable this feature.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_license.get_license_status")
         logger.exception(_CODE_LICENSE_GET_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

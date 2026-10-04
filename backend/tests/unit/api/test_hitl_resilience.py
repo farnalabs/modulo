@@ -1636,7 +1636,12 @@ class TestSessionContractErrorIs500Not503:
     ) -> None:
         """Logged LOUDLY under the distinct session-contract key — never as a DB outage.
 
-        The ``modulo.api.routes.hitl`` assertion is the control for the
+        FAR-1464: the key is now emitted by the SHARED guard
+        (``db_error_handling.raise_session_contract_error`` -> the classifier's
+        ``InvalidRequestError`` arm), so the records carry the
+        ``modulo.api.db_error_handling`` logger instead of the old
+        ``modulo.api.routes.hitl`` local helper — same message key, one source
+        of truth. That presence assertion is the control for the
         ``db_error_reporting`` absence below: it proves caplog actually
         captured this request's logging, so "no service_unavailable record"
         is an observation rather than a harness that captured nothing.
@@ -1651,8 +1656,8 @@ class TestSessionContractErrorIs500Not503:
             resp = _call(client, method, url, payload)
 
         assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR, resp.text
-        hitl_messages = [r.getMessage() for r in caplog.records if r.name == "modulo.api.routes.hitl"]
-        assert log_key in hitl_messages, hitl_messages
+        shared_messages = [r.getMessage() for r in caplog.records if r.name == "modulo.api.db_error_handling"]
+        assert log_key in shared_messages, shared_messages
         # A session-contract violation must never be filed as a DB outage.
         records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
         assert not records, f"a programming error must not write a service_unavailable record: {records}"

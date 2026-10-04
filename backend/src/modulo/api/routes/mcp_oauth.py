@@ -31,7 +31,7 @@ from modulo.api.constants import (
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_UNEXPECTED_ERROR_NO_PERIOD,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -148,7 +148,8 @@ async def register_oauth_client(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_oauth.register_oauth_client")
         _log.exception("mcp_oauth.register_oauth_client")
         _log.warning(
             "mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)}
@@ -202,7 +203,8 @@ async def list_oauth_clients_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_oauth.list_oauth_clients_endpoint")
         _log.exception("mcp_oauth.list_oauth_clients_endpoint")
         _log.warning("mcp_oauth.list_oauth_clients.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -254,7 +256,8 @@ async def remove_oauth_client(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_oauth.remove_oauth_client")
         _log.exception("mcp_oauth.remove_oauth_client")
         _log.warning(
             "mcp_oauth.remove_oauth_client.sqlalchemy_error",
@@ -370,7 +373,8 @@ async def approve_consent(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_oauth.approve_consent")
         _log.exception("mcp_oauth.approve_consent")
         _log.warning("mcp_oauth.approve_consent.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(

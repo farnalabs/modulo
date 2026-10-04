@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import validate_owner_team_for_create
@@ -510,6 +510,7 @@ async def list_lifecycle_maps_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.list_lifecycle_maps_endpoint")
         _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -579,6 +580,7 @@ async def create_lifecycle_map_endpoint(
             detail=_MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.create_lifecycle_map_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -644,6 +646,7 @@ async def import_lifecycle_map_endpoint(
             detail=_MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.import_lifecycle_map_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -680,6 +683,7 @@ async def export_lifecycle_map_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.export_lifecycle_map_endpoint")
         _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -718,6 +722,7 @@ async def get_lifecycle_map_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.get_lifecycle_map_endpoint")
         _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -783,6 +788,7 @@ async def update_lifecycle_map_endpoint(
             detail=_MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.update_lifecycle_map_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -827,6 +833,7 @@ async def delete_lifecycle_map_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.delete_lifecycle_map_endpoint")
         _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -883,6 +890,7 @@ async def restore_lifecycle_map_endpoint(
             detail="Lifecycle map cannot be restored: a stage pipeline is already registered in another active map.",
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.restore_lifecycle_map_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -920,6 +928,7 @@ async def list_lifecycle_map_versions_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.list_lifecycle_map_versions_endpoint")
         _log.exception("lifecycle_maps.list_versions_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -992,6 +1001,7 @@ async def save_lifecycle_map_version_endpoint(
             detail=_MSG_MAP_VERSION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.save_lifecycle_map_version_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1066,6 +1076,7 @@ async def update_lifecycle_map_version_endpoint(
             detail=_MSG_MAP_VERSION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.update_lifecycle_map_version_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1104,6 +1115,7 @@ async def get_lifecycle_map_version_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.get_lifecycle_map_version_endpoint")
         _log.exception("lifecycle_maps.get_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1172,6 +1184,7 @@ async def graduate_lifecycle_map_stage_endpoint(
             detail=_MSG_MAP_VERSION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.graduate_lifecycle_map_stage_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1287,6 +1300,7 @@ async def list_journeys_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.list_journeys_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1352,6 +1366,7 @@ async def get_journey_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.get_journey_endpoint")
         _log.exception(_CODE_LIFECYCLE_MAPS_GET_JOURNEY)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1464,6 +1479,7 @@ async def self_report_journeys_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "lifecycle_maps.self_report_journeys_endpoint")
         _log.exception("lifecycle_maps.self_report_journeys_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
