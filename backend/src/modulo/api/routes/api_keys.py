@@ -200,6 +200,16 @@ async def _enforce_grants_mint_cap(
     principal: TenantPrincipal,
     requested_grants: list[str],
 ) -> None:
+    """REST wrapper over :func:`enforce_grants_mint_cap_for` (principal -> ids)."""
+    await enforce_grants_mint_cap_for(session, principal.account_id, principal.organisation_id, requested_grants)
+
+
+async def enforce_grants_mint_cap_for(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    org_id: uuid.UUID,
+    requested_grants: list[str],
+) -> None:
     """FAR-1477 mint cap: requested grants must be a subset of the caller's LIVE capability.
 
     Generalises ``_enforce_mint_cap``. Each grant must be (a) a known
@@ -221,7 +231,7 @@ async def _enforce_grants_mint_cap(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Permission(s) cannot be delegated to an API key: {', '.join(excluded)}",
         )
-    live_role = await resolve_role_from_membership(session, str(principal.account_id), str(principal.organisation_id))
+    live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
     if live_role is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -802,6 +812,44 @@ async def revoke_api_key_endpoint(
     )
 
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
+
+
+class GrantablePermission(BaseModel):
+    name: str
+    min_role: str
+
+
+class GrantablePermissionsResponse(BaseModel):
+    """Delegable permissions the caller may put in an API key grant-set (FAR-1477)."""
+
+    enabled: bool
+    permissions: list[GrantablePermission]
+
+
+@router.get("/grantable-permissions")
+@handle_db_errors("api_keys.grantable_permissions_endpoint")
+async def grantable_permissions_endpoint(
+    principal: TenantPrincipal = require_permission("api_key.create"),
+) -> GrantablePermissionsResponse:
+    """List permissions a new key's grant-set may contain.
+
+    Sourced from the registry through ``is_delegable`` (the same predicate the
+    mint cap and the enforcement resolvers use), so non-delegable permissions
+    are never offered. Filtered to the caller's own role level for the UI; the
+    mint cap remains the authority. ``enabled`` mirrors the ``api_key_grants``
+    flag -- when OFF the list is empty.
+    """
+    if not await api_key_grants_enabled(principal.organisation_id):
+        return GrantablePermissionsResponse(enabled=False, permissions=[])
+    caller_level = org_role_level(principal.org_role)
+    return GrantablePermissionsResponse(
+        enabled=True,
+        permissions=[
+            GrantablePermission(name=name, min_role=min_role)
+            for name, min_role in sorted(PERMISSIONS.items())
+            if is_delegable(name) and org_role_level(min_role) <= caller_level
+        ],
+    )
 
 
 @router.get("/mcp-config")

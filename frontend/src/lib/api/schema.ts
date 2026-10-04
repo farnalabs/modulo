@@ -5257,6 +5257,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/api-keys/grantable-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Grantable Permissions Endpoint
+         * @description List permissions a new key's grant-set may contain.
+         *
+         *     Sourced from the registry through ``is_delegable`` (the same predicate the
+         *     mint cap and the enforcement resolvers use), so non-delegable permissions
+         *     are never offered. Filtered to the caller's own role level for the UI; the
+         *     mint cap remains the authority. ``enabled`` mirrors the ``api_key_grants``
+         *     flag -- when OFF the list is empty.
+         */
+        get: operations["grantable_permissions_endpoint_api_v1_api_keys_grantable_permissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/api-keys/mcp-config": {
         parameters: {
             query?: never;
@@ -12996,6 +13022,23 @@ export interface components {
         GraduateStageRequest: {
             /** Pipeline Id */
             pipeline_id?: string | null;
+        };
+        /** GrantablePermission */
+        GrantablePermission: {
+            /** Name */
+            name: string;
+            /** Min Role */
+            min_role: string;
+        };
+        /**
+         * GrantablePermissionsResponse
+         * @description Delegable permissions the caller may put in an API key grant-set (FAR-1477).
+         */
+        GrantablePermissionsResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Permissions */
+            permissions: components["schemas"]["GrantablePermission"][];
         };
         /** GraphPosition */
         GraphPosition: {
@@ -31712,6 +31755,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiKeyRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grantable_permissions_endpoint_api_v1_api_keys_grantable_permissions_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantablePermissionsResponse"];
                 };
             };
             /** @description Validation Error */

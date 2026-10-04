@@ -1843,4 +1843,70 @@ describe('SettingsMcpView', () => {
     vm.dismissKeyCreatedDialog()
     expect(vm.copyFailedField).toBeNull()
   })
+
+  // ─── FAR-1477: optional API key grant-set at creation ─────────────────
+
+  const grantablePayload = {
+    enabled: true,
+    permissions: [
+      { name: 'run.list', min_role: 'runner' },
+      { name: 'run.cancel', min_role: 'runner' },
+    ],
+  }
+
+  function mockWithGrantable(grantable: unknown) {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: mockOAuthClients, error: undefined })
+      if (path === '/api/v1/api-keys/grantable-permissions') return Promise.resolve({ data: grantable, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+  }
+
+  async function openCreateDialogWith(grantable: unknown) {
+    mockWithGrantable(grantable)
+    postMock.mockResolvedValueOnce({
+      data: { id: 'k', name: 'New Key', key_value: 'mod_mk_new_secret_1234' },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    return wrapper
+  }
+
+  it('hides the grant picker when the grants flag is off', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
+  })
+
+  it('omits grants from the create body by default (role bundle)', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(true)
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock.mock.calls[0][1].body).toEqual({ name: 'New Key', role: 'operator' })
+  })
+
+  it('sends the ticked permissions as grants when restricted', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    await wrapper.find('[data-testid="api-key-grants-restrict"]').setValue(true)
+    await wrapper.find('[data-testid="api-key-grant-run.list"]').setValue(true)
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock.mock.calls[0][1].body.grants).toEqual(['run.list'])
+  })
+
+  it('never sends an empty grants list: restricted with nothing ticked does not submit', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    await wrapper.find('[data-testid="api-key-grants-restrict"]').setValue(true)
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+  })
 })

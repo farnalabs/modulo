@@ -55,7 +55,9 @@ class TestTriState:
 
     def test_serialize_keeps_null_and_empty_distinct(self) -> None:
         assert serialize_grants(None) is None
-        assert serialize_grants([]) == ""
+        empty = serialize_grants([])
+        assert empty is not None
+        assert not empty
 
     def test_serialize_roundtrip(self) -> None:
         assert parse_grants(serialize_grants(["b.x", "a.y"])) == frozenset({"a.y", "b.x"})
@@ -187,7 +189,7 @@ class TestRestResolver:
 
     @pytest.mark.asyncio
     async def test_null_grants_passes_on_role(self) -> None:
-        await self._check(_principal("runner", None))
+        assert await self._check(_principal("runner", None)) is None
 
     @pytest.mark.asyncio
     async def test_empty_grants_denied(self) -> None:
@@ -197,7 +199,7 @@ class TestRestResolver:
 
     @pytest.mark.asyncio
     async def test_granted_passes(self) -> None:
-        await self._check(_principal("runner", frozenset({"run.trigger"})))
+        assert await self._check(_principal("runner", frozenset({"run.trigger"}))) is None
 
     @pytest.mark.asyncio
     async def test_ungranted_denied(self) -> None:
@@ -248,7 +250,9 @@ class TestResolveKeyGrants:
     @pytest.mark.asyncio
     async def test_flag_on_empty_is_deny_all_set(self) -> None:
         with patch.object(api_key_mod, "api_key_grants_enabled", AsyncMock(return_value=True)):
-            assert await resolve_key_grants(_key("")) == frozenset()
+            resolved = await resolve_key_grants(_key(""))
+        assert resolved is not None
+        assert not resolved
 
     @pytest.mark.asyncio
     async def test_flag_read_error_fails_closed(self) -> None:
@@ -278,7 +282,9 @@ class TestSerialize:
         assert "grants" not in _serialize_key(self._row(None))
 
     def test_empty_grants_emitted_as_empty_list(self) -> None:
-        assert _serialize_key(self._row(""))["grants"] == []
+        emitted = _serialize_key(self._row(""))["grants"]
+        assert emitted is not None
+        assert not emitted
 
     def test_grants_emitted_sorted(self) -> None:
         assert _serialize_key(self._row("b.x a.y"))["grants"] == ["a.y", "b.x"]
@@ -321,11 +327,41 @@ class TestMintCap:
 
     @pytest.mark.asyncio
     async def test_subset_of_live_capability_ok(self) -> None:
-        await self._cap(["run.trigger", "pipeline.list"], "runner")
+        assert await self._cap(["run.trigger", "pipeline.list"], "runner") is None
 
     @pytest.mark.asyncio
     async def test_empty_grants_ok(self) -> None:
-        await self._cap([], "runner")
+        assert await self._cap([], "runner") is None
+
+
+# ── grantable-permissions listing (UI source) ───────────────────────────────
+
+
+class TestGrantablePermissionsEndpoint:
+    async def _list(self, role: str, flag: bool):
+        from modulo.api.routes.api_keys import grantable_permissions_endpoint
+
+        with patch.object(api_keys_routes, "api_key_grants_enabled", AsyncMock(return_value=flag)):
+            return await grantable_permissions_endpoint(principal=_principal(role))
+
+    @pytest.mark.asyncio
+    async def test_flag_off_disabled_and_no_permissions(self) -> None:
+        resp = await self._list("admin", flag=False)
+        assert resp.enabled is False
+        assert not resp.permissions
+
+    @pytest.mark.asyncio
+    async def test_only_delegable_permissions_offered(self) -> None:
+        resp = await self._list("admin", flag=True)
+        offered = {p.name for p in resp.permissions}
+        assert offered
+        assert all(is_delegable(name) for name in offered)
+        assert "api_key.create" not in offered
+
+    @pytest.mark.asyncio
+    async def test_filtered_to_caller_role_level(self) -> None:
+        resp = await self._list("runner", flag=True)
+        assert {p.min_role for p in resp.permissions}.isdisjoint({"operator", "admin"})
 
 
 # ── TTL + immutability ──────────────────────────────────────────────────────

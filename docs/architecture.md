@@ -632,8 +632,12 @@ at enforcement and mint time (never-grantable: human_only HITL, `api_key.*`,
 scopes and principals must consume it rather than keep a second list. With the
 flag OFF a grant-bearing key is denied (401), never widened to its role, and
 `grants` on mint is rejected (422). With the flag ON, user-scoped keys default
-to and are capped at 90 days. Grants are immutable after mint. MCP
-`create_api_key` does not accept grants yet.
+to and are capped at 90 days. Grants are immutable after mint. The MCP
+`create_api_key` tool accepts the same optional `grants` (always an org-scoped
+key, so no 90-day user-key TTL) and runs the same mint cap and flag gate as
+REST. The Settings > MCP create-key dialog offers a grant picker, sourced from
+`GET /api/v1/api-keys/grantable-permissions` (delegable permissions only,
+empty with the flag OFF); it omits `grants` unless the user restricts the key.
 
 
 ### Row-Level Security

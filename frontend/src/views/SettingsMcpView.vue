@@ -184,7 +184,7 @@
       :title="$t('views.SettingsMcpView.create_mcp_api_key')"
       :description="$t('views.SettingsMcpView.generate_new_api_key_description')"
       :confirmText="$t('views.SettingsMcpView.create_mcp_api_key')"
-      :confirmDisabled="!createKeyName.trim()"
+      :confirmDisabled="!createKeyName.trim() || (grantsRestricted && grantsSelected.length === 0)"
       :loading="creatingKey"
       @confirm="createKey"
     >
@@ -222,6 +222,12 @@
   </template>
 </Select>
         </div>
+        <ApiKeyGrantsSelector
+          v-if="grantsEnabled"
+          v-model:restricted="grantsRestricted"
+          v-model:selected="grantsSelected"
+          :permissions="grantablePermissions"
+        />
         <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
       </div>
     </FormDialog>
@@ -300,6 +306,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
 import Select from '../components/shared/AppSelect.vue'
 import McpOauthClientsCard from '../components/settings/McpOauthClientsCard.vue'
+import ApiKeyGrantsSelector, { type GrantablePermission } from '../components/settings/ApiKeyGrantsSelector.vue'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useSecretReveal } from '../composables/useSecretReveal'
 import { useI18n } from 'vue-i18n'
@@ -530,6 +537,13 @@ const createKeyName = ref('')
 const createKeyNameTouched = ref(false)
 const createKeyRole = ref('operator')
 const creatingKey = ref(false)
+// FAR-1477: optional grant-set. `grantsEnabled` mirrors the org's
+// `api_key_grants` flag as reported by the backend (false = selector hidden and
+// `grants` never sent). Restricted off = legacy role bundle (field omitted).
+const grantsEnabled = ref(false)
+const grantablePermissions = ref<GrantablePermission[]>([])
+const grantsRestricted = ref(false)
+const grantsSelected = ref<string[]>([])
 const createKeyError = ref<string | null>(null)
 
 const keyCreatedDialogOpen = ref(false)
@@ -685,7 +699,31 @@ function dismissKeyCreatedDialog() {
   onKeyCreatedDialogClose()
 }
 
+/**
+ * Load the delegable permission list for the grant picker. NON-fatal: any
+ * failure (older backend, 403, network) just hides the picker so key creation
+ * keeps working exactly as before.
+ */
+async function loadGrantablePermissions() {
+  try {
+    const { data, error: err } = await api.GET('/api/v1/api-keys/grantable-permissions')
+    if (err || !data || !data.enabled) {
+      grantsEnabled.value = false
+      grantablePermissions.value = []
+      return
+    }
+    grantablePermissions.value = data.permissions
+    grantsEnabled.value = data.permissions.length > 0
+  } catch {
+    grantsEnabled.value = false
+    grantablePermissions.value = []
+  }
+}
+
 function openCreateKeyDialog() {
+  grantsRestricted.value = false
+  grantsSelected.value = []
+  void loadGrantablePermissions()
   createKeyName.value = ''
   createKeyNameTouched.value = false
   createKeyRole.value = 'operator'
@@ -695,11 +733,20 @@ function openCreateKeyDialog() {
 
 async function createKey() {
   if (!createKeyName.value.trim()) return
+  if (grantsEnabled.value && grantsRestricted.value && grantsSelected.value.length === 0) return
   creatingKey.value = true
   createKeyError.value = null
   try {
     const { data, error: err } = await api.POST('/api/v1/api-keys', {
-      body: { name: createKeyName.value.trim(), role: createKeyRole.value },
+      body: {
+        name: createKeyName.value.trim(),
+        role: createKeyRole.value,
+        // Omitted (not []) unless the user explicitly restricted the key: an
+        // empty list would mean deny-all on the backend.
+        ...(grantsEnabled.value && grantsRestricted.value && grantsSelected.value.length > 0
+          ? { grants: grantsSelected.value }
+          : {}),
+      },
     })
     if (err) {
       createKeyError.value = formatApiError(err)

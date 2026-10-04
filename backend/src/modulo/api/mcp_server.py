@@ -68,10 +68,12 @@ from modulo.api.middleware.sensitive_mask import (
     merge_masked_config,
     merge_masked_graph_nodes,
 )
+from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
     ApiKeyInvalidError,
+    api_key_grants_enabled,
     resolve_key_grants,
     validate_api_key,
 )
@@ -7251,7 +7253,12 @@ async def set_hitl_email_alerts(
         "Create a new organisation API key. Returns the full mk_... key value "
         "ONLY at creation — store it immediately, it is never returned again. "
         "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner'. A key "
-        "cannot be minted above the caller's live org role."
+        "cannot be minted above the caller's live org role. Optional 'grants' "
+        "(list of permission names, e.g. ['pipeline.read']) restricts the key to "
+        "exactly those permissions instead of its full role bundle; omit it for "
+        "the legacy role bundle, pass [] to deny everything. Requires the "
+        "org's api_key_grants flag; grants must be delegable and within your "
+        "own live capability."
     ),
 )
 @_RETRY_DB
@@ -7260,6 +7267,7 @@ async def create_api_key(
     role: str = "operator",
     expires_at: str | None = None,
     team_id: str | None = None,
+    grants: list[str] | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -7283,9 +7291,25 @@ async def create_api_key(
         if team_error is not None:
             return team_error
 
+        # FAR-1477: grants are accepted ONLY with the org flag ON (OFF => 422,
+        # never a silent downgrade to a legacy full-role key).
+        if grants is not None and not await api_key_grants_enabled(org_id):
+            return {
+                "error": "validation_error",
+                "status": 422,
+                "detail": "API key grant-sets are not enabled for this organisation",
+            }
+
         async with _session(org_id) as s:
             await _deny_break_glass_mint(s, account_id)
             await _enforce_api_key_mint_cap(s, account_id, org_id, role)
+            if grants is not None:
+                try:
+                    await enforce_grants_mint_cap_for(s, account_id, org_id, grants)
+                except FastAPIHTTPException as exc:
+                    if exc.status_code == 422:
+                        return {"error": "validation_error", "status": 422, "detail": str(exc.detail)}
+                    raise MCPAuthorizationError(str(exc.detail)) from None
             key, full_key = await auth_create_api_key(
                 s,
                 org_id=org_id,
@@ -7294,6 +7318,7 @@ async def create_api_key(
                 account_id=account_id,
                 team_id=team_uuid,
                 expires_at=parsed_expires_at,
+                grants=grants,
             )
 
         # FAR-620: parity with the REST mint audit (PRD §8.12) + payload stamps.
@@ -7310,6 +7335,7 @@ async def create_api_key(
                 # tool can never produce a user-scoped key.
                 "key_scope": "org",
                 "lookup_prefix": f"mk_{key.lookup_prefix}****",
+                **({"grants": sorted(grants)} if grants is not None else {}),
             },
             log_context="mcp.create_api_key_audit_failed",
         )
@@ -7322,6 +7348,7 @@ async def create_api_key(
             "lookup_prefix": f"mk_{key.lookup_prefix}****",
             "created_at": key.created_at.isoformat() if key.created_at else None,
             "team_id": str(key.team_id) if key.team_id else None,
+            "grants": sorted(grants) if grants is not None else None,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
