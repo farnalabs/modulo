@@ -10140,6 +10140,11 @@ export interface components {
             avg_final_idle_ms?: number | null;
             /** Avg Output Bytes */
             avg_output_bytes?: number | null;
+            /**
+             * Node Deadline Watchdog Fired Count
+             * @default 0
+             */
+            node_deadline_watchdog_fired_count: number;
         };
         /**
          * AnalyticsDimension
@@ -10231,6 +10236,8 @@ export interface components {
             dispatch_phase?: string | null;
             /** Dispatch Phase Entered At */
             dispatch_phase_entered_at?: string | null;
+            /** Node Deadline Watchdog Fired Count */
+            node_deadline_watchdog_fired_count?: number | null;
             /** Created At */
             created_at: string;
         };

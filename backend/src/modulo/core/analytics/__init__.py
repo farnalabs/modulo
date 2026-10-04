@@ -447,6 +447,11 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "dispatch_phase": getattr(run, "dispatch_phase", None),
             "dispatch_phase_entered_at": getattr(run, "dispatch_phase_entered_at", None),
             "workspace_inputs_count": workspace_inputs_count,
+            # FAR-1463: node-deadline watchdog firings copied from the run so
+            # the analytics read path never joins runs (ADR 020) and the
+            # marker outlives the run purge. getattr for legacy run-shaped
+            # objects (pre-column runs degrade to NULL, not an error).
+            "node_deadline_watchdog_fired_count": getattr(run, "node_deadline_watchdog_fired_count", None),
             # FAR-902: schema enforcement aggregate counters — aggregated
             # from per-attempt enforcement records on run_node_outputs.
             "enforcement_native_count": enforcement.native_count if enforcement else None,
@@ -493,6 +498,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "dispatch_phase": stmt.excluded.dispatch_phase,
                 "dispatch_phase_entered_at": stmt.excluded.dispatch_phase_entered_at,
                 "workspace_inputs_count": stmt.excluded.workspace_inputs_count,
+                "node_deadline_watchdog_fired_count": stmt.excluded.node_deadline_watchdog_fired_count,
                 "enforcement_native_count": stmt.excluded.enforcement_native_count,
                 "enforcement_verbatim_count": stmt.excluded.enforcement_verbatim_count,
                 "enforcement_repair_count": stmt.excluded.enforcement_repair_count,

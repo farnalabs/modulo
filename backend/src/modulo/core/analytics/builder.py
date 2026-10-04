@@ -355,6 +355,15 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         ).label("avg_dispatch_latency_ms"),
         sa.func.avg(RunDailyFact.final_idle_ms).label("avg_final_idle_ms"),
         sa.func.avg(RunDailyFact.output_bytes).label("avg_output_bytes"),
+        # FAR-1463: node-deadline watchdog firings summed across the bucket's
+        # runs. A firing is recorded whether the kill re-dispatched (which
+        # nulls error_code, leaving no other fingerprint) or terminal-failed,
+        # so this is the only analytics signal for a re-dispatched firing.
+        # coalesce: the fact column is NULL for pre-FAR-1463 rows, and SUM over
+        # an all-NULL group is NULL — an unknown/empty bucket must read 0.
+        sa.func.coalesce(sa.func.sum(RunDailyFact.node_deadline_watchdog_fired_count), 0).label(
+            "node_deadline_watchdog_fired_count"
+        ),
     ]
 
     params: dict[str, Any] = {
@@ -804,6 +813,7 @@ def _empty_bucket() -> dict[str, Any]:
         "final_idle_n": 0,
         "output_bytes_sum": 0.0,
         "output_bytes_n": 0,
+        "node_deadline_watchdog_fired": 0,
     }
 
 
@@ -866,6 +876,10 @@ def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
     if avg_output is not None:
         bucket["output_bytes_sum"] += float(avg_output) * cnt
         bucket["output_bytes_n"] += cnt
+    # FAR-1463: sum the per-run watchdog-firing counts (getattr default keeps
+    # hand-built row doubles without the attribute at 0, like every other
+    # metric here).
+    bucket["node_deadline_watchdog_fired"] += int(getattr(row, "node_deadline_watchdog_fired_count", None) or 0)
 
 
 def _build_time_grid(group_by: AnalyticsGroupBy, date_from: date, date_to: date) -> list[date] | list[datetime]:
@@ -943,6 +957,8 @@ def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any 
         "avg_dispatch_latency_ms": round(avg_dispatch_latency, 1) if avg_dispatch_latency is not None else None,
         "avg_final_idle_ms": round(avg_final_idle, 1) if avg_final_idle is not None else None,
         "avg_output_bytes": round(avg_output_bytes, 1) if avg_output_bytes is not None else None,
+        # FAR-1463: total node-deadline watchdog firings in the bucket.
+        "node_deadline_watchdog_fired_count": b["node_deadline_watchdog_fired"] if b else 0,
     }
 
 

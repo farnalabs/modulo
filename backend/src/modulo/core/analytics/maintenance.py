@@ -367,6 +367,9 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.trigger_id.label("trigger_id"),
             Run.dispatch_phase.label("dispatch_phase"),
             Run.dispatch_phase_entered_at.label("dispatch_phase_entered_at"),
+            # FAR-1463: node-deadline watchdog firings — straight from the run,
+            # mirroring the live writer (no derived expression).
+            Run.node_deadline_watchdog_fired_count.label("node_deadline_watchdog_fired_count"),
         )
         .select_from(Run)
         .outerjoin(Team, Team.id == Run.owner_team_id)
@@ -421,6 +424,7 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.trigger_id,
                 RunDailyFact.dispatch_phase,
                 RunDailyFact.dispatch_phase_entered_at,
+                RunDailyFact.node_deadline_watchdog_fired_count,
             ],
             select_stmt,
         )
