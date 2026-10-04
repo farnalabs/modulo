@@ -13,6 +13,7 @@ unit-tests:
   - backend/tests/unit/test_analytics_record_facts.py
   - backend/tests/unit/test_analytics_service.py
   - backend/tests/unit/test_analytics_service_execution.py
+  - backend/tests/unit/api/test_analytics_export_contract.py
 bdd:
   - backend/tests/bdd/features/analytics/query.feature
   - backend/tests/bdd/features/analytics/test_analytics_query_steps.py
@@ -63,6 +64,17 @@ reports resolve against a consistent fact model.
       run_id)` order in fixed page-size batches, sharing the typed filters, org +
       team-boundary scoping, per-org rate limit and bounded statement timeout of
       `/export` (`backend/tests/unit/test_analytics_service_execution.py`)
+- [x] Claim→dispatch latency (FAR-1421): every bucket carries
+      `avg_dispatch_latency_ms` = `dispatch_phase_entered_at` − `created_at`
+      (the durable post-claim phase stamp from `pipeline_execution.py`),
+      falling back to `started_at` − `created_at` when the phase timestamp is
+      NULL (pre-migration rows / no durable phase / purged-run backfills), and
+      is groupable per trigger with `dimension=trigger_type` or
+      `dimension=trigger_id` — both provenance fields are copied onto
+      `run_daily_facts` at finalize so the read never joins `runs` (ADR 020)
+      and the metric survives the run purge; NULL when the bucket has no
+      sample, never 0 (`core/analytics/builder.py`,
+      `backend/tests/unit/api/test_analytics_export_contract.py`)
 - [x] Concurrency (`/concurrency`) reports the pooled slot-utilisation series
       (`pool_reference` + per-bucket `max_active`/`avg_active`/`max_queued`/
       `avg_queued`), and the guardrail scorecard (`/guardrails`) is labelled
@@ -74,6 +86,19 @@ reports resolve against a consistent fact model.
   not a shared Redis-scaled limiter across a fleet of workers.
 
 ## QA History
+
+- 2026-10-03: **Improve Architecture product-map walk** – closed the
+  `feat-analytics` tracker lag left by FAR-1421 (merged 2026-09-25): the
+  manifest `feat-analytics` registry carried the claim→dispatch latency
+  behaviour (`avg_dispatch_latency_ms` per bucket, groupable per trigger via
+  `dimension=trigger_type` / `trigger_id`) but the human-readable graph entry
+  had no behaviour line and never cited the export-contract unit suite. Added
+  the checked behaviour (the `dispatch_phase_entered_at` − `created_at` metric
+  with the `started_at` fallback, `run_daily_facts` provenance copied at
+  finalize so the read never joins `runs`, and the NULL-never-0 semantics) plus
+  the `core/analytics/builder.py` code citation and the
+  `test_analytics_export_contract.py` unit citation.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 
 - 2026-09-21: **product-map review pass** — closed the
   "No server-side streaming / scan export for the whole org in one response"

@@ -35,7 +35,12 @@ from sqlalchemy.ext.asyncio import (
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.api.team_scope import TeamScopeProvider, team_membership_exists
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from modulo.auth.dependencies import (
+    bind_principal_context,
+    get_current_tenant_user,
+    get_current_tenant_user_or_api_key,
+    get_current_user,
+)
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.auth.permissions import (
     PermissionConfigurationError,
@@ -897,6 +902,10 @@ async def get_current_tenant_user_optional(
     credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
+    # Injected by FastAPI; None only for the direct (non-DI) calls in tests —
+    # see auth.dependencies.get_current_user for why the annotation must stay
+    # bare ``Request``.
+    request: Request = None,  # type: ignore[assignment]
 ) -> TenantPrincipal | None:
     """Optional tenant principal (``None`` when unauthenticated).
 
@@ -920,6 +929,12 @@ async def get_current_tenant_user_optional(
             return None
     except JWTError:
         return None
+
+    # Bind before the break-glass DB read below: the organisation is already
+    # known from the claim, so an ERROR on that read (or later in the request)
+    # is attributed rather than dropped (FAR-1417). Monotonic — a denial still
+    # leaves the org of the credential that was presented.
+    bind_principal_context(request, principal)
 
     try:
         from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live

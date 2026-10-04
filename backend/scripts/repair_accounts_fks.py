@@ -55,8 +55,19 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
+from typing import Any
+
+# Make ``modulo`` importable when this documented repair tool is run directly
+# from a repo checkout (``python scripts/repair_accounts_fks.py``) rather than
+# through the installed package. Mirrors the other backend/scripts entrypoints
+# (backfill_daily_facts.py, migrate-checkpoint-blobs.py). The helper it imports
+# is stdlib-only, so this keeps the "asyncpg + stdlib only" runtime contract.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
+
+from modulo.db.bootstrap import split_postgres_sslmode
 
 # FK on-delete action shared by the nullable-account FKs below: deleting the
 # account nulls the child column rather than cascading.
@@ -163,20 +174,26 @@ _ACCOUNTS_GRANTS: tuple[str, ...] = (
 _ON_DELETE_ACTIONS = frozenset({ON_DELETE_RESTRICT, ON_DELETE_CASCADE, ON_DELETE_SET_NULL, "NO ACTION", "SET DEFAULT"})
 
 
-def _resolve_db_url(raw: str) -> str:
-    """Convert a SQLAlchemy/asyncpg-style URL into an asyncpg connection string."""
+def _resolve_db_url(raw: str) -> tuple[str, bool | str | None]:
+    """Convert a SQLAlchemy/asyncpg-style URL into an asyncpg connection string.
+
+    Returns ``(url, ssl_arg)`` where ``ssl_arg`` is the value for asyncpg's
+    ``ssl`` connect kwarg (``None`` = do not pass one). FAR-1441: the operator's
+    ``sslmode`` is HONOURED — never silently stripped — and unsupported modes
+    (``prefer``/``allow``) fail closed with ``ValueError``.
+    """
     url = raw
     for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgres://"):
         if url.startswith(prefix):
             url = "postgresql://" + url[len(prefix) :]
             break
-    # asyncpg does not understand sslmode in the query string -- strip it
-    # (mirrors settings.py). SSL mode is negotiated by asyncpg by default.
-    if "?" in url:
-        base, _, query = url.partition("?")
-        kept = [kv for kv in query.split("&") if kv and not kv.startswith("sslmode=")]
-        url = base + ("?" + "&".join(kept) if kept else "")
-    return url
+    if url.startswith("postgres"):
+        # asyncpg does not accept sslmode in the query string; translate it to
+        # the ``ssl`` kwarg instead of dropping it (FAR-1441).
+        return split_postgres_sslmode(url)
+    # Non-Postgres URL: pass through unchanged with no ssl kwarg (asyncpg will
+    # refuse the DSN loudly — the caller's scheme, the caller's problem).
+    return url, None
 
 
 def _q(ident: str) -> str:
@@ -467,8 +484,11 @@ async def _cmd_repair(conn: asyncpg.Connection, confirmed: bool = False) -> int:
     return await _cmd_add_fks(conn)
 
 
-async def _dispatch(command: str, url: str, confirmed: bool = False) -> int:
-    conn = await asyncpg.connect(url)
+async def _dispatch(command: str, url: str, confirmed: bool = False, ssl_arg: bool | str | None = None) -> int:
+    connect_kwargs: dict[str, Any] = {}
+    if ssl_arg is not None:
+        connect_kwargs["ssl"] = ssl_arg
+    conn = await asyncpg.connect(url, **connect_kwargs)
     try:
         if command == "check":
             return await _cmd_check(conn)
@@ -507,7 +527,8 @@ def main() -> None:
         print("ERROR: DATABASE_URL is not set.", file=sys.stderr)
         sys.exit(1)
     try:
-        rc = asyncio.run(_dispatch(args.command, _resolve_db_url(raw), args.confirmed))
+        dsn, ssl_arg = _resolve_db_url(raw)
+        rc = asyncio.run(_dispatch(args.command, dsn, args.confirmed, ssl_arg=ssl_arg))
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)

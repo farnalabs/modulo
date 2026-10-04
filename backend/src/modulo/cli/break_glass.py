@@ -129,14 +129,31 @@ def get_break_glass_engine(settings: Settings) -> AsyncEngine:
     ``api.dependencies.get_or_create_engine``'s module-level cache.
     """
     global _bg_engine, _bg_engine_url
-    url = settings.modulo_break_glass_database_url
-    if _bg_engine is None or _bg_engine_url != url:
+    keyed_url = settings.modulo_break_glass_database_url
+    if _bg_engine is None or _bg_engine_url != keyed_url:
+        # FAR-1441: translate the operator's ``sslmode`` into asyncpg's ``ssl``
+        # connect arg instead of hardcoding ``ssl=False`` (which silently
+        # downgrades ``sslmode=require``). Guard on the URL's ACTUAL driver
+        # scheme, not on any modulo_db knob: a non-Postgres break-glass URL
+        # passes through unchanged with no ssl connect arg.
+        effective_url = keyed_url
+        connect_args: dict[str, Any] = {"timeout": 10}
+        from sqlalchemy.engine import make_url
+
+        if str(make_url(keyed_url).drivername).startswith("postgres"):
+            from modulo.db.bootstrap import split_postgres_sslmode
+
+            effective_url, ssl_arg = split_postgres_sslmode(keyed_url)
+            connect_args["ssl"] = ssl_arg
         _bg_engine = create_async_engine(
-            url,
+            effective_url,
             pool_pre_ping=True,
-            connect_args={"timeout": 10, "ssl": False},
+            connect_args=connect_args,
         )
-        _bg_engine_url = url
+        # Cache key stays the RAW settings URL: two operator URLs differing
+        # only by sslmode strip to the same effective DSN but must never share
+        # a cached engine.
+        _bg_engine_url = keyed_url
     return _bg_engine
 
 
