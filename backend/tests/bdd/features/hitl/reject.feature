@@ -8,6 +8,7 @@
 # its normal edge instead of terminating. FAR-1487 changes the default so a
 # rejection terminates the run. Do not treat these scenarios as evidence of
 # shipped behaviour until that lands.
+@far-1487
 Feature: HITL Reject
   As an approver
   I want to reject a run waiting at a HITL review
@@ -16,6 +17,7 @@ Feature: HITL Reject
   Background:
     Given I am authenticated as an approver in org "acme"
 
+  @far-1487
   Scenario: Reject a claimed gate
     Given a run is waiting at gate "pre-deploy"
     And I have claimed gate "pre-deploy"
@@ -23,6 +25,7 @@ Feature: HITL Reject
     Then the response status is 200
     And the run status becomes "rejected"
 
+  @far-1487
   Scenario: Rejected run includes rejection reason
     Given a run is waiting at gate "pre-deploy"
     And I have claimed gate "pre-deploy"
@@ -30,6 +33,7 @@ Feature: HITL Reject
     Then the run status becomes "rejected"
     And the run has rejection_reason "Not ready"
 
+  @far-1487
   Scenario: Rejected run cannot be approved later
     Given a run is waiting at gate "pre-deploy"
     And I have claimed gate "pre-deploy"

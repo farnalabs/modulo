@@ -10,12 +10,14 @@ resolved, trigger reported as ``unknown`` rather than guessed).
 """
 
 import json
+import logging
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.pipeline_engine import graph_cache
 from modulo.core.pipeline_engine.hitl_context import (
     _NAME_FIELD_MAX_CHARS,
     _TEXT_FIELD_MAX_CHARS,
@@ -28,10 +30,13 @@ from modulo.core.pipeline_engine.hitl_context import (
     serialize_value,
     slice_with_marker,
 )
+from modulo.db.crud.hitl_review_config import make_review_id
 
 _UUID_SRC = "550e8400-e29b-41d4-a716-446655440000"
 _UUID_TGT = "660e8400-e29b-41d4-a716-446655440001"
 _UUID_OTHER = "770e8400-e29b-41d4-a716-446655440002"
+_EDGE_A = "880e8400-e29b-41d4-a716-446655440010"
+_EDGE_B = "880e8400-e29b-41d4-a716-446655440011"
 _REVIEW_ID = f"hitl_review_{_UUID_SRC}_{_UUID_TGT}"
 _ORG_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
@@ -787,3 +792,266 @@ class TestConsequences:
         assert context is not None
         assert context["consequences"]["approve"]["label"] == "Deploy Step"
         assert context["consequences"]["reject"]["label"] == "Rollback"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1486 reject-consequence agreement tripwire + resilience
+# ---------------------------------------------------------------------------
+
+
+class _RecordingGraph:
+    """Minimal StateGraph stand-in: records the wiring the compiler emits."""
+
+    def __init__(self) -> None:
+        self.plain_edges: list[tuple[str, str]] = []
+        self.conditional: list[tuple[str, Any]] = []
+
+    def add_node(self, _node_id: str, _fn: Any) -> None:
+        pass
+
+    def add_edge(self, source: str, target: str) -> None:
+        self.plain_edges.append((source, target))
+
+    def add_conditional_edges(self, _node_id: str, router: Any) -> None:
+        self.conditional.append((_node_id, router))
+
+
+def _compile_gate(edges: list[dict[str, Any]], config: dict[str, Any]) -> tuple[str | None, _RecordingGraph]:
+    """Drive the REAL compiler path and report where a rejection routes.
+
+    Runs ``graph_cache._add_hitl_review_edge`` (the single place the compiler
+    decides config-vs-edge precedence and wires, or declines to wire, the
+    kick-back router) against a recording graph, then drives the router with a
+    matching rejected decision.
+
+    Returns ``(reject_target, graph)``: ``reject_target is None`` means the
+    compiled gate has NO reject router and a rejection falls through to the
+    plain normal edge.
+    """
+    graph = _RecordingGraph()
+    graph_cache._add_hitl_review_edge(
+        graph,
+        _UUID_SRC,
+        _UUID_TGT,
+        dict(config),
+        target_ids=set(),
+        gate_node_ids=set(),
+        reject_targets_by_source=graph_cache._build_reject_targets(edges),
+        eval_definitions_by_node=None,
+        session_factory=None,
+        org_id=None,
+        node_type_map={},
+    )
+    if not graph.conditional:
+        return None, graph
+    _node_id, router = graph.conditional[0]
+    decision = {"review_id": make_review_id(_UUID_SRC, _UUID_TGT), "action": "rejected"}
+    return str(router({"_hitl_decision": decision})), graph
+
+
+def _resolved_reject(graph: dict[str, Any], config: dict[str, Any] | None) -> str | None:
+    consequences = _resolve_consequences(graph, _REVIEW_ID, config, _UUID_SRC)
+    if consequences is None:
+        return None
+    reject = consequences.get("reject")
+    return None if reject is None else str(reject["node_id"])
+
+
+def _gate_edge(config: dict[str, Any]) -> dict[str, Any]:
+    return {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config}
+
+
+def _graph_with(edges: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "nodes": [
+            {"id": _UUID_SRC, "label": "Comment Gen"},
+            {"id": _UUID_TGT, "label": "Poster"},
+            {"id": _UUID_OTHER, "label": "Fixer"},
+            {"id": _EDGE_A, "label": "Edge A"},
+            {"id": _EDGE_B, "label": "Edge B"},
+        ],
+        "edges": edges,
+    }
+
+
+# (case, gate config, reject edges, expected reject target)
+_AGREEMENT_MATRIX = [
+    ("config-only", {"reject_target": _UUID_OTHER}, [], _UUID_OTHER),
+    (
+        "edge-only",
+        {},
+        [{"source": _UUID_SRC, "target": _EDGE_A, "type": "reject"}],
+        _EDGE_A,
+    ),
+    (
+        "both",
+        {"reject_target": _UUID_OTHER},
+        [{"source": _UUID_SRC, "target": _EDGE_A, "type": "reject"}],
+        _UUID_OTHER,
+    ),
+    ("neither", {}, [], None),
+    (
+        "multiple reject edges last-wins",
+        {},
+        [
+            {"source": _UUID_SRC, "target": _EDGE_A, "type": "reject"},
+            {"source": _UUID_SRC, "target": _EDGE_B, "type": "reject"},
+        ],
+        _EDGE_B,
+    ),
+    (
+        "foreign-source ignored",
+        {},
+        [{"source": _UUID_OTHER, "target": _EDGE_A, "type": "reject"}],
+        None,
+    ),
+]
+
+
+class TestRejectConsequenceAgreement:
+    """FAR-1486 tripwire: the briefing, the compiler and the reject-edge map
+    must resolve the SAME reject route — or the same absence of one."""
+
+    @pytest.mark.parametrize(
+        ("case", "config", "reject_edges", "expected"),
+        _AGREEMENT_MATRIX,
+        ids=[row[0] for row in _AGREEMENT_MATRIX],
+    )
+    def test_resolver_agrees_with_compiler_and_reject_edge_map(
+        self,
+        case: str,
+        config: dict[str, Any],
+        reject_edges: list[dict[str, Any]],
+        expected: str | None,
+    ) -> None:
+        """The reviewer briefing must show the reject route the compiled graph
+        ACTUALLY takes — not merely a plausible one.
+
+        Three independent readers of the same fixture must agree:
+        ``_resolve_consequences`` (briefing), the real compiler wiring
+        (``_add_hitl_review_edge`` + its router), and
+        ``graph_cache._build_reject_targets`` (the edge contribution).
+        """
+        del case  # ids only — the case name is in the parametrize ids
+        edges = [_gate_edge(config), *reject_edges]
+        graph = _graph_with(edges)
+
+        resolved = _resolved_reject(graph, config)
+        compiled, compiled_graph = _compile_gate(edges, config)
+
+        assert resolved == expected
+        assert compiled == expected
+        if expected is None:
+            # No reject route wired at all: the gate falls through to the
+            # plain normal edge (run continues), there is NO router.
+            assert not compiled_graph.conditional
+            assert compiled_graph.plain_edges == [(_UUID_SRC, _REVIEW_ID), (_REVIEW_ID, _UUID_TGT)]
+        else:
+            assert compiled_graph.conditional
+
+        # With no config value, the resolver must adopt EXACTLY what the
+        # compiler's per-source reject-edge map holds (dict build → last wins).
+        if config.get("reject_target") is None:
+            assert resolved == graph_cache._build_reject_targets(edges).get(_UUID_SRC)
+
+    def test_falsy_reject_target_yields_no_reject_consequence(self) -> None:
+        """FAR-1486 F8a: a falsy config ``reject_target`` must NOT become a
+        phantom ``{"node_id": "False"}`` / ``{"node_id": ""}`` consequence.
+
+        The compiler treats it as absent for WIRING (``if reject_target:``)
+        while its ``is None`` check still blocks the reject-edge fallback, so
+        the compiled gate has no reject route at all — the briefing agrees.
+        """
+        reject_edges = [{"source": _UUID_SRC, "target": _EDGE_A, "type": "reject"}]
+        graph = _graph_with([_gate_edge({"reject_target": ""}), *reject_edges])
+        assert _resolved_reject(graph, {"reject_target": ""}) is None
+
+        graph = _graph_with([_gate_edge({"reject_target": False}), *reject_edges])
+        assert _resolved_reject(graph, {"reject_target": False}) is None
+
+        compiled, compiled_graph = _compile_gate(reject_edges, {"reject_target": ""})
+        assert compiled is None
+        assert not compiled_graph.conditional
+
+    def test_source_node_id_fallback_when_approve_edge_is_not_matched(self) -> None:
+        """No edge carries this review_id (node gate / snapshot drift): the
+        reject route still resolves from the gate's ``source_node_id``."""
+        reject_edges = [{"source": _UUID_SRC, "target": _EDGE_A, "type": "reject"}]
+        graph = _graph_with(reject_edges)
+
+        consequences = _resolve_consequences(graph, _REVIEW_ID, {}, _UUID_SRC)
+        assert consequences is not None
+        assert "approve" not in consequences
+        assert consequences["reject"]["node_id"] == _EDGE_A
+        assert _resolve_consequences(graph, _REVIEW_ID, {}, None) is None
+
+    def test_legacy_edge_keys_resolve_like_canonical_ones(self) -> None:
+        """Legacy persisted edge shapes (``edge_type`` +
+        ``source_node_id``/``target_node_id``) resolve identically to the
+        canonical keys — for the briefing AND the compiler."""
+        config = {"description": "Approve."}
+        edges = [
+            {
+                "source_node_id": _UUID_SRC,
+                "target_node_id": _UUID_TGT,
+                "edge_type": "normal",
+                "hitl_review_config": config,
+            },
+            {"source_node_id": _UUID_SRC, "target_node_id": _EDGE_A, "edge_type": "reject"},
+        ]
+        graph = _graph_with(edges)
+
+        consequences = _resolve_consequences(graph, _REVIEW_ID, config, _UUID_SRC)
+        assert consequences is not None
+        assert consequences["approve"]["node_id"] == _UUID_TGT
+        assert consequences["reject"]["node_id"] == _EDGE_A
+
+        compiled, _compiled_graph = _compile_gate(edges[1:], config)
+        assert compiled == _EDGE_A
+        assert graph_cache._build_reject_targets(edges[1:]) == {_UUID_SRC: _EDGE_A}
+
+    @pytest.mark.parametrize("bad_edges", [None, 42], ids=["null", "scalar"])
+    async def test_malformed_snapshot_edges_degrade_without_nulling_briefing(
+        self,
+        bad_edges: Any,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """FAR-1486 F8b: a snapshot whose ``edges`` is not a list must degrade
+        to no consequences (WITH a log) — never raise out and null the whole
+        briefing."""
+        graph = {"nodes": [{"id": _UUID_SRC, "label": "Generator"}], "edges": bad_edges}
+        with caplog.at_level(logging.WARNING):
+            context = await _build(graph)
+        assert context is not None
+        assert context["consequences"] is None
+        assert context["trigger"] == "unknown"
+        assert context["source_node_id"] == _UUID_SRC
+        assert "hitl_review.malformed_snapshot_edges" in caplog.text
+
+    async def test_resolver_failure_degrades_to_no_consequences_with_log(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """FAR-1486 F8b: whatever makes the resolver raise, the CALL SITE must
+        degrade to ``consequences = None`` WITH a logged warning — if the
+        exception escaped, the outer capture guard would null the ENTIRE
+        briefing (every other field lost) instead of this one enrichment."""
+        config = {"description": "Approve the comments."}
+        graph = _graph_with([_gate_edge(config)])
+
+        def _boom(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            msg = "malformed snapshot graph"
+            raise RuntimeError(msg)
+
+        with (
+            patch("modulo.core.pipeline_engine.hitl_context._resolve_consequences", _boom),
+            caplog.at_level(logging.WARNING),
+        ):
+            context = await _build(graph)
+
+        assert context is not None
+        assert context["consequences"] is None
+        assert context["description"] == "Approve the comments."
+        assert context["trigger"] == "condition"
+        assert context["source_node_id"] == _UUID_SRC
+        assert "hitl_review.consequences_resolution_failed" in caplog.text
