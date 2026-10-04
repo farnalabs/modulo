@@ -1043,10 +1043,15 @@ async def reject_review(
     engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = require_permission("hitl.reject"),
 ) -> dict[str, str]:
-    """Reject an interrupted HITL gate and route to reject_target or fail."""
+    """Reject an interrupted HITL gate and route to the gate's reject_target.
+
+    With no reject route configured on the gate, the run continues along the
+    normal path.
+    """
     # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
     # No require_sandbox guard here (unlike the resume actions): rejecting
-    # routes the run to its reject_target or terminates it, so it must not be
+    # routes the run to its reject_target when one is configured (with no
+    # reject route the run continues along the normal path), so it must not be
     # blocked because the org is at sandbox capacity. The human_only guard is
     # not applied mechanically, but it IS effectively in force: reject
     # requires a claim_token and non-browser principals can no longer CLAIM a

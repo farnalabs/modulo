@@ -656,6 +656,90 @@ class TestConsequences:
         assert "approve" in consequences
         assert "reject" not in consequences
 
+    async def test_reject_target_resolved_from_reject_edge_when_config_has_none(self):
+        """FAR-1486: an edge-wired reject route must resolve a reject
+        consequence even when the gate config declares no ``reject_target``.
+
+        The graph compiler resolves the reject destination from gate config OR
+        a reject-typed edge (graph_cache._build_reject_targets, consulted in
+        _add_hitl_review_edge), so the reviewer briefing must show the same
+        consequence for a pipeline whose reject route is wired as an edge.
+        """
+        config = {
+            "description": "Approve the comments.",
+            "condition": f"node_id=='{_UUID_SRC}'",
+        }
+        graph = {
+            "nodes": [
+                {"id": _UUID_SRC, "label": "Comment Gen"},
+                {"id": _UUID_TGT, "label": "Poster"},
+                {"id": _UUID_OTHER, "label": "Fixer"},
+            ],
+            "edges": [
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config},
+                {"source": _UUID_SRC, "target": _UUID_OTHER, "type": "reject"},
+            ],
+        }
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
+        assert context is not None
+        consequences = context["consequences"]
+        assert consequences is not None
+        assert consequences["approve"]["node_id"] == _UUID_TGT
+        assert consequences["reject"]["node_id"] == _UUID_OTHER
+        assert consequences["reject"]["label"] == "Fixer"
+
+    async def test_config_reject_target_wins_over_reject_edge(self):
+        """Config ``reject_target`` keeps precedence over a reject-typed edge,
+        mirroring the compiler's order (config reject_target > reject edge)."""
+        config = {
+            "description": "Approve the comments.",
+            "condition": f"node_id=='{_UUID_SRC}'",
+            "reject_target": _UUID_OTHER,
+        }
+        edge_wired_target = "880e8400-e29b-41d4-a716-446655440003"
+        graph = {
+            "nodes": [
+                {"id": _UUID_SRC, "label": "Comment Gen"},
+                {"id": _UUID_TGT, "label": "Poster"},
+                {"id": _UUID_OTHER, "label": "Fixer"},
+                {"id": edge_wired_target, "label": "Edge Wired"},
+            ],
+            "edges": [
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config},
+                {"source": _UUID_SRC, "target": edge_wired_target, "type": "reject"},
+            ],
+        }
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
+        assert context is not None
+        consequences = context["consequences"]
+        assert consequences is not None
+        assert consequences["reject"]["node_id"] == _UUID_OTHER
+
+    async def test_reject_edge_from_another_source_is_not_adopted(self):
+        """A reject-typed edge whose source is NOT this gate's source must not
+        be mistaken for this gate's reject route."""
+        config = {
+            "description": "Approve the comments.",
+            "condition": f"node_id=='{_UUID_SRC}'",
+        }
+        graph = {
+            "nodes": [
+                {"id": _UUID_SRC, "label": "Comment Gen"},
+                {"id": _UUID_TGT, "label": "Poster"},
+                {"id": _UUID_OTHER, "label": "Fixer"},
+            ],
+            "edges": [
+                {"source": _UUID_SRC, "target": _UUID_TGT, "type": "normal", "hitl_review_config": config},
+                {"source": _UUID_OTHER, "target": _UUID_TGT, "type": "reject"},
+            ],
+        }
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: {"ok": True}})
+        assert context is not None
+        consequences = context["consequences"]
+        assert consequences is not None
+        assert "approve" in consequences
+        assert "reject" not in consequences
+
     async def test_no_consequences_when_no_graph(self):
         context = await _build(None)
         assert context is not None

@@ -492,7 +492,7 @@ async def _build_context_inner(
 
     # FAR-859: resolve consequences — approve/reject routing from the
     # snapshot graph.  Approve continues to the gate edge's target node;
-    # reject routes to reject_target (when set).
+    # reject routes to reject_target (config or reject edge, when set).
     consequences: dict[str, Any] | None = None
     if graph_json is not None:
         consequences = _resolve_consequences(graph_json, review_id, config, source_node_id)
@@ -538,12 +538,14 @@ def _resolve_consequences(
     """Resolve approve/reject consequences from the snapshot graph.
 
     Approve: the gate edge's ``target_node_id`` (the run continues there).
-    Reject: the gate's ``reject_target`` (only when set).
+    Reject: the gate config's ``reject_target``, else a reject-typed edge from
+    the gate's source node — the same precedence the graph compiler applies.
 
     Returns ``None`` when neither target can be resolved.
     """
     approve_target: str | None = None
     reject_target: str | None = None
+    gate_source: str | None = None
 
     # Approve: find the edge whose topology-derived review_id matches and
     # extract its target.  Uses make_review_id (topology-based) — the same
@@ -556,13 +558,33 @@ def _resolve_consequences(
         target = edge_source_or_target(edge, "target")
         if source is not None and target is not None and make_review_id(source, target) == review_id:
             approve_target = str(target)
+            gate_source = source
             break
 
-    # Reject: from the gate config's reject_target.
+    # Reject: gate config ``reject_target`` first, then a reject-typed edge
+    # from the gate's source node — the SAME precedence the graph compiler
+    # applies (graph_cache._build_reject_targets, keyed by source, consulted
+    # in _add_hitl_review_edge as config reject_target > reject edge). An
+    # edge-wired reject route with no config reject_target must still show a
+    # reject consequence in the reviewer briefing.
     if isinstance(config, dict):
         raw_reject = config.get("reject_target")
         if raw_reject is not None:
             reject_target = str(raw_reject)
+    if reject_target is None:
+        reject_source = gate_source if gate_source is not None else source_node_id
+        if reject_source is not None:
+            for edge in graph_json.get("edges", []):
+                if not isinstance(edge, dict):
+                    continue
+                # Mirror graph_cache._get_edge_type (type, else edge_type).
+                edge_type = edge.get("type", edge.get("edge_type", ""))
+                if edge_type is None or str(edge_type) != "reject":
+                    continue
+                if edge_source_or_target(edge, "source") == reject_source:
+                    target = edge_source_or_target(edge, "target")
+                    if target is not None:
+                        reject_target = target
 
     if approve_target is None and reject_target is None:
         return None
