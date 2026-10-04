@@ -744,6 +744,15 @@ async def create_snapshot_from_live_graph(
     bounded by ``_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS``, so an unavailable
     lock source fails fast instead of stalling. Raises
     SnapshotLockNotAvailableError only after a bound is exhausted.
+
+    KNOWN RESIDUAL — pre-existing, recorded for FAR-1287 Part 2 (do NOT fix
+    here): the lock is released in this function's ``finally``, i.e. BEFORE the
+    caller's transaction commits, so ``max(snapshot_version)+1`` is read and the
+    row written inside a window where a second creator — holding the lock right
+    after the release — can read the same max and collide on the unique
+    ``(pipeline_id, snapshot_version)`` at commit time. Part 1 only guarantees
+    the lock is always released; narrowing that window (or making the version
+    allocation itself atomic) is Part 2 work.
     """
     key1, key2 = _pipeline_lock_keys(pipeline_id)
     lock_conn = await _acquire_snapshot_lock(session, pipeline_id=pipeline_id, key1=key1, key2=key2)
