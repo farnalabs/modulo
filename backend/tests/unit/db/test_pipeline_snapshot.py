@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.guardrails import fingerprint_guardrail_pins
@@ -31,6 +31,30 @@ def _scalars_result(values: list[object]) -> MagicMock:
     scalars_mock.all.return_value = values
     scalars_mock.__iter__.return_value = iter(values)
     result.scalars.return_value = scalars_mock
+    return result
+
+
+def _bind_lock_connection(session: AsyncMock, *attempts: MagicMock) -> AsyncMock:
+    """FAR-1287: wire the mock session's bound engine to a mock LOCK connection.
+
+    The advisory lock is acquired and released on a dedicated connection opened
+    from ``session.bind`` — never on the caller's session — so the
+    ``pg_try_advisory_lock`` results (plus one trailing result for the
+    ``pg_advisory_unlock``) belong to the lock connection's ``execute``, not the
+    session's. The trailing entry is simply unused when no unlock runs (budget
+    exhausted).
+    """
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [*attempts, MagicMock()]
+    engine = MagicMock(spec=AsyncEngine)
+    engine.connect = AsyncMock(return_value=lock_conn)
+    session.bind = engine
+    return lock_conn
+
+
+def _lock_attempt_result(acquired: bool) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one.return_value = acquired
     return result
 
 
@@ -121,11 +145,9 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     guardrail_row.suite_id = None
 
     session = AsyncMock(spec=AsyncSession)
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-    unlock_result = MagicMock()
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
-        lock_result,
         _scalar_result(pipeline),
         _scalars_result([edge]),
         _scalars_result([agent]),
@@ -135,7 +157,6 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
         _scalar_result(4),
         _scalars_result([guardrail_row]),
         _scalars_result([]),  # policy gate rows (empty - no gates bound)
-        unlock_result,
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -231,17 +252,14 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
     edge.condition_expression = expr
 
     session = AsyncMock(spec=AsyncSession)
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-    unlock_result = MagicMock()
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
-        lock_result,
         _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
         _scalar_result(1),  # snapshot_version max
         _scalars_result([]),  # guardrail rows (none bound)
         _scalars_result([]),  # policy gate rows (none bound)
-        unlock_result,
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -290,16 +308,14 @@ async def test_snapshot_carries_pipeline_default_autonomy_level(autonomy: str | 
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
-        lock_result,
         _scalar_result(pipeline),
         _scalars_result([edge]),
         _scalar_result(1),
         _scalars_result([]),
         _scalars_result([]),  # policy gate rows (none bound)
-        MagicMock(),
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -339,16 +355,14 @@ async def test_snapshot_carries_pipeline_max_autonomy_level(ceiling: str | None)
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
-        lock_result,
         _scalar_result(pipeline),
         _scalars_result([edge]),
         _scalar_result(1),
         _scalars_result([]),
         _scalars_result([]),  # policy gate rows (none bound)
-        MagicMock(),
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -383,12 +397,6 @@ def test_snapshot_to_dict_serialises_max_autonomy_level() -> None:
     assert plain["default_autonomy_level"] == "manual_approval"
 
 
-def _lock_attempt_result(acquired: bool) -> MagicMock:
-    result = MagicMock()
-    result.scalar_one.return_value = acquired
-    return result
-
-
 async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> None:
     """FAR-527: two near-simultaneous run-starts contend on the per-pipeline
     snapshot advisory lock. The bounded-wait loop must retry the (non-blocking)
@@ -417,15 +425,17 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
-    session.execute.side_effect = [
+    lock_conn = _bind_lock_connection(
+        session,
         _lock_attempt_result(False),  # attempt 1: contended
         _lock_attempt_result(True),  # attempt 2: lock freed
+    )
+    session.execute.side_effect = [
         _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
         _scalar_result(1),  # snapshot_version max
         _scalars_result([]),  # guardrail rows (none bound)
         _scalars_result([]),  # policy gate rows (none bound)
-        MagicMock(),  # unlock
     ]
 
     with patch("modulo.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
@@ -434,19 +444,28 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.pipeline_id == pipeline_id
     mock_sleep.assert_awaited_once_with(SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS)
-    # Lock held across the copy, released exactly once in the finally path.
-    assert session.execute.await_count == 8
+    # FAR-1287: the two lock attempts + the single unlock all ran on the
+    # dedicated lock connection, which is then returned to the pool.
+    assert lock_conn.execute.await_count == 3
+    lock_conn.close.assert_awaited_once()
+    # The caller's session ran only the 5 graph-copy reads — never a lock query,
+    # so an aborted caller transaction can no longer strand the advisory lock.
+    assert session.execute.await_count == 5
+    assert not any("pg_advisory" in str(call.args[0]) for call in session.execute.call_args_list)
 
 
 async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:
     """FAR-527: when the lock stays unavailable for the whole budget the
     function must still raise SnapshotLockNotAvailableError — after exactly
     SNAPSHOT_LOCK_ATTEMPTS lock queries (never an unlock of a lock it does
-    not hold) and SNAPSHOT_LOCK_ATTEMPTS - 1 sleeps."""
+    not hold) and SNAPSHOT_LOCK_ATTEMPTS - 1 sleeps.
+
+    FAR-1287: all of those lock queries run on the dedicated lock connection;
+    the caller's session never issues one."""
 
     pipeline_id = uuid.uuid4()
     session = AsyncMock(spec=AsyncSession)
-    session.execute.return_value = _lock_attempt_result(False)
+    lock_conn = _bind_lock_connection(session, *[_lock_attempt_result(False)] * SNAPSHOT_LOCK_ATTEMPTS)
 
     with (
         patch("modulo.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
@@ -454,5 +473,10 @@ async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
-    assert session.execute.await_count == SNAPSHOT_LOCK_ATTEMPTS
+    assert lock_conn.execute.await_count == SNAPSHOT_LOCK_ATTEMPTS
+    assert session.execute.await_count == 0
     assert mock_sleep.await_count == SNAPSHOT_LOCK_ATTEMPTS - 1
+    # Never acquired, so the connection is pooled again without an unlock, and
+    # (its state being provably lock-free) without an invalidate either.
+    lock_conn.close.assert_awaited_once()
+    lock_conn.invalidate.assert_not_awaited()
