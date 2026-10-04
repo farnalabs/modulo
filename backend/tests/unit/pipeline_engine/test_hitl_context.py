@@ -1019,6 +1019,33 @@ class TestRejectConsequenceAgreement:
         assert consequences["reject"]["node_id"] == _EDGE_A
         assert _resolve_consequences(graph, _REVIEW_ID, {}, None) is None
 
+    def test_non_dict_edge_is_skipped_when_resolving_reject_route(self) -> None:
+        """A malformed (non-dict) entry in the snapshot ``edges`` list must be
+        skipped, not crash the reject-edge scan — the briefing resolves from
+        the remaining well-formed edges."""
+        edges = [
+            "not-an-edge",
+            {"source": _UUID_SRC, "target": _EDGE_A, "type": "reject"},
+        ]
+        graph = _graph_with(edges)
+        consequences = _resolve_consequences(graph, _REVIEW_ID, {}, _UUID_SRC)
+        assert consequences is not None
+        assert "approve" not in consequences
+        assert consequences["reject"]["node_id"] == _EDGE_A
+
+    def test_reject_edge_without_target_yields_no_reject_consequence(self) -> None:
+        """A reject-typed edge whose target is falsy must not produce a phantom
+        reject consequence — there is no route to name."""
+        edges = [
+            _gate_edge({"description": "Approve."}),
+            {"source": _UUID_SRC, "target": None, "type": "reject"},
+        ]
+        graph = _graph_with(edges)
+        consequences = _resolve_consequences(graph, _REVIEW_ID, {"description": "Approve."}, _UUID_SRC)
+        assert consequences is not None
+        assert "approve" in consequences
+        assert "reject" not in consequences
+
     def test_legacy_edge_keys_resolve_like_canonical_ones(self) -> None:
         """Legacy persisted edge shapes (``edge_type`` +
         ``source_node_id``/``target_node_id``) resolve identically to the

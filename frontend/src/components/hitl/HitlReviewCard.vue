@@ -415,21 +415,19 @@ const rejectConsequence = computed<RejectConsequence | null>(() => {
 })
 
 /** Target name for the routed copy: the snapshot label, else the node id. */
-const rejectTargetName = computed(() => {
-  const consequence = rejectConsequence.value
-  if (!consequence) return ''
+function rejectTargetName(consequence: RejectConsequence): string {
   return consequence.label || consequence.node_id
-})
+}
 
 /**
  * FAR-1486: the rejected banner is truthful in BOTH directions — routed to
  * the reject target when one exists, otherwise the run continues normally.
  */
-const rejectedBannerText = computed(() =>
-  rejectConsequence.value
-    ? t('hitl.gate.rejected_banner', { target: rejectTargetName.value })
-    : t('hitl.gate.rejected_banner_no_route'),
-)
+const rejectedBannerText = computed(() => {
+  const consequence = rejectConsequence.value
+  if (!consequence) return t('hitl.gate.rejected_banner_no_route')
+  return t('hitl.gate.rejected_banner', { target: rejectTargetName(consequence) })
+})
 
 /**
  * FAR-860: the gate's response contract from the fire-time briefing.
@@ -671,11 +669,12 @@ async function decideGate(decision: 'approve' | 'reject') {
       // FAR-1486: the reject outcome is only "routed to the reject target"
       // when the gate actually HAS a reject route; without one the rejection
       // records the decision and the run continues along its normal path.
+      const consequence = rejectConsequence.value
       const successText =
         decision === 'approve'
           ? t('hitl.gate.gate_approved_pipeline_resuming')
-          : rejectConsequence.value
-            ? t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName.value })
+          : consequence
+            ? t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
             : t('hitl.gate.gate_rejected_no_reject_route')
       const payload: HitlMessage = { type: 'success', text: successText }
       showMessage(payload)

@@ -232,6 +232,23 @@ describe('HitlReviewCard', () => {
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
   })
 
+  it.each([
+    ['missing consequences', {}],
+    ['consequences not an object', { consequences: 'nope' as unknown }],
+    ['missing reject entry', { consequences: {} }],
+    ['reject entry not an object', { consequences: { reject: 'nope' as unknown } }],
+    ['node_id not a string', { consequences: { reject: { node_id: 123 } } }],
+    ['node_id blank', { consequences: { reject: { node_id: '   ' } } }],
+  ])('falls back to the normal-path copy for a malformed reject consequence (%s) (FAR-1486)', (_name, context) => {
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', context }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run continues along the normal path.')
+  })
+
+  it('names the reject node id when the route has no usable label (FAR-1486)', () => {
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', context: { consequences: { reject: { node_id: 'rollback-1', label: 42 } } } }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run was routed to rollback-1.')
+  })
+
   it('omits the run link by default and renders it with showRunLink', async () => {
     wrapper = mount(HitlReviewCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
     expect(wrapper.find('[data-testid="hitl-gate-run-link"]').exists()).toBe(false)
