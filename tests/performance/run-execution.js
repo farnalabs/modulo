@@ -99,10 +99,11 @@ export default function runExecution(data) {
       const res = http.post(`${BASE_URL}/runs`, payload, params);
       runCreateTrend.add(res.timings.duration);
 
+      const runBody = JSON.parse(res.body);
       const passed = check(res, {
         'trigger run status 202': (r) => r.status === 202,
-        'trigger run returns run_id': (r) => typeof JSON.parse(r.body).run_id === 'string' && JSON.parse(r.body).run_id.length > 0,
-        'trigger run status is pending': (r) => JSON.parse(r.body).status === 'pending',
+        'trigger run returns run_id': () => typeof runBody.run_id === 'string' && runBody.run_id.length > 0,
+        'trigger run status is pending': () => runBody.status === 'pending',
       });
 
       if (!passed) {

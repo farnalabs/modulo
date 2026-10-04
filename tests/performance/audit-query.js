@@ -131,20 +131,16 @@ export default function auditQuery(data) {
         auditCursorTrend.add(cursorRes.timings.duration);
 
         const firstItem = firstBody.items[0];
+        const cursorBody = JSON.parse(cursorRes.body);
         check(cursorRes, {
           'cursor page status 200': (r) => r.status === 200,
-          'cursor page returns items': (r) => {
-            const body = JSON.parse(r.body);
-            return Array.isArray(body.items);
-          },
-          'cursor page does not repeat first page': (r) => {
-            const body = JSON.parse(r.body);
+          'cursor page returns items': () => Array.isArray(cursorBody.items),
+          'cursor page does not repeat first page': () =>
             // Each seeded pipeline PATCH emits one pipeline.autonomy_level_changed
             // event, so with limit=10 there are guaranteed to be more pages and
             // the follow-up page must be non-empty AND disjoint from the first
             // page (the cursor boundary is strict older-than).
-            return body.items.length > 0 && body.items[0].id !== firstItem.id;
-          },
+            cursorBody.items.length > 0 && cursorBody.items[0].id !== firstItem.id,
         });
       }
     });

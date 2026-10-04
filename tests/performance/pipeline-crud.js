@@ -79,9 +79,10 @@ export default function pipelineCrud(data) {
       const res = http.post(`${BASE_URL}/pipelines`, payload, params);
       pipelineCreateTrend.add(res.timings.duration);
 
+      const createdBody = JSON.parse(res.body);
       const passed = check(res, {
         'create pipeline status 201': (r) => r.status === 201,
-        'create pipeline has id': (r) => typeof JSON.parse(r.body).id === 'string' && JSON.parse(r.body).id.length > 0,
+        'create pipeline has id': () => typeof createdBody.id === 'string' && createdBody.id.length > 0,
       });
 
       if (!passed) {
