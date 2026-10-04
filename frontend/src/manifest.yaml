@@ -5218,12 +5218,12 @@ features:
             - "[x] POST /batch-detail returns full details for up to 100 event ids (BATCH_MAX_SIZE), skipping silently only invalid-UUID entries, so cross-page bulk selection works"
             - "[x] GET /export returns paginated JSON (page / page_size clamped to 1..1000, ordered created_at ASC) with the same filters and a total, driving the admin CSV/JSONL export"
             - "[x] /batch-detail and /export additionally require the audit_viewer feature (no view without the flag); every audit endpoint needs audit.manage"
+            - "[x] GET /scan is the server-side scan export companion to /export (same filters, audit_viewer + audit.manage gates, org-scoped RLS): it streams the WHOLE matching event set in ONE response (NDJSON by default, or a Content-Disposition CSV attachment with the scan columns) with no offset/limit pagination — the server keyset-paginates over the stable (created_at ASC, id ASC) order in fixed page-size batches so memory stays bounded for any org size, and an invalid user_id is 422 while pre-stream DB errors surface as a proper status (backend/src/modulo/core/audit_logger/__init__.py stream_export_chain, backend/src/modulo/api/routes/audit.py scan_chain_endpoint, test_audit_scan_route.py, TestScanChain in test_audit.py)"
 
             # Frontend (AdminAuditLogView, /admin/audit)
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
         deferrals:
             - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events — there is no incremental from-chain-head verify for very long chains
-            - The export surface is paginated JSON only (no server-side streaming / scan export for the whole org in one response)
     feat-connectors:
         description: External tool connectors
         status: covered

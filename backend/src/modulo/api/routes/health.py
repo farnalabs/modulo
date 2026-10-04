@@ -39,6 +39,7 @@ import json
 import logging
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -254,6 +255,256 @@ async def _check_database() -> CheckResult:
             status="unavailable",
             latency_ms=round(latency_ms, 1),
             detail="database unreachable",
+        )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1445 — database-hygiene sub-check (dead-tuple bloat + freeze age).
+#
+# Every other readiness sub-check asks "is the dependency REACHABLE / does it
+# answer?"; none asked whether the database is still in a state where it can
+# answer FAST. The runs table reached 361,302 dead tuples against 10,411 live
+# (97% bloat, last_autovacuum = never) before anyone saw it, and it surfaced
+# only as ~2.6s DB latency, 504-ing /healthz/ready (5s gateway budget) and a
+# five-day deploy blockade. This check reports the two hygiene facts that are
+# cheap to read and expensive to ignore.
+#
+# COST CONTRACT — /healthz/ready must not get slower (the endpoint 504'd on a
+# 5s budget): ONE statement, ONE round trip through the ALREADY-POOLED engine
+# (get_or_create_engine — no new connection per probe), reading only the
+# in-memory statistics views (pg_stat_user_tables is one row per table, not a
+# scan of table contents) plus the database's own freeze age. Budget: a 1s
+# per-check timeout (modulo_health_db_hygiene_timeout_seconds), the smallest
+# of any sub-check, and the check runs inside the same asyncio.gather as its
+# siblings so it only costs the endpoint whatever is SLOWER than the current
+# slowest check.
+# ---------------------------------------------------------------------------
+
+#: One round trip, no table-content reads: the worst dead-tuple ratio among
+#: tables already over the absolute floor (the floor is applied in SQL so the
+#: ORDER BY ranks the tables that can actually trip the check, then re-applied
+#: in :func:`_grade_db_hygiene` so the grading rule stays a single, directly
+#: testable function), plus ``age(datfrozenxid)`` against the server's own
+#: ``autovacuum_freeze_max_age``. LEFT JOIN so a database with nothing over
+#: the floor still returns its freeze age.
+#:
+#: Zero-size relations are excluded (``n_live_tup + n_dead_tup > 0``) in
+#: addition to the ``NULLS LAST`` belt: a 0/0 table's ratio is NULL (0/0),
+#: and Postgres sorts NULLs FIRST under ``DESC`` — with a legal
+#: ``min_dead = 0`` floor (the field is ``ge=0``; the max-sensitivity setting
+#: an operator would pick) an empty table would win the pick, the grader would
+#: see ``dead_ratio is None`` and read ``ok`` while a 97%-dead table sat
+#: right there: a silent fail-open through a legal config value. Both guards
+#: state the intent; neither ordering clause alone is the contract.
+_DB_HYGIENE_SQL = text(
+    """
+    WITH db_freeze AS (
+        SELECT
+            current_setting('autovacuum_freeze_max_age')::bigint AS freeze_max_age,
+            age(datfrozenxid)::bigint                            AS frozen_age
+        FROM pg_database
+        WHERE datname = current_database()
+    ),
+    worst AS (
+        SELECT
+            relname,
+            n_live_tup,
+            n_dead_tup,
+            (n_dead_tup::float8 / NULLIF(n_live_tup + n_dead_tup, 0)) AS dead_ratio
+        FROM pg_stat_user_tables
+        WHERE n_dead_tup >= :min_dead
+          AND (n_live_tup + n_dead_tup) > 0
+        ORDER BY dead_ratio DESC NULLS LAST
+        LIMIT 1
+    )
+    SELECT
+        d.freeze_max_age,
+        d.frozen_age,
+        w.relname,
+        w.n_live_tup,
+        w.n_dead_tup,
+        w.dead_ratio
+    FROM db_freeze d
+    LEFT JOIN worst w ON TRUE
+    """,
+)
+
+#: Freeze-age warning tier: half of the server's ``autovacuum_freeze_max_age``
+#: (200,000,000 by default → 100,000,000). Half the ceiling is reached only
+#: after the freeze machinery has demonstrably stopped advancing
+#: ``datfrozenxid`` for a long stretch, while still leaving the entire second
+#: half as runway to act — and it is orders of magnitude above what a
+#: vacuuming database shows, so it cannot fire on normal operation.
+_DB_HYGIENE_FREEZE_WARN_FRACTION = 0.5
+
+#: Wraparound-tier labels appended to the freeze-age detail.
+_DB_HYGIENE_FREEZE_AT_CEILING = "AT/ABOVE autovacuum_freeze_max_age — wraparound protection must be forced now"
+_DB_HYGIENE_FREEZE_WARN_TIER = "at or past the {warn_at:,} warning tier (50% of autovacuum_freeze_max_age)"
+
+
+@dataclass(frozen=True)
+class DbHygieneReading:
+    """The two hygiene facts the database-hygiene probe read back.
+
+    ``worst_table``/``n_live_tup``/``n_dead_tup``/``dead_ratio`` describe the
+    worst table already over the dead-tuple floor (all ``None`` when no table
+    is). Kept separate from the SQL row so the grading rule can be exercised
+    directly at its threshold boundaries.
+    """
+
+    frozen_age: int
+    freeze_max_age: int
+    worst_table: str | None = None
+    n_live_tup: int | None = None
+    n_dead_tup: int | None = None
+    dead_ratio: float | None = None
+
+
+def _grade_db_hygiene(
+    reading: DbHygieneReading,
+    *,
+    min_dead_tuples: int,
+    dead_ratio_threshold: float,
+) -> tuple[Literal["ok", "degraded"], str]:
+    """Grade one hygiene reading against the two configured thresholds.
+
+    Both thresholds are settings (``modulo_health_db_hygiene_min_dead_tuples``,
+    ``modulo_health_db_hygiene_dead_ratio``) — see the reasoning on those
+    fields. In short: a ratio is only acted on once the table also carries a
+    material absolute number of dead rows (10,000 — a tiny table that is
+    momentarily 90% dead is ordinary churn), and the ratio sits at 60%, 3x
+    autovacuum's own 20% trigger (20-40% is normal operation, not bloat) but
+    still 37 points below the 97% the incident reached.
+
+    The function can ONLY return ``ok`` or ``degraded``: hygiene is a report
+    about table maintenance, never about whether the deployment can serve
+    work, so it must be structurally incapable of returning ``unavailable``
+    and flipping /healthz/ready to 503.
+    """
+    over_floor = (
+        reading.worst_table is not None
+        and reading.n_dead_tup is not None
+        and reading.dead_ratio is not None
+        and reading.n_dead_tup >= min_dead_tuples
+    )
+    bloat = bool(over_floor and reading.dead_ratio is not None and reading.dead_ratio >= dead_ratio_threshold)
+
+    if reading.worst_table is None:
+        table_part = f"no table over the {min_dead_tuples:,}-dead floor"
+    else:
+        live = reading.n_live_tup or 0
+        dead = reading.n_dead_tup or 0
+        table_part = (
+            f'worst table "{reading.worst_table}": {dead:,} dead of {live + dead:,} rows '
+            f"({(reading.dead_ratio or 0.0) * 100:.1f}% dead)"
+        )
+
+    if bloat:
+        parts = [
+            (
+                f"DEAD-TUPLE BLOAT: {table_part} at/above the "
+                f"{dead_ratio_threshold * 100:.0f}% threshold (floor {min_dead_tuples:,} dead)"
+            ),
+        ]
+    else:
+        parts = [f"dead-tuples within thresholds ({table_part}; threshold {dead_ratio_threshold * 100:.0f}%)"]
+
+    freeze_part = f"freeze age {reading.frozen_age:,}/{reading.freeze_max_age:,}"
+    freeze_degraded = False
+    # No "operator-disabled ceiling" branch: autovacuum_freeze_max_age is
+    # server-start-only and Postgres rejects 0 outright ("FATAL: 0 is outside
+    # the valid range for parameter \"autovacuum_freeze_max_age\" (100000 ..
+    # 2000000000)"), so freeze_max_age <= 0 cannot reach here — and if a bad
+    # reading somehow did, grading it at/above the ceiling is the fail-closed
+    # answer (never a silent "clean").
+    warn_at = int(reading.freeze_max_age * _DB_HYGIENE_FREEZE_WARN_FRACTION)
+    if reading.frozen_age >= reading.freeze_max_age:
+        freeze_degraded = True
+        freeze_part += f" {_DB_HYGIENE_FREEZE_AT_CEILING}"
+    elif reading.frozen_age >= warn_at:
+        freeze_degraded = True
+        freeze_part += " " + _DB_HYGIENE_FREEZE_WARN_TIER.format(warn_at=warn_at)
+    parts.append(freeze_part)
+
+    status: Literal["ok", "degraded"] = "ok"
+    if bloat or freeze_degraded:
+        status = "degraded"
+    return status, "; ".join(parts)
+
+
+async def _check_db_hygiene() -> CheckResult:
+    """Database hygiene: worst-table dead-tuple ratio + freeze age (FAR-1445).
+
+    Reports the two numbers the bloat incident had no surface for:
+
+    1. the worst per-table dead-tuple ratio ``n_dead_tup / (n_live_tup +
+       n_dead_tup)`` from ``pg_stat_user_tables``, naming the offending table,
+       gated by BOTH configured thresholds (absolute dead-tuple floor, then
+       ratio — see :func:`_grade_db_hygiene`);
+    2. ``age(datfrozenxid)`` for this database against the server's own
+       ``autovacuum_freeze_max_age``, degraded at half the ceiling.
+
+    Placement: it rides /healthz/ready (a single pooled-engine read of
+    in-memory statistics, 1s budget, concurrent with the sibling checks) so
+    the health surface finally sees hygiene — but it reports ONLY ``ok`` or
+    ``degraded``, never ``unavailable``. ``degraded`` leaves the endpoint at
+    HTTP 200 (the aggregation 503s solely on ``unavailable``), which is what
+    the Fly service check and every deploy gate key on; the finding reaches
+    operators through the readiness body and the uptime monitor's sub-check
+    scan instead of by taking the deployment out of rotation.
+    """
+    settings = get_settings()
+    timeout = _per_check_timeout(settings, "modulo_health_db_hygiene_timeout_seconds")
+    start = time.monotonic()
+
+    async def _probe() -> DbHygieneReading:
+        engine = get_or_create_engine(settings)
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                _DB_HYGIENE_SQL,
+                {"min_dead": settings.modulo_health_db_hygiene_min_dead_tuples},
+            )
+            row = result.mappings().first()
+        if row is None:
+            # Unreachable in practice (the db_freeze CTE always yields a row) —
+            # fail loudly rather than grade an invented reading.
+            raise RuntimeError("database-hygiene query returned no rows")
+        return DbHygieneReading(
+            frozen_age=int(row["frozen_age"]),
+            freeze_max_age=int(row["freeze_max_age"]),
+            worst_table=row["relname"],
+            n_live_tup=int(row["n_live_tup"]) if row["n_live_tup"] is not None else None,
+            n_dead_tup=int(row["n_dead_tup"]) if row["n_dead_tup"] is not None else None,
+            dead_ratio=float(row["dead_ratio"]) if row["dead_ratio"] is not None else None,
+        )
+
+    try:
+        reading = await asyncio.wait_for(_probe(), timeout=timeout)
+        status, detail = _grade_db_hygiene(
+            reading,
+            min_dead_tuples=settings.modulo_health_db_hygiene_min_dead_tuples,
+            dead_ratio_threshold=settings.modulo_health_db_hygiene_dead_ratio,
+        )
+        if status != "ok":
+            _log.warning("health.db_hygiene %s", detail)
+        return CheckResult(
+            status=status,
+            latency_ms=round((time.monotonic() - start) * 1000, 1),
+            detail=detail,
+        )
+    except TimeoutError:
+        _log.warning("health._check_db_hygiene", exc_info=True)
+        return _timeout_result("degraded", "database hygiene", timeout, start)
+    except Exception:
+        # The check could not run — degraded, never "clean" (a crashed check
+        # must not read as an ok one) and never unavailable: a failure to
+        # INSPECT hygiene says nothing about the deployment's ability to
+        # serve, and `database` already owns the reachability verdict.
+        _log.warning("health._check_db_hygiene", exc_info=True)
+        return CheckResult(
+            status="degraded",
+            latency_ms=round((time.monotonic() - start) * 1000, 1),
+            detail="database-hygiene check could not run (see logs)",
         )
 
 
@@ -1077,6 +1328,7 @@ async def readiness(response: Response) -> ReadinessResponse:
             redis_check,
             cp_check,
             mig_check,
+            hyg_check,
             saq_check,
             cron_check,
             dr_check,
@@ -1091,6 +1343,7 @@ async def readiness(response: Response) -> ReadinessResponse:
             _check_redis(),
             _check_checkpointer(),
             _check_migrations(),
+            _check_db_hygiene(),
             _check_saq_workers(),
             _check_system_crons(),
             _check_dispatcher_reconcile(),
@@ -1134,6 +1387,13 @@ async def readiness(response: Response) -> ReadinessResponse:
         "redis": redis_check,
         "checkpointer": cp_check,
         "migrations": mig_check,
+        # FAR-1445: database hygiene (worst-table dead-tuple ratio + freeze
+        # age). Gating at the DEGRADED tier only: the check can never return
+        # "unavailable" (see _check_db_hygiene), so a bloat / high-age report
+        # degrades the overall status while the endpoint stays HTTP 200 — the
+        # Fly service check and every deploy gate key on the status CODE and
+        # tolerate degraded, and the uptime monitor alerts on the sub-check.
+        "db_hygiene": hyg_check,
         "saq_workers": saq_check,
         "system_crons": cron_check,
         # ADVISORY only — excluded from the aggregate so a break-glass config
@@ -1182,6 +1442,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         redis_check.status,
         cp_check.status,
         mig_check.status,
+        # FAR-1445: hygiene gates at degraded only — every path through
+        # _check_db_hygiene (graded, timed out, or crashed) returns degraded
+        # rather than unavailable, so this entry can move the overall status
+        # to degraded but can never 503 the endpoint on its own.
+        hyg_check.status,
         saq_check.status,
         cron_check.status,
     ]

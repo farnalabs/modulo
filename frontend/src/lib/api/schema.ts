@@ -5360,6 +5360,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/audit/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scan Chain Endpoint
+         * @description Server-side scan export: stream the WHOLE org audit chain in ONE response.
+         *
+         *     The deferral companion to ``/export``: the same typed filters, org-scoped
+         *     RLS and ``audit_viewer`` + ``audit.manage`` gates, but no ``page`` /
+         *     ``page_size`` pagination — the server keyset-paginates internally over the
+         *     stable ``(created_at, id)`` order in fixed batches, so memory stays bounded
+         *     for any org size while the client receives the entire result as a single
+         *     streaming body. ``format=json`` (default) is NDJSON (one audit event per
+         *     line); ``format=csv`` is a Content-Disposition CSV attachment with the
+         *     scan columns.
+         */
+        get: operations["scan_chain_endpoint_api_v1_admin_audit_scan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries": {
         parameters: {
             query?: never;
@@ -31870,6 +31899,48 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scan_chain_endpoint_api_v1_admin_audit_scan_get: {
+        parameters: {
+            query?: {
+                format?: string;
+                /** @description Filter by event type */
+                event_type?: string | null;
+                /** @description Filter by actor user ID */
+                user_id?: string | null;
+                /** @description Filter by resource type */
+                entity_type?: string | null;
+                /** @description Filter by start date (ISO 8601) */
+                from_date?: string | null;
+                /** @description Filter by end date (ISO 8601) */
+                to_date?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

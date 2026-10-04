@@ -383,6 +383,7 @@ async def test_readiness_unavailable_logs_structured_reason(
         patch.object(health_routes, "_check_redis", new_callable=AsyncMock, return_value=ok),
         patch.object(health_routes, "_check_checkpointer", new_callable=AsyncMock, return_value=ok),
         patch.object(health_routes, "_check_migrations", new_callable=AsyncMock, return_value=ok),
+        patch.object(health_routes, "_check_db_hygiene", new_callable=AsyncMock, return_value=ok),
         patch.object(health_routes, "_check_saq_workers", new_callable=AsyncMock, return_value=ok),
         patch.object(health_routes, "_check_system_crons", new_callable=AsyncMock, return_value=ok),
         patch.object(health_routes, "_check_dispatcher_reconcile", new_callable=AsyncMock, return_value=ok),
