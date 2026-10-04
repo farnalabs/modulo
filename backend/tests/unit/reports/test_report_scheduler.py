@@ -553,6 +553,31 @@ class TestGetEngine:
         finally:
             rsched._ENGINE = saved
 
+    def test_non_postgres_engine_url_omits_ssl_connect_args(self) -> None:
+        import modulo.core.reports.scheduler as rsched
+
+        saved = rsched._ENGINE
+        try:
+            rsched._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.modulo_db = "sqlite"
+            settings_mock.database_url = "sqlite+aiosqlite:///./reports.db"
+            mock_engine = MagicMock()
+            with (
+                patch.object(rsched, "_ENGINE", None),
+                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch.object(rsched, "get_settings", return_value=settings_mock),
+            ):
+                _get_engine()
+            args, kwargs = mock_create.call_args
+            # A non-asyncpg driver returns ssl=None from the shared gate, so no
+            # asyncpg-only connect args may be injected and the URL passes
+            # through unchanged (FAR-1440).
+            assert args[0] == "sqlite+aiosqlite:///./reports.db"
+            assert kwargs["connect_args"] == {"timeout": 10}
+        finally:
+            rsched._ENGINE = saved
+
 
 # ---------------------------------------------------------------------------
 # compute_next_send tests
