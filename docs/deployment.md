@@ -97,8 +97,8 @@ http://localhost:4317
 
 Set the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable:
 
-```
-http://localhost:4317
+```env
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
 ---
