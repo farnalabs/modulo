@@ -73,8 +73,13 @@ class _StreamEnd:
 
 
 def _wrapped_command(command: list[str]) -> str:
-    """``["sh", "-c", wrapped]`` -> ``wrapped`` (the legacy ``commands.run`` argv[0])."""
-    if len(command) == 3 and command[0] == "sh" and command[1] == "-c":
+    """``["sh" | "bash", "-c", wrapped]`` -> ``wrapped`` (the legacy argv[0]).
+
+    Both shells are accepted: FAR-1470 moved the dispatch to ``bash`` (``sh``
+    on the sandbox image is dash, which has no ``pipefail``), but some paths
+    still build an ``sh -c`` argv.
+    """
+    if len(command) == 3 and command[0] in ("sh", "bash") and command[1] == "-c":
         return command[2]
     return " ".join(command)
 
