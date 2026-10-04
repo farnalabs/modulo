@@ -191,10 +191,10 @@ def test_unknown_provider_type_is_caught_by_provider_not_configured_handler() ->
     hub.register("local", LocalRuntimeProvider())
 
     with pytest.raises(ProviderNotConfiguredError) as exc_info:
-        hub.resolve(SimpleNamespace(provider_type="kubernetes"))
+        hub.resolve(SimpleNamespace(provider_type="nomad"))
 
     assert isinstance(exc_info.value, UnknownProviderTypeError)
-    assert exc_info.value.provider_type == "kubernetes"
+    assert exc_info.value.provider_type == "nomad"
     assert isinstance(exc_info.value.valid_types, frozenset)
 
 

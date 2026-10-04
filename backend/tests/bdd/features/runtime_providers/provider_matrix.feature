@@ -60,9 +60,9 @@ Feature: Runtime provider platform matrix (ADR 044 / ADR 029)
 
   Scenario: Unknown provider types name the valid vocabulary instead of guessing
     Given a hub with only the "local" provider registered
-    And an environment profile with provider_type "kubernetes" and no provider_hint
+    And an environment profile with provider_type "nomad" and no provider_hint
     When I resolve the profile against the hub
-    Then resolve fails with UnknownProviderTypeError for provider_type "kubernetes"
+    Then resolve fails with UnknownProviderTypeError for provider_type "nomad"
     And the error names the valid provider types
 
   Scenario: A profile without any provider type is unresolvable
