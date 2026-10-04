@@ -106,8 +106,12 @@ may decide.
       data-rot guard (`test_hitl_manager` same-account re-claim cases)
 - [x] Approve resumes the run (`action: approved`, optional notes) – gated by
       `hitl.approve`; a claimed-by-other caller cannot approve
-- [x] Reject records the decision and resumes the graph through a router on
-      the rejected path rather than leaving a non-terminal state
+- [x] Reject records the decision and resumes the graph: when a reject route
+      is wired (the gate's `reject_target` config or a reject-typed edge) the
+      gate's router routes the rejected path to that target, and with no
+      reject route wired there is no router — the run continues along the
+      normal edge (terminate-by-default is FAR-1487). Either way the run
+      resumes rather than being left in a non-terminal state
 - [x] Modify-then-approve applies the reviewer's modified output into state
       before resuming; missing/expired claim_token → 403/410, already-decided
       → 409 (`test_hitl_manager` approve-with-modification cases,

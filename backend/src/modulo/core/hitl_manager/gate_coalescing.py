@@ -22,7 +22,9 @@ every 15 minutes, so the pile grows fast).
   with a SYSTEM-committed ``rejected`` decision (loudly audited as
   ``hitl.gate_superseded``) and the old run — if it was parked — is un-parked
   to ``awaiting_human`` so the existing committed-decision resume machinery
-  (dispatcher_reconcile F6a) terminalises it through the normal reject path.
+  (dispatcher_reconcile F6a) resumes it, routing it through the gate's reject
+  route when one is configured and, with no reject route, continuing it along
+  the normal path (it does NOT terminate; terminate-by-default is FAR-1487).
   The new run raises its gate fresh.
 * **raise** — no open gate for the key (or the run carries no coalesce key,
   e.g. non-webhook triggers): normal gate creation.
@@ -210,8 +212,10 @@ async def evaluate_gate_coalescing(
 
     # Changed SHA — supersede: close the old gate with a SYSTEM-committed
     # rejection (guarded re-validation against a concurrent claimer) and
-    # un-park the old run so the committed-decision resume machinery
-    # terminalises it through the normal reject path. Then raise fresh.
+    # un-park the old run so the committed-decision resume machinery resumes
+    # it: it routes through the gate's reject route when one is configured,
+    # and with no reject route continues along the normal path (no
+    # terminate-by-default yet — FAR-1487). Then raise fresh.
     now = datetime.now(UTC)
     superseded = await session.execute(
         update(HitlClaim)
