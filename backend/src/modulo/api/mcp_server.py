@@ -224,10 +224,12 @@ _MCP_BREAKDOWN_KEYS = frozenset(
         "amount_usd",
         "basis",
         "missing_self_report",
-        # FAR-1305: which of the two missing-self-report states applies —
-        # "agent_not_reported" (no cost key presented) vs
-        # "zero_report_unproven" (an explicit $0.00 was presented and refused).
-        # Sanitised as a string by _sanitize_cost_breakdown_entry like any other.
+        # FAR-1305/FAR-1308: which of the THREE missing-self-report states
+        # applies — "agent_not_reported" (no cost key presented),
+        # "zero_report_unproven" (an explicit $0.00 was presented and refused),
+        # or "sub_floor_rejected" (a positive value below the countable floor
+        # was presented and refused). Sanitised as a string by
+        # _sanitize_cost_breakdown_entry like any other.
         "missing_self_report_reason",
         "error",
         "total_clamped",

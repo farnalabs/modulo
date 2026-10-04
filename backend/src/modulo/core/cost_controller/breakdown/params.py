@@ -29,6 +29,8 @@ from typing import Any, NamedTuple
 
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_USD_MIN,
+    MISSING_REASON_SUB_FLOOR_REJECTED,
+    MISSING_REASON_ZERO_REPORT_UNPROVEN,
     RUN_WARNING_MISSING_SELF_REPORT,
     RUN_WARNING_SEVERITY_WARNING,
 )
@@ -626,9 +628,13 @@ def compute_run_warnings(cost_breakdown: Any) -> list[dict[str, Any]]:
     FAR-1305: the fallback message is keyed off ``missing_self_report_reason``.
     An explicit ``$0.00`` that the trust boundary REFUSED as unproven
     (``zero_report_unproven``) is not "the agent did not report" — the agent
-    did report, so the message says so. Every other case keeps the original
-    "did not report" text (``agent_not_reported``, or a pre-reason breakdown
-    with no stamp at all).
+    did report, so the message says so.
+
+    FAR-1308: likewise for a POSITIVE value below the reportable floor
+    (``sub_floor_rejected``) — the agent reported, the value was just too
+    small to count. Only ``agent_not_reported`` (no cost key ever presented,
+    or a pre-reason breakdown with no stamp at all) keeps the original
+    "did not report" text.
 
     ``cost_breakdown`` is NULL for pre-migration runs and a non-list means no
     warnings. Never raises.
@@ -640,20 +646,35 @@ def compute_run_warnings(cost_breakdown: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         if entry.get("source") == "self_reported" and entry.get("missing_self_report") is True:
-            rejected_zero = entry.get("missing_self_report_reason") == "zero_report_unproven"
+            reason = entry.get("missing_self_report_reason")
             warnings.append(
                 {
                     "code": RUN_WARNING_MISSING_SELF_REPORT,
                     "severity": RUN_WARNING_SEVERITY_WARNING,
-                    "message": (
-                        "The agent reported a model cost of $0.00 for this run, but it was rejected "
-                        "as unproven (token usage was not zero)."
-                        if rejected_zero
-                        else "The agent did not report a model cost for this run."
-                    ),
+                    "message": _missing_self_report_message(reason),
                 }
             )
     return warnings
+
+
+def _missing_self_report_message(reason: Any) -> str:
+    """The plain-text fallback for one missing-self-report warning (FAR-1308).
+
+    Three truthful messages for the three closed-vocabulary reasons; anything
+    else (a pre-FAR-1305 breakdown with no stamp, or an unexpected value)
+    keeps the original, deliberate "did not report" text.
+    """
+    if reason == MISSING_REASON_ZERO_REPORT_UNPROVEN:
+        return (
+            "The agent reported a model cost of $0.00 for this run, but it was rejected "
+            "as unproven (token usage was not zero)."
+        )
+    if reason == MISSING_REASON_SUB_FLOOR_REJECTED:
+        return (
+            "The agent reported a model cost below the minimum that can be counted for this run, "
+            "so it was not included."
+        )
+    return "The agent did not report a model cost for this run."
 
 
 def compute_run_warnings_count(cost_breakdown: Any) -> int:

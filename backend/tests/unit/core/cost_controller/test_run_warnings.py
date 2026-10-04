@@ -9,6 +9,12 @@ Pins the fixes for the phantom ``$0.000000`` "Model cost (self-reported)" row:
 FAR-1305 adds the second, truthful reason: a node that PRESENTED an explicit
 ``0.0`` which the trust boundary rejected as unproven is not "the agent never
 reported" — it is ``zero_report_unproven``.
+
+FAR-1308 adds the third: a node that PRESENTED a positive value BELOW the
+reportable floor (e.g. ``0.0000005``) was also refused — it is
+``sub_floor_rejected``, not ``agent_not_reported``. The trust boundary is
+unchanged in every case: which reports are accepted is identical before and
+after; only the LABEL on a missing self-report differs.
 """
 
 from __future__ import annotations
@@ -23,7 +29,11 @@ from modulo.core.cost_controller.breakdown.params import (
     compute_run_warnings,
     compute_run_warnings_count,
 )
-from modulo.core.cost_controller.finalize import _enrich_union, _rejected_zero_nodes
+from modulo.core.cost_controller.finalize import (
+    _enrich_union,
+    _rejected_zero_nodes,
+    _rejection_reasons,
+)
 
 
 def _self_reported_comp() -> CostComponentConfig:
@@ -324,3 +334,213 @@ def test_run_warning_message_without_reason_stamp_keeps_old_text() -> None:
     )
     assert len(warnings) == 1
     assert warnings[0]["message"] == "The agent did not report a model cost for this run."
+
+
+# ---------------------------------------------------------------------------
+# FAR-1308: a positive-but-SUB-FLOOR report is presented and refused too
+# ---------------------------------------------------------------------------
+
+#: A positive value BELOW ``MAX_REPORTABLE_USD_MIN`` (0.000001) - the FAR-1308
+#: defect shape: the agent DID report, the trust boundary correctly refused it
+#: as implausibly small, but nothing recorded WHY.
+SUB_FLOOR_COST = 0.0000005
+
+
+def _sub_floor_node_shapes() -> tuple[dict, dict, dict]:
+    """The FAR-1308 shape: a sandbox node presenting a positive sub-floor cost.
+
+    Mirrors ``_free_model_node_shapes`` exactly, except the presented value is
+    ``0.0000005`` (positive, finite, below the floor) instead of ``0.0``.
+    """
+    usage = {"node1": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}
+    outputs = {
+        "node1": {
+            "model_cost_usd": SUB_FLOOR_COST,
+            "model_cost_raw_usd": SUB_FLOOR_COST,
+            "token_usage": {"input": 35170, "output": 3669, "total": 38839},
+        }
+    }
+    telemetry = {
+        "node1": {
+            "status": "completed",
+            "wall_clock_time_ms": 12_050,
+            "model_tokens_input": 35170,
+            "model_tokens_output": 3669,
+            "model_tokens_total": 38839,
+        }
+    }
+    return usage, outputs, telemetry
+
+
+def _sub_floor_union() -> dict[str, dict]:
+    usage, outputs, telemetry = _sub_floor_node_shapes()
+    return _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+
+
+def test_sub_floor_report_stamps_sub_floor_rejection_marker() -> None:
+    """A positive sub-floor report is REFUSED (unchanged) but now MARKED.
+
+    Acceptance criterion: the enrichment records THAT a sub-floor value was
+    presented and refused, with the reason ``sub_floor_rejected`` - while the
+    trust boundary is untouched (the value is still not folded in).
+    """
+    union = _sub_floor_union()
+    entry = union["node1"]
+    assert entry.get("model_cost_rejected") is True
+    assert entry.get("model_cost_rejection_reason") == "sub_floor_rejected"
+    # The boundary is UNCHANGED: still not counted.
+    assert "model_cost_usd" not in entry
+    assert _rejection_reasons(union) == {"node1": "sub_floor_rejected"}
+
+
+def test_sub_floor_report_reason_is_sub_floor_rejected_in_breakdown() -> None:
+    """The breakdown must not claim ``agent_not_reported`` for a sub-floor report.
+
+    The agent demonstrably reported a positive model cost; the value was
+    refused for being below the countable floor, not for being absent.
+    """
+    union = _sub_floor_union()
+    tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
+    breakdown, _total = build_cost_breakdown(
+        tele,
+        [_self_reported_comp()],
+        rejected_zero_nodes=_rejected_zero_nodes(union),
+        rejection_reasons=_rejection_reasons(union),
+    )
+    entry = breakdown[0]
+    assert entry["source"] == "self_reported"
+    assert entry["missing_self_report"] is True
+    assert entry["missing_self_report_reason"] == "sub_floor_rejected"
+    assert entry["amount_usd"] == "0.000000"
+
+
+def test_rejected_zero_nodes_excludes_sub_floor_nodes() -> None:
+    """``_rejected_zero_nodes`` stays truthful to its name (zeros only).
+
+    The sub-floor node is carried by the NEW ``_rejection_reasons`` map
+    instead; keeping it out of the zero set means a legacy boolean-only
+    caller can never mislabel a sub-floor report as ``zero_report_unproven``.
+    """
+    union = _sub_floor_union()
+    assert not _rejected_zero_nodes(union)
+    assert _rejection_reasons(union) == {"node1": "sub_floor_rejected"}
+
+
+def test_run_warning_message_for_sub_floor_is_truthful() -> None:
+    """``compute_run_warnings`` must NOT say "did not report" for a sub-floor report.
+
+    The whole FAR-1308 defect: the false claim
+    "The agent did not report a model cost for this run." was rendered for a
+    value the agent DID report.
+    """
+    usage, outputs, telemetry = _sub_floor_node_shapes()
+    union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
+    breakdown, _total = build_cost_breakdown(
+        tele,
+        [_self_reported_comp()],
+        rejected_zero_nodes=_rejected_zero_nodes(union),
+        rejection_reasons=_rejection_reasons(union),
+    )
+    warnings = compute_run_warnings(breakdown)
+    assert len(warnings) == 1
+    message = warnings[0]["message"]
+    assert message != "The agent did not report a model cost for this run."
+    assert "did not report" not in message
+    # Truthful: a report was made but was too small to count.
+    assert "below" in message
+
+
+def test_absent_cost_key_still_reports_agent_not_reported_with_reason_map() -> None:
+    """An absent cost key with an EMPTY reason map stays ``agent_not_reported``."""
+    usage = {"node1": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}
+    outputs = {"node1": {"status": "completed", "summary": "no cost key at all"}}
+    telemetry = {"node1": {"status": "completed", "wall_clock_time_ms": 500}}
+    union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    assert not _rejection_reasons(union)
+    tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
+    breakdown, _total = build_cost_breakdown(
+        tele,
+        [_self_reported_comp()],
+        rejected_zero_nodes=_rejected_zero_nodes(union),
+        rejection_reasons=_rejection_reasons(union),
+    )
+    assert breakdown[0]["missing_self_report_reason"] == "agent_not_reported"
+
+
+def test_zero_report_still_stamps_zero_report_unproven_with_reason_map() -> None:
+    """FAR-1305 behaviour is preserved when the reason map is threaded (regression)."""
+    usage, outputs, telemetry = _free_model_node_shapes()
+    union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    assert _rejection_reasons(union) == {"node1": "zero_report_unproven"}
+    tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
+    breakdown, _total = build_cost_breakdown(
+        tele,
+        [_self_reported_comp()],
+        rejected_zero_nodes=_rejected_zero_nodes(union),
+        rejection_reasons=_rejection_reasons(union),
+    )
+    assert breakdown[0]["missing_self_report_reason"] == "zero_report_unproven"
+
+
+def test_legacy_output_carried_sub_floor_stamps_marker() -> None:
+    """Second stamp site: the legacy / no-split-telemetry shape where the
+    OUTPUT itself carries the sub-floor value (``_fold_from_output_obj``'s
+    reject branch) must stamp the marker too."""
+    usage = {"node1": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}
+    outputs = {
+        "node1": {
+            "model_cost_usd": SUB_FLOOR_COST,
+            "model_cost_raw_usd": SUB_FLOOR_COST,
+            "model_tokens_input": 5,
+            "model_tokens_output": 5,
+            "model_tokens_total": 10,
+        }
+    }
+    union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True)
+    entry = union["node1"]
+    assert entry.get("model_cost_rejected") is True
+    assert entry.get("model_cost_rejection_reason") == "sub_floor_rejected"
+    # Boundary unchanged: not counted.
+    assert "model_cost_usd" not in entry
+
+
+def test_mixed_zero_and_sub_floor_nodes_prefer_no_false_silence() -> None:
+    """A component where one node presented $0.00 and another a sub-floor value
+    must not fall back to ``agent_not_reported`` (the pre-fix behaviour)."""
+    usage = {
+        "node1": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "node2": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+    }
+    outputs = {
+        "node1": {
+            "model_cost_usd": 0.0,
+            "model_cost_raw_usd": 0.0,
+            "token_usage": {"input": 10, "output": 5, "total": 15},
+        },
+        "node2": {
+            "model_cost_usd": SUB_FLOOR_COST,
+            "model_cost_raw_usd": SUB_FLOOR_COST,
+            "token_usage": {"input": 10, "output": 5, "total": 15},
+        },
+    }
+    telemetry = {
+        "node1": {"status": "completed", "wall_clock_time_ms": 100},
+        "node2": {"status": "completed", "wall_clock_time_ms": 100},
+    }
+    union = _enrich_union(
+        usage,
+        outputs,
+        {"node1": "sandbox_agent", "node2": "sandbox_agent"},
+        is_terminal=True,
+        merged_telemetry=telemetry,
+    )
+    tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
+    breakdown, _total = build_cost_breakdown(
+        tele,
+        [_self_reported_comp()],
+        rejected_zero_nodes=_rejected_zero_nodes(union),
+        rejection_reasons=_rejection_reasons(union),
+    )
+    # At least one rejected node exists -> never the false "not reported".
+    assert breakdown[0]["missing_self_report_reason"] != "agent_not_reported"
