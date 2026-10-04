@@ -70,3 +70,27 @@ RUN_WARNING_MISSING_SELF_REPORT = "missing_self_report"
 # The severity tag carried by every run-level cost warning (reserved for a
 # future "error" tier — nothing is a hard error today).
 RUN_WARNING_SEVERITY_WARNING = "warning"
+
+# --- missing-self-report reason vocabulary (FAR-1305 / FAR-1308) ---
+# The CLOSED set of values a cost_breakdown entry's
+# ``missing_self_report_reason`` may carry (the per-node refusal marker
+# ``model_cost_rejection_reason`` uses the same two rejected-* values):
+#
+# * ``agent_not_reported``    — no cost key was ever presented (the absence
+#                               claim; the ONLY reason that says the agent
+#                               stayed silent);
+# * ``zero_report_unproven``  — a node presented an explicit ``0.0`` and the
+#                               trust boundary refused it as unproven (FAR-1305);
+# * ``sub_floor_rejected``    — a node presented a POSITIVE value below
+#                               ``MAX_REPORTABLE_USD_MIN`` and the trust
+#                               boundary refused it as implausibly small
+#                               (FAR-1308).
+#
+# DIAGNOSTIC ONLY: the vocabulary labels WHY a self-report is missing from the
+# total — it never feeds the money math and never changes which reports are
+# accepted. Shared by finalize (stamping), aggregate (breakdown rendering) and
+# params (the compute_run_warnings fallback message) so the three surfaces
+# cannot drift apart.
+MISSING_REASON_AGENT_NOT_REPORTED = "agent_not_reported"
+MISSING_REASON_ZERO_REPORT_UNPROVEN = "zero_report_unproven"
+MISSING_REASON_SUB_FLOOR_REJECTED = "sub_floor_rejected"
