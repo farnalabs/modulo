@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
@@ -189,7 +189,8 @@ async def run_determination(
         raise HTTPException(
             status_code=501, detail="Feature is not available. Run database migrations to enable it."
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "determination.run_determination")
         logger.exception(_CODE_DETERMINATION_RUN_DETERMINATION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -309,7 +310,8 @@ async def create_determination_draft(
         raise HTTPException(
             status_code=501, detail="Feature is not available. Run database migrations to enable it."
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "determination.create_determination_draft")
         logger.exception(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

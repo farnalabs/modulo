@@ -42,7 +42,7 @@ from modulo.api.constants import (
     MSG_PIPELINE_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -640,6 +640,7 @@ async def create_policy_gate(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.create_policy_gate")
         # Detect lock-acquisition timeout (SQLSTATE 57014)
         if sqlstate_of(exc) == "57014":
             _log.warning(
@@ -796,7 +797,8 @@ async def update_policy_gate(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.update_policy_gate")
         _log.exception(_CODE_EVALS_POLICY_GATE_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -911,7 +913,8 @@ async def delete_policy_gate(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.delete_policy_gate")
         _log.exception(_CODE_EVALS_POLICY_GATE_DELETE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1046,6 +1049,7 @@ async def toggle_policy_gate(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.toggle_policy_gate")
         # Lock-acquisition timeout (SQLSTATE 57014) — same mapping as create.
         if sqlstate_of(exc) == "57014":
             _log.warning(
@@ -1134,7 +1138,8 @@ async def get_policy_gate(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.get_policy_gate")
         _log.exception(_CODE_EVALS_POLICY_GATE_GET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1247,7 +1252,8 @@ async def create_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.create_eval_definition")
         _log.exception(_CODE_EVALS_CREATE_EVAL_DEFINITION)
         _log.warning("evals.create_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -1345,7 +1351,8 @@ async def list_eval_definitions(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.list_eval_definitions")
         _log.exception(_CODE_EVALS_LIST_EVAL_DEFINITIONS)
         _log.warning("evals.list_eval_definitions_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -1437,7 +1444,8 @@ async def eval_coverage(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.eval_coverage")
         _log.exception(_CODE_EVALS_EVAL_COVERAGE)
         _log.warning("evals.eval_coverage_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -1555,7 +1563,8 @@ async def eval_leaderboard(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.eval_leaderboard")
         _log.exception(_CODE_EVALS_LEADERBOARD)
         _log.warning("evals.leaderboard_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -1657,7 +1666,8 @@ async def eval_timeseries(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.eval_timeseries")
         _log.exception(_CODE_EVALS_TIMESERIES)
         _log.warning("evals.timeseries_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -1762,7 +1772,8 @@ async def eval_coverage_gap(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.eval_coverage_gap")
         _log.exception(_CODE_EVALS_COVERAGE_GAP)
         _log.warning("evals.coverage_gap_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -1852,7 +1863,8 @@ async def update_suite_alerting(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.update_suite_alerting")
         _log.exception(_CODE_EVALS_SUITE_ALERTING)
         _log.warning("evals.suite_alerting_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -1968,7 +1980,8 @@ async def create_eval_dataset(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval dataset name already exists in this organisation.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.create_eval_dataset")
         _log.exception(_CODE_EVAL_DATASETS_CREATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2010,7 +2023,8 @@ async def list_eval_datasets(
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.list_eval_datasets")
         _log.exception(_CODE_EVAL_DATASETS_LIST)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2045,7 +2059,8 @@ async def get_eval_dataset(
                 )
             )
             dataset = result.scalar_one_or_none()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.get_eval_dataset")
         _log.exception(_CODE_EVAL_DATASETS_GET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2098,7 +2113,8 @@ async def update_eval_dataset(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval dataset name already exists in this organisation.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.update_eval_dataset")
         _log.exception(_CODE_EVAL_DATASETS_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2142,7 +2158,8 @@ async def delete_eval_dataset(
             dataset.deleted_by = principal.account_id
     except HTTPException:
         raise
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.delete_eval_dataset")
         _log.exception(_CODE_EVAL_DATASETS_DELETE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2251,7 +2268,8 @@ async def create_eval_suite(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval suite with this name already exists in this organisation.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.create_eval_suite")
         _log.exception(_CODE_EVAL_SUITES_CREATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2289,7 +2307,8 @@ async def list_eval_suites(
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.list_eval_suites")
         _log.exception(_CODE_EVAL_SUITES_LIST)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2323,7 +2342,8 @@ async def get_eval_suite(
                 )
             )
             suite = result.scalar_one_or_none()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.get_eval_suite")
         _log.exception(_CODE_EVAL_SUITES_GET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2375,7 +2395,8 @@ async def update_eval_suite(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval suite with this name already exists in this organisation.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.update_eval_suite")
         _log.exception(_CODE_EVAL_SUITES_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2423,7 +2444,8 @@ async def delete_eval_suite(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot delete eval suite: it is referenced by other resources.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.delete_eval_suite")
         _log.exception(_CODE_EVAL_SUITES_DELETE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2484,7 +2506,8 @@ async def get_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.get_eval_definition")
         _log.exception(_CODE_EVALS_GET_EVAL_DEFINITION)
         _log.warning("evals.get_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -2605,7 +2628,8 @@ async def update_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.update_eval_definition")
         _log.exception(_CODE_EVALS_UPDATE_EVAL_DEFINITION)
         _log.warning("evals.update_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -2725,7 +2749,8 @@ async def delete_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.delete_eval_definition")
         _log.exception(_CODE_EVALS_DELETE_EVAL_DEFINITION)
         _log.warning("evals.delete_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -2814,7 +2839,8 @@ async def list_run_evals(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals.list_run_evals")
         _log.exception(_CODE_EVALS_LIST_RUN_EVALS)
         _log.warning("evals.list_run_evals_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -3011,7 +3037,8 @@ async def _fetch_compare_evals(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals._fetch_compare_evals")
         _log.exception(_CODE_EVALS_COMPARE_EVALS)
         _log.warning("evals.compare_evals_first_block_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -3065,7 +3092,8 @@ async def _fetch_eval_definitions(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals._fetch_eval_definitions")
         _log.exception(_CODE_EVALS_COMPARE_EVALS)
         _log.warning("evals.compare_evals_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -3194,7 +3222,8 @@ async def _eval_from_run_source(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals._eval_from_run_source")
         _log.exception(_CODE_EVALS_CREATE_EVAL_RUN)
         _log.warning(
             "evals.create_eval_from_run_first_block_db_error", extra={"org_id": str(principal.organisation_id)}
@@ -3278,7 +3307,8 @@ async def _insert_eval_definition(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "evals._insert_eval_definition")
         _log.exception(_CODE_EVALS_CREATE_EVAL_RUN)
         _log.warning(
             "evals.create_eval_from_run_second_block_db_error", extra={"org_id": str(principal.organisation_id)}

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.library import LibraryPrimitiveResponse
 from modulo.auth.jwt import TenantPrincipal
@@ -195,7 +196,8 @@ async def install(
             ) from None
         _log.exception(_CODE_COMMUNITY_LIBRARY_INSTALL)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "community_library.install")
         _log.exception(_CODE_COMMUNITY_LIBRARY_INSTALL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

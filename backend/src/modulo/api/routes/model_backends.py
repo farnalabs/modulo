@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_NOT_FOUND, MSG_RESOURCE_ALREADY_EXISTS
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     deny_break_glass_mint_any_credential,
@@ -400,7 +400,8 @@ async def list_model_backends_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends.list_model_backends_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_LIST_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -448,7 +449,8 @@ async def list_model_backend_presets_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_MODEL_BACKENDS_PRESETS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends.list_model_backend_presets_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_PRESETS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -689,7 +691,8 @@ async def create_model_backend_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends.create_model_backend_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -730,7 +733,8 @@ async def get_model_backend_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends.get_model_backend_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_GET_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -784,7 +788,8 @@ async def list_pipeline_references_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends.list_pipeline_references_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_PIPELINE_REFS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -949,7 +954,8 @@ async def _apply_backend_update(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends._apply_backend_update")
         logger.exception(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1035,7 +1041,8 @@ async def recheck_model_backend_health_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends.recheck_model_backend_health_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1116,7 +1123,8 @@ async def delete_model_backend_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "model_backends.delete_model_backend_endpoint")
         logger.exception(_CODE_MODEL_BACKENDS_DELETE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

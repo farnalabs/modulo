@@ -47,6 +47,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
@@ -1329,7 +1330,8 @@ async def _authenticate_api_key(
             status_code=401,
             media_type=_CT_APPLICATION_JSON,
         )
-    except (SQLAlchemyError, TimeoutError):
+    except (SQLAlchemyError, TimeoutError) as exc:
+        raise_session_contract_error(exc, "mcp_server._authenticate_api_key")
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
         return False, Response(
             _JSON_AUTH_DB_UNAVAILABLE,
@@ -1411,7 +1413,8 @@ async def _authenticate_oauth_jwt(
                     str(principal.account_id),
                     str(principal.organisation_id),
                 )
-        except (SQLAlchemyError, TimeoutError):
+        except (SQLAlchemyError, TimeoutError) as exc:
+            raise_session_contract_error(exc, "mcp_server._authenticate_oauth_jwt")
             _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
             return (
                 False,
@@ -1482,7 +1485,8 @@ async def _verify_oauth_token_family(
                     status_code=401,
                     media_type=_CT_APPLICATION_JSON,
                 )
-    except (SQLAlchemyError, TimeoutError):
+    except (SQLAlchemyError, TimeoutError) as exc:
+        raise_session_contract_error(exc, "mcp_server._verify_oauth_token_family")
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
         return Response(
             _JSON_AUTH_DB_UNAVAILABLE,
@@ -1547,7 +1551,8 @@ async def _finalize_oauth_principal(
                 str(claims.account_id),
                 str(claims.organisation_id),
             )
-    except (SQLAlchemyError, TimeoutError):
+    except (SQLAlchemyError, TimeoutError) as exc:
+        raise_session_contract_error(exc, "mcp_server._finalize_oauth_principal")
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
         return Response(
             _JSON_AUTH_DB_UNAVAILABLE,
@@ -9865,7 +9870,8 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
             {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_server._oauth_authorize")
         _log.warning("mcp_oauth.authorize.sqlalchemy_error", extra={"client_id": client_id})
         return JSONResponse(
             {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
@@ -10124,7 +10130,8 @@ async def _oauth_token(request: Request) -> JSONResponse:
             {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_server._oauth_token")
         _log.warning("mcp_oauth.token.sqlalchemy_error")
         return JSONResponse(
             {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
@@ -10314,7 +10321,8 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
             {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_server._oauth_refresh")
         _log.warning("mcp_oauth.refresh.sqlalchemy_error")
         return JSONResponse(
             {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},

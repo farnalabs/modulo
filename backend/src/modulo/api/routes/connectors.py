@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
@@ -427,7 +427,8 @@ async def list_connectors_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "connectors.list_connectors_endpoint")
         logger.exception(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -555,7 +556,8 @@ async def _create_connector(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "connectors._create_connector")
         logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -618,7 +620,8 @@ async def get_connector_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "connectors.get_connector_endpoint")
         logger.exception(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -802,7 +805,8 @@ async def update_connector_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "connectors.update_connector_endpoint")
         logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -848,7 +852,8 @@ async def delete_connector_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "connectors.delete_connector_endpoint")
         logger.exception(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

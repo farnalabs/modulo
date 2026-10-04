@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_CSRF_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.csrf import CsrfMiddleware
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
@@ -522,7 +522,8 @@ async def login(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "auth.login")
         _log.exception("auth.login")
         _log.warning("login.sqlalchemy_error")
         raise HTTPException(
@@ -866,7 +867,8 @@ async def accept_invite(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "auth.accept_invite")
         _log.exception(_CODE_AUTH_ACCEPT_INVITE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1147,7 +1149,8 @@ async def refresh(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "auth.refresh")
         _log.exception(_CODE_AUTH_REFRESH)
         _log.warning("refresh.sqlalchemy_error")
         raise HTTPException(
@@ -1206,7 +1209,8 @@ async def _blacklist_refresh_family(session: AsyncSession, claims: dict[str, obj
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail=MSG_FEATURE_NOT_AVAILABLE,
             ) from None
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "auth._blacklist_refresh_family")
             _log.exception(_CODE_AUTH_LOGOUT)
             _log.warning("logout.sqlalchemy_error")
             raise HTTPException(
@@ -1283,7 +1287,8 @@ async def _resolve_live_org_role(
     try:
         async with session.begin():
             live_org_role = await resolve_role_from_membership(session, account_id, org_id)
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "auth._resolve_live_org_role")
         _log.warning("permission.live_role_read_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1368,7 +1373,8 @@ async def me(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "auth.me")
         _log.exception("auth.me")
         _log.warning("me.sqlalchemy_error")
         raise HTTPException(

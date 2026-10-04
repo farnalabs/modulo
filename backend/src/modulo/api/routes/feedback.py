@@ -25,7 +25,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DATABASE_ERROR_OCCURRED_PLEASE
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event_isolated
@@ -182,6 +182,7 @@ async def create_feedback(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.create_feedback")
         logger.exception(_CODE_FEEDBACK_CREATE_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -256,6 +257,7 @@ async def list_feedback(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.list_feedback")
         logger.exception(_CODE_FEEDBACK_LIST_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -321,6 +323,7 @@ async def list_feedback_inbox(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.list_feedback_inbox")
         logger.exception(_CODE_FEEDBACK_LIST_FEEDBACK_INBOX)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -416,6 +419,7 @@ async def list_eval_proposals(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.list_eval_proposals")
         logger.exception(_CODE_FEEDBACK_LIST_EVAL_PROPOSALS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -593,7 +597,8 @@ async def publish_eval_proposal(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.publish_eval_proposal")
         logger.exception(_CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -671,6 +676,7 @@ async def get_feedback(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.get_feedback")
         logger.exception(_CODE_FEEDBACK_GET_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -744,6 +750,7 @@ async def _update_feedback_status_transaction(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback._update_feedback_status_transaction")
         logger.exception(_CODE_FEEDBACK_UPDATE_FEEDBACK_STATUS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -848,6 +855,7 @@ async def detect_eval_gap(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.detect_eval_gap")
         logger.exception(_CODE_FEEDBACK_DETECT_EVAL_GAP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -915,6 +923,7 @@ async def get_inbox_item(
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.get_inbox_item")
         logger.exception(_CODE_FEEDBACK_GET_INBOX_ITEM)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1043,7 +1052,8 @@ async def review_feedback(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "feedback.review_feedback")
         logger.exception(_CODE_FEEDBACK_REVIEW_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

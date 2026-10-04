@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
     require_feature,
@@ -199,7 +199,8 @@ async def list_schemas_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.list_schemas_endpoint")
         logger.exception("schemas.list_schemas")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -250,7 +251,8 @@ async def schema_counts_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.schema_counts_endpoint")
         logger.exception("schemas.counts")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -331,7 +333,8 @@ async def create_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.create_schema_endpoint")
         logger.exception("schemas.create_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -373,7 +376,8 @@ async def get_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.get_schema_endpoint")
         logger.exception("schemas.get_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -421,7 +425,8 @@ async def update_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.update_schema_endpoint")
         logger.exception("schemas.update_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -467,7 +472,8 @@ async def deprecate_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.deprecate_schema_endpoint")
         logger.exception("schemas.deprecate_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -557,7 +563,8 @@ async def delete_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.delete_schema_endpoint")
         logger.exception("schemas.delete_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -613,7 +620,8 @@ async def list_schema_versions_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.list_schema_versions_endpoint")
         logger.exception("schemas.list_schema_versions")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -675,7 +683,8 @@ async def create_schema_version_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.create_schema_version_endpoint")
         logger.exception("schemas.create_schema_version")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -720,7 +729,8 @@ async def get_schema_version_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.get_schema_version_endpoint")
         logger.exception("schemas.get_schema_version")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -799,7 +809,8 @@ async def list_schema_fields_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.list_schema_fields_endpoint")
         logger.exception("schemas.list_schema_fields")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1055,7 +1066,8 @@ async def infer_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema inference is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.infer_schema_endpoint")
         logger.exception("schemas.infer_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1198,7 +1210,8 @@ async def generate_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.generate_schema_endpoint")
         logger.exception("schemas.generate_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1387,7 +1400,8 @@ async def migrate_data_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "schemas.migrate_data_endpoint")
         logger.exception("schemas.migrate_data")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

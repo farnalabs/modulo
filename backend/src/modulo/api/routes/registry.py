@@ -17,7 +17,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR_NO_PERIOD
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.registry import (
@@ -318,7 +318,8 @@ async def download_registry_primitive_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "registry.download_registry_primitive_endpoint")
         _log.warning(
             "DB error in download_registry_primitive_endpoint for slug=%s",
             _sanitise_log_value(slug),
@@ -599,7 +600,8 @@ async def verify_registry_primitive_v2(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
             ) from None
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "registry.verify_registry_primitive_v2")
             _log.exception("registry.verify_registry_primitive_v2")
             _log.warning(
                 "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",

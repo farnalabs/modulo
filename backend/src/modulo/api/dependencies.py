@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.api.team_scope import TeamScopeProvider, team_membership_exists
 from modulo.auth.dependencies import (
@@ -367,7 +368,8 @@ def require_target_org_role(
                     role = await _resolve_live_org_role(session, current_user.account_id, org_id)
                     enforce = await resolve_authz_enforce(session, org_id)
                 token = set_authz_enforce(enforce)
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
+                raise_session_contract_error(exc, "dependencies._check")
                 logger.exception("permission.live_role_read_failed")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -501,7 +503,8 @@ def _team_membership_or_admin_dep(
                         )
                 else:
                     is_member = True
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "dependencies._check")
             logger.exception("permission.team_scope_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1015,7 +1018,8 @@ def deny_break_glass_mint_dependency(
             now = datetime.now(UTC)
             async with session.begin():
                 account = await session.get(Account, principal.account_id)
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "dependencies._check")
             logger.exception("permission.break_glass_mint_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
