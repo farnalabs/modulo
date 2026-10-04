@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.schema import CreateTable
 
 from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
@@ -755,16 +755,23 @@ def _creation_session(
     gate_rows: list[MagicMock],
 ) -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
+    # FAR-1287: the snapshot advisory lock is acquired/released on a DEDICATED
+    # connection opened from session.bind, never on the caller's session — so
+    # the lock/unlock results belong to the lock connection's execute, and the
+    # session's sequence starts at the pipeline read.
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [lock_result, MagicMock()]  # try-lock, then unlock
+    engine = MagicMock(spec=AsyncEngine)
+    engine.connect = AsyncMock(return_value=lock_conn)
+    session.bind = engine
     session.execute.side_effect = [
-        lock_result,
         _scalar_result(pipeline),
         _scalars_result([edge]),
         _scalar_result(1),
         _scalars_result([]),  # guardrail rows
         _scalars_result(gate_rows),  # policy gate rows
-        MagicMock(),  # unlock
     ]
     return session
 

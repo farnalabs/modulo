@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.middleware.sensitive_mask import resolve_and_reject_mask_sentinels
 from modulo.core.composite_engine.expander import (
@@ -56,6 +56,23 @@ def _scalars_result(values: list[object]) -> MagicMock:
     scalars_mock.__iter__.return_value = iter(values)
     result.scalars.return_value = scalars_mock
     return result
+
+
+def _bind_lock_connection(session: AsyncMock) -> AsyncMock:
+    """FAR-1287: wire the mock session's bound engine to a mock LOCK connection.
+
+    The snapshot advisory lock is acquired and released on a dedicated
+    connection opened from ``session.bind`` — never on the caller's session —
+    so no lock/unlock statement ever appears in ``session.execute``'s sequence.
+    """
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [lock_result, MagicMock()]  # try-lock, then unlock
+    engine = MagicMock(spec=AsyncEngine)
+    engine.connect = AsyncMock(return_value=lock_conn)
+    session.bind = engine
+    return lock_conn
 
 
 def _template_mock(template_id: uuid.UUID, sub_graph: dict[str, Any]) -> MagicMock:
@@ -141,19 +158,17 @@ async def test_snapshot_hop_carries_real_credential_from_save_as_composite() -> 
     ]
     pipeline.run_context_defaults = {}
 
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-    unlock_result = MagicMock()
     session = AsyncMock(spec=AsyncSession)
+    # FAR-1287: the advisory lock is acquired/released on the dedicated lock
+    # connection opened from session.bind — never on the caller's session.
+    _bind_lock_connection(session)
     session.execute.side_effect = [
-        lock_result,  # 1 pg_try_advisory_lock
-        _scalar_result(pipeline),  # 2 pipeline
-        _scalars_result([]),  # 3 edges
-        _scalar_result(template),  # 4 composite template (expander)
-        _scalar_result(0),  # 5 snapshot version max
-        _scalars_result([]),  # 6 guardrail rows
-        _scalars_result([]),  # 7 policy-gate rows (FAR-967 chunk 10 pin loader)
-        unlock_result,  # 8 pg_advisory_unlock
+        _scalar_result(pipeline),  # 1 pipeline
+        _scalars_result([]),  # 2 edges
+        _scalar_result(template),  # 3 composite template (expander)
+        _scalar_result(0),  # 4 snapshot version max
+        _scalars_result([]),  # 5 guardrail rows
+        _scalars_result([]),  # 6 policy-gate rows (FAR-967 chunk 10 pin loader)
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)

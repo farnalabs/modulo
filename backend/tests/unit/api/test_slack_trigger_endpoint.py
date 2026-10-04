@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
 from modulo.api.main import app
@@ -68,6 +69,17 @@ def _make_trigger_session() -> AsyncMock:
     session.execute = AsyncMock(return_value=execute_result)
     session.add = MagicMock()
     session.flush = AsyncMock()
+    # FAR-1287: the route creates the pipeline snapshot before dispatch, and
+    # that snapshot's advisory lock lives on a DEDICATED connection opened from
+    # session.bind — never on this caller session. Without a bound engine the
+    # snapshot creation refuses to start (RuntimeError), so give the mock one.
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [lock_result, MagicMock()]  # try-lock, then unlock
+    engine = MagicMock(spec=AsyncEngine)
+    engine.connect = AsyncMock(return_value=lock_conn)
+    session.bind = engine
     return session
 
 
