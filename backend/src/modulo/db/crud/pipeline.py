@@ -1064,7 +1064,24 @@ def _resolve_read_session_factory(
 
     if async_url is None:
         raise RuntimeError("cannot derive an async read URL from the clone source session")
-    read_engine = create_async_engine(async_url, poolclass=NullPool)
+    # FAR-1440: the source engine's URL is clean (``sslmode`` was extracted
+    # into ``connect_args`` by the upstream engine factory), so a naive
+    # ``create_async_engine`` here would connect with asyncpg's default
+    # ``prefer`` — CERT_NONE with a silent plaintext retry — on a production
+    # read path. Re-translate the operator's ``sslmode`` (absent/disable →
+    # explicit ``ssl=False``; require/verify-* kept fail-closed; prefer/allow
+    # rejected) exactly like every other engine in the process.
+    connect_args: dict[str, Any] = {}
+    url_for_engine: Any = async_url
+    if str(async_url.drivername).startswith("postgres"):
+        from modulo.db.url_utils import split_postgres_sslmode
+
+        # URL.__str__ masks the password ("u:***@h"); render with the password
+        # kept so the clone engine connects with the real credentials.
+        url_str = async_url.render_as_string(hide_password=False)
+        url_for_engine, ssl_arg = split_postgres_sslmode(url_str)
+        connect_args["ssl"] = ssl_arg
+    read_engine = create_async_engine(url_for_engine, poolclass=NullPool, connect_args=connect_args)
     return async_sessionmaker(read_engine, expire_on_commit=False, class_=AsyncSession), read_engine
 
 

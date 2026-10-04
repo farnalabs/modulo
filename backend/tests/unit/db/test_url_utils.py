@@ -1,160 +1,247 @@
-"""Unit tests for the promoted zero-dependency URL helpers (FAR-671).
+"""Unit tests for the promoted zero-dependency URL helpers (FAR-671, FAR-1440).
 
 ``modulo.db.url_utils`` is the SINGLE implementation of the boot URL contract
 (container bootstrap, Settings validator, native launcher). These tests lock:
 
-* the unified ``fix_database_url`` semantics (legacy prefix rewrites + strip
-  ALL sslmode params) against frozen copies of BOTH historical variants
-  (deploy + settings) on their own fixture inputs;
-* the documented superset difference (a non-``disable`` sslmode is now also
-  stripped from Settings URLs);
+* ``fix_database_url`` semantics — legacy prefix rewrites, ``sslmode``
+  PRESERVED on Postgres-family URLs (an operator's TLS setting is honoured,
+  FAR-1440) and stripped from MySQL-family URLs (aiomysql rejects it);
+* ``split_postgres_sslmode`` — the sslmode→asyncpg ``ssl`` translation with
+  a fail-closed posture (require/verify-* kept, prefer/allow rejected,
+  absent/disable → explicit plaintext ``False``);
 * ``derive_system_database_url`` verbatim behaviour.
 """
 
 from __future__ import annotations
 
-import re
-from urllib.parse import urlsplit, urlunsplit
-
 import pytest
 
-from modulo.db.url_utils import derive_system_database_url, fix_database_url
+from modulo.db.url_utils import (
+    derive_system_database_url,
+    fix_database_url,
+    split_engine_sslmode,
+    split_postgres_sslmode,
+)
 
 # ---------------------------------------------------------------------------
-# Frozen legacy reference implementations (characterization anchors).
-# These are verbatim copies of the pre-promotion variants; they exist ONLY in
-# this test file so drift between old and new behaviour is caught here.
+# fix_database_url — prefix rewrites + per-family sslmode handling
 # ---------------------------------------------------------------------------
 
-
-def _legacy_deploy_fix_database_url(url: str) -> str:
-    # Verbatim from deploy/fly/bootstrap_db.py pre-FAR-671.
-    sslmode_re = re.compile(r"[?&]sslmode=[^&]*")
-    fixed = url.replace("postgres://", "postgresql+asyncpg://", 1)
-    return sslmode_re.sub("", fixed).rstrip("?")
-
-
-def _legacy_settings_fix_database_url(url: str) -> str:
-    # Verbatim from modulo.settings._fix_database_url pre-FAR-671
-    # (postgres-rewrite branch; the asyncmy branch is covered separately).
-    if url.startswith("postgres://"):
-        url = "postgresql+asyncpg://" + url[len("postgres://") :]
-    return url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
-
-
-FIX_DATABASE_URL_CASES = [
+POSTGRES_PRESERVE_CASES = [
+    # plain legacy postgres:// is rewritten to the asyncpg prefix
     (
         "postgres://modulo:pw@db.internal:5432/modulo",
         "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
     ),
-    # sslmode stripped as the only query param (trailing ? removed)
+    # an operator's sslmode is honoured: PRESERVED verbatim on every shape
     (
         "postgres://modulo:pw@db.internal:5432/modulo?sslmode=require",
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=require",
     ),
     (
+        "postgres://modulo:pw@db.internal:5432/modulo?sslmode=disable",
         "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=disable",
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
     ),
-    # sslmode not the first query param — kept params survive
+    # sslmode not the first query param — untouched
     (
         "postgres://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10",
+        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
     ),
-    # already-async URL with no postgres:// prefix is left otherwise untouched
-    (
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
-    ),
-    # sslmode FIRST followed by others — known wart carried through: the
-    # remaining param keeps its leading & (pre-existing behaviour).
-    (
-        "postgres://modulo:pw@db.internal:5432/modulo?sslmode=require&connect_timeout=10",
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo&connect_timeout=10",
-    ),
-    # mid-chain sslmode removal keeps the other params intact
+    # mid-chain sslmode — untouched (the engine factory removes it later, cleanly)
     (
         "postgres://u:p@h:5432/db?application_name=mod&sslmode=verify-full&connect_timeout=2",
-        "postgresql+asyncpg://u:p@h:5432/db?application_name=mod&connect_timeout=2",
+        "postgresql+asyncpg://u:p@h:5432/db?application_name=mod&sslmode=verify-full&connect_timeout=2",
+    ),
+    # already-driver URL with sslmode — untouched
+    (
+        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=verify-ca",
+        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=verify-ca",
+    ),
+    # prefix-only rewriting: a credential containing 'postgres://' is not a URL prefix
+    (
+        "postgresql://u:postgres://pw@h:5432/db",
+        "postgresql://u:postgres://pw@h:5432/db",
     ),
 ]
 
 
-@pytest.mark.parametrize(("url", "expected"), FIX_DATABASE_URL_CASES)
-def test_fix_database_url_matches_legacy_deploy_variant(url: str, expected: str) -> None:
+@pytest.mark.parametrize(("url", "expected"), POSTGRES_PRESERVE_CASES)
+def test_fix_database_url_preserves_postgres_sslmode(url: str, expected: str) -> None:
     assert fix_database_url(url) == expected
-    assert fix_database_url(url) == _legacy_deploy_fix_database_url(url)
+
+
+MYSQL_STRIP_CASES = [
+    ("mysql+asyncmy://modulo:modulo@localhost:3306/modulo", "mysql+aiomysql://modulo:modulo@localhost:3306/modulo"),
+    # aiomysql rejects sslmode — stripped, with the known wart when first
+    ("mysql+aiomysql://u:p@h:3306/db?sslmode=require&charset=utf8", "mysql+aiomysql://u:p@h:3306/db&charset=utf8"),
+    (
+        "mysql+aiomysql://u:p@h:3306/db?connect_timeout=3&sslmode=disable",
+        "mysql+aiomysql://u:p@h:3306/db?connect_timeout=3",
+    ),
+]
+
+
+@pytest.mark.parametrize(("url", "expected"), MYSQL_STRIP_CASES)
+def test_fix_database_url_strips_mysql_sslmode(url: str, expected: str) -> None:
+    assert fix_database_url(url) == expected
+
+
+# ---------------------------------------------------------------------------
+# split_postgres_sslmode — the sslmode→asyncpg ssl translation (FAR-1440)
+# ---------------------------------------------------------------------------
+
+SPLIT_PASS_CASES = [
+    pytest.param(
+        "postgresql+asyncpg://u:p@h/db",
+        "postgresql+asyncpg://u:p@h/db",
+        False,
+        id="no_sslmode_explicit_plaintext",
+    ),
+    pytest.param(
+        "postgres://u:p@h/db",
+        "postgres://u:p@h/db",
+        False,
+        id="plain_postgres_refused_default",
+    ),
+    pytest.param(
+        "postgresql+asyncpg://u:p@h/db?sslmode=disable",
+        "postgresql+asyncpg://u:p@h/db",
+        False,
+        id="disable_removed_plaintext",
+    ),
+    pytest.param(
+        "postgresql+asyncpg://u:p@h/db?sslmode=require",
+        "postgresql+asyncpg://u:p@h/db",
+        "require",
+        id="require_only_param",
+    ),
+    pytest.param(
+        "postgresql+asyncpg://u:p@h/db?connect_timeout=10&sslmode=verify-ca",
+        "postgresql+asyncpg://u:p@h/db?connect_timeout=10",
+        "verify-ca",
+        id="verify_ca_last_param",
+    ),
+    # sslmode FIRST: the following param is re-anchored with '?' (no wart)
+    pytest.param(
+        "postgresql+asyncpg://u:p@h/db?sslmode=verify-full&connect_timeout=10",
+        "postgresql+asyncpg://u:p@h/db?connect_timeout=10",
+        "verify-full",
+        id="sslmode_first_param_neighbours_kept",
+    ),
+    pytest.param(
+        "postgresql+asyncpg://u:p@h/db?application_name=mod&sslmode=require&connect_timeout=2",
+        "postgresql+asyncpg://u:p@h/db?application_name=mod&connect_timeout=2",
+        "require",
+        id="sslmode_mid_param_neighbours_kept",
+    ),
+    pytest.param(
+        "postgresql+asyncpg://u:p%40ss@h/db?sslmode=require",
+        "postgresql+asyncpg://u:p%40ss@h/db",
+        "require",
+        id="encoded_password_preserved",
+    ),
+    pytest.param(
+        "postgresql+asyncpg://u:ab+cd@h/db?sslmode=require",
+        "postgresql+asyncpg://u:ab+cd@h/db",
+        "require",
+        id="plus_encoding_preserved",
+    ),
+    pytest.param(
+        "postgresql+psycopg://u:p@h/db?sslmode=require",
+        "postgresql+psycopg://u:p@h/db",
+        "require",
+        id="psycopg_scheme_translated",
+    ),
+]
+
+
+@pytest.mark.parametrize(("url", "expected_url", "expected_ssl"), SPLIT_PASS_CASES)
+def test_split_postgres_sslmode_pass(url: str, expected_url: str, expected_ssl: str | bool) -> None:
+    assert split_postgres_sslmode(url) == (expected_url, expected_ssl)
 
 
 @pytest.mark.parametrize(
-    ("url", "expected"),
+    ("url", "bad_mode"),
     [
-        # Fixtures where sslmode is absent or `disable` — the two historical
-        # variants agreed here, so the unified semantics must match BOTH.
-        (
-            "postgres://modulo:pw@db.internal:5432/modulo",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+        pytest.param("postgresql+asyncpg://u:p@h/db?sslmode=prefer", "prefer", id="prefer_rejected"),
+        pytest.param("postgresql+asyncpg://u:p@h/db?sslmode=allow", "allow", id="allow_rejected"),
+        pytest.param("postgresql+asyncpg://u:p@h/db?sslmode=bogus", "bogus", id="unknown_mode_rejected"),
+    ],
+)
+def test_split_postgres_sslmode_rejects_unsafe_or_unknown(url: str, bad_mode: str) -> None:
+    # prefer/allow are silent downgrades in asyncpg (CERT_NONE SSLContext);
+    # unknown modes cannot guarantee a posture — refuse the boot instead.
+    with pytest.raises(ValueError, match="sslmode"):
+        split_postgres_sslmode(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("mysql+aiomysql://u:p@h/db?sslmode=require", id="mysql_scheme"),
+        pytest.param("sqlite+aiosqlite:///./test.db?sslmode=require", id="sqlite_scheme"),
+    ],
+)
+def test_split_postgres_sslmode_refuses_non_postgres_scheme(url: str) -> None:
+    with pytest.raises(ValueError, match="scheme"):
+        split_postgres_sslmode(url)
+
+
+# ---------------------------------------------------------------------------
+# split_engine_sslmode — the shared engine-factory gate (FAR-1440)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_url", "expected_ssl"),
+    [
+        pytest.param(
+            "postgresql+asyncpg://u:p@h/db?sslmode=require",
+            "postgresql+asyncpg://u:p@h/db",
+            "require",
+            id="postgres_require_translated",
         ),
-        (
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=disable",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+        pytest.param(
+            "postgresql+asyncpg://u:p@h/db",
+            "postgresql+asyncpg://u:p@h/db",
+            False,
+            id="postgres_absent_defaults_plaintext",
         ),
-        (
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+        pytest.param(
+            "postgresql+psycopg://u:p@h/db?sslmode=verify-full",
+            "postgresql+psycopg://u:p@h/db",
+            "verify-full",
+            id="psycopg_scheme_translated",
         ),
-        (
-            "postgres://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=disable",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10",
+        pytest.param(
+            "sqlite+aiosqlite:///./test.db?sslmode=require",
+            "sqlite+aiosqlite:///./test.db?sslmode=require",
+            None,
+            id="sqlite_passes_through_untouched",
+        ),
+        pytest.param(
+            "mysql+aiomysql://u:p@h/db",
+            "mysql+aiomysql://u:p@h/db",
+            None,
+            id="mysql_passes_through_untouched",
         ),
     ],
 )
-def test_fix_database_url_matches_legacy_settings_variant(url: str, expected: str) -> None:
-    assert fix_database_url(url) == expected
-    assert fix_database_url(url) == _legacy_settings_fix_database_url(url)
+def test_split_engine_sslmode_gates_on_driver_scheme(
+    url: str, expected_url: str, expected_ssl: str | bool | None
+) -> None:
+    assert split_engine_sslmode(url) == (expected_url, expected_ssl)
 
 
-@pytest.mark.parametrize("url", [case[0] for case in FIX_DATABASE_URL_CASES if "sslmode=" in case[0]])
-def test_fix_database_url_superset_vs_legacy_settings_on_non_disable(url: str) -> None:
-    # For non-disable sslmode fixtures the historical settings variant left
-    # the parameter in place; the unified semantics strips it (documented
-    # superset) while matching the deploy variant exactly.
-    unified = fix_database_url(url)
-    assert unified == _legacy_deploy_fix_database_url(url)
-    assert "sslmode=" not in unified
-    if "sslmode=disable" not in url:
-        assert _legacy_settings_fix_database_url(url) != unified
+def test_split_engine_sslmode_still_rejects_unsafe_postgres_mode() -> None:
+    # The shared gate must not weaken the fail-closed posture.
+    with pytest.raises(ValueError, match="sslmode"):
+        split_engine_sslmode("postgresql+asyncpg://u:p@h/db?sslmode=prefer")
 
 
-def test_fix_database_url_superset_difference_vs_settings_variant() -> None:
-    # Documented superset: the settings variant left a non-disable sslmode in
-    # the URL (which asyncpg then rejects at parse time); the unified
-    # semantics strips it. The deploy variant already stripped it.
-    url = "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=require"
-    assert _legacy_settings_fix_database_url(url) == url  # historical: left as-is
-    assert fix_database_url(url) == "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo"
-
-
-def test_fix_database_url_rewrites_legacy_asyncmy_prefix() -> None:
-    url = "mysql+asyncmy://modulo:modulo@localhost:3306/modulo"
-    assert fix_database_url(url) == "mysql+aiomysql://modulo:modulo@localhost:3306/modulo"
-
-
-def test_fix_database_url_prefix_only_postgres_rewrite() -> None:
-    # A mid-URL 'postgres://' (e.g. inside a credential) is NOT rewritten —
-    # the unified semantics only rewrites a prefix (documented narrowing vs
-    # the historical deploy variant's str.replace).
-    url = "postgresql://u:postgres://pw@h:5432/db"
-    assert fix_database_url(url) == url
-
-
-def test_fix_database_url_mysql_url_sslmode_stripped() -> None:
-    # The unified strip applies to any driver prefix (aiomysql does not
-    # accept sslmode either). Known wart carried through: sslmode FIRST among
-    # params leaves the remaining param with its leading &.
-    url = "mysql+aiomysql://u:p@h:3306/db?sslmode=require&charset=utf8"
-    assert fix_database_url(url) == "mysql+aiomysql://u:p@h:3306/db&charset=utf8"
-
+# ---------------------------------------------------------------------------
+# derive_system_database_url — username swap (unchanged by FAR-1440)
+# ---------------------------------------------------------------------------
 
 DERIVE_CASES = [
     # password containing @ — rpartition must split on the LAST @
@@ -171,10 +258,10 @@ DERIVE_CASES = [
     ("postgresql+asyncpg://modulo@db.internal:5432/modulo", ""),
     # explicit empty password (user:@host) — same as no password
     ("postgresql+asyncpg://modulo:@db.internal:5432/modulo", ""),
-    # query-string preserved unchanged
+    # query-string preserved unchanged (incl. the operator's sslmode)
     (
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10",
-        "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?connect_timeout=10",
+        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
+        "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
     ),
     # no userinfo@ separator — nothing to swap, returns empty (caller skips)
     ("postgresql+asyncpg://db.internal:5432/modulo", ""),
@@ -186,33 +273,10 @@ def test_derive_system_database_url_swaps_username(runtime_url: str, expected: s
     assert derive_system_database_url(runtime_url) == expected
 
 
-def test_derive_matches_reference_implementation() -> None:
-    """Lock the promoted implementation against its historical reference shape.
-
-    The reference here re-derives the swap via urlsplit the way the original
-    body did — identical on every fixture input (including the @-containing
-    password, which rpartition must split on the LAST @).
-    """
-
-    def _reference(runtime_url: str) -> str:
-        parts = urlsplit(runtime_url)
-        userinfo, sep, hostport = parts.netloc.rpartition("@")
-        if sep:
-            _, _, password = userinfo.partition(":")
-            if password:
-                return urlunsplit(parts._replace(netloc=f"modulo_system:{password}@{hostport}"))
-        return ""
-
-    for runtime_url, expected in DERIVE_CASES:
-        promoted = derive_system_database_url(runtime_url)
-        reference = _reference(runtime_url)
-        assert promoted == reference
-        assert reference == expected
-
-
 def test_derivation_runs_on_the_fixed_database_url() -> None:
     # Real boot flow: DATABASE_URL is fixed first, then the system URL is
-    # derived from the fixed value (password and host/port preserved).
+    # derived from the fixed value (password, host/port AND sslmode preserved).
     fixed = fix_database_url("postgres://modulo:pw@db.internal:5432/modulo?sslmode=require")
+    assert fixed == "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=require"
     derived = derive_system_database_url(fixed)
-    assert derived == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
+    assert derived == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?sslmode=require"

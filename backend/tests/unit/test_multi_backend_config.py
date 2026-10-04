@@ -50,10 +50,10 @@ class TestMultiBackendCustomValidators:
         settings = Settings()
         assert settings.database_url.startswith("postgresql+asyncpg://")
 
-    def test_ssl_mode_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_ssl_mode_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, DATABASE_URL="postgresql+asyncpg://modulo:modulo@localhost:5432/modulo?sslmode=disable")
         settings = Settings()
-        assert "sslmode=disable" not in settings.database_url
+        assert "sslmode=disable" in settings.database_url
 
     def test_modulo_db_case_insensitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, MODULO_DB="SQLite")

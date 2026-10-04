@@ -272,7 +272,7 @@ def test_default_probes_migrations_at_head_probe(tmp_path: Path, monkeypatch: py
         return True
 
     monkeypatch.setattr(hc, "db_is_at_migration_head", _head)
-    monkeypatch.setattr(sae, "create_async_engine", lambda _url: _FakeEngine())
+    monkeypatch.setattr(sae, "create_async_engine", lambda _url, **_kwargs: _FakeEngine())
     assert probes.migrations_at_head() is True
 
 

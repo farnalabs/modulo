@@ -2310,6 +2310,26 @@ class TestGetSystemAsyncEngine:
         finally:
             sw._SYSTEM_ASYNC_ENGINE = None
 
+    def test_translates_sslmode_require_for_the_system_engine(self) -> None:
+        mock_settings = _settings(
+            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require"
+        )
+        sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(sw, "get_settings", return_value=mock_settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
+            ):
+                sw._get_system_async_engine()
+
+            args, kwargs = create_engine.call_args
+            # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
+            # leaving it in the URL raises TypeError at first connect (FAR-1440).
+            assert args[0] == "postgresql+asyncpg://sys:pass@db:5432/modulo"
+            assert kwargs["connect_args"] == {"ssl": "require", "statement_cache_size": 0}
+        finally:
+            sw._SYSTEM_ASYNC_ENGINE = None
+
     def test_honours_sslmode_require(self) -> None:
         """FAR-1441: sslmode=require must reach asyncpg as ssl='require' (TLS
         required, fail-closed), not be silently downgraded to ssl=False."""

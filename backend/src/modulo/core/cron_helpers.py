@@ -619,26 +619,23 @@ def _get_system_engine() -> AsyncEngine:
     if _SYSTEM_ENGINE is None:
         settings = get_settings()
         if settings.modulo_system_database_url:
-            from sqlalchemy.engine import make_url
             from sqlalchemy.ext.asyncio import create_async_engine
 
-            # FAR-1441: translate the operator's ``sslmode`` into asyncpg's
-            # ``ssl`` connect arg instead of hardcoding ``ssl=False`` (which
-            # silently downgrades ``sslmode=require``). Guard on the URL's
-            # ACTUAL driver scheme, not on any modulo_db knob: a non-Postgres
-            # system URL keeps only the asyncpg knobs it understands.
-            system_url = settings.modulo_system_database_url
-            connect_args: dict[str, Any] = {}
-            if str(make_url(system_url).drivername).startswith("postgres"):
-                from modulo.db.bootstrap import split_postgres_sslmode
+            from modulo.db.url_utils import split_engine_sslmode
 
-                system_url, ssl_arg = split_postgres_sslmode(system_url)
-                connect_args["ssl"] = ssl_arg
-                connect_args["statement_cache_size"] = 0
+            # FAR-1440: the system URL preserves the operator's ``sslmode``, so
+            # translate it into asyncpg's ``ssl`` connect arg (absent/disable →
+            # explicit plaintext; require/verify-* kept fail-closed). Passing
+            # the raw URL straight through raises TypeError at first connect.
+            system_url, system_ssl_arg = split_engine_sslmode(settings.modulo_system_database_url)
+            system_connect_args: dict[str, Any] = {}
+            if system_ssl_arg is not None:
+                system_connect_args["ssl"] = system_ssl_arg
+                system_connect_args["statement_cache_size"] = 0
             _SYSTEM_ENGINE = create_async_engine(
                 system_url,
                 pool_pre_ping=True,
-                connect_args=connect_args,
+                connect_args=system_connect_args,
             )
         else:
             _log.error(
