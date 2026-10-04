@@ -3539,6 +3539,12 @@ elements:
         type: element
         dynamic_testid: false
     /runs/:id:
+      - testid: run-detail-breadcrumb-runs
+        type: link
+        dynamic_testid: false
+      - testid: run-detail-copy-run-id
+        type: button
+        dynamic_testid: false
       - testid: run-detail-share-summary
         type: button
         dynamic_testid: false
