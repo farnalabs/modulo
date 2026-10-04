@@ -154,10 +154,10 @@ describe('useEnvironmentProfilesStore', () => {
     fetchMock.mockResolvedValue(okJsonResponse(profile({ id: 'env-new', name: 'New' })))
     const store = useEnvironmentProfilesStore()
 
-    await store.createProfile({ name: 'New', provider_type: 'e2b' })
+    await store.createProfile({ name: 'New', provider_type: 'e2b', network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' })
 
     const [, init] = fetchMock.mock.calls[0]
-    expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ name: 'New', provider_type: 'e2b' }) })
+    expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ name: 'New', provider_type: 'e2b', network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' }) })
     expect(store.profiles).toHaveLength(1)
     expect(store.profiles[0].id).toBe('env-new')
     expect(store.profiles[0].name).toBe('New')
@@ -168,7 +168,7 @@ describe('useEnvironmentProfilesStore', () => {
     fetchMock.mockResolvedValue(errorResponse(409, 'Duplicate name'))
     const store = useEnvironmentProfilesStore()
 
-    await expect(store.createProfile({ name: 'New' })).rejects.toThrow('Duplicate name')
+    await expect(store.createProfile({ name: 'New', provider_type: 'e2b', network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' })).rejects.toThrow('Duplicate name')
     expect(store.error).toBe('Duplicate name')
     expect(store.isSaving).toBe(false)
     expect(store.profiles).toEqual([])

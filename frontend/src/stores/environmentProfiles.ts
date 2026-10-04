@@ -2,6 +2,13 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
+import type { components } from '../lib/api/schema'
+
+// Wire shapes for environment-profile writes, taken from the generated OpenAPI
+// schema so vue-tsc can verify the full payload against the contract
+// (TYPE-1: no hand-maintained shapes, no `as any` at the call sites).
+export type ProfileCreatePayload = components['schemas']['ProfileCreate']
+export type ProfileUpdatePayload = components['schemas']['ProfileUpdate']
 
 export interface EnvironmentProfile {
   id: string
@@ -68,7 +75,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
     }
   }
 
-  async function createProfile(data: Partial<EnvironmentProfile>): Promise<void> {
+  async function createProfile(data: ProfileCreatePayload): Promise<void> {
     isSaving.value = true
     error.value = null
     try {
@@ -91,7 +98,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
     }
   }
 
-  async function updateProfile(id: string, data: Partial<EnvironmentProfile>): Promise<void> {
+  async function updateProfile(id: string, data: ProfileUpdatePayload): Promise<void> {
     isSaving.value = true
     error.value = null
     try {

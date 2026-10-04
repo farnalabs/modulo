@@ -179,6 +179,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
+import type { ProfileCreatePayload } from '../../stores/environmentProfiles'
 import { runnerTierForProvider, runnerTierLabelKey } from '../../lib/runnerTiers'
 import { ArrowLeft } from '@lucide/vue'
 import Button from 'primevue/button'
@@ -243,7 +244,7 @@ async function handleSubmit() {
   if (!form.name.trim()) return
   if (!form.provider_type) return
 
-  const payload: Record<string, unknown> = {
+  const payload: ProfileCreatePayload = {
     name: form.name.trim(),
     description: form.description.trim() || null,
     provider_type: form.provider_type,
@@ -252,14 +253,15 @@ async function handleSubmit() {
     network_policy: form.network_policy,
     initialisation_strategy: form.initialisation_strategy,
     persistence_policy: form.persistence_policy,
+    visibility: 'org',
   }
 
   try {
     const profileId = props.profileId || (route.params.id as string)
     if (profileId && profileId !== 'new') {
-      await store.updateProfile(profileId, payload as any)
+      await store.updateProfile(profileId, payload)
     } else {
-      await store.createProfile(payload as any)
+      await store.createProfile(payload)
     }
     router.push('/environment-profiles')
   } catch (e: unknown) {

@@ -124,6 +124,7 @@ describe('EnvironmentProfileForm — create mode', () => {
       network_policy: 'outbound',
       initialisation_strategy: 'git_clone',
       persistence_policy: 'ephemeral',
+      visibility: 'org',
     })
     expect(routerPush).toHaveBeenCalledWith('/environment-profiles')
   })
