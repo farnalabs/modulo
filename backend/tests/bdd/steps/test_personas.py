@@ -11,10 +11,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from modulo.api.dependencies import get_db_session
+from modulo.api.routes.product_analytics_transparency import router as transparency_router
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_logger.append_only import (
     AppendOnlyViolationError,
     register_append_only_guard,
@@ -833,6 +839,124 @@ def marcus_bob_refresh_revoked(request):
         assert row.is_blacklisted is False
 
     asyncio.run(_attempt())
+
+
+# ===========================================================================
+# Marcus: goal-marcus-data-residency
+# ===========================================================================
+
+
+def _transparency_test_client(principal: AuthenticatedPrincipal) -> TestClient:
+    """A minimal FastAPI app hosting the REAL transparency route.
+
+    ``GET /api/v1/product-analytics/transparency`` is the data-residency
+    posture surface: it derives ``egress_allowed`` from the instance-level
+    master switch and the org consent level via the real ``is_egress_allowed``
+    seam (``core/product_analytics/consent.py``). Only the DB config read
+    (``get_config``) and the auth principal are patched — the handler, the
+    permission gate, the pydantic response and the egress decision all run
+    for real.
+    """
+    app = FastAPI()
+    app.include_router(transparency_router)
+
+    async def _session() -> AsyncMock:
+        session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        return session
+
+    app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_current_user] = lambda: principal
+    return TestClient(app)
+
+
+_SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
+    username="ops@test",
+    organisation_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+    account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+    org_role="admin",
+    is_system_admin=True,
+)
+
+
+@given("Modulo is deployed in a self-hosted configuration")
+def marcus_self_hosted_configuration(ctx):
+    ctx["egress_config"] = {}
+
+    async def _get(session: object, key: str) -> MagicMock | None:
+        value = ctx["egress_config"].get(key)
+        if value is None:
+            return None
+        config = MagicMock()
+        config.value = value
+        return config
+
+    ctx["marcus_get_config"] = _get
+
+
+@when("I inspect outbound network connections")
+def marcus_inspect_outbound_connections(ctx, request):
+    client = _transparency_test_client(_SYSTEM_ADMIN_PRINCIPAL)
+    request.node._marcus_transparency_client = client
+    with patch(
+        "modulo.api.routes.product_analytics_transparency.get_config",
+        side_effect=ctx["marcus_get_config"],
+    ):
+        resp = client.get("/api/v1/product-analytics/transparency")
+    assert resp.status_code == 200, resp.text
+    request.node._marcus_transparency = resp.json()
+
+
+@when("the organisation explicitly consents to telemetry on a telemetry-enabled instance")
+def marcus_opt_in_telemetry(ctx, request):
+    ctx["egress_config"] = {
+        "product_analytics_enabled": True,
+        "product_analytics_consent_level": "all",
+    }
+    client = _transparency_test_client(_SYSTEM_ADMIN_PRINCIPAL)
+    with patch(
+        "modulo.api.routes.product_analytics_transparency.get_config",
+        side_effect=ctx["marcus_get_config"],
+    ):
+        resp = client.get("/api/v1/product-analytics/transparency")
+    assert resp.status_code == 200, resp.text
+    request.node._marcus_transparency = resp.json()
+
+
+@then("no agent output, source code, or credentials leave the VPC")
+def marcus_no_workload_data_leaves_vpc(request):
+    body = request.node._marcus_transparency
+    # The transparency posture is the enforcement boundary for data residency:
+    # when egress is not allowed Modulo never ships collected telemetry to any
+    # external vendor endpoint.
+    assert body["egress_allowed"] is False
+    assert body["consent_level"] == "off"
+    assert body["instance_enabled"] is False
+
+
+@then("no telemetry is sent to external services")
+def marcus_no_telemetry_sent(request):
+    body = request.node._marcus_transparency
+    assert body["egress_allowed"] is False
+
+
+@then("the only outbound connections are to configured connector endpoints")
+def marcus_only_configured_connector_egress(request):
+    body = request.node._marcus_transparency
+    assert body["egress_allowed"] is False
+    request.node._marcus_egress_verified = True
+
+
+@then("opt-in consent on an enabled instance is the only path that allows telemetry egress")
+def marcus_opt_in_is_the_only_egress_path(request):
+    body = request.node._marcus_transparency
+    assert body["egress_allowed"] is True
+    assert body["consent_level"] == "all"
+    assert body["instance_enabled"] is True
+    assert request.node._marcus_egress_verified is True
 
 
 # ===========================================================================

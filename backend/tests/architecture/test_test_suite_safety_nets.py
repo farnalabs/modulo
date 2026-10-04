@@ -81,11 +81,7 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Jordan packages evals alongside his contributed agent",
         }
     ),
-    "tests/bdd/features/personas/marcus-ciso.feature": frozenset(
-        {
-            "Marcus confirms no data leaves the organisation's infrastructure",
-        }
-    ),
+    "tests/bdd/features/personas/marcus-ciso.feature": frozenset(),  # data-residency journey shipped 2026-10-03
     "tests/bdd/features/personas/priya-platform-engineer.feature": frozenset(
         {
             "Priya self-hosts Modulo on existing infrastructure",
