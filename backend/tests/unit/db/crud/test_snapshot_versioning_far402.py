@@ -238,6 +238,10 @@ class TestCreateSnapshotEdit:
 
 class TestRollbackDiscriminator:
     @patch(
+        "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+        new_callable=AsyncMock,
+    )
+    @patch(
         "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
         new_callable=AsyncMock,
     )
@@ -253,7 +257,9 @@ class TestRollbackDiscriminator:
         "modulo.db.crud.pipeline_snapshot_versioning.enforce_guardrail_binding_strip",
         new_callable=AsyncMock,
     )
-    async def test_rollback_tags_created_kind_rollback(self, mock_enforce, mock_apply, mock_resolve, mock_create):
+    async def test_rollback_tags_created_kind_rollback(
+        self, mock_enforce, mock_apply, mock_resolve, mock_create, mock_audit
+    ):
         from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
         # FAR-609: the diff result now also carries weakened_nodes — the mock
@@ -265,6 +271,7 @@ class TestRollbackDiscriminator:
         mock_create.return_value = new_snapshot
 
         pipeline_id = uuid.uuid4()
+        account_id = uuid.uuid4()
         target = MagicMock()
         target.pipeline_id = pipeline_id
         target.graph_json = {"nodes": [], "edges": []}
@@ -300,7 +307,7 @@ class TestRollbackDiscriminator:
             session,
             pipeline_id,
             target.id,
-            account_id=uuid.uuid4(),
+            account_id=account_id,
             is_privileged=True,
             caller_type="rest",
         )
@@ -309,6 +316,14 @@ class TestRollbackDiscriminator:
         kwargs = mock_create.await_args.kwargs
         assert kwargs["version_kind"] == "edit"
         assert kwargs["created_kind"] == "rollback"
+        # FAR-1471: a rollback is a graph mutation, so it always appends
+        # pipeline.graph_updated — attributed to the rollback caller. The
+        # append is mocked because this test drives an AsyncMock session,
+        # which cannot host the real append's begin_nested().
+        audit_kwargs = mock_audit.await_args.kwargs
+        assert audit_kwargs["event_type"] == "pipeline.graph_updated"
+        assert audit_kwargs["actor_user_id"] == account_id
+        assert audit_kwargs["resource_id"] == pipeline_id
 
 
 class TestDiffSnapshotsSemantic:
