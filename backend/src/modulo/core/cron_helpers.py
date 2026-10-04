@@ -30,7 +30,8 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -47,6 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
+from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
@@ -3145,6 +3147,30 @@ async def _rollback_catchup_advance(
         _log.exception("fire_due_triggers: catch-up enqueue rollback failed %s", trigger_id)
 
 
+@asynccontextmanager
+async def _bound_org(org_id: uuid.UUID) -> AsyncIterator[None]:
+    """Bind *org_id* into ``org_id_var`` for one per-org tick (FAR-1484).
+
+    ``fire_due_triggers`` is an org-less SYSTEM cron at the job level — the
+    SAQ ``before_process`` hook correctly binds ``None`` for it — but the loop
+    body below scans ONE organisation per iteration, and every ERROR it logs
+    there (``cron read failed (org ...)``, enqueue/advance/catch-up failures)
+    has a resolvable org that ``ErrorTrackingLogHandler`` can attribute. Bind
+    for the duration of the tick and reset in ``finally`` so the caller's
+    context (and the next org's tick) never inherits it.
+
+    Failures OUTSIDE the per-org loop (org collection, the pause read, the
+    liveness heartbeat) have no organisation and keep the announced
+    ``no_org_context`` drop — persisting those would need the system/unknown
+    organisation schema decision reported under FAR-1417/FAR-1484.
+    """
+    token = org_id_var.set(str(org_id))
+    try:
+        yield
+    finally:
+        org_id_var.reset(token)
+
+
 async def fire_due_triggers() -> dict[str, Any]:
     """System cron — read due cron/polling/report/ongoing rows and enqueue fire jobs.
 
@@ -3215,7 +3241,7 @@ async def fire_due_triggers() -> dict[str, Any]:
             # per-row atomic advance below still moves next_fire_at forward so
             # unpausing never causes a catch-up storm.
             org_paused = pause_by_org.get(org_id, False)
-            async with factory() as session, session.begin():
+            async with _bound_org(org_id), factory() as session, session.begin():
                 await _set_rls_org(session, org_id)
                 now = datetime.now(UTC)
                 advanced_this_tick = await _process_due_cron_scan(
