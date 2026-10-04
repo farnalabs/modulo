@@ -391,6 +391,18 @@ async def _build_context_inner(
         ).scalar_one_or_none()
         if isinstance(snapshot, dict):
             graph_json = snapshot
+            # FAR-1486: degrade a malformed snapshot ONCE at the door. Every
+            # walker below (``config_from_graph`` first of all) iterates
+            # ``edges`` unconditionally, so a snapshot whose ``edges`` is not
+            # a list (``null`` / a scalar) would raise into the outer capture
+            # guard and null the ENTIRE briefing. Normalise to an empty edge
+            # list instead — best-effort capture fails open WITH a log.
+            if not isinstance(graph_json.get("edges", []), list):
+                _log.warning(
+                    "hitl_review.malformed_snapshot_edges",
+                    extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
+                )
+                graph_json = {**graph_json, "edges": []}
 
     parsed = parse_hitl_review_id(review_id)
     source_node_id = parsed[0] if parsed else None
@@ -493,9 +505,23 @@ async def _build_context_inner(
     # FAR-859: resolve consequences — approve/reject routing from the
     # snapshot graph.  Approve continues to the gate edge's target node;
     # reject routes to reject_target (config or reject edge, when set).
+    # FAR-1486: best-effort, fail OPEN WITH A LOG — a defect INSIDE the
+    # resolver (a malformed collection reached through _snapshot_node_label,
+    # a snapshot shape the door-normalisation above did not catch) must
+    # degrade to no consequences rather than raise out and null the whole
+    # briefing (the outer capture guard would otherwise return None and lose
+    # every other field).
     consequences: dict[str, Any] | None = None
     if graph_json is not None:
-        consequences = _resolve_consequences(graph_json, review_id, config, source_node_id)
+        try:
+            consequences = _resolve_consequences(graph_json, review_id, config, source_node_id)
+        except Exception:
+            _log.warning(
+                "hitl_review.consequences_resolution_failed",
+                extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
+                exc_info=True,
+            )
+            consequences = None
 
     # FAR-860: capture the response_contract from the gate config so the
     # UI can render agent-defined options from the briefing without
@@ -541,6 +567,12 @@ def _resolve_consequences(
     Reject: the gate config's ``reject_target``, else a reject-typed edge from
     the gate's source node — the same precedence the graph compiler applies.
 
+    A FALSY config value (``""`` / ``False``) never yields a reject route:
+    the compiler's ``if reject_target:`` wires no router for it, and its
+    ``is None`` fallback check means such a value also blocks the reject-edge
+    lookup — so emit no reject consequence rather than a phantom
+    ``{"node_id": "False"}`` entry.
+
     Returns ``None`` when neither target can be resolved.
     """
     approve_target: str | None = None
@@ -563,15 +595,14 @@ def _resolve_consequences(
 
     # Reject: gate config ``reject_target`` first, then a reject-typed edge
     # from the gate's source node — the SAME precedence the graph compiler
-    # applies (graph_cache._build_reject_targets, keyed by source, consulted
-    # in _add_hitl_review_edge as config reject_target > reject edge). An
-    # edge-wired reject route with no config reject_target must still show a
-    # reject consequence in the reviewer briefing.
+    # applies (graph_cache._add_hitl_review_edge: config value, ``is None``
+    # → reject_targets_by_source, then ``if reject_target:`` wires the
+    # router). An edge-wired reject route with no config reject_target must
+    # still show a reject consequence in the reviewer briefing.
+    raw_reject: Any = None
     if isinstance(config, dict):
         raw_reject = config.get("reject_target")
-        if raw_reject is not None:
-            reject_target = str(raw_reject)
-    if reject_target is None:
+    if raw_reject is None:
         reject_source = gate_source if gate_source is not None else source_node_id
         if reject_source is not None:
             for edge in graph_json.get("edges", []):
@@ -583,8 +614,12 @@ def _resolve_consequences(
                     continue
                 if edge_source_or_target(edge, "source") == reject_source:
                     target = edge_source_or_target(edge, "target")
-                    if target is not None:
+                    if target:
+                        # Last matching reject edge wins — mirrors
+                        # graph_cache._build_reject_targets' dict build.
                         reject_target = target
+    elif raw_reject:
+        reject_target = str(raw_reject)
 
     if approve_target is None and reject_target is None:
         return None

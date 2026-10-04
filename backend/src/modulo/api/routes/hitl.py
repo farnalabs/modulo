@@ -305,9 +305,17 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
 
     Applied to the resume actions (approve / approve-with-modification /
     deliver-manual / submit-manual), which continue executing the sandbox
-    graph. ``reject_gate`` is deliberately exempt: a rejection routes the run
-    to its ``reject_target`` or terminates it — it does not resume sandbox
-    execution, so blocking it on capacity would only confuse the operator.
+    graph. ``reject_gate`` is deliberately exempt: a human rejection that has
+    already been committed is never bounced off the gate by a transient
+    capacity limit.
+
+    That exemption is a POLICY choice, not a "no sandbox work follows"
+    argument. A rejection always resumes downstream execution: it routes the
+    run to its reject route (``reject_target`` config or a reject edge) when
+    one exists, and with no reject route it continues the run along the
+    normal path — and continuing DOES resume downstream (including sandbox)
+    execution. The resulting approve(409-gated)/reject(not gated) asymmetry
+    is a known point of this design, flagged here rather than justified.
     """
     if not await org_sandbox_capacity_free(session, org_id, run_id):
         raise HTTPException(
@@ -1055,21 +1063,27 @@ async def reject_review(
     engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = require_permission("hitl.reject"),
 ) -> dict[str, str]:
-    """Reject an interrupted HITL gate and route to the gate's reject_target.
+    """Reject an interrupted HITL gate and route to its reject route.
 
-    With no reject route configured on the gate, the run continues along the
-    normal path.
+    The reject route is the gate's reject_target config or a reject-typed
+    edge, when one exists. With no reject route configured on the gate, the
+    run continues along the normal path.
     """
     # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
-    # No require_sandbox guard here (unlike the resume actions): rejecting
-    # routes the run to its reject_target when one is configured (with no
-    # reject route the run continues along the normal path), so it must not be
-    # blocked because the org is at sandbox capacity. The human_only guard is
-    # not applied mechanically, but it IS effectively in force: reject
-    # requires a claim_token and non-browser principals can no longer CLAIM a
-    # default-human_only gate (FAR-609), so they cannot reach reject either —
-    # only a principal already holding a claim can reject. Agent-only runs on
-    # default gates require browser-human intervention (intended policy).
+    # No require_sandbox guard here (unlike the resume actions): the capacity
+    # exemption is POLICY — a human rejection already committed must not be
+    # bounced off the gate by a transient capacity limit — and NOT a claim
+    # that rejection avoids sandbox work. It does not: a rejection routes to
+    # the gate's reject route when one is configured, and with no reject route
+    # the run continues along the normal path; either way downstream execution
+    # resumes.
+    #
+    # The human_only guard is not applied mechanically, but it IS effectively
+    # in force: reject requires a claim_token and non-browser principals can
+    # no longer CLAIM a default-human_only gate (FAR-609), so they cannot
+    # reach reject either — only a principal already holding a claim can
+    # reject. Agent-only runs on default gates require browser-human
+    # intervention (intended policy).
     resume_data: dict[str, Any] = {"action": "rejected", "review_id": review_id, "reason": req.reason}
     await _run_hitl_manager(
         session,
@@ -1084,8 +1098,10 @@ async def reject_review(
         client_type=_client_type(principal),
     )
 
-    # Resume the graph with rejection data so the gate router picks the
-    # reject_target branch.
+    # Resume the graph with rejection data: when a reject route is wired
+    # (reject_target config or a reject edge) the gate's router picks that
+    # branch; when unwired there is no router and the run simply continues
+    # along the normal edge.
     try:
         executor = _build_resume_executor(engine)
         await executor.resume(
