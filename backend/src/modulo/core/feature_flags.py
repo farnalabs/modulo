@@ -613,8 +613,15 @@ class FeatureFlagRegistry:
         self,
         flag_name: str,
         org_id: uuid.UUID | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> bool:
         """Resolve a flag from two layers: system override > org override > tier default.
+
+        ``raise_on_error=True`` (strict, for enforcement callers that must not
+        mistake a transient DB failure for "flag OFF") propagates the org
+        override read error instead of falling through to the tier default.
+        Default behaviour (swallow + log, fall through) is unchanged.
 
         Team-level and user-level overrides were removed (FAR-927). The
         resolution order is now:
@@ -625,7 +632,7 @@ class FeatureFlagRegistry:
             return sys_override
 
         if org_id is not None:
-            org_val = await self._get_org_override(flag_name, org_id)
+            org_val = await self._get_org_override(flag_name, org_id, raise_on_error=raise_on_error)
             if org_val is not None:
                 return org_val
 
@@ -640,6 +647,8 @@ class FeatureFlagRegistry:
         load_row_factory: Callable[[], Callable[[Any], Awaitable[Any]]],
         settings_attr: str,
         error_log: str,
+        *,
+        raise_on_error: bool = False,
     ) -> bool | None:
         """Resolve a ``feature_overrides`` entry from a single org/team/account row.
 
@@ -688,9 +697,13 @@ class FeatureFlagRegistry:
             raise
         except Exception:
             logger.exception(error_log)
+            if raise_on_error:
+                raise
         return None
 
-    async def _get_org_override(self, flag_name: str, org_id: uuid.UUID) -> bool | None:
+    async def _get_org_override(
+        self, flag_name: str, org_id: uuid.UUID, *, raise_on_error: bool = False
+    ) -> bool | None:
         """Check org.settings_json.feature_overrides for this flag."""
 
         def _load_factory() -> Callable[[Any], Awaitable[Any]]:
@@ -702,7 +715,11 @@ class FeatureFlagRegistry:
             return _load
 
         return await self._override_from_entity(
-            flag_name, _load_factory, "settings_json", "Failed to check org flag override"
+            flag_name,
+            _load_factory,
+            "settings_json",
+            "Failed to check org flag override",
+            raise_on_error=raise_on_error,
         )
 
 

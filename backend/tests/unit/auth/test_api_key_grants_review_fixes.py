@@ -76,7 +76,7 @@ class TestPipelinePrivilegeHelpers:
         assert _may_manage_cost(_principal("admin", frozenset({"cost.manage"}))) is True
 
     def test_in_dev_operator_null_grants_unchanged(self) -> None:
-        require_in_dev_operator(_principal("operator", None), "connector.list.in_dev")
+        assert require_in_dev_operator(_principal("operator", None), "connector.list.in_dev") is None
 
     def test_in_dev_operator_narrow_grants_denied(self) -> None:
         with pytest.raises(HTTPException) as exc:
@@ -84,10 +84,11 @@ class TestPipelinePrivilegeHelpers:
         assert exc.value.status_code == 403
 
     def test_in_dev_operator_granted_passes(self) -> None:
-        require_in_dev_operator(
+        result = require_in_dev_operator(
             _principal("operator", frozenset({"connector.list.in_dev"})),
             "connector.list.in_dev",
         )
+        assert result is None
 
 
 class TestMcpPrivilegeHelpers:

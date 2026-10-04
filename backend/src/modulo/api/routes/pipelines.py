@@ -55,7 +55,12 @@ from modulo.api.team_scope import (
     validate_owner_team_for_create,
 )
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import PermissionDenied, assert_org_role, grants_permit, resolve_required
+from modulo.auth.permissions import (
+    PermissionDenied,
+    assert_org_role,
+    grants_and_role,
+    resolve_required,
+)
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
@@ -168,7 +173,6 @@ _MAX_GRAPH_EDGES = 1000
 
 # ADR 047 service-layer backstop: operator+ is "privileged" (privilege is
 # required to weaken/remove an existing HITL gate via a graph write).
-_CODE_GRAPH_UPDATE = "pipeline.graph.update"
 _CODE_GUARDRAIL_MANAGE = "guardrail.manage"  # nosec B105 — permission key, not a credential
 _OPERATOR_LEVEL = org_role_level("operator")
 _ADMIN_LEVEL = org_role_level("admin")
@@ -185,11 +189,11 @@ def _is_privileged(role: str | None, key_grants: frozenset[str] | None = None) -
     kill-switched assert_org_role path, so the HITL guard stays live even
     when authz.enforce is disabled.
     """
-    if role is None:
-        return False
-    if not grants_permit(key_grants, _CODE_GRAPH_UPDATE):
-        return False
-    return org_role_level(role) >= _OPERATOR_LEVEL
+    return grants_and_role(
+        key_grants,
+        _CODE_PIPELINE_GRAPH_UPDATE,
+        lambda: role is not None and org_role_level(role) >= _OPERATOR_LEVEL,
+    )
 
 
 def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
@@ -206,11 +210,12 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     ``rollback_to_snapshot``) re-reads the live role under the row lock for
     REST callers, so a stale role claim cannot slip a strip past the guard.
     """
-    if principal.org_role is None:
-        return False
-    if not grants_permit(principal.key_grants, _CODE_GUARDRAIL_MANAGE):
-        return False
-    return org_role_level(principal.org_role) >= _ADMIN_LEVEL
+    role = principal.org_role
+    return grants_and_role(
+        principal.key_grants,
+        _CODE_GUARDRAIL_MANAGE,
+        lambda: role is not None and org_role_level(role) >= _ADMIN_LEVEL,
+    )
 
 
 def _may_manage_cost(principal: TenantPrincipal) -> bool:
@@ -221,13 +226,15 @@ def _may_manage_cost(principal: TenantPrincipal) -> bool:
     (``assert_org_role``) — never an ad-hoc role comparison. Fail-closed: a
     missing/unknown role raises ``PermissionDenied`` and resolves to False.
     """
-    if not grants_permit(principal.key_grants, _CODE_COST_MANAGE):
-        return False
-    try:
-        assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
-    except PermissionDenied:
-        return False
-    return True
+
+    def _role_ok() -> bool:
+        try:
+            assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+        except PermissionDenied:
+            return False
+        return True
+
+    return grants_and_role(principal.key_grants, _CODE_COST_MANAGE, _role_ok)
 
 
 async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:

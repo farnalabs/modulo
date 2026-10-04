@@ -81,7 +81,10 @@ async def api_key_grants_enabled(org_id: uuid.UUID, *, strict: bool = False) -> 
     mistaken for "flag OFF" (401 invalid key) — it must surface as 503.
     """
     try:
-        return bool(await get_registry().resolve_flag(FLAG_API_KEY_GRANTS, org_id=org_id))
+        # strict propagates the registry's org-override read error (the default
+        # path swallows it and falls through to the tier default, which would
+        # make a DB blip indistinguishable from "flag OFF").
+        return bool(await get_registry().resolve_flag(FLAG_API_KEY_GRANTS, org_id=org_id, raise_on_error=strict))
     except asyncio.CancelledError:
         raise
     except Exception:

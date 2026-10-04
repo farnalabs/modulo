@@ -642,10 +642,22 @@ Privilege helpers that gate admin/operator-only extras inside a route (cost
 breaker, guardrail strip, HITL weakening, In-Dev reveal) also require the
 matching permission (`cost.manage`, `guardrail.manage`, `pipeline.graph.update`,
 `*.list.in_dev`) in the grant-set when the key carries one; a malformed
-grant value is denied, never read as unrestricted. A transient failure reading
-the flag for a grant-bearing key answers 503 (not 401); NULL-grants keys never
-read the flag. Long-lived MCP connections re-run the grant resolver on every
-re-validation. **Known REST/MCP asymmetry (open design question):** over MCP
+grant value is denied, never read as unrestricted. The grant decision is carried
+into the service layer: for REST callers `replace_pipeline_graph` and
+`rollback_to_snapshot` compute the final HITL-privilege and guardrail-admin
+flags as (route-supplied grant-aware flag) AND (live-role re-read under the row
+lock), so the live-role re-read can only narrow, never widen, and never
+overrides a grants denial (an admin-owned key holding only
+`pipeline.graph.update` cannot strip a guardrail binding). The grant flag and
+grant-set are resolved after the key-validation DB session closes (never nested
+inside it, to avoid holding two pooled connections per request). A transient
+failure reading the flag for a grant-bearing key (the strict read propagates the
+registry's org-override read error instead of treating it as OFF) answers 503
+(not 401) on REST and a retryable denial on MCP; NULL-grants keys never read the
+flag. Long-lived MCP connections re-run the grant resolver on every
+re-validation. A grant above the key's own minted/live role has no effect,
+since `effective = grants ∩ bundle(role)`; the mint cap checks the minter's
+capability, not the new key's role. **Known REST/MCP asymmetry (open design question):** over MCP
 every read-only tool is gated by the single coarse `resource.read_only` key,
 not the fine-grained REST read keys (`pipeline.list`, `pipeline.graph.read`,
 ...), so MCP reads are all-or-nothing per grant-set; REST enforces the fine keys.

@@ -531,15 +531,16 @@ def _ctx_may_manage_cost() -> bool:
     (``assert_org_role``). A missing/unknown role raises ``PermissionDenied``
     and resolves to False, never True.
     """
-    from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+    from modulo.auth.permissions import PermissionDenied, assert_org_role, grants_and_role, resolve_required
 
-    if not grants_permit(_ctx_key_grants.get(None), _CODE_COST_MANAGE):
-        return False
-    try:
-        assert_org_role(_ctx_role_val(), resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
-    except PermissionDenied:
-        return False
-    return True
+    def _role_ok() -> bool:
+        try:
+            assert_org_role(_ctx_role_val(), resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+        except PermissionDenied:
+            return False
+        return True
+
+    return grants_and_role(_ctx_key_grants.get(None), _CODE_COST_MANAGE, _role_ok)
 
 
 def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
@@ -1114,6 +1115,11 @@ async def validate_current_auth() -> bool:
         return False
     except (ApiKeyInvalidError, JWTError):
         return False
+    except ApiKeyGrantsUnavailableError:
+        # FAR-1477: grant flag unreadable -> retryable fail-closed denial; a
+        # transient read failure is expected noise, not a traceback.
+        _log.warning("mcp.validate_current_auth_grants_unavailable")
+        return False
     except Exception:
         _log.exception("validate_current_auth failed")
         return False
@@ -1294,9 +1300,6 @@ async def _authenticate_api_key(
                     key_id=key.id,
                 )
                 raise ApiKeyInvalidError
-            # FAR-1477: grant-set (None = legacy, no flag read; flag OFF on a
-            # grant-bearing key raises ApiKeyInvalidError -> 401).
-            key_grants = await resolve_key_grants(key)
             if clamped != key.role:
                 _record_api_key_role_cap(
                     minted_role=key.role,
@@ -1305,6 +1308,12 @@ async def _authenticate_api_key(
                     degraded=True,
                     key_id=key.id,
                 )
+        # FAR-1477: grant-set (None = legacy, no flag read; flag OFF on a
+        # grant-bearing key raises ApiKeyInvalidError -> 401). Resolved AFTER
+        # the validation session closes: the flag read opens its own pooled
+        # session for grant-bearing keys, and nesting two sessions per request
+        # risks pool-exhaustion deadlock.
+        key_grants = await resolve_key_grants(key)
         org_id = key.organisation_id
         # FAR-620: the ``user_scoped_mcp_keys`` flag is the kill switch for
         # user-scoped keys — disabling it DENIES the key at auth (401),

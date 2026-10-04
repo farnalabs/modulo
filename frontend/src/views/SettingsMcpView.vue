@@ -184,7 +184,7 @@
       :title="$t('views.SettingsMcpView.create_mcp_api_key')"
       :description="$t('views.SettingsMcpView.generate_new_api_key_description')"
       :confirmText="$t('views.SettingsMcpView.create_mcp_api_key')"
-      :confirmDisabled="!createKeyName.trim() || (grantsRestricted && grantsSelected.length === 0)"
+      :confirmDisabled="!createKeyName.trim() || grantsLoading || grantsLoadFailed || (grantsRestricted && grantsSelected.length === 0)"
       :loading="creatingKey"
       @confirm="createKey"
     >
@@ -222,8 +222,20 @@
   </template>
 </Select>
         </div>
+        <p v-if="grantsLoading" class="text-sm text-muted-foreground" data-testid="settings-mcp-grants-loading">
+          {{ $t('views.SettingsMcpView.grants_loading') }}
+        </p>
+        <div v-else-if="grantsLoadFailed" class="flex items-center gap-3 text-sm text-destructive" data-testid="settings-mcp-grants-load-error">
+          <span>{{ $t('views.SettingsMcpView.grants_load_failed') }}</span>
+          <button
+            type="button"
+            class="rounded-md border px-2 py-1 text-xs"
+            data-testid="settings-mcp-grants-retry"
+            @click="loadGrantablePermissions"
+          >{{ $t('views.SettingsMcpView.grants_retry') }}</button>
+        </div>
         <ApiKeyGrantsSelector
-          v-if="grantsEnabled"
+          v-else-if="grantsEnabled"
           v-model:restricted="grantsRestricted"
           v-model:selected="grantsSelected"
           :permissions="grantablePermissions"
@@ -542,6 +554,12 @@ const creatingKey = ref(false)
 // `grants` never sent). Restricted off = legacy role bundle (field omitted).
 const grantsEnabled = ref(false)
 const grantablePermissions = ref<GrantablePermission[]>([])
+// While the picker's permission list is loading or failed to load we cannot
+// tell whether the org has grants enabled, so key creation is blocked: a key
+// must never be silently created with the full role bundle because the picker
+// had not rendered yet.
+const grantsLoading = ref(false)
+const grantsLoadFailed = ref(false)
 const grantsRestricted = ref(false)
 const grantsSelected = ref<string[]>([])
 const createKeyError = ref<string | null>(null)
@@ -700,9 +718,10 @@ function dismissKeyCreatedDialog() {
 }
 
 /**
- * Load the delegable permission list for the grant picker. NON-fatal: any
- * failure (older backend, 403, network) just hides the picker so key creation
- * keeps working exactly as before.
+ * Load the delegable permission list for the grant picker. While loading, or
+ * after a failure (network error / non-2xx), key creation is blocked and a
+ * retry is offered. "Grants disabled for this org" (``enabled: false``) is a
+ * successful answer and simply hides the picker.
  */
 let grantsLoadSeq = 0
 async function loadGrantablePermissions() {
@@ -711,21 +730,24 @@ async function loadGrantablePermissions() {
   // from an earlier, slower fetch that resolve after a newer one started.
   grantsEnabled.value = false
   grantablePermissions.value = []
+  grantsLoadFailed.value = false
+  grantsLoading.value = true
   const seq = ++grantsLoadSeq
   try {
     const { data, error: err } = await api.GET('/api/v1/api-keys/grantable-permissions')
     if (seq !== grantsLoadSeq) return
-    if (err || !data || !data.enabled) {
-      grantsEnabled.value = false
-      grantablePermissions.value = []
+    if (err) {
+      grantsLoadFailed.value = true
       return
     }
+    if (!data || !data.enabled) return
     grantablePermissions.value = data.permissions
     grantsEnabled.value = data.permissions.length > 0
   } catch {
     if (seq !== grantsLoadSeq) return
-    grantsEnabled.value = false
-    grantablePermissions.value = []
+    grantsLoadFailed.value = true
+  } finally {
+    if (seq === grantsLoadSeq) grantsLoading.value = false
   }
 }
 
@@ -742,6 +764,7 @@ function openCreateKeyDialog() {
 
 async function createKey() {
   if (!createKeyName.value.trim()) return
+  if (grantsLoading.value || grantsLoadFailed.value) return
   if (grantsEnabled.value && grantsRestricted.value && grantsSelected.value.length === 0) return
   creatingKey.value = true
   createKeyError.value = null

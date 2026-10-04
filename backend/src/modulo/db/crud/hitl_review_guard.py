@@ -467,6 +467,12 @@ async def resolve_effective_privilege(
       denies with ``role-changed-reauth-required``.
     - otherwise: the caller-supplied ``is_privileged`` is used as-is (tests,
       creation-only paths).
+
+    The caller-supplied ``is_privileged`` carries the route's grant-aware
+    decision (FAR-1477: API-key grants intersect the role bundle). The live-role
+    re-read may only NARROW it, never widen it: the result is
+    ``is_privileged AND live-role-privileged``, so a grants denial can never be
+    overridden by the key owner's live role.
     """
     if caller_type == "mcp":
         return False
@@ -490,7 +496,7 @@ async def resolve_effective_privilege(
             reason_code=REASON_ROLE_CHANGED,
             detail="No active org membership for the caller.",
         )
-    return is_privileged_role(live_role)
+    return is_privileged and is_privileged_role(live_role)
 
 
 def denial_detail(diff: DiffResult) -> str:
@@ -582,12 +588,14 @@ async def enforce_guardrail_binding_strip(
     """
     effective_admin = is_guardrail_admin
     if caller_type == "rest" and account_id is not None:
-        effective_admin = await _resolve_effective_guardrail_admin(
+        # Live role may only narrow the route's grant-aware flag, never widen it.
+        live_admin = await _resolve_effective_guardrail_admin(
             session,
             org_id=org_id,
             account_id=account_id,
             caller_type=caller_type,
         )
+        effective_admin = is_guardrail_admin and live_admin
     if effective_admin:
         return
     from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows

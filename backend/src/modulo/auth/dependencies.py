@@ -284,9 +284,12 @@ async def get_current_tenant_user_or_api_key(
                     str(key.account_id),
                     str(key.organisation_id),
                 )
-                # FAR-1477: tri-state grant-set (None = legacy role bundle, no
-                # flag read). A grant-bearing key with the flag OFF is denied.
-                key_grants = await resolve_key_grants(key)
+            # FAR-1477: tri-state grant-set (None = legacy role bundle, no
+            # flag read). A grant-bearing key with the flag OFF is denied.
+            # Resolved AFTER the validation session closes: for grant-bearing
+            # keys the flag read opens its own pooled session, and holding two
+            # connections per request risks pool-exhaustion deadlock.
+            key_grants = await resolve_key_grants(key)
         except ApiKeyInvalidError:
             raise InvalidToken from None
         except ApiKeyGrantsUnavailableError:

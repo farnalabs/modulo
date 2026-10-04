@@ -186,8 +186,6 @@ def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None
     required = resolve_required(permission)
     try:
         assert_org_role(principal.org_role, required, permission, kill_switch_eligible=False)
-        # FAR-1477: a grant-bearing key must also hold the In-Dev permission.
-        assert_grant(principal.key_grants, permission)
     except PermissionDenied as exc:
         logger.warning(
             _CODE_PERMISSION_DENIED,
@@ -200,6 +198,19 @@ def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Permission '{permission}' requires '{required}' role",
+        ) from exc
+    # FAR-1477: a grant-bearing key must also hold the In-Dev permission. A
+    # grant-set denial gets its own detail + log reason (not the role message).
+    try:
+        assert_grant(principal.key_grants, permission)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={"permission": permission, "reason": "not_granted"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' is not granted to this API key",
         ) from exc
 
 

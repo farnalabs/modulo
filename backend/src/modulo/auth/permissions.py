@@ -11,7 +11,7 @@ required to perform them. Roles resolve through ``ORG_ROLE_HIERARCHY`` from
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
@@ -375,6 +375,19 @@ def grants_permit(grants: frozenset[str] | None, permission: str) -> bool:
         # Malformed value: fail closed (never treat as unrestricted).
         return False
     return permission in grants and is_delegable(permission)
+
+
+def grants_and_role(
+    grants: frozenset[str] | None,
+    permission: str,
+    role_check: Callable[[], bool],
+) -> bool:
+    """Shared ``effective = grant_set INTERSECT bundle(live_role)`` decision.
+
+    Fail-closed boolean: the grant leg is evaluated first (a grants denial never
+    consults the role), then ``role_check`` must also return True.
+    """
+    return grants_permit(grants, permission) and role_check()
 
 
 def assert_grant(grants: frozenset[str] | None, permission: str) -> None:

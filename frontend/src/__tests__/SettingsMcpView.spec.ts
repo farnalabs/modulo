@@ -1943,4 +1943,43 @@ describe('SettingsMcpView', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
   })
+
+  it('blocks key creation while the grantable-permissions fetch is loading', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return new Promise(() => {})
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-loading"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('blocks key creation and offers retry when the grantable-permissions fetch fails', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') {
+        return Promise.resolve({ data: undefined, error: { detail: 'boom' } })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+
+    // Retry succeeds: error clears, picker renders, creation allowed.
+    mockWithGrantable(grantablePayload)
+    await wrapper.find('[data-testid="settings-mcp-grants-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(true)
+  })
 })
