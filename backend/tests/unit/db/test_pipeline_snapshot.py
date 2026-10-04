@@ -1,12 +1,15 @@
 """Tests for immutable snapshots created from the editable live graph."""
 
+import asyncio
 import copy
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.guardrails import fingerprint_guardrail_pins
@@ -34,22 +37,30 @@ def _scalars_result(values: list[object]) -> MagicMock:
     return result
 
 
-def _bind_lock_connection(session: AsyncMock, *attempts: MagicMock) -> AsyncMock:
-    """FAR-1287: wire the mock session's bound engine to a mock LOCK connection.
+def _bind_lock_connection(session: AsyncMock, *attempts: MagicMock) -> Any:
+    """Build the stubbed DEDICATED lock engine and return a patch that installs it.
 
-    The advisory lock is acquired and released on a dedicated connection opened
-    from ``session.bind`` — never on the caller's session — so the
-    ``pg_try_advisory_lock`` results (plus one trailing result for the
-    ``pg_advisory_unlock``) belong to the lock connection's ``execute``, not the
-    session's. The trailing entry is simply unused when no unlock runs (budget
-    exhausted).
+    FAR-1287: the lock connection is drawn from a dedicated NullPool engine that
+    ``_dedicated_lock_engine`` resolves from the caller's bound engine — never
+    from ``session.bind``'s pool — so unit tests replace that resolver (they
+    must never build a real engine). Enter the returned patch around the
+    snapshot call.
+
+    The stub engine's ``connect`` yields a lock connection carrying *attempts*
+    (the ``pg_try_advisory_lock`` results) plus one trailing result for the
+    ``pg_advisory_unlock`` — the trailing entry is simply unused when no unlock
+    runs (budget exhausted). ``session.bind`` is wired to the same stub engine so
+    the derivation contract (``isinstance(bind, AsyncEngine)``) stays exercised.
+
+    After the ``with`` block, the lock connection is reachable as
+    ``session.bind.connect.return_value``.
     """
     lock_conn = AsyncMock()
     lock_conn.execute.side_effect = [*attempts, MagicMock()]
     engine = MagicMock(spec=AsyncEngine)
     engine.connect = AsyncMock(return_value=lock_conn)
     session.bind = engine
-    return lock_conn
+    return patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _lock_attempt_result(acquired: bool) -> MagicMock:
@@ -145,8 +156,6 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     guardrail_row.suite_id = None
 
     session = AsyncMock(spec=AsyncSession)
-    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
-    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
@@ -159,7 +168,9 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
         _scalars_result([]),  # policy gate rows (empty - no gates bound)
     ]
 
-    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.snapshot_version == 5
@@ -252,8 +263,6 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
     edge.condition_expression = expr
 
     session = AsyncMock(spec=AsyncSession)
-    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
-    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
         _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
@@ -262,7 +271,9 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
         _scalars_result([]),  # policy gate rows (none bound)
     ]
 
-    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.graph_json["edges"] == [
@@ -308,8 +319,6 @@ async def test_snapshot_carries_pipeline_default_autonomy_level(autonomy: str | 
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
-    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
-    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
@@ -318,7 +327,9 @@ async def test_snapshot_carries_pipeline_default_autonomy_level(autonomy: str | 
         _scalars_result([]),  # policy gate rows (none bound)
     ]
 
-    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.default_autonomy_level == autonomy
@@ -355,8 +366,6 @@ async def test_snapshot_carries_pipeline_max_autonomy_level(ceiling: str | None)
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
-    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
-    _bind_lock_connection(session, _lock_attempt_result(True))
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
@@ -365,7 +374,9 @@ async def test_snapshot_carries_pipeline_max_autonomy_level(ceiling: str | None)
         _scalars_result([]),  # policy gate rows (none bound)
     ]
 
-    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # FAR-1287: lock/unlock run on the dedicated lock connection, not the session.
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.max_autonomy_level == ceiling
@@ -425,7 +436,7 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     edge.condition_expression = None
 
     session = AsyncMock(spec=AsyncSession)
-    lock_conn = _bind_lock_connection(
+    lock_stub = _bind_lock_connection(
         session,
         _lock_attempt_result(False),  # attempt 1: contended
         _lock_attempt_result(True),  # attempt 2: lock freed
@@ -438,8 +449,13 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
         _scalars_result([]),  # policy gate rows (none bound)
     ]
 
-    with patch("modulo.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with (
+        lock_stub,
+        patch("modulo.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
         snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # The stub lock engine's connection (session.bind IS the stubbed engine).
+    lock_conn = session.bind.connect.return_value
 
     assert isinstance(snapshot, PipelineSnapshot)
     assert snapshot.pipeline_id == pipeline_id
@@ -465,13 +481,15 @@ async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:
 
     pipeline_id = uuid.uuid4()
     session = AsyncMock(spec=AsyncSession)
-    lock_conn = _bind_lock_connection(session, *[_lock_attempt_result(False)] * SNAPSHOT_LOCK_ATTEMPTS)
+    lock_stub = _bind_lock_connection(session, *[_lock_attempt_result(False)] * SNAPSHOT_LOCK_ATTEMPTS)
 
     with (
+        lock_stub,
         patch("modulo.db.crud.pipeline_snapshot.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         pytest.raises(SnapshotLockNotAvailableError, match=f"after {SNAPSHOT_LOCK_ATTEMPTS} attempts"),
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    lock_conn = session.bind.connect.return_value
 
     assert lock_conn.execute.await_count == SNAPSHOT_LOCK_ATTEMPTS
     assert session.execute.await_count == 0
@@ -480,3 +498,165 @@ async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:
     # (its state being provably lock-free) without an invalidate either.
     lock_conn.close.assert_awaited_once()
     lock_conn.invalidate.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 (pool-contention regression): the lock must not consume a main-pool
+# slot, and acquisition must be bounded.
+# ---------------------------------------------------------------------------
+
+
+async def test_lock_connection_comes_from_a_dedicated_engine_not_the_callers_pool() -> None:
+    """FAR-1287: the lock is drawn from the DEDICATED lock engine.
+
+    ``caller_engine`` is the pool the session was built from — the main web
+    pool in production. If the lock checked a slot out of it, every concurrent
+    snapshot creation would hold TWO main-pool connections (caller + lock) and a
+    burst would drive every waiter into the 30s pool checkout timeout, surfacing
+    as ``sqlalchemy.exc.TimeoutError`` instead of the lock contract.
+    """
+    pipeline_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = uuid.uuid4()
+    pipeline.graph_nodes_json = [
+        {"id": str(source_id), "agent_id": None, "connector_binding": None},
+        {"id": str(target_id), "agent_id": None, "connector_binding": None},
+    ]
+    pipeline.run_context_defaults = {}
+
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = source_id
+    edge.target_node_id = target_id
+    edge.edge_type = "normal"
+    edge.hitl_review_config = None
+    edge.condition_expression = None
+
+    session = AsyncMock(spec=AsyncSession)
+    caller_engine = MagicMock(spec=AsyncEngine)  # the MAIN pool
+    caller_engine.connect = AsyncMock()
+    session.bind = caller_engine
+
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [_lock_attempt_result(True), MagicMock()]
+    lock_engine = MagicMock(spec=AsyncEngine)
+    lock_engine.connect = AsyncMock(return_value=lock_conn)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        _scalar_result(1),
+        _scalars_result([]),
+        _scalars_result([]),  # policy gate rows (none bound)
+    ]
+
+    with patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=lock_engine) as derive:
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    # The main pool was never checked out for the lock ...
+    caller_engine.connect.assert_not_called()
+    # ... the resolver still keyed off the caller's engine, and the lock itself
+    # (1 try-lock + 1 unlock) ran on the dedicated engine, which released it.
+    derive.assert_called_once_with(caller_engine)
+    lock_engine.connect.assert_awaited_once()
+    assert lock_conn.execute.await_count == 2
+    lock_conn.close.assert_awaited_once()
+
+
+async def test_unavailable_lock_source_fails_fast_as_snapshot_lock_not_available() -> None:
+    """FAR-1287 (bounded acquisition): a lock source that never answers surfaces
+    as ``SnapshotLockNotAvailableError`` inside the acquisition bound — never a
+    30s pool checkout stall.
+
+    The stub ``connect`` never resolves, so the ONLY way this test finishes is
+    ``_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS`` (patched small here). If the
+    bound were removed this test would hang and fail under pytest-timeout — that
+    is the oracle for the regression.
+    """
+    pipeline_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    session.bind = MagicMock(spec=AsyncEngine)
+    hanging_engine = MagicMock(spec=AsyncEngine)
+    never = asyncio.Event()
+    hanging_engine.connect = AsyncMock(side_effect=never.wait)
+
+    with (
+        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=hanging_engine),
+        patch("modulo.db.crud.pipeline_snapshot._SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.05),
+        pytest.raises(SnapshotLockNotAvailableError, match="lock source unavailable"),
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    # Acquisition failed before a single graph read.
+    assert session.execute.await_count == 0
+
+
+async def test_lock_source_connect_error_is_relabelled_snapshot_lock_unavailable() -> None:
+    """An unusable lock source (connection refused, auth failure, saturated
+    Postgres) is reported through the existing lock contract with the original
+    error chained — never as a raw driver exception thrown out of a snapshot
+    call, and never as a bare 30s stall."""
+    pipeline_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    session.bind = MagicMock(spec=AsyncEngine)
+    broken_engine = MagicMock(spec=AsyncEngine)
+    broken_engine.connect = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+    with (
+        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=broken_engine),
+        pytest.raises(SnapshotLockNotAvailableError, match=r"lock source unavailable \(RuntimeError\)") as excinfo,
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert session.execute.await_count == 0
+
+
+async def test_dedicated_lock_engine_is_null_pool_and_cached_per_url() -> None:
+    """FAR-1287: the lock engine is a per-URL ``NullPool`` engine.
+
+    NullPool means no pooled slots to contend (nothing to starve the main pool
+    with, nothing to time out after 30s) and a ``close()`` that physically ends
+    the PG session — so a released lock can never outlive its connection. The
+    URL comes from the caller's engine so the lock always lands in the SAME
+    database the snapshot is written to; the engine is cached per URL like
+    ``db.session``'s shared engine. Never connects (engine construction is
+    lazy), so this needs no database.
+    """
+    from modulo.db.crud.pipeline_snapshot import _dedicated_lock_engine
+
+    probe_url = f"postgresql+asyncpg://probe:{uuid.uuid4().hex}@localhost/probe"
+    other_url = f"postgresql+asyncpg://probe:{uuid.uuid4().hex}@localhost/other"
+    source = create_async_engine(probe_url)
+    other_source = create_async_engine(other_url)
+    try:
+        with patch("modulo.db.crud.pipeline_snapshot.get_settings") as settings:
+            settings.return_value.database_url = probe_url
+            lock_engine = _dedicated_lock_engine(source)
+
+            assert lock_engine is not source
+            assert isinstance(lock_engine.pool, NullPool)
+            assert lock_engine.url.render_as_string(hide_password=False) == source.url.render_as_string(
+                hide_password=False
+            )
+            # Cached per URL — a second resolution returns the same engine.
+            assert _dedicated_lock_engine(source) is lock_engine
+            # A different database gets its own lock engine (its own locks).
+            assert _dedicated_lock_engine(other_source) is not lock_engine
+    finally:
+        await source.dispose()
+        await other_source.dispose()
+
+
+async def test_session_without_engine_binding_raises_runtime_error() -> None:
+    """The derivation contract stays loud: a session with no usable engine
+    binding is a hard error, never a silent fallback onto the caller's own
+    connection — that fallback is exactly what leaked the lock originally."""
+    session = AsyncMock(spec=AsyncSession)  # .bind is a plain MagicMock, not an AsyncEngine
+
+    with pytest.raises(RuntimeError, match="bound to an AsyncEngine"):
+        await create_snapshot_from_live_graph(session, pipeline_id=uuid.uuid4())

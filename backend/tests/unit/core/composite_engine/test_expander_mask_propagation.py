@@ -19,7 +19,7 @@ tokens in test files.
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -58,12 +58,14 @@ def _scalars_result(values: list[object]) -> MagicMock:
     return result
 
 
-def _bind_lock_connection(session: AsyncMock) -> AsyncMock:
-    """FAR-1287: wire the mock session's bound engine to a mock LOCK connection.
+def _bind_lock_connection(session: AsyncMock) -> Any:
+    """Build the stubbed DEDICATED lock engine and return a patch that installs it.
 
-    The snapshot advisory lock is acquired and released on a dedicated
-    connection opened from ``session.bind`` — never on the caller's session —
-    so no lock/unlock statement ever appears in ``session.execute``'s sequence.
+    FAR-1287: the snapshot advisory lock is acquired/released on a connection
+    from a dedicated NullPool engine resolved by ``_dedicated_lock_engine`` —
+    never on the caller's session or its pool — so no lock/unlock statement ever
+    appears in ``session.execute``'s sequence. Enter the returned patch around
+    the snapshot call.
     """
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
@@ -72,7 +74,7 @@ def _bind_lock_connection(session: AsyncMock) -> AsyncMock:
     engine = MagicMock(spec=AsyncEngine)
     engine.connect = AsyncMock(return_value=lock_conn)
     session.bind = engine
-    return lock_conn
+    return patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _template_mock(template_id: uuid.UUID, sub_graph: dict[str, Any]) -> MagicMock:
@@ -159,9 +161,6 @@ async def test_snapshot_hop_carries_real_credential_from_save_as_composite() -> 
     pipeline.run_context_defaults = {}
 
     session = AsyncMock(spec=AsyncSession)
-    # FAR-1287: the advisory lock is acquired/released on the dedicated lock
-    # connection opened from session.bind — never on the caller's session.
-    _bind_lock_connection(session)
     session.execute.side_effect = [
         _scalar_result(pipeline),  # 1 pipeline
         _scalars_result([]),  # 2 edges
@@ -171,7 +170,10 @@ async def test_snapshot_hop_carries_real_credential_from_save_as_composite() -> 
         _scalars_result([]),  # 6 policy-gate rows (FAR-967 chunk 10 pin loader)
     ]
 
-    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # FAR-1287: the advisory lock is acquired/released on the dedicated lock
+    # connection opened from the dedicated engine — never on the caller's session.
+    with _bind_lock_connection(session):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     assert isinstance(snapshot, PipelineSnapshot)
     nodes = snapshot.graph_json["nodes"]

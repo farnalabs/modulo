@@ -50,6 +50,22 @@ def _slack_sig(body: bytes, secret: str, timestamp: str) -> str:
     return "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
 
 
+def _lock_engine_stub() -> MagicMock:
+    """Stub for the DEDICATED NullPool lock engine (FAR-1287).
+
+    The snapshot's advisory lock is resolved by ``_dedicated_lock_engine`` and
+    drawn from that engine — never from the session's pool — so a test whose
+    session reaches ``create_snapshot_from_live_graph`` must stub the resolver.
+    """
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [lock_result, MagicMock()]  # try-lock, then unlock
+    engine = MagicMock(spec=AsyncEngine)
+    engine.connect = AsyncMock(return_value=lock_conn)
+    return engine
+
+
 def _make_trigger_session() -> AsyncMock:
     """Session whose trigger carries a signing_secret so route-level signature
     validation runs against the real secret."""
@@ -69,17 +85,10 @@ def _make_trigger_session() -> AsyncMock:
     session.execute = AsyncMock(return_value=execute_result)
     session.add = MagicMock()
     session.flush = AsyncMock()
-    # FAR-1287: the route creates the pipeline snapshot before dispatch, and
-    # that snapshot's advisory lock lives on a DEDICATED connection opened from
-    # session.bind — never on this caller session. Without a bound engine the
-    # snapshot creation refuses to start (RuntimeError), so give the mock one.
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-    lock_conn = AsyncMock()
-    lock_conn.execute.side_effect = [lock_result, MagicMock()]  # try-lock, then unlock
-    engine = MagicMock(spec=AsyncEngine)
-    engine.connect = AsyncMock(return_value=lock_conn)
-    session.bind = engine
+    # FAR-1287: the route creates the pipeline snapshot before dispatch; without
+    # a bound AsyncEngine the snapshot creation refuses to start (RuntimeError),
+    # so wire the derivation contract even though tests stub the resolver.
+    session.bind = _lock_engine_stub()
     return session
 
 
@@ -402,6 +411,9 @@ def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient)
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.slack.record_busy_delivery", new_callable=AsyncMock) as record,
         patch("modulo.api.routes.slack.set_rls_org"),
+        # FAR-1287: the route snapshots the pipeline before dispatch, and the
+        # snapshot's advisory lock is resolved onto a dedicated engine.
+        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
     ):
         m.side_effect = TriggerBusyError(_TRIGGER_ID)
         resp = client.post(

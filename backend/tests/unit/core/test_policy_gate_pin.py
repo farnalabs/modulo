@@ -17,7 +17,7 @@ Migration round-trip + live-DB CHECK behaviour (C13) live in
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import inspect
@@ -753,12 +753,17 @@ def _creation_session(
     pipeline: MagicMock,
     edge: MagicMock,
     gate_rows: list[MagicMock],
-) -> AsyncMock:
+) -> tuple[AsyncMock, Any]:
+    """Return ``(session, lock_stub)`` for a snapshot-creation call.
+
+    FAR-1287: the snapshot advisory lock is acquired/released on a DEDICATED
+    connection from a dedicated NullPool engine resolved by
+    ``_dedicated_lock_engine`` — never on the caller's session or its pool — so
+    the lock/unlock results belong to the lock connection's ``execute``, and the
+    session's sequence starts at the pipeline read. Enter the returned patch
+    around the ``create_snapshot_from_live_graph`` call.
+    """
     session = AsyncMock(spec=AsyncSession)
-    # FAR-1287: the snapshot advisory lock is acquired/released on a DEDICATED
-    # connection opened from session.bind, never on the caller's session — so
-    # the lock/unlock results belong to the lock connection's execute, and the
-    # session's sequence starts at the pipeline read.
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
     lock_conn = AsyncMock()
@@ -773,7 +778,7 @@ def _creation_session(
         _scalars_result([]),  # guardrail rows
         _scalars_result(gate_rows),  # policy gate rows
     ]
-    return session
+    return session, patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _simple_pipeline_and_edge() -> tuple[MagicMock, MagicMock]:
@@ -817,10 +822,9 @@ async def test_creation_writes_policy_gate_pins_and_fingerprint_to_snapshot() ->
         for row in gate_rows
     ]
 
-    snapshot = await create_snapshot_from_live_graph(
-        _creation_session(pipeline, edge, gate_rows),
-        pipeline_id=pipeline.id,
-    )
+    session, lock_stub = _creation_session(pipeline, edge, gate_rows)
+    with lock_stub:
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline.id)
 
     assert snapshot is not None
     assert snapshot.policy_gate_pins_json == expected_pins
@@ -837,10 +841,9 @@ async def test_creation_zero_gates_store_empty_pin_set_with_digest() -> None:
     from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 
     pipeline, edge = _simple_pipeline_and_edge()
-    snapshot = await create_snapshot_from_live_graph(
-        _creation_session(pipeline, edge, []),
-        pipeline_id=pipeline.id,
-    )
+    session, lock_stub = _creation_session(pipeline, edge, [])
+    with lock_stub:
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline.id)
 
     assert snapshot is not None
     stored_pins = snapshot.policy_gate_pins_json

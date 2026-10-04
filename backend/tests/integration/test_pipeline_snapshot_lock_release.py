@@ -182,7 +182,16 @@ async def test_lock_is_never_held_by_the_callers_session(
 ) -> None:
     """FAR-1287: mid-copy, the caller's backend holds NO advisory lock — some
     OTHER backend does (the dedicated lock connection), which is what still
-    serialises concurrent snapshot creation."""
+    serialises concurrent snapshot creation — and the caller's POOL is not
+    consumed by that lock either.
+
+    The pool assertion is the production regression this shape guards: a lock
+    drawn from the caller's engine would take a SECOND slot of the main web pool
+    (20+10) per snapshot creation, so a burst would push every waiter into the
+    30s ``pool_timeout`` and surface as ``sqlalchemy.exc.TimeoutError``. Mid-copy
+    exactly one connection of THIS engine is checked out — the caller's own
+    session; the lock's connection belongs to the dedicated NullPool engine.
+    """
     pipeline_id = await _insert_pipeline(pooled_engine, test_org, test_user)
     key1, key2 = _pipeline_lock_keys(pipeline_id)
     observed: dict[str, int] = {}
@@ -207,6 +216,7 @@ async def test_lock_is_never_held_by_the_callers_session(
         )
         observed["caller_locks"] = caller_locks
         observed["holders"] = holders
+        observed["main_pool_checked_out"] = pooled_engine.sync_engine.pool.checkedout()
 
     try:
         with patch("modulo.db.crud.pipeline_snapshot._load_guardrail_pins", new=_observe_lock_state):
@@ -214,6 +224,8 @@ async def test_lock_is_never_held_by_the_callers_session(
         assert isinstance(snapshot, PipelineSnapshot)
         assert observed["caller_locks"] == 0
         assert observed["holders"] >= 1
+        # The caller's session only — the lock is NOT a second slot on this pool.
+        assert observed["main_pool_checked_out"] == 1
     finally:
         await _cleanup(pooled_engine, pipeline_id)
 
