@@ -147,6 +147,7 @@ from modulo.core.library_service import (
     get_primitive_by_slug,
     list_primitives,
 )
+from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     check_tool_scope,
@@ -384,6 +385,36 @@ _ctx_user_keys_enabled: contextvars.ContextVar[bool] = contextvars.ContextVar("m
 _ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "mcp_node_allowed_tools", default=None
 )
+
+
+def _bind_org_context(request: Request, org_id: uuid.UUID, account_id: uuid.UUID | None = None) -> None:
+    """Publish the MCP-resolved organisation where ERROR capture can see it (FAR-1417).
+
+    ``McpAuthMiddleware`` resolves the tenant into ``_ctx_org_id`` for the tool
+    handlers, but ``ErrorTrackingLogHandler`` reads a DIFFERENT contextvar
+    (``org_id_var``) synchronously on every log record — left unwired, every
+    ``_log.exception`` on this surface (auth DB failures, the tool-shell error
+    mapping, the HITL decision-budget check) was dropped before it could reach
+    ``error_events``.
+
+    Same two carriers as ``auth.dependencies.bind_principal_context``:
+
+    * ``org_id_var`` — visible to the middleware's own frame and, once
+      ``call_next`` creates the downstream task, to every tool handler
+      (asyncio copies the caller's context at task creation — the same
+      propagation the ``_ctx_*`` vars above rely on);
+    * ``request.state`` — ASGI-scope-backed, so an OUTER middleware
+      (``CatchAllMiddleware``) can re-bind after a failure raised above this
+      mounted sub-app, where the contextvar is not visible.
+
+    Call it exactly where ``_ctx_org_id`` is set: one per auth flavour, never
+    earlier (the org is not known) and never as a fallback.
+    """
+    org = str(org_id)
+    org_id_var.set(org)
+    request.state.organisation_id = org
+    if account_id is not None:
+        request.state.user_id = str(account_id)
 
 
 class McpAuthContextError(LookupError):
@@ -1243,6 +1274,7 @@ async def _authenticate_api_key(
                 )
                 raise ApiKeyInvalidError
         _ctx_org_id.set(org_id)
+        _bind_org_context(request, org_id, key.account_id)
         _ctx_role.set(clamped)
         _ctx_key_id.set(key.id)
         _ctx_team_id.set(key.team_id)
@@ -1374,6 +1406,7 @@ async def _authenticate_oauth_jwt(
                 None,
             )
         _ctx_org_id.set(principal.organisation_id)
+        _bind_org_context(request, principal.organisation_id, principal.account_id)
         _ctx_role.set(live_role)
         _ctx_key_id.set(uuid.UUID(int=0))
         _ctx_user_id.set(principal.account_id)
@@ -1492,6 +1525,7 @@ async def _finalize_oauth_principal(
     role = clamp_oauth_role(scope_role, live_role)
 
     _ctx_org_id.set(claims.organisation_id)
+    _bind_org_context(request, claims.organisation_id, claims.account_id)
     _ctx_role.set(role)
     _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
     _ctx_user_id.set(claims.account_id)
