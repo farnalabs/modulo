@@ -84,6 +84,11 @@ _SEED_TABLES = {
     "run_node_outputs",
     "lifecycle_maps",
     "lifecycle_map_stages",
+    # FAR-1471: every graph write through replace_pipeline_graph appends a
+    # pipeline.graph_updated audit event, so the seed's graph converge path
+    # needs the audit chain tables too.
+    "audit_events",
+    "audit_chain_heads",
 }
 
 
