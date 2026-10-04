@@ -11,7 +11,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.trigger import apply_trigger_event_cursor
@@ -58,7 +58,8 @@ async def _run_trigger_event_query(query: Callable[[], Awaitable[Any]], fail_log
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_triggers._run_trigger_event_query")
         _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

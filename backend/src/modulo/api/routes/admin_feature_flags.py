@@ -21,7 +21,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_logger import append_audit_event_isolated
@@ -356,7 +356,8 @@ async def list_feature_flags(
                 }
             },
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_feature_flags.list_feature_flags")
         logger.exception(_CODE_FEATURE_FLAGS_LIST_FAILED)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -428,7 +429,8 @@ async def get_feature_flag(
                 }
             },
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_feature_flags.get_feature_flag")
         logger.exception(_CODE_FEATURE_FLAGS_GET_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -502,7 +504,8 @@ async def toggle_feature_flag(
                 }
             },
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_feature_flags.toggle_feature_flag")
         logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -558,7 +561,8 @@ async def get_org_flag_override(
                 }
             },
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_feature_flags.get_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_GET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -613,7 +617,8 @@ async def set_org_flag_override(
                 }
             },
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_feature_flags.set_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -682,7 +687,8 @@ async def clear_org_flag_override(
                 }
             },
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_feature_flags.clear_org_flag_override")
         logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

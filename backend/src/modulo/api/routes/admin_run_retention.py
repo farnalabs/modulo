@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
     require_feature,
@@ -212,7 +213,8 @@ async def candidates(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_run_retention.candidates")
         _log.exception("run_retention.candidates.db_error")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -332,7 +334,8 @@ async def purge(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_run_retention.purge")
         _log.exception("run_retention.purge.db_error")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

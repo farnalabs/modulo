@@ -12,7 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.tier_catalog import list_tiers
@@ -80,7 +80,8 @@ async def list_tiers_endpoint(
     except ProgrammingError:
         logger.exception("admin_tiers.list_tiers_endpoint")
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_tiers.list_tiers_endpoint")
         logger.exception("admin_tiers.list_tiers_endpoint")
         raise HTTPException(status_code=503, detail="Database error occurred.") from None
     except Exception:

@@ -7,7 +7,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.system_config import get_config, update_config
@@ -100,7 +100,8 @@ async def get_monitor_config(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_monitor_config.get_monitor_config")
         _log.exception("admin.monitor_config.get_monitor_config - SQL error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -138,7 +139,8 @@ async def set_monitor_config(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_monitor_config.set_monitor_config")
         _log.exception("admin.monitor_config.set_monitor_config - SQL error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
