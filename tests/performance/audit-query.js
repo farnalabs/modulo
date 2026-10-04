@@ -115,7 +115,9 @@ export default function auditQuery(data) {
       const firstBody = JSON.parse(firstRes.body);
       auditCursorTrend.add(firstRes.timings.duration);
 
-      check(firstRes, {
+      // Require BOTH a non-empty first page and a next cursor before following
+      // it, so a follow-up page can be compared against a known first item.
+      const firstPageOk = check(firstRes, {
         'first cursor page has items': () => Array.isArray(firstBody.items) && firstBody.items.length > 0,
         'first cursor page has next cursor': () =>
           typeof firstBody.next_cursor === 'string' && firstBody.next_cursor.length > 0,
@@ -126,22 +128,30 @@ export default function auditQuery(data) {
       // bare event id here would fail to decode and silently fall back to page
       // 1, measuring a first-page fetch instead of cursor traversal.
       const nextCursor = firstBody.next_cursor;
-      if (typeof nextCursor === 'string' && nextCursor.length > 0) {
+      if (firstPageOk && typeof nextCursor === 'string' && nextCursor.length > 0) {
         const cursorRes = http.get(`${BASE_URL}/admin/audit?limit=10&cursor=${encodeURIComponent(nextCursor)}`, params);
         auditCursorTrend.add(cursorRes.timings.duration);
 
-        const firstItem = firstBody.items[0];
-        const cursorBody = JSON.parse(cursorRes.body);
-        check(cursorRes, {
+        // Check the status BEFORE parsing: a non-200 body (e.g. a 5xx HTML
+        // page) is not JSON, and an uncaught JSON.parse here would abort the
+        // whole VU iteration instead of just failing a check.
+        const cursorStatusOk = check(cursorRes, {
           'cursor page status 200': (r) => r.status === 200,
-          'cursor page returns items': () => Array.isArray(cursorBody.items),
-          'cursor page does not repeat first page': () =>
-            // Each seeded pipeline PATCH emits one pipeline.autonomy_level_changed
-            // event, so with limit=10 there are guaranteed to be more pages and
-            // the follow-up page must be non-empty AND disjoint from the first
-            // page (the cursor boundary is strict older-than).
-            cursorBody.items.length > 0 && cursorBody.items[0].id !== firstItem.id,
         });
+
+        if (cursorStatusOk) {
+          const cursorBody = JSON.parse(cursorRes.body);
+          const firstItem = firstBody.items[0];
+          check(cursorRes, {
+            'cursor page returns items': () => Array.isArray(cursorBody.items),
+            'cursor page does not repeat first page': () =>
+              // Each seeded pipeline PATCH emits one pipeline.autonomy_level_changed
+              // event, so with limit=10 there are guaranteed to be more pages and
+              // the follow-up page must be non-empty AND disjoint from the first
+              // page (the cursor boundary is strict older-than).
+              cursorBody.items.length > 0 && cursorBody.items[0].id !== firstItem.id,
+          });
+        }
       }
     });
 

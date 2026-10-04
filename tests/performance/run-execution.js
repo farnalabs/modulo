@@ -99,7 +99,13 @@ export default function runExecution(data) {
       const res = http.post(`${BASE_URL}/runs`, payload, params);
       runCreateTrend.add(res.timings.duration);
 
-      const runBody = JSON.parse(res.body);
+      // Only a 202 carries a JSON body; guard the parse so a non-JSON error
+      // body (e.g. a 5xx HTML page) fails a check instead of aborting the VU.
+      let runBody = {};
+      if (res.status === 202) {
+        runBody = JSON.parse(res.body);
+      }
+
       const passed = check(res, {
         'trigger run status 202': (r) => r.status === 202,
         'trigger run returns run_id': () => typeof runBody.run_id === 'string' && runBody.run_id.length > 0,
@@ -111,7 +117,7 @@ export default function runExecution(data) {
         return;
       }
 
-      const runId = JSON.parse(res.body).run_id;
+      const runId = runBody.run_id;
 
       // POLL UNTIL COMPLETE
       group('Poll run status', function () {
