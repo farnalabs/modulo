@@ -229,14 +229,16 @@ async def _open_and_poll_snapshot_lock(
             if lock_result.scalar_one():
                 acquired = True
                 break
-            if attempt == SNAPSHOT_LOCK_ATTEMPTS:
-                # Every attempt completed and reported "not held", so the
-                # connection is provably lock-free when it is disposed below.
-                exhausted = True
-                raise SnapshotLockNotAvailableError(
-                    f"Cannot acquire snapshot lock for pipeline {pipeline_id} after {SNAPSHOT_LOCK_ATTEMPTS} attempts"
-                )
-            await asyncio.sleep(SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS)
+            if attempt < SNAPSHOT_LOCK_ATTEMPTS:
+                await asyncio.sleep(SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS)
+        if not acquired:
+            # Every attempt completed and reported "not held" and the loop ended
+            # without a break, so the budget is exhausted and the connection is
+            # provably lock-free when it is disposed below.
+            exhausted = True
+            raise SnapshotLockNotAvailableError(
+                f"Cannot acquire snapshot lock for pipeline {pipeline_id} after {SNAPSHOT_LOCK_ATTEMPTS} attempts"
+            )
     finally:
         if not acquired:
             # Budget exhausted cleanly -> the connection is provably lock-free;

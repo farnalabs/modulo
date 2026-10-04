@@ -660,3 +660,101 @@ async def test_session_without_engine_binding_raises_runtime_error() -> None:
 
     with pytest.raises(RuntimeError, match="bound to an AsyncEngine"):
         await create_snapshot_from_live_graph(session, pipeline_id=uuid.uuid4())
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 teardown edge cases: the dispose/unlock failure arms.
+# ---------------------------------------------------------------------------
+
+
+async def test_dispose_lock_connection_reraises_cancellation() -> None:
+    """A cancellation must not be swallowed while the dedicated lock connection
+    is being disposed: ``asyncio.shield`` lets the dispose run to completion so
+    the lock cannot leak, but the cancellation still propagates to the caller."""
+    from modulo.db.crud.pipeline_snapshot import _dispose_snapshot_lock_connection
+
+    lock_conn = AsyncMock()
+    lock_conn.close.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await _dispose_snapshot_lock_connection(lock_conn, can_pool=True)
+
+    lock_conn.close.assert_awaited_once()
+    lock_conn.invalidate.assert_not_awaited()
+
+
+async def test_dispose_lock_connection_swallows_and_logs_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """A best-effort teardown failure is reported loudly but must never mask the
+    caller's own error — the dispose returns normally after logging."""
+    import logging
+
+    from modulo.db.crud.pipeline_snapshot import _dispose_snapshot_lock_connection
+
+    lock_conn = AsyncMock()
+    lock_conn.close.side_effect = RuntimeError("teardown boom")
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline_snapshot"):
+        await _dispose_snapshot_lock_connection(lock_conn, can_pool=True)
+
+    assert any("snapshot_lock_connection_dispose_failed" in record.getMessage() for record in caplog.records)
+
+
+async def test_release_lock_invalidates_physical_session_when_unlock_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the ``pg_advisory_unlock`` itself fails (transport/abort), the lock
+    state is unconfirmed, so the connection is invalidated (physical session
+    teardown) rather than pooled — and the failure is logged."""
+    import logging
+
+    from modulo.db.crud.pipeline_snapshot import _release_snapshot_lock
+
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = RuntimeError("transport gone")
+
+    with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline_snapshot"):
+        await _release_snapshot_lock(lock_conn, key1=1, key2=2)
+
+    lock_conn.invalidate.assert_awaited_once()
+    lock_conn.close.assert_not_awaited()
+    assert any("snapshot_lock_unlock_failed" in record.getMessage() for record in caplog.records)
+
+
+def test_build_lock_engine_non_postgres_skips_postgres_connect_args() -> None:
+    """A non-Postgres bind (SQLite/MySQL deployments) takes none of the asyncpg
+    knobs — only the shared connect timeout is passed."""
+    from modulo.db.crud.pipeline_snapshot import _build_lock_engine
+
+    bind = MagicMock(spec=AsyncEngine)
+    bind.url.drivername = "sqlite+aiosqlite"
+
+    with patch("modulo.db.crud.pipeline_snapshot.create_async_engine") as create:
+        sentinel = object()
+        create.return_value = sentinel
+        assert _build_lock_engine(bind) is sentinel
+
+    assert create.call_args.kwargs["connect_args"] == {"timeout": 10}
+    assert create.call_args.kwargs["poolclass"] is NullPool
+
+
+def test_build_lock_engine_skips_ssl_when_settings_url_is_not_postgres() -> None:
+    """The TLS posture is read from ``settings.database_url`` via
+    ``split_engine_sslmode``; a non-Postgres settings URL resolves to ``None``,
+    meaning no ``ssl``/``statement_cache_size`` connect args even for a Postgres
+    bind — the non-Postgres arm of the SSL guard."""
+    from modulo.db.crud.pipeline_snapshot import _build_lock_engine
+
+    bind = MagicMock(spec=AsyncEngine)
+    bind.url.drivername = "postgresql+asyncpg"
+
+    with (
+        patch("modulo.db.crud.pipeline_snapshot.get_settings") as settings,
+        patch("modulo.db.crud.pipeline_snapshot.create_async_engine") as create,
+    ):
+        settings.return_value.database_url = "sqlite+aiosqlite:///probe.db"
+        sentinel = object()
+        create.return_value = sentinel
+        assert _build_lock_engine(bind) is sentinel
+
+    assert create.call_args.kwargs["connect_args"] == {"timeout": 10}
+    assert create.call_args.kwargs["poolclass"] is NullPool
