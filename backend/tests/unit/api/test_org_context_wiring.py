@@ -242,6 +242,42 @@ async def test_unauthenticated_request_inherits_nothing_and_the_drop_is_visible(
     assert any("no_org_context" in record.getMessage() for record in caplog.records)
 
 
+def test_principal_without_an_org_is_returned_unchanged_and_binds_nothing() -> None:
+    """The monotonic arm: a system-admin principal (no org) binds neither carrier.
+
+    ``bind_principal_context`` returns the principal untouched when
+    ``organisation_id`` is ``None`` and must not clear a value another
+    dependency already bound on the same request — a system-admin surface
+    reached after an org-scoped one keeps the earlier org for its ERRORs.
+    """
+    from modulo.auth.dependencies import bind_principal_context
+    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.core.logging_config import org_id_var
+
+    request = SimpleNamespace(state=SimpleNamespace())
+    principal = AuthenticatedPrincipal(
+        username="root",
+        organisation_id=None,
+        account_id=_ACCOUNT_ID,
+        org_role=None,
+        is_system_admin=True,
+    )
+
+    previous = org_id_var.get()
+    try:
+        org_id_var.set(str(_ORG_ID))
+        returned = bind_principal_context(request, principal)
+
+        # Returned unchanged, and the earlier org is not cleared.
+        assert returned is principal
+        assert org_id_var.get() == str(_ORG_ID)
+        # No org carrier was written to the request scope.
+        assert getattr(request.state, "organisation_id", None) is None
+        assert getattr(request.state, "user_id", None) is None
+    finally:
+        org_id_var.set(previous)
+
+
 # ---------------------------------------------------------------------------
 # MAJOR 1 — MCP auth surface (McpAuthMiddleware resolves _ctx_org_id)
 # ---------------------------------------------------------------------------
