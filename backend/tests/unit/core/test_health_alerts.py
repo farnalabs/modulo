@@ -13,6 +13,7 @@ Covers the four contract requirements:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -388,3 +389,236 @@ async def test_observe_readiness_reuses_the_route_evaluation() -> None:
     assert observation.status == "degraded"
     assert observation.checks["db_hygiene"].detail == "dead-tuple ratio 0.18"
     assert observation.observed_state == "unhealthy"
+
+
+# ---------------------------------------------------------------------------
+# Default collaborators, malformed state, and failure edges.  The transition
+# tests above stub the observer/sender/redis and only drive the happy paths;
+# these exercise the remaining changed lines and branches directly.
+# ---------------------------------------------------------------------------
+
+
+def test_recipients_splits_and_drops_empties() -> None:
+    """Recipients are comma-split, trimmed, and empties dropped."""
+    settings = _make_settings(alert_email_to=" ops@example.com , ,sre@example.com ")
+    assert ha._recipients(settings) == ["ops@example.com", "sre@example.com"]
+
+
+def test_recipients_empty_when_unset() -> None:
+    assert not ha._recipients(_make_settings(alert_email_to=""))
+    assert not ha._recipients(_make_settings(alert_email_to=None))
+
+
+def test_alerting_configured_requires_both_halves() -> None:
+    """``SMTP_HOST`` AND ``ALERT_EMAIL_TO`` are both required."""
+    assert ha.alerting_configured(_make_settings()) is True
+    assert ha.alerting_configured(_make_settings(smtp_host="")) is False
+    assert ha.alerting_configured(_make_settings(alert_email_to="")) is False
+
+
+def test_conditions_name_non_ok_checks_without_detail() -> None:
+    """A non-``ok`` check with no detail still produces a bullet."""
+    observation = ha.HealthObservation(
+        status="degraded",
+        checks={
+            "redis": ha.SubCheck(status="degraded", detail=None),
+            "database": ha.SubCheck(status="ok", detail="connected"),
+        },
+    )
+    assert observation.conditions() == ["redis: degraded"]
+    assert observation.observed_state == "unhealthy"
+
+
+def test_from_raw_malformed_json_starts_fresh(caplog: pytest.LogCaptureFixture) -> None:
+    """Unparsable stored JSON degrades to a fresh state (never crashes)."""
+    with caplog.at_level(logging.WARNING, logger=ha.__name__):
+        state = ha._AlertState.from_raw("{not valid json")
+    assert state.notified is None
+    assert state.pending_count == 0
+    assert "health_alerts.state_unparsable" in caplog.text
+
+
+def test_from_raw_non_dict_starts_fresh(caplog: pytest.LogCaptureFixture) -> None:
+    """A well-formed JSON value that is not an object also starts fresh."""
+    with caplog.at_level(logging.WARNING, logger=ha.__name__):
+        state = ha._AlertState.from_raw(json.dumps(["not", "a", "dict"]))
+    assert state.pending is None
+    assert state.pending_count == 0
+    assert "health_alerts.state_unexpected_shape" in caplog.text
+
+
+async def test_send_via_smtp_delegates_to_email_sender() -> None:
+    """The default sender offloads the sync ``send_email`` and returns its bool."""
+    settings = _make_settings()
+    with patch.object(ha, "send_email", return_value=True) as send:
+        delivered = await ha._send_via_smtp(settings, ["ops@example.com"], "s", "<p>h</p>", "t")
+    assert delivered is True
+    send.assert_called_once_with(settings, ["ops@example.com"], "s", "<p>h</p>", "t")
+
+
+async def test_send_via_smtp_swallows_email_errors(caplog: pytest.LogCaptureFixture) -> None:
+    """An ``EmailSendingError`` becomes ``False`` so the tick retries."""
+    settings = _make_settings()
+    with (
+        caplog.at_level(logging.WARNING, logger=ha.__name__),
+        patch.object(ha, "send_email", side_effect=ha.EmailSendingError("smtp refused")),
+    ):
+        delivered = await ha._send_via_smtp(settings, ["ops@example.com"], "s", "h", "t")
+    assert delivered is False
+    assert "health_alerts.email_send_failed" in caplog.text
+
+
+async def test_send_via_smtp_swallows_unexpected_errors(caplog: pytest.LogCaptureFixture) -> None:
+    """Any other sender failure also becomes ``False``, never a crash."""
+    settings = _make_settings()
+    with (
+        caplog.at_level(logging.WARNING, logger=ha.__name__),
+        patch.object(ha, "send_email", side_effect=RuntimeError("boom")),
+    ):
+        delivered = await ha._send_via_smtp(settings, ["ops@example.com"], "s", "h", "t")
+    assert delivered is False
+    assert "health_alerts.email_send_failed" in caplog.text
+
+
+async def test_send_via_smtp_propagates_cancellation() -> None:
+    """Cancellation must propagate — it is not a send failure to retry."""
+    settings = _make_settings()
+    with (
+        patch.object(ha, "send_email", side_effect=asyncio.CancelledError),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await ha._send_via_smtp(settings, ["ops@example.com"], "s", "h", "t")
+
+
+async def test_recovery_quiet_when_email_unconfigured() -> None:
+    """A seeded incident recovering with no SMTP config takes the recovery
+    quiet branch: no send, state untouched."""
+    settings = _make_settings(smtp_host="", alert_email_to=None)
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+    store.data[ha.STATE_KEY] = json.dumps(
+        {
+            "notified": "unhealthy",
+            "pending": "unhealthy",
+            "pending_count": 5,
+            "conditions": ["database: unavailable (connection refused)"],
+            "since": 999_000.0,
+        }
+    )
+
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+
+    assert not sender.sent
+    assert result["action"] == "disabled"
+    assert json.loads(store.data[ha.STATE_KEY])["notified"] == "unhealthy"
+
+
+async def test_recovery_send_failure_is_retried() -> None:
+    """A failed recovery send is not committed, so the next tick retries."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender(result=False)
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+    store.data[ha.STATE_KEY] = json.dumps(
+        {
+            "notified": "unhealthy",
+            "pending": "unhealthy",
+            "pending_count": 5,
+            "conditions": ["database: unavailable (connection refused)"],
+            "since": 999_000.0,
+        }
+    )
+
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "send_failed"
+    assert json.loads(store.data[ha.STATE_KEY])["notified"] == "unhealthy"
+
+
+class _BoomObserver:
+    """Observer whose readiness evaluation always raises."""
+
+    async def __call__(self) -> ha.HealthObservation:
+        raise RuntimeError("probe blew up")
+
+
+class _CancelledObserver:
+    """Observer that raises ``CancelledError`` (shutdown, not failure)."""
+
+    async def __call__(self) -> ha.HealthObservation:
+        raise asyncio.CancelledError
+
+
+async def test_observe_failure_is_logged_and_non_fatal(caplog: pytest.LogCaptureFixture) -> None:
+    """A failed evaluation is reported, not raised — the next tick retries."""
+    with caplog.at_level(logging.WARNING, logger=ha.__name__):
+        result = await ha.run_health_alert_check(
+            observe=_BoomObserver(),
+            sender=_FakeSender(),
+            redis_client=_FakeRedis(),
+            settings=_make_settings(),
+            now=lambda: 1.0,
+        )
+    assert result["status"] == "observe_failed"
+    assert "probe blew up" in result["error"]
+    assert "health_alerts.observe_failed" in caplog.text
+
+
+async def test_observe_cancellation_propagates() -> None:
+    """Cancellation during evaluation must not be swallowed."""
+    with pytest.raises(asyncio.CancelledError):
+        await ha.run_health_alert_check(
+            observe=_CancelledObserver(),
+            sender=_FakeSender(),
+            redis_client=_FakeRedis(),
+            settings=_make_settings(),
+            now=lambda: 1.0,
+        )
+
+
+class _CancellingRedis:
+    """Store whose ``get`` raises ``CancelledError`` during a tick."""
+
+    async def get(self, key: str) -> str | None:
+        raise asyncio.CancelledError
+
+    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+        raise AssertionError("set must not be reached after cancellation")
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_tick_cancellation_propagates() -> None:
+    """Cancellation while reading the dedup store must not be swallowed."""
+    with pytest.raises(asyncio.CancelledError):
+        await ha.run_health_alert_check(
+            observe=_FakeObserver(),
+            sender=_FakeSender(),
+            redis_client=_CancellingRedis(),
+            settings=_make_settings(),
+            now=lambda: 1.0,
+        )
+
+
+async def test_owned_redis_client_is_created_and_closed() -> None:
+    """With no injected client the tick builds one from ``settings.redis_url``
+    and closes it in the ``finally`` (it owns the connection)."""
+    settings = _make_settings()
+    store = _FakeRedis()
+    with patch.object(ha.aioredis.Redis, "from_url", return_value=store) as from_url:
+        result = await ha.run_health_alert_check(
+            observe=_FakeObserver(),
+            sender=_FakeSender(),
+            settings=settings,
+            now=lambda: 1.0,
+        )
+    from_url.assert_called_once()
+    assert result["notified"] == "none"
