@@ -7,6 +7,7 @@ this package stubs them. ``tests/unit/api/conftest.py`` supplies the settings
 env and monkeypatches ``_verify_identity`` so no test here opens a socket.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -318,3 +319,36 @@ def test_audited_rejects_a_blank_event_type() -> None:
         audited("  ", "widget", principal_dep=get_current_tenant_user)
     with pytest.raises(ValueError, match="resource_type"):
         audited("widget_created", "", principal_dep=get_current_tenant_user)
+
+
+def _drive_to_yield() -> AsyncGenerator[None, None]:
+    """Build the real ``audited()`` dependency and advance it to its yield.
+
+    Driving the async generator directly is the only way to reach its teardown
+    arms: ``TestClient`` always finishes the request, so a cancelled-request
+    teardown (``GeneratorExit`` / ``CancelledError``) never fires through HTTP.
+    """
+    dep = audited("widget_created", "widget", principal_dep=get_current_tenant_user)
+    return dep(MagicMock(), _make_mock_session(), _make_principal())
+
+
+async def test_dependency_propagates_append_cancellation() -> None:
+    """A cancelled audit append is re-raised, never logged and swallowed."""
+    gen = _drive_to_yield()
+    assert await gen.asend(None) is None
+    with (
+        patch(
+            "modulo.core.audit_coverage.append_audit_event_isolated",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await gen.asend(None)
+
+
+async def test_dependency_rethrows_cancellation_at_yield() -> None:
+    """A cancelled request re-raises at the yield — no audit write after cancel."""
+    gen = _drive_to_yield()
+    assert await gen.asend(None) is None
+    with pytest.raises(asyncio.CancelledError):
+        await gen.athrow(asyncio.CancelledError())

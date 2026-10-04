@@ -151,22 +151,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="regenerate the baseline from the current tree (complete by construction)",
     )
-    parser.add_argument("--routes-dir", type=Path, default=ROUTES_DIR, help=argparse.SUPPRESS)
-    parser.add_argument("--baseline", type=Path, default=BASELINE_PATH, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
-    unannotated = scan_tree(args.routes_dir)
+    unannotated = scan_tree()
 
     if args.update:
-        args.baseline.parent.mkdir(parents=True, exist_ok=True)
-        args.baseline.write_text(render_baseline(unannotated), encoding="utf-8", newline="\n")
-        print(f"audit-coverage: baseline written with {len(unannotated)} route(s) -> {args.baseline}")
+        BASELINE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BASELINE_PATH.write_text(render_baseline(unannotated), encoding="utf-8", newline="\n")
+        print(f"audit-coverage: baseline written with {len(unannotated)} route(s) -> {BASELINE_PATH}")
         return 0
 
-    baseline = read_baseline(args.baseline)
+    baseline = read_baseline()
     new_violations, stale_entries = compare(unannotated, baseline)
 
-    total_routes = _count_mutating_routes(args.routes_dir)
+    total_routes = _count_mutating_routes()
     audited_routes = total_routes - len(unannotated)
     print(f"audit-coverage: {total_routes} mutating route(s), {audited_routes} audited, baseline {len(baseline)}")
 
