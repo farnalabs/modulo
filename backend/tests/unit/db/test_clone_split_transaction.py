@@ -1,4 +1,4 @@
-"""Clone split-transaction tests (hitl-gate-removal-guard-plan.md v19 Â§3 item 3).
+"""Clone split-transaction tests (hitl-gate-removal-guard-plan.md v19 §3 item 3).
 
 Verifies the step-(a) short read transaction / step-(b) slow clone-write split:
 - the FOR SHARE read happens on a separate session that commits before the
@@ -125,7 +125,7 @@ def _make_main_session() -> AsyncMock:
 # ---------------------------------------------------------------------------
 # FAR-1440: the clone-engine sslmode contract. The source engine's URL is
 # clean (its ``sslmode`` was extracted into connect_args upstream), so the
-# derived clone-read engine must re-translate ``sslmode`` explicitly â€” a naive
+# derived clone-read engine must re-translate ``sslmode`` explicitly — a naive
 # create_async_engine would use asyncpg's default ``prefer`` (CERT_NONE with
 # silent plaintext retry) and silently downgrade a ``sslmode=require`` deploy.
 # ---------------------------------------------------------------------------
