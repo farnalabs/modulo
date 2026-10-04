@@ -287,6 +287,15 @@ async def _check_database() -> CheckResult:
 #: testable function), plus ``age(datfrozenxid)`` against the server's own
 #: ``autovacuum_freeze_max_age``. LEFT JOIN so a database with nothing over
 #: the floor still returns its freeze age.
+#:
+#: Zero-size relations are excluded (``n_live_tup + n_dead_tup > 0``) in
+#: addition to the ``NULLS LAST`` belt: a 0/0 table's ratio is NULL (0/0),
+#: and Postgres sorts NULLs FIRST under ``DESC`` — with a legal
+#: ``min_dead = 0`` floor (the field is ``ge=0``; the max-sensitivity setting
+#: an operator would pick) an empty table would win the pick, the grader would
+#: see ``dead_ratio is None`` and read ``ok`` while a 97%-dead table sat
+#: right there: a silent fail-open through a legal config value. Both guards
+#: state the intent; neither ordering clause alone is the contract.
 _DB_HYGIENE_SQL = text(
     """
     WITH db_freeze AS (
@@ -304,7 +313,8 @@ _DB_HYGIENE_SQL = text(
             (n_dead_tup::float8 / NULLIF(n_live_tup + n_dead_tup, 0)) AS dead_ratio
         FROM pg_stat_user_tables
         WHERE n_dead_tup >= :min_dead
-        ORDER BY dead_ratio DESC
+          AND (n_live_tup + n_dead_tup) > 0
+        ORDER BY dead_ratio DESC NULLS LAST
         LIMIT 1
     )
     SELECT
@@ -401,18 +411,19 @@ def _grade_db_hygiene(
 
     freeze_part = f"freeze age {reading.frozen_age:,}/{reading.freeze_max_age:,}"
     freeze_degraded = False
-    if reading.freeze_max_age <= 0:
-        # Operator-disabled forcing (autovacuum_freeze_max_age = 0): nothing
-        # to grade against — say so rather than silently reading "clean".
-        freeze_part += " (autovacuum_freeze_max_age disabled)"
-    else:
-        warn_at = int(reading.freeze_max_age * _DB_HYGIENE_FREEZE_WARN_FRACTION)
-        if reading.frozen_age >= reading.freeze_max_age:
-            freeze_degraded = True
-            freeze_part += f" {_DB_HYGIENE_FREEZE_AT_CEILING}"
-        elif reading.frozen_age >= warn_at:
-            freeze_degraded = True
-            freeze_part += " " + _DB_HYGIENE_FREEZE_WARN_TIER.format(warn_at=warn_at)
+    # No "operator-disabled ceiling" branch: autovacuum_freeze_max_age is
+    # server-start-only and Postgres rejects 0 outright ("FATAL: 0 is outside
+    # the valid range for parameter \"autovacuum_freeze_max_age\" (100000 ..
+    # 2000000000)"), so freeze_max_age <= 0 cannot reach here — and if a bad
+    # reading somehow did, grading it at/above the ceiling is the fail-closed
+    # answer (never a silent "clean").
+    warn_at = int(reading.freeze_max_age * _DB_HYGIENE_FREEZE_WARN_FRACTION)
+    if reading.frozen_age >= reading.freeze_max_age:
+        freeze_degraded = True
+        freeze_part += f" {_DB_HYGIENE_FREEZE_AT_CEILING}"
+    elif reading.frozen_age >= warn_at:
+        freeze_degraded = True
+        freeze_part += " " + _DB_HYGIENE_FREEZE_WARN_TIER.format(warn_at=warn_at)
     parts.append(freeze_part)
 
     status: Literal["ok", "degraded"] = "ok"

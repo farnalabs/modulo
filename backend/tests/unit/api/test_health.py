@@ -1628,12 +1628,19 @@ class TestDbHygieneGradingBoundaries:
         assert status == "degraded"
         assert "AT/ABOVE autovacuum_freeze_max_age" in detail
 
-    def test_disabled_freeze_ceiling_is_reported_not_graded(self) -> None:
-        """autovacuum_freeze_max_age = 0 disables the forcing — say so rather
-        than divide by it or read the database as clean."""
-        status, detail = _grade(_reading(frozen_age=1_000_000, freeze_max_age=0))
-        assert status == "ok"
-        assert "autovacuum_freeze_max_age disabled" in detail
+    def test_minimum_legal_freeze_ceiling_still_grades(self) -> None:
+        """There is no "operator-disabled ceiling" state to special-case:
+        autovacuum_freeze_max_age is server-start-only and Postgres rejects 0
+        ("FATAL: 0 is outside the valid range for parameter
+        \"autovacuum_freeze_max_age\" (100000 .. 2000000000)"), so the smallest
+        legal ceiling is 100,000 and it grades like any other."""
+        ok_status, ok_detail = _grade(_reading(frozen_age=49_999, freeze_max_age=100_000))
+        assert ok_status == "ok"
+        assert "disabled" not in ok_detail
+        bad_status, bad_detail = _grade(_reading(frozen_age=100_000, freeze_max_age=100_000))
+        assert bad_status == "degraded"
+        assert "AT/ABOVE autovacuum_freeze_max_age" in bad_detail
+        assert "disabled" not in bad_detail
 
     # --- the regression this check exists for ---------------------------
 
@@ -1745,6 +1752,47 @@ class TestDbHygieneCheck:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "could not run" in result.detail
+
+    async def test_probe_returning_no_row_is_degraded_never_ok(self) -> None:
+        """``row = None`` from ``mappings().first()`` (the query yielded
+        nothing): the probe raises and the check reports degraded — a check
+        that produced NO reading must never read as a clean one."""
+        result, _engine = await self._run(None)
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "could not run" in result.detail
+
+    async def test_dead_ratio_setting_changes_the_grade_end_to_end(self) -> None:
+        """The configured ratio must flow settings → probe → grade.
+
+        The SAME incident row grades degraded at the default 0.60 and ok when
+        the operator raises the threshold above it — hardcoding 0.60 inside
+        the check would still pass the rest of the suite but fails here.
+        """
+        default_result, _ = await self._run(_HYGIENE_INCIDENT_ROW)
+        assert default_result.status == "degraded"
+
+        raised, _ = await self._run(_HYGIENE_INCIDENT_ROW, modulo_health_db_hygiene_dead_ratio=0.99)
+        assert raised.status == "ok"
+        assert raised.detail is not None
+        assert "within thresholds" in raised.detail
+
+        # The other direction: a 40%-dead table over the floor is within
+        # thresholds at the default 0.60, degraded when tightened to 0.30.
+        mid_dead_row: dict[str, object] = {
+            **_HYGIENE_INCIDENT_ROW,
+            "relname": "half_dead",
+            "n_live_tup": 600_000,
+            "n_dead_tup": 400_000,
+            "dead_ratio": 0.40,
+        }
+        at_default, _ = await self._run(mid_dead_row)
+        assert at_default.status == "ok"
+
+        tightened, _ = await self._run(mid_dead_row, modulo_health_db_hygiene_dead_ratio=0.30)
+        assert tightened.status == "degraded"
+        assert tightened.detail is not None
+        assert "half_dead" in tightened.detail
 
     def test_settings_defaults(self) -> None:
         settings = _make_settings()
