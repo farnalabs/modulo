@@ -2,19 +2,19 @@
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto max-w-6xl">
-        <PageHeader title="Lifecycle Maps">
+        <PageHeader :title="$t('views.LifecycleMapList.title')">
           <template #right>
             <FilterBar
-              :search="{ placeholder: 'Search maps...' }"
+              :search="{ placeholder: $t('views.LifecycleMapList.search_placeholder') }"
               :search-value="search"
               @update:search="search = $event; page = 1"
             >
               <template #after>
                 <Select
                   class="w-full sm:w-auto"
-                  aria-label="Form control"
+                  :aria-label="$t('views.LifecycleMapList.filter_owner_aria')"
                   v-model="ownerFilter"
-                  placeholder="All teams"
+                  :placeholder="$t('views.LifecycleMapList.filter_owner')"
                   data-testid="lifecycle-map-list-owner-filter"
                   :options="uniqueOwners.map(owner => ({ value: owner, label: owner }))"
                   option-label="label"
@@ -27,8 +27,8 @@
               </template>
             </FilterBar>
             <Button @click="handleNewMap" data-testid="lifecycle-map-list-new">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              New Map
+              <Plus :size="14" aria-hidden="true" class="mr-1" />
+              {{ $t('views.LifecycleMapList.new_map') }}
             </Button>
           </template>
         </PageHeader>
@@ -50,18 +50,18 @@
 
       <EmptyState
         v-else-if="filteredMaps.length === 0 && search"
-        title="No maps match your search"
-        description="Try a different search term or clear the filters."
+        :title="$t('views.LifecycleMapList.empty_search_title')"
+        :description="$t('views.LifecycleMapList.empty_search_description')"
       />
 
       <EmptyState
         v-else-if="allMaps.length === 0"
-        title="No Lifecycle Maps yet"
-        description="Create one to model your SDLC."
+        :title="$t('views.LifecycleMapList.empty_title')"
+        :description="$t('views.LifecycleMapList.empty_description')"
       >
         <Button class="w-full sm:w-auto" @click="handleNewMap" data-testid="lifecycle-map-list-empty-new">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Create Map
+          <Plus :size="14" aria-hidden="true" class="mr-1" />
+          {{ $t('views.LifecycleMapList.empty_create_map') }}
         </Button>
       </EmptyState>
 
@@ -91,7 +91,7 @@
                 @keydown.enter.stop
                 @keydown.space.prevent.stop
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                <Pencil :size="12" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -103,21 +103,21 @@
 
           <div class="flex items-center gap-3 text-xs text-muted-foreground mb-3">
             <span class="flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-              {{ m.stage_count }} stages
+              <Clock :size="12" aria-hidden="true" />
+              {{ $t('views.LifecycleMapList.stages_count', { count: m.stage_count }) }}
             </span>
             <span v-if="m.graduated_count > 0" class="flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="text-amber-500"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
-              {{ m.graduated_count }} graduated
+              <Star :size="12" aria-hidden="true" class="fill-amber-500 text-amber-500" />
+              {{ $t('views.LifecycleMapList.graduated_count', { count: m.graduated_count }) }}
             </span>
           </div>
 
           <div class="flex items-center justify-between text-xs text-muted-foreground pt-3 border-t border-border">
-            <span v-if="m.owner" class="flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-              {{ m.owner }}
+            <span class="flex items-center gap-1">
+              <User :size="10" aria-hidden="true" />
+              {{ m.owner || $t('views.LifecycleMapList.owner_fallback') }}
             </span>
-            <span>Updated {{ formatDate(m.updated_at) }}</span>
+            <span>{{ $t('views.LifecycleMapList.updated', { date: formatDate(m.updated_at) }) }}</span>
           </div>
         </div>
       </div>
@@ -129,10 +129,10 @@
           @click="prevPage"
           data-testid="lifecycle-map-list-prev-page"
         >
-          Previous
+          {{ $t('views.LifecycleMapList.previous') }}
         </button>
         <span class="px-4 py-2 text-sm text-muted-foreground">
-          Page {{ page }} of {{ totalPages }}
+          {{ $t('views.LifecycleMapList.page_of', { page, total: totalPages }) }}
         </span>
         <button type="button"
           :disabled="page >= totalPages"
@@ -140,7 +140,7 @@
           @click="nextPage"
           data-testid="lifecycle-map-list-next-page"
         >
-          Next
+          {{ $t('views.LifecycleMapList.next') }}
         </button>
       </div>
     </main>
@@ -160,7 +160,8 @@
               v-model="newName"
               @keydown.space.stop
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="My Delivery Lifecycle"
+              :placeholder="$t('views.LifecycleMapList.name_placeholder')"
+              data-testid="lifecycle-map-list-create-name"
             />
           </div>
           <div>
@@ -170,7 +171,8 @@
               @keydown.space.stop
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"
-              placeholder="Optional description"
+              :placeholder="$t('views.LifecycleMapList.description_placeholder')"
+              data-testid="lifecycle-map-list-create-description"
             />
           </div>
           <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
@@ -180,11 +182,12 @@
             <button type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="showCreateDialog = false"
+              data-testid="lifecycle-map-list-create-cancel"
             >
-              Cancel
+              {{ $t('views.LifecycleMapList.cancel') }}
             </button>
-            <Button :disabled="!newName.trim() || creating" @click="handleCreateConfirm">
-              {{ creating ? 'Creating...' : 'Create' }}
+            <Button :disabled="!newName.trim() || creating" @click="handleCreateConfirm" data-testid="lifecycle-map-list-create-submit">
+              {{ creating ? $t('views.LifecycleMapList.creating') : $t('views.LifecycleMapList.create') }}
             </Button>
           </div>
         </div>
@@ -196,6 +199,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { Clock, Pencil, Plus, Star, User } from '@lucide/vue'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import FilterBar from '../../components/shared/FilterBar.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
