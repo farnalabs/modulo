@@ -81,7 +81,7 @@ export default function pipelineCrud(data) {
 
       const passed = check(res, {
         'create pipeline status 201': (r) => r.status === 201,
-        'create pipeline has id': (r) => JSON.parse(r.body).id !== undefined,
+        'create pipeline has id': (r) => typeof JSON.parse(r.body).id === 'string' && JSON.parse(r.body).id.length > 0,
       });
 
       if (!passed) {

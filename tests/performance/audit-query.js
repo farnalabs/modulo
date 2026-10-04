@@ -7,6 +7,7 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000/api/v1';
 
 const auditPageTrend = new Trend('audit_page_duration');
 const auditCursorTrend = new Trend('audit_cursor_duration');
+const auditFilteredTrend = new Trend('audit_filtered_duration');
 const errorRate = new Rate('errors');
 
 export const options = {
@@ -19,6 +20,7 @@ export const options = {
   thresholds: {
     audit_page_duration: ['p(95)<200'],
     audit_cursor_duration: ['p(95)<200'],
+    audit_filtered_duration: ['p(95)<200'],
     http_req_duration: ['p(95)<1000'],
     errors: ['rate<0.01'],
   },
@@ -115,20 +117,33 @@ export default function auditQuery(data) {
 
       check(firstRes, {
         'first cursor page has items': () => Array.isArray(firstBody.items) && firstBody.items.length > 0,
-        'first cursor page has next cursor': () => firstBody.next_cursor !== undefined || firstBody.cursor !== undefined,
+        'first cursor page has next cursor': () =>
+          typeof firstBody.next_cursor === 'string' && firstBody.next_cursor.length > 0,
       });
 
-      // Follow cursor if available
-      const lastItem = firstBody.items?.[firstBody.items.length - 1];
-      if (lastItem?.id) {
-        const cursorRes = http.get(`${BASE_URL}/admin/audit?limit=10&cursor=${lastItem.id}`, params);
+      // Follow the OPAQUE JSON cursor returned by the API. The audit endpoint
+      // expects a JSON cursor string ({"c":<created_at>,"i":<id>}) — passing a
+      // bare event id here would fail to decode and silently fall back to page
+      // 1, measuring a first-page fetch instead of cursor traversal.
+      const nextCursor = firstBody.next_cursor;
+      if (typeof nextCursor === 'string' && nextCursor.length > 0) {
+        const cursorRes = http.get(`${BASE_URL}/admin/audit?limit=10&cursor=${encodeURIComponent(nextCursor)}`, params);
         auditCursorTrend.add(cursorRes.timings.duration);
 
+        const firstItem = firstBody.items[0];
         check(cursorRes, {
           'cursor page status 200': (r) => r.status === 200,
           'cursor page returns items': (r) => {
             const body = JSON.parse(r.body);
             return Array.isArray(body.items);
+          },
+          'cursor page does not repeat first page': (r) => {
+            const body = JSON.parse(r.body);
+            // Each seeded pipeline PATCH emits one pipeline.autonomy_level_changed
+            // event, so with limit=10 there are guaranteed to be more pages and
+            // the follow-up page must be non-empty AND disjoint from the first
+            // page (the cursor boundary is strict older-than).
+            return body.items.length > 0 && body.items[0].id !== firstItem.id;
           },
         });
       }
@@ -136,11 +151,30 @@ export default function auditQuery(data) {
 
     // FILTERED QUERY
     group('Audit filtered query', function () {
-      const res = http.get(`${BASE_URL}/admin/audit?event_type=pipeline.updated&limit=20`, params);
+      // Pipeline PATCHes that flip default_autonomy_level emit the
+      // pipeline.autonomy_level_changed event — the ONLY pipeline-scoped event
+      // type the seeding is guaranteed to generate (creation does not audit).
+      // Asserting against a real emitted type instead of the aspirational
+      // 'pipeline.updated' proves the filter actually filters.
+      const res = http.get(`${BASE_URL}/admin/audit?event_type=pipeline.autonomy_level_changed&limit=20`, params);
+      auditFilteredTrend.add(res.timings.duration);
 
-      check(res, {
+      // The filter must actually filter: every returned event type must match.
+      const passed = check(res, {
         'filtered audit status 200': (r) => r.status === 200,
+        'filtered audit returns matching events': (r) => {
+          const body = JSON.parse(r.body);
+          return (
+            Array.isArray(body.items) &&
+            body.items.length > 0 &&
+            body.items.every((item) => item.event_type === 'pipeline.autonomy_level_changed')
+          );
+        },
       });
+
+      if (!passed) {
+        errorRate.add(1);
+      }
     });
   });
 

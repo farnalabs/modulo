@@ -101,7 +101,7 @@ export default function runExecution(data) {
 
       const passed = check(res, {
         'trigger run status 202': (r) => r.status === 202,
-        'trigger run returns run_id': (r) => JSON.parse(r.body).run_id !== undefined,
+        'trigger run returns run_id': (r) => typeof JSON.parse(r.body).run_id === 'string' && JSON.parse(r.body).run_id.length > 0,
         'trigger run status is pending': (r) => JSON.parse(r.body).status === 'pending',
       });
 
