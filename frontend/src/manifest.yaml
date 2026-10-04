@@ -2860,6 +2860,18 @@ elements:
       - testid: lifecycle-map-list-next-page
         type: button
         dynamic_testid: false
+      - testid: lifecycle-map-list-create-name
+        type: input
+        dynamic_testid: false
+      - testid: lifecycle-map-list-create-description
+        type: textarea
+        dynamic_testid: false
+      - testid: lifecycle-map-list-create-cancel
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-list-create-submit
+        type: button
+        dynamic_testid: false
       - testid: page-header-right
         type: element
         dynamic_testid: false
