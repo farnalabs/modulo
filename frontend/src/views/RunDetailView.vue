@@ -791,9 +791,9 @@
         <template #header>
           <div>
             <div class="text-lg font-semibold">
-              Prompt — {{ selectedPrompt.nodeName }}
+              {{ $t('views.RunDetailView.prompt_dialog_title', { node: selectedPrompt.nodeName }) }}
               <span v-if="selectedPrompt.tokenCount != null" class="ml-2 text-sm font-normal text-muted-foreground">
-                ~{{ selectedPrompt.tokenCount.toLocaleString() }} tokens
+                {{ $t('views.RunDetailView.prompt_dialog_token_count', { count: selectedPrompt.tokenCount.toLocaleString() }) }}
               </span>
             </div>
           </div>
@@ -846,7 +846,7 @@
         <template #footer>
           <div class="flex justify-end">
             <Button data-testid="run-detail-override-submit" :disabled="overrideSubmitting" @click="submitOverride">
-              {{ overrideSubmitting ? '...' : $t('views.RunDetailGuardrailSummary.override_guardrail') }}
+              {{ overrideSubmitting ? $t('views.RunDetailGuardrailSummary.override_submitting') : $t('views.RunDetailGuardrailSummary.override_guardrail') }}
             </Button>
           </div>
         </template>
