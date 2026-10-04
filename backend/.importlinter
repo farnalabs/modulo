@@ -77,6 +77,15 @@ ignore_imports =
     modulo.core.feature_flags -> modulo.api.dependencies
     modulo.core.logging_config -> modulo.api.dependencies
     modulo.core.dispatch -> modulo.api.dependencies
+    # FAR-1446: the readiness-degradation alert runs as a system cron (core,
+    # saq_worker) and MUST evaluate health through the SAME code the
+    # /healthz/ready route runs - reimplementing the ~14 sub-checks in a
+    # second place is exactly the drift this feature exists to prevent. The
+    # import is lazy (inside the observer function, never at core import
+    # time) and reaches only the health route module, not the FastAPI app
+    # wiring - the same lazy in-function seam shape as the three dependencies
+    # entries above.
+    modulo.core.health_alerts -> modulo.api.routes.health
 
 [importlinter:contract:db-does-not-import-core]
 name = DB layer has no business logic imports

@@ -1761,6 +1761,27 @@ async def connector_health_checks(_ctx: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+async def health_readiness_alert(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — readiness-degradation alert email (FAR-1446).
+
+    Delegates to :func:`modulo.core.health_alerts.run_health_alert_check`,
+    which evaluates readiness through the SAME code the ``/healthz/ready``
+    route runs (``api.routes.health.evaluate_readiness`` — no reimplemented
+    checks), and emails ``ALERT_EMAIL_TO`` on a confirmed transition into a
+    degraded/unavailable state plus a matching recovery email when healthy
+    again. Edge-triggered with a 2-tick hysteresis and Redis-backed dedup
+    state, so a tick almost never sends anything.
+
+    Quiet when unconfigured (the compose default): with ``SMTP_HOST`` /
+    ``ALERT_EMAIL_TO`` absent the check still runs, never raises, and logs at
+    most hourly that alerting is disabled. Never raises — a bad tick is
+    logged and the next 5-minute tick re-evaluates.
+    """
+    from modulo.core.health_alerts import run_health_alert_check
+
+    return await run_health_alert_check()
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -2053,6 +2074,7 @@ def _system_functions() -> list[Any]:
         library_sync,
         metrics_dump,
         connector_health_checks,
+        health_readiness_alert,
         memory_monitor_cron,
     ]
 
@@ -2356,6 +2378,24 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=30,
             retries=1,
             ttl=900,
+        ),
+        # health_readiness_alert: every 5 min (FAR-1446) — emails ALERT_EMAIL_TO
+        # when readiness CONFIRMEDLY transitions (2-tick hysteresis + Redis dedup
+        # in core.health_alerts), plus the matching recovery email. 5-min cadence
+        # matches the other advisory sweeps and, with the confirmation window,
+        # bounds worst-case notification latency at ~10 min; the edge-triggered
+        # state means a steady tick sends nothing. unique=True so overlapping
+        # fleet ticks cannot double-notify (the read-modify-write dedup state
+        # depends on one execution per slot). Quiet no-op (hourly INFO log) when
+        # SMTP_HOST/ALERT_EMAIL_TO are unconfigured — the compose default.
+        CronJob(
+            health_readiness_alert,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
         ),
         # memory_monitor_cron: every 5 min (FAR-776) — captures /proc/meminfo
         # + cgroup v1 memory counters to structured logs for durable OOM
