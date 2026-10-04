@@ -506,16 +506,21 @@ async def _lookup_pin_primitive(
     slug: str,
     version: str,
 ) -> LibraryPrimitive | None:
-    """Resolve a manifest pin's slug@version to its backing primitive."""
+    """Resolve a manifest pin's slug@version to its backing primitive.
+
+    Returns ``None`` only when the primitive genuinely does not exist. A
+    database failure is NOT folded into that ``None`` (FAR-1483): it
+    propagates to the caller, where the route's ``except SQLAlchemyError``
+    arm logs it and answers 503. Swallowing here made a DB outage
+    indistinguishable from a bad pin, so the publish endpoint reported a
+    misleading 422 "unknown primitive" while the database was down.
+    """
     stmt = select(LibraryPrimitive).where(
         LibraryPrimitive.organisation_id == org_id,
         LibraryPrimitive.slug == slug,
         LibraryPrimitive.version == version,
     )
-    try:
-        result = await session.execute(stmt)
-    except SQLAlchemyError:
-        return None
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
