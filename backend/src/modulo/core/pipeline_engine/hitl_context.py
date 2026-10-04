@@ -403,6 +403,20 @@ async def _build_context_inner(
                     extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
                 )
                 graph_json = {**graph_json, "edges": []}
+            # Same rule for ``nodes``: every node walker below
+            # (``config_from_hitl_nodes``, ``_snapshot_source_is_hitl_node``,
+            # ``_snapshot_node_label``, and through it ``_resolve_consequences``)
+            # iterates ``nodes`` unconditionally, so a snapshot whose ``nodes``
+            # is not a list (``null`` / a scalar) would raise into the outer
+            # capture guard and null the ENTIRE briefing. Normalise to an empty
+            # node list instead — best-effort capture fails open WITH a log, so
+            # labels resolve to null rather than the briefing being lost.
+            if not isinstance(graph_json.get("nodes", []), list):
+                _log.warning(
+                    "hitl_review.malformed_snapshot_nodes",
+                    extra={"run_id": str(run_id), "review_id": review_id, "org_id": str(org_id)},
+                )
+                graph_json = {**graph_json, "nodes": []}
 
     parsed = parse_hitl_review_id(review_id)
     source_node_id = parsed[0] if parsed else None

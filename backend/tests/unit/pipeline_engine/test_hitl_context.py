@@ -332,6 +332,40 @@ class TestFailureIsolation:
         assert context is None
 
 
+class TestMalformedSnapshotNodes:
+    """A snapshot whose ``nodes`` is not a list degrades WITH a log.
+
+    The door normalisation normalises ``nodes`` to ``[]`` (logged at WARNING),
+    so the node walkers below never see a non-iterable: the briefing SURVIVES
+    with null labels instead of the outer capture guard nulling the whole
+    bundle. Symmetric with the malformed-``edges`` degradation.
+    """
+
+    @pytest.mark.parametrize("bad_nodes", [None, 42], ids=["null", "scalar"])
+    async def test_malformed_snapshot_nodes_degrade_without_nulling_briefing(
+        self,
+        bad_nodes: Any,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        graph: dict[str, Any] = {"nodes": bad_nodes}
+        with caplog.at_level(logging.WARNING):
+            context = await _build(graph)
+
+        assert context is not None
+        assert context["consequences"] is None
+        assert context["trigger"] == "unknown"
+        assert context["source_node_id"] == _UUID_SRC
+        # Labels resolve to null (nodes normalised away) rather than raising.
+        assert context["source_node_label"] is None
+
+        assert "hitl_review.malformed_snapshot_nodes" in caplog.text
+        record = next(r for r in caplog.records if "malformed_snapshot_nodes" in r.getMessage())
+        assert record.levelno == logging.WARNING
+        assert record.run_id == str(_RUN_ID)
+        assert record.review_id == _REVIEW_ID
+        assert record.org_id == str(_ORG_ID)
+
+
 class TestTruncationBounds:
     async def test_artifacts_serialised_within_budget(self):
         huge_output = {"blob": "x" * 100_000}
