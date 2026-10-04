@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.web_vital_event import WebVitalEvent
@@ -87,7 +88,8 @@ async def ingest_web_vitals(
                     recorded_at=now,
                 )
                 session.add(wv)
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "metrics.ingest_web_vitals")
         _log.exception("Failed to ingest web vitals", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -140,7 +142,8 @@ async def get_web_vitals_summary(
                 )
                 for row in result.all()
             ]
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "metrics.get_web_vitals_summary")
         _log.exception("Failed to fetch web vitals summary", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -191,7 +194,8 @@ async def get_web_vitals_timeseries(
                 )
                 for row in result.all()
             ]
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "metrics.get_web_vitals_timeseries")
         _log.exception("Failed to fetch web vitals timeseries", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
