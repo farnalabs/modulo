@@ -4913,6 +4913,9 @@ elements:
       - testid: settings-triggers-pause-error
         type: element
         dynamic_testid: false
+      - testid: settings-triggers-loading
+        type: element
+        dynamic_testid: false
       - testid: settings-triggers-streak
         type: element
         dynamic_testid: false
