@@ -3,6 +3,11 @@
 The MCP call site passes the literal caller_type="mcp"; the guarded function
 hardcodes is_privileged=False, so an MCP-authenticated gate-weakening attempt
 is denied regardless of MCP scope. Denials are audited.
+
+FAR-1471: a successful graph write is audited too — it appends
+``pipeline.graph_updated`` attributed to the caller's account — so a test
+asserting on the audit must select an ``event_type`` rather than asserting
+that nothing was appended.
 """
 
 from __future__ import annotations
@@ -98,6 +103,14 @@ def _patch_session_and_audit(
 
     audit = AsyncMock()
     monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", audit)
+    # FAR-1471: ``replace_pipeline_graph`` binds ``append_audit_event`` at
+    # MODULE import time, so patching only ``core.audit_logger`` leaves its
+    # ``pipeline.graph_updated`` append running for real against this
+    # ``AsyncMock`` session (whose ``begin_nested()`` is not an async context
+    # manager). Both call sites feed the SAME mock: the denial audit imports
+    # the symbol lazily (core.audit_logger), the graph-write audit uses
+    # pipeline.py's bound reference.
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
     monkeypatch.setattr(_ms, "_session", factory)
     return session, audit
 
@@ -171,7 +184,18 @@ async def test_mcp_non_weakening_graph_write_allowed(monkeypatch: pytest.MonkeyP
     )
 
     assert "error" not in result, result
-    audit.assert_not_awaited()
+    # FAR-1471: every successful graph write now appends an audit event — the
+    # old assertion here was `audit.assert_not_awaited()`, which encoded the
+    # pre-FAR-1471 premise that a non-weakening write records NOTHING (exactly
+    # the unattributed-write gap the ticket closes). The write IS audited now,
+    # as ``pipeline.graph_updated`` carrying the MCP caller's account id; the
+    # HITL gate-removal event must still NOT fire, because nothing weakened.
+    audit.assert_awaited_once()
+    audit_kwargs = audit.call_args.kwargs
+    assert audit_kwargs["event_type"] == "pipeline.graph_updated"
+    assert audit_kwargs["actor_user_id"] == uuid.UUID(_USER)
+    assert audit_kwargs["resource_id"] == uuid.UUID(_PIPELINE)
+    assert audit_kwargs["resource_type"] == "pipeline"
 
 
 async def test_mcp_denial_audit_never_masked_by_audit_failure(monkeypatch: pytest.MonkeyPatch) -> None:
