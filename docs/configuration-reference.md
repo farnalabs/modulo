@@ -365,6 +365,13 @@ See [`docs/operations/backup.md`](./operations/backup.md) for backup configurati
 | `EMAIL_FROM` | No | – | From-address for outgoing emails |
 | `SMTP_TIMEOUT` | No | `30` | SMTP connection/send timeout in seconds |
 
+The same variables also drive the Docker Compose **health watchdog**'s email
+alerts (`watchdog` service in the root `docker-compose.yml`) — one SMTP setup
+serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
+`EMAIL_FROM` and `ALERT_EMAIL_TO` are all set; leaving them unset is a
+supported state where monitoring still runs and only the emails are skipped.
+See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
+
 ---
 
 ## Worker Liveness Watchdog
