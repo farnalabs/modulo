@@ -227,6 +227,7 @@ async def get_current_tenant_user_or_api_key(
             _MK_PREFIX,
             _PREFIX_LEN,
             ApiKeyInvalidError,
+            resolve_key_grants,
             validate_api_key,
         )
         from modulo.db.models.api_key import OrgApiKey
@@ -282,6 +283,9 @@ async def get_current_tenant_user_or_api_key(
                     str(key.account_id),
                     str(key.organisation_id),
                 )
+                # FAR-1477: tri-state grant-set (None = legacy role bundle, no
+                # flag read). A grant-bearing key with the flag OFF is denied.
+                key_grants = await resolve_key_grants(key)
         except ApiKeyInvalidError:
             raise InvalidToken from None
         except SQLAlchemyError:
@@ -333,6 +337,7 @@ async def get_current_tenant_user_or_api_key(
                 # the human_only enforcement's ``client_kind != browser`` rule
                 # subsumes the via_api_key check through this stamp.
                 client_kind=CLIENT_KIND_PROGRAMMATIC,
+                key_grants=key_grants,
             ),
         )
 

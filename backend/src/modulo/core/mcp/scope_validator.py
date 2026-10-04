@@ -21,6 +21,7 @@ from modulo.auth.permissions import (
     PermissionDenied,
     assert_org_role,
     authz_enforce_enabled,
+    grants_permit,
     resolve_required,
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
@@ -288,6 +289,7 @@ def resolve_tool_access(
     auth_type: str | None,
     allowed_tools: set[str] | None,
     kill_switch: bool,
+    grants: frozenset[str] | None = None,
 ) -> tuple[bool, str]:
     """Pure tool-access decision for one MCP call (FAR-620).
 
@@ -305,6 +307,9 @@ def resolve_tool_access(
             UNRESTRICTED; an explicit empty set is deny-by-default).
         kill_switch: True when the org's authz-enforce kill switch is ON
             (hierarchy enforced); False fail-opens ONLY the role leg.
+        grants: FAR-1477 API-key grant-set (``None`` = legacy role bundle, no
+            narrowing; empty = deny-all). A deny-only, kill-switch-INELIGIBLE
+            leg: ``effective = grants INTERSECT bundle(live_role)``.
 
     Returns ``(allowed, permission_key)``. ``permission_key`` is the resolved
     key for error/log detail, or ``""`` when the tool could not be resolved.
@@ -356,6 +361,9 @@ def resolve_tool_access(
         return False, permission_key
     if kill_switch and actual_level < ORG_ROLE_HIERARCHY[required]:
         return False, permission_key
+    # Leg 5 (FAR-1477): grant-set membership + live non-delegable exclusion.
+    if not grants_permit(grants, permission_key):
+        return False, permission_key
     return True, permission_key
 
 
@@ -395,6 +403,7 @@ def check_tool_scope(
     allowed_tools: Sequence[str] | None = None,
     key_scope: str | None = None,
     auth_type: str | None = None,
+    grants: frozenset[str] | None = None,
 ) -> None:
     """Single tool-dispatch chokepoint (delegates to ``resolve_tool_access``).
 
@@ -444,6 +453,7 @@ def check_tool_scope(
         auth_type=auth_type,
         allowed_tools=allowed_set,
         kill_switch=authz_enforce_enabled(),
+        grants=grants,
     )
     if not allowed:
         message = _denial_message(
@@ -456,6 +466,7 @@ def check_tool_scope(
             auth_type=auth_type,
             allowed_set=allowed_set,
             kill_switch=authz_enforce_enabled(),
+            grants=grants,
         )
         _log.warning("Scope check failed: %s", message)
         raise MCPAuthorizationError(message)
@@ -472,6 +483,7 @@ def _denial_message(
     auth_type: str | None,
     allowed_set: set[str] | None,
     kill_switch: bool,
+    grants: frozenset[str] | None = None,
 ) -> str:
     """Re-derive the specific denial message for a resolver denial.
 
@@ -508,4 +520,7 @@ def _denial_message(
         assert_org_role(current_role, required, subject=f"MCP tool '{tool_name}'")
     except PermissionDenied as exc:
         return str(exc)
+    # Leg 5: grant-set (FAR-1477).
+    if not grants_permit(grants, permission_key):
+        return f"Tool '{tool_name}' requires '{permission_key}', which is not granted to this API key"
     return f"Tool '{tool_name}' access denied"

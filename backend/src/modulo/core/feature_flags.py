@@ -209,6 +209,12 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Per-user MCP API keys (keys operate as their creator's identity)",
         tier="community",
     ),
+    # ── Community tier — API-key grant-sets (default OFF, FAR-1477 / ADR 058) ──
+    FeatureFlag(
+        name="api_key_grants",
+        description="Explicit capability grant-sets on API keys (role becomes a bundle over grants)",
+        tier="community",
+    ),
     # ── Community tier - SSO unrestricted JIT provisioning (default OFF, FAR-855) ──
     FeatureFlag(
         name="sso_unrestricted_provisioning",
@@ -259,6 +265,7 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "webhook_notification_log",
         "library_collection",
         "sso_unrestricted_provisioning",
+        "api_key_grants",
     }
 )
 

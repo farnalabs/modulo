@@ -147,7 +147,7 @@ _MIGRATION_PATH = (
 # 0280_runs_node_deadline_watchdog_fired_count chained onto 0279_table_autovacuum_tuning as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0280_runs_node_deadline_watchdog_fired_count"
+_CHAIN_HEAD_MIGRATION_NAME = "0281_org_api_keys_grants"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -11,6 +11,7 @@ required to perform them. Roles resolve through ``ORG_ROLE_HIERARCHY`` from
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextvars import ContextVar, Token
 
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
@@ -294,6 +295,96 @@ PERMISSIONS: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# FAR-1477 / ADR 058 — delegation exclusion flag + API-key grant-sets.
+#
+# ``NON_DELEGABLE_PERMISSIONS`` / ``NON_DELEGABLE_PREFIXES`` are the ONE
+# registry-level "human_only"-style marker for permissions that may never be
+# delegated to a credential through a grant-set. FAR-1476 (OAuth scopes) and
+# FAR-1385 (principals) MUST consume ``is_delegable`` rather than keep a second
+# list. The marker is read LIVE on every call (no caching, no snapshot at mint)
+# by both the enforcement resolvers and the mint write path, so tightening it
+# takes effect for already-minted keys immediately.
+# ---------------------------------------------------------------------------
+
+NON_DELEGABLE_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        # human_only HITL decisions (ADR 047 / FAR-609): decided by a browser human.
+        "hitl.claim",
+        "hitl.approve",
+        "hitl.reject",
+        "hitl.deliver_manual",
+        "hitl.review",
+        # org destruction.
+        "org.delete",
+        # break-glass / authz kill-switch controls.
+        "org.authz_enforce.manage",
+        "org.guardrails.kill_switch.manage",
+    }
+)
+# Credential lifecycle (api_key.*, oauth.client.*) and system administration
+# (system.*) are excluded wholesale by prefix, so a newly added key under those
+# namespaces is non-delegable by default (fail-closed).
+NON_DELEGABLE_PREFIXES: tuple[str, ...] = ("api_key.", "oauth.client.", "system.")
+
+
+def is_delegable(permission: str) -> bool:
+    """Return True when ``permission`` is a known key that MAY be granted to a credential.
+
+    Unknown keys are NOT delegable (fail-closed). Read live on every call.
+    """
+    if permission not in PERMISSIONS:
+        return False
+    if permission in NON_DELEGABLE_PERMISSIONS:
+        return False
+    return not permission.startswith(NON_DELEGABLE_PREFIXES)
+
+
+def parse_grants(raw: str | None) -> frozenset[str] | None:
+    """Decode the ``org_api_keys.grants`` column into the tri-state grant-set.
+
+    ``None`` (NULL) -> ``None``: legacy role-bundle behaviour.
+    ``""`` (empty)  -> ``frozenset()``: explicit deny-all.
+    otherwise       -> the exact set of space-separated permission keys.
+    NULL and empty MUST NOT collapse: that would silently widen or break keys.
+    """
+    if raw is None:
+        return None
+    return frozenset(raw.split())
+
+
+def serialize_grants(grants: Iterable[str] | None) -> str | None:
+    """Encode a grant-set for storage (``None`` stays NULL; empty stays ``""``)."""
+    if grants is None:
+        return None
+    return " ".join(sorted(set(grants)))
+
+
+def grants_permit(grants: frozenset[str] | None, permission: str) -> bool:
+    """Grant-set leg: does ``grants`` allow ``permission``?
+
+    ``None`` means no grant-set (legacy role-bundle) -> this leg does not
+    narrow. Otherwise the permission must be in the set AND still delegable
+    (live exclusion read), so tightening the flag revokes already-minted grants.
+    The caller still ANDs this with the live-role bundle check:
+    ``effective = grant_set INTERSECT bundle(live_role)``.
+    """
+    if grants is None:
+        return True
+    return permission in grants and is_delegable(permission)
+
+
+def assert_grant(grants: frozenset[str] | None, permission: str) -> None:
+    """Raise ``PermissionDenied`` when the grant-set does not permit ``permission``."""
+    if not grants_permit(grants, permission):
+        raise PermissionDenied(
+            permission=permission,
+            required_role=PERMISSIONS.get(permission, ""),
+            actual_role=None,
+            reason="not_granted",
+        )
+
+
 class PermissionConfigurationError(Exception):
     """Raised when the permission registry is misconfigured (unknown key or role)."""
 
@@ -322,6 +413,8 @@ class PermissionDenied(Exception):  # noqa: N818 — name mandated by ADR 047 ex
         self.reason = reason
         if reason == "unknown_role":
             message = f"Unknown role: '{actual_role}'"
+        elif reason == "not_granted":
+            message = f"Permission '{permission}' is not in this credential's grant-set"
         else:
             message = f"Insufficient scope for '{permission}': requires '{required_role}' role, got '{actual_role}'"
         super().__init__(message)
@@ -417,3 +510,9 @@ def _clamp_role(minted_role: str, live_role: str | None) -> str:
 for _permission, _role in PERMISSIONS.items():
     if _role not in ORG_ROLE_HIERARCHY:
         raise PermissionConfigurationError(f"Permission '{_permission}' maps to unknown role '{_role}'")
+
+
+# Import-time validation: every explicit non-delegable key must exist.
+for _nd in NON_DELEGABLE_PERMISSIONS:
+    if _nd not in PERMISSIONS:
+        raise PermissionConfigurationError(f"Non-delegable permission '{_nd}' is not in PERMISSIONS")

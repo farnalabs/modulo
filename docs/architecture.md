@@ -617,6 +617,25 @@ account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
 surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
+**Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
+`org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,
+tri-state: `NULL` = legacy role-bundle behaviour (unchanged), empty = explicit
+deny-all, a list = the exact set. Enforcement is
+`effective = grants ∩ bundle(live_role)` on both the REST resolver
+(`_assert_tenant_permission`) and the MCP chokepoint (`resolve_tool_access`);
+the grant leg only ever narrows and is not lifted by the authz kill switch.
+Minting (`POST /api/v1/api-keys` with `grants`) caps requested grants to the
+caller's LIVE capability and rejects non-delegable keys. Delegability is a
+single registry-level flag, `modulo.auth.permissions.is_delegable`, read live
+at enforcement and mint time (never-grantable: human_only HITL, `api_key.*`,
+`oauth.client.*`, `system.*`, `org.delete`, break-glass controls); OAuth
+scopes and principals must consume it rather than keep a second list. With the
+flag OFF a grant-bearing key is denied (401), never widened to its role, and
+`grants` on mint is rejected (422). With the flag ON, user-scoped keys default
+to and are capped at 90 days. Grants are immutable after mint. MCP
+`create_api_key` does not accept grants yet.
+
+
 ### Row-Level Security
 
 All tenant isolation is at the database layer via `SET LOCAL app.organisation_id` inside transactions. Every query runs within the org scope. This prevents cross-tenant leaks even if application-level scoping is bypassed. Team-visibility resources return 404 (not 403) for non-members – no existence enumeration.

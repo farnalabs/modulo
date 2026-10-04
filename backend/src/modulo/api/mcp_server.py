@@ -72,6 +72,7 @@ from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
     ApiKeyInvalidError,
+    resolve_key_grants,
     validate_api_key,
 )
 from modulo.auth.api_key import (
@@ -383,6 +384,9 @@ _ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar(
 # 'user' (a user-scoped API key, a regular JWT session, or an OAuth token),
 # None (unset — the caller-scope leg of the tool-scope check fails closed).
 _ctx_key_scope: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_key_scope", default=None)
+# FAR-1477: the request's API-key grant-set. ``None`` = no grant-set (JWT/OAuth
+# sessions and legacy role-bundle keys); an empty frozenset is explicit deny-all.
+_ctx_key_grants: contextvars.ContextVar[frozenset[str] | None] = contextvars.ContextVar("mcp_key_grants", default=None)
 # FAR-620: per-request resolution of the ``user_scoped_mcp_keys`` org flag.
 # Read once per request by the auth middleware (no caching across requests);
 # fail-closed default False so a read failure never broadens access.
@@ -507,6 +511,7 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
         allowed_tools=_ctx_node_allowed_tools_val(),
         key_scope=_ctx_key_scope.get(None),
         auth_type=_ctx_auth_type.get(None),
+        grants=_ctx_key_grants.get(None),
     )
 
 
@@ -1278,6 +1283,9 @@ async def _authenticate_api_key(
                     key_id=key.id,
                 )
                 raise ApiKeyInvalidError
+            # FAR-1477: grant-set (None = legacy, no flag read; flag OFF on a
+            # grant-bearing key raises ApiKeyInvalidError -> 401).
+            key_grants = await resolve_key_grants(key)
             if clamped != key.role:
                 _record_api_key_role_cap(
                     minted_role=key.role,
@@ -1315,6 +1323,7 @@ async def _authenticate_api_key(
         # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
         # rows) on the fail-closed None; real rows always carry a string.
         _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
+        _ctx_key_grants.set(key_grants)
         # FAR-436: a run-scoped sandbox key narrows the agent's MCP tool-call
         # loop to the node's capability_scope.allowed_tools (deny-by-default
         # within the scope). Non-run keys / scoped-less nodes resolve to None
@@ -1453,6 +1462,7 @@ async def _authenticate_oauth_jwt(
         # 'user' (identity-bound, eligible for caller-scoped tools).
         _ctx_auth_type.set("jwt")
         _ctx_key_scope.set("user")
+        _ctx_key_grants.set(None)
         _ctx_team_id.set(None)  # user tokens carry no team boundary
         request.scope["auth_principal"] = {
             "type": "user",
@@ -1584,6 +1594,7 @@ async def _finalize_oauth_principal(
     # FAR-620: an OAuth token is the user's own identity — caller scope
     # 'user' (identity-bound, eligible for caller-scoped tools).
     _ctx_key_scope.set("user")
+    _ctx_key_grants.set(None)
     _ctx_team_id.set(None)  # user tokens carry no team boundary
     request.scope["auth_principal"] = {
         "type": "user",
