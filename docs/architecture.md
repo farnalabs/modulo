@@ -175,7 +175,7 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `AzureKeyVaultConnector` | `secrets` | read secrets |
 | `SharePointConnector` | `documentation` | read/write files and pages |
 | `CodeClimateConnector` | `quality` | query code quality metrics |
-| *(40 built-in connectors total; see `modulo/connectors/`)* | | |
+| *(40 concrete connectors; 43 `ConnectorType` enum members including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`; see `modulo/connectors/`)* | | |
 
 #### Integration Validation Levels (FAR-935)
 
@@ -224,7 +224,7 @@ Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a
 | LocalAI | V1 |
 | Jan | V1 |
 | OpenCode | V1 |
-| *(26 model backends total; see `modulo/model_backends/`)* | |
+| *(26 production providers plus the `stub` test double (27 directories); see `modulo/model_backends/`)* | |
 
 ### Trigger Engine (`modulo/core/trigger_engine/`)
 

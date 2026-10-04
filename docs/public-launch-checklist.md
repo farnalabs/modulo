@@ -14,7 +14,7 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
   - TLS enabled if Redis is configured with `tls-port`
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled
   - `ghcr.io/farnalabs/modulo:latest`
-- [ ] **`install.sh`** is reachable at the documented native-install URL — `https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh`
+- [ ] **`install.sh`** is reachable at the documented native-install URL - `https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh`
   - A short `modulo.run` URL for it does not exist yet (the old one 404s); do not advertise any short URL until it actually serves the script
 - [ ] **DNS** is configured for the target domain
   - A/AAAA record or CNAME to the reverse proxy or load balancer

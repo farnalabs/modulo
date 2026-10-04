@@ -375,7 +375,7 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 |----------|----------|---------|-------------|
 | `WATCHDOG_ENABLED` | No | `true` | Enable the watchdog tick |
 | `WATCHDOG_TICK_SECONDS` | No | `30` | Tick interval in seconds |
-| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Sustained window before an alert fires — applies to BOTH the SAQ-worker liveness condition AND the system-cron (`fire_due_triggers`) heartbeat condition, each of which must look bad continuously for this many seconds |
+| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Sustained window before an alert fires - applies to BOTH the SAQ-worker liveness condition AND the system-cron (`fire_due_triggers`) heartbeat condition, each of which must look bad continuously for this many seconds |
 | `WATCHDOG_ALERT_STATE_TTL_SECONDS` | No | `604800` | Edge-triggered alert state TTL (default 7 days) |
 | `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
 | `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
@@ -502,7 +502,7 @@ per-check override is set to a positive value.
 | `MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS` | No | `0` | Checkpointer schema check timeout; `0` = use global |
 | `MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS` | No | `0` | Alembic migration check timeout; `0` = use global |
 | `MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS` | No | `1` | Database-hygiene check timeout (seconds); `0` = use global |
-| `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor — a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
+| `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor - a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
 | `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO` | No | `0.60` | Database-hygiene: worst-table dead-tuple ratio at/above which a table over the floor grades `degraded` (`0`–`1`) |
 
 A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations/
