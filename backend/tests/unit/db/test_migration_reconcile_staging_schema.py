@@ -109,8 +109,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0275_run_cancel_reason_vocabulary chains off 0274, and
 # 0276_runs_autovacuum_enabled chains off 0275, and
 # 0277_run_daily_facts_trigger_dispatch_phase chains off 0276, and
-# 0278_runs_workspace_drift_sweep_index chains off 0277 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0278_runs_workspace_drift_sweep_index"
+# 0278_runs_workspace_drift_sweep_index chains off 0277, and
+# 0279_runs_node_deadline_watchdog_fired_count chains off 0278 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0279_runs_node_deadline_watchdog_fired_count"
 
 
 def _source(name: str) -> str:
