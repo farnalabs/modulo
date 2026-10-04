@@ -141,7 +141,15 @@ class RuntimeProviderHub:
         """Factory-load providers from a configuration dict.
 
         The config dict maps provider names to provider-specific configs.
-        Supported provider types: runner_docker (legacy alias local_docker), e2b.
+        Supported provider types: runner_docker (legacy alias local_docker),
+        e2b, kubernetes (alias k8s).
+
+        Like the other factory arms this is an EXPLICIT configuration path —
+        the caller naming the provider is the opt-in (the environment-driven
+        :func:`modulo.core.runtime_provider.build_hub` carries the
+        ``MODULO_KUBERNETES_ENABLED`` gate instead). A provider type that is
+        in the vocabulary but unhandled here still warns-and-skips; an
+        unrecognised type raises :class:`UnknownProviderTypeError`.
         """
         for provider_name, provider_config in config.items():
             if provider_name in self._providers:
@@ -172,6 +180,25 @@ class RuntimeProviderHub:
                     e2b_provider = E2BRuntimeProvider(api_key=api_key)
                     try:
                         self.register(provider_name, e2b_provider)
+                    except ValueError:
+                        _log.warning("Provider '%s' already registered, skipping", provider_name)
+                case "kubernetes" | "k8s":
+                    # FAR-1051: the Kubernetes provider registers here too, so
+                    # both hub entry points agree (build_hub + initialise). The
+                    # client is lazy, so construction never touches the cluster;
+                    # a missing kubernetes-asyncio SDK skips with a warning
+                    # instead of crashing boot (build_hub parity).
+                    try:
+                        from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+                    except ImportError:
+                        _log.warning(
+                            "Kubernetes dependency (kubernetes-asyncio) not installed; skipping provider '%s'",
+                            provider_name,
+                        )
+                        continue
+                    kubernetes_provider = KubernetesRuntimeProvider()
+                    try:
+                        self.register(provider_name, kubernetes_provider)
                     except ValueError:
                         _log.warning("Provider '%s' already registered, skipping", provider_name)
                 case _:

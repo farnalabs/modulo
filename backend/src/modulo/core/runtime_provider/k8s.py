@@ -64,10 +64,11 @@ WorkspaceSpec mapping
 
 Deliberately deferred (FAR-1051's "not frozen" list): pod-lifetime deadline
 scoping (no ``active_deadline_seconds`` — the default 3600s spec timeout
-must not kill a long-lived workspace), the K8s orphan-reconciler sweep (the
-shipped ``runner_reconciler`` is Docker-engine-specific; wiring a pod sweep
-is a separate allowlisted change), egress default posture, and
-dispatcher-minted secret naming.
+must not kill a long-lived workspace), egress default posture, and
+dispatcher-minted secret naming. The orphan sweep IS wired:
+:meth:`KubernetesRuntimeProvider.list_workspace_pods` feeds the
+provider-neutral ``runner_reconciler`` sweep, which stays the single owner
+of reclamation for every tier.
 """
 
 from __future__ import annotations
@@ -191,6 +192,27 @@ class _ExecStreamState:
 
     exit_payload: str | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkspacePodRef:
+    """One Modulo workspace pod as the reconciler's sweep sees it (FAR-1051).
+
+    Deliberately carries the pod's labels RAW rather than a pre-extracted run
+    id: the ``modulo.run.id`` label key belongs to the workspace-orphan
+    reconciler (it owns the label vocabulary it filters on for every
+    provider), while pod identity — namespace, deployment-identity
+    annotation, creation timestamp — belongs to this provider.
+
+    ``created_age_s`` is ``now - modulo.created_at`` (epoch seconds), or
+    ``0.0`` when the marker is absent/unparseable — never a negative or
+    fabricated age, so a pod without a creation marker can never become a
+    grace-period destroy candidate.
+    """
+
+    ref: str
+    labels: dict[str, str]
+    created_age_s: float
 
 
 class KubernetesRuntimeProvider(RuntimeProvider):
@@ -837,6 +859,57 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             return False
         self._workspaces.discard(provider_ref)
         return True
+
+    async def list_workspace_pods(self) -> list[WorkspacePodRef]:
+        """List this deployment's Modulo workspace pods in the namespace.
+
+        The listing primitive behind the workspace-orphan reconciler's
+        Kubernetes source (FAR-1051 — "reconciler as single owner of K8s
+        runs"). Two scoping layers, mirroring the Docker source's container
+        filter:
+
+        - server-side selector ``modulo.provider=kubernetes`` — never a
+          foreign pod;
+        - client-side deployment-identity match on the ``modulo.machine.id``
+          ANNOTATION (pods carry the identity as an annotation, not a label),
+          so two Modulo deployments sharing one namespace never reconcile
+          each other's workspace pods.
+
+        Any listing failure propagates: a configured-but-unreachable cluster
+        must surface as a reported sweep failure, never a silent empty list.
+        """
+        core = await self._get_core()
+        pods = await core.list_namespaced_pod(
+            namespace=self._namespace,
+            label_selector=f"{_PROVIDER_LABEL}={_PROVIDER_LABEL_VALUE}",
+        )
+        identity = self._deployment_identity()
+        now = time.time()
+        entries: list[WorkspacePodRef] = []
+        for pod in getattr(pods, "items", None) or []:
+            metadata = getattr(pod, "metadata", None)
+            if metadata is None:
+                continue
+            annotations = getattr(metadata, "annotations", None) or {}
+            if annotations.get(_MACHINE_ANNOTATION) != identity:
+                continue
+            labels = getattr(metadata, "labels", None) or {}
+            try:
+                created = float(labels.get(_CREATED_AT_LABEL, "0") or 0)
+            except (TypeError, ValueError):
+                created = 0.0
+            ref = getattr(metadata, "name", "") or ""
+            if not ref:
+                _log.warning("list_workspace_pods: workspace pod without a name in namespace %s", self._namespace)
+                continue
+            entries.append(
+                WorkspacePodRef(
+                    ref=ref,
+                    labels=dict(labels),
+                    created_age_s=(now - created) if created else 0.0,
+                )
+            )
+        return entries
 
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the pod phase (``running`` / ``pending`` / ... ), ``terminated`` when gone."""

@@ -481,6 +481,10 @@ _PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("modulo.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
     ("modulo.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
     ("modulo.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
+    # FAR-1051: without this entry a ``kubernetes`` (or its ``k8s`` alias)
+    # profile falls through to the raw provider_type as the tier, so the
+    # alias reads as an unknown tier and a supported profile refuses.
+    ("modulo.core.runtime_provider.k8s", "KubernetesRuntimeProvider", "kubernetes"),
 )
 
 

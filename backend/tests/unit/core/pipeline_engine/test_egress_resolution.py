@@ -68,6 +68,17 @@ _EGRESS_CASES: list[tuple[str | None, str | None, str, bool, str | None, bool, s
     ("unset", "unset", "local", False, None, False, "local: default posture accepted"),
     ("deny_all", "outbound", "local", False, "deny_all", True, "local: deny_all -> refused"),
     ("selected", "unset", "local", True, "selected", True, "local: selected -> refused"),
+    # Kubernetes (FAR-1051): only the provider-default posture is enforceable —
+    # bounded egress is the CUSTOMER's NetworkPolicy, so deny_all / selected
+    # are named refusals, never a silent downgrade.
+    ("unset", "unset", "kubernetes", False, None, False, "kubernetes: both unset -> provider default"),
+    ("unset", "outbound", "kubernetes", False, None, False, "kubernetes: profile outbound -> provider default"),
+    ("default", "unset", "kubernetes", False, None, False, "kubernetes: node default -> provider default"),
+    ("unset", "none", "kubernetes", False, "deny_all", True, "kubernetes: profile none -> refused"),
+    ("deny_all", "outbound", "kubernetes", False, "deny_all", True, "kubernetes: node deny_all -> refused"),
+    ("selected", "unset", "kubernetes", True, "selected", True, "kubernetes: node selected -> refused"),
+    ("unset", "selected", "kubernetes", False, "selected", True, "kubernetes: profile selected -> refused"),
+    ("deny_all", "none", "kubernetes", False, "deny_all", True, "kubernetes: both deny_all -> refused"),
 ]
 
 
@@ -511,3 +522,61 @@ def test_spec_egress_for_canonical_selected_is_not_permissive() -> None:
     """A restrictive canonical policy must never map to the permissive dialect value."""
     assert spec_egress_for_canonical("selected") != "outbound"
     assert spec_egress_for_canonical("deny_all") != "outbound"
+
+
+# --- Kubernetes tier (FAR-1051) ----------------------------------------------
+
+
+def test_kubernetes_tier_is_registered_in_the_enforcement_matrix() -> None:
+    """The kubernetes tier exists and declares exactly one enforceable posture.
+
+    Without this entry a kubernetes profile resolved to ``unknown tier``,
+    which reads as a configuration bug instead of the deliberate posture.
+    """
+    tier_caps = egress_mod._TIER_ENFORCEMENT["kubernetes"]
+
+    assert tier_caps == {"default": True, "deny_all": False, "selected": False}
+
+
+def test_kubernetes_refusal_names_networkpolicy_as_the_remediation() -> None:
+    """A refusal must say WHERE the control lives: bounded egress on this tier
+    is the customer's NetworkPolicy, not something the provider enforces."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy="none",
+        tier="kubernetes",
+    )
+
+    assert result.refusal is not None
+    assert "NetworkPolicy" in result.refusal
+    assert "kubernetes" in result.refusal
+
+
+def test_kubernetes_default_posture_is_not_refused() -> None:
+    """No silent degradation of a supported configuration: the unrestricted
+    default resolves cleanly on this tier (the tier's only enforceable posture)."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="kubernetes",
+    )
+
+    assert result.refusal is None
+    assert result.policy is None
+
+
+def test_other_tiers_keep_their_historical_refusal_message() -> None:
+    """The per-tier remediation note is additive: a tier with no note (local)
+    produces the exact pre-FAR-1051 refusal text."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy="none",
+        tier="local",
+    )
+
+    assert result.refusal is not None
+    assert "NetworkPolicy" not in result.refusal
+    assert "available enforcement on this tier" in result.refusal

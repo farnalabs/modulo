@@ -16,6 +16,7 @@ from modulo.core.runtime_provider import (
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
 from modulo.core.runtime_provider.local import LocalRuntimeProvider
 
 
@@ -343,6 +344,39 @@ class TestInitialise:
 
         assert "already registered, skipping" in caplog.text
         assert hub.get("sandbox") is None
+
+    async def test_registers_kubernetes_type(self) -> None:
+        """FAR-1051: the SECOND hub entry point accepts the Kubernetes provider.
+
+        ``initialise`` previously warned-and-skipped ``kubernetes``, so the
+        two factories disagreed about which providers exist. Construction is
+        lazy (no cluster contact), so this never touches a network.
+        """
+        hub = RuntimeProviderHub()
+        await hub.initialise({"pod-runtime": {"type": "kubernetes"}})
+        provider = hub.get("pod-runtime")
+        assert isinstance(provider, KubernetesRuntimeProvider)
+        assert provider.provider_id == "kubernetes"
+
+    async def test_registers_kubernetes_alias_type(self) -> None:
+        """The ``k8s`` alias registers too — a name that is in the vocabulary
+        must never warn-and-skip (the pre-FAR-1051 behaviour)."""
+        hub = RuntimeProviderHub()
+        await hub.initialise({"pod-runtime": {"type": "k8s"}})
+        assert isinstance(hub.get("pod-runtime"), KubernetesRuntimeProvider)
+
+    async def test_kubernetes_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A concurrent registration of the same name logs instead of crashing."""
+        hub = RuntimeProviderHub()
+
+        def _raise_duplicate(name: str, provider: Any) -> None:
+            raise ValueError(f"RuntimeProvider '{name}' is already registered")
+
+        with patch.object(hub, "register", side_effect=_raise_duplicate):
+            await hub.initialise({"pod-runtime": {"type": "kubernetes"}})
+
+        assert "already registered, skipping" in caplog.text
+        assert hub.get("pod-runtime") is None
 
 
 # ---------------------------------------------------------------------------

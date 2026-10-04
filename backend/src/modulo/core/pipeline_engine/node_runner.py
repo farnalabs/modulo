@@ -1077,17 +1077,38 @@ async def _build_log_tail_provider(api_key: str) -> "RuntimeProvider | None":
     return provider_hub.get("e2b")
 
 
-async def _read_log_tail_via_provider(sandbox_id: str | None, *, max_bytes: int = 6000) -> str:
-    """Read the E2B log tail via the ``read_log_tail`` ABC primitive (FAR-1050 R1).
+async def _read_log_tail_via_provider(
+    sandbox_id: str | None,
+    *,
+    max_bytes: int = 6000,
+    provider_type: str | None = None,
+) -> str:
+    """Read the workspace log tail via the ``read_log_tail`` ABC primitive (FAR-1050 R1).
 
     The only log-probe path since FAR-1050 R6 retired the legacy urllib
     helper. Resolves the key through the runtime bridge /
     ``MODULO_E2B_API_KEY``, then the legacy ``E2B_API_KEY`` env var; empty on
     no key. Never raises — provider build failure, provider error and fetch
     failure all yield ``""`` (``CancelledError`` propagates).
+
+    FAR-1051: ``provider_type`` (the run's bound profile's declared type)
+    selects a non-E2B provider through the hub, so a ``kubernetes`` dispatch
+    reads its pod log tail through the same probe; the never-raises contract
+    is unchanged on both arms (an unregistered provider degrades this
+    best-effort probe to ``""`` — the probe is diagnostics, never
+    enforcement).
     """
     if not isinstance(sandbox_id, str) or not sandbox_id:
         return ""
+    if not _is_legacy_e2b_route(provider_type):
+        try:
+            profile_provider = await _build_profile_provider(str(provider_type))
+            profile_raw = await profile_provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return ""
+        return bytes(profile_raw).decode("utf-8", errors="replace")
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
 
     api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
@@ -1128,6 +1149,7 @@ async def _apply_isolation_via_provider(
     command_timeout: float = 60.0,
     single_pr_per_run: bool = False,
     guard_owner: str | None = None,
+    provider_type: str | None = None,
 ) -> str | None:
     """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
 
@@ -1138,9 +1160,17 @@ async def _apply_isolation_via_provider(
     wrote is UNKNOWN, never "confirmed no create".
 
     The single enforcement path since FAR-1050 R6 retired the engine-side
-    ``apply_sandbox_policy(sandbox, ...)`` invocation. Key resolution mirrors
-    the enforcement gate (runtime bridge / ``MODULO_E2B_API_KEY``, then the
-    legacy ``E2B_API_KEY`` env var).
+    ``apply_sandbox_policy(sandbox, ...)`` invocation.
+
+    FAR-1051 provider resolution: ``provider_type`` is the run's bound
+    environment profile's declared type. ``None``/``"e2b"`` is the legacy
+    profile-less route and resolves EXACTLY as before (key resolution
+    mirrors the enforcement gate: runtime bridge / ``MODULO_E2B_API_KEY``,
+    then the legacy ``E2B_API_KEY`` env var). Any other declared type
+    resolves through the hub, so a ``kubernetes`` profile reaches the
+    Kubernetes provider — and an unregistered one raises the typed
+    ``ProviderNotConfiguredError`` carrying its remediation env var, never
+    a fallback to E2B or local.
 
     Failure semantics at this invocation point:
       - enforcement-critical step failures propagate UNCHANGED (the same
@@ -1152,7 +1182,8 @@ async def _apply_isolation_via_provider(
         never retry-loop (ADR 040);
       - no key / provider build failure / missing sandbox id fail CLOSED as
         the same tier refusal (isolation is enforcement-critical: never
-        silently skipped).
+        silently skipped), while an unregistered profile provider fails
+        CLOSED as the typed :class:`ProviderNotConfiguredError`.
 
     FAR-1273: ``single_pr_per_run`` (optional, default ``False`` — existing
     callers unaffected) rides the TYPED ``IsolationPolicy`` to the E2B
@@ -1176,12 +1207,17 @@ async def _apply_isolation_via_provider(
 
     if not isinstance(sandbox_id, str) or not sandbox_id:
         raise SandboxTierRefusedError("sandbox isolation requires the dispatch sandbox id")
-    api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
-    provider = await _build_isolation_provider(api_key) if api_key else None
-    if provider is None:
-        raise SandboxTierRefusedError(
-            "sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
-        )
+    if _is_legacy_e2b_route(provider_type):
+        api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
+        provider = await _build_isolation_provider(api_key) if api_key else None
+        if provider is None:
+            raise SandboxTierRefusedError(
+                "sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
+            )
+    else:
+        # FAR-1051: hub-resolved for the profile's own provider type. The
+        # typed ProviderNotConfiguredError from the hub propagates unchanged.
+        provider = await _build_profile_provider(str(provider_type))
     # WorkspaceSpec requires profile/org UUIDs; a session-factory-less
     # dispatch has no bound profile (unit tests / direct dispatch), so the
     # missing ids fall back to the nil UUID. E2B's apply_isolation does not
@@ -1227,7 +1263,11 @@ async def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
     return await _build_log_tail_provider(api_key)
 
 
-async def _file_io_provider_for(sandbox_id: str | None) -> "tuple[RuntimeProvider, str]":
+async def _file_io_provider_for(
+    sandbox_id: str | None,
+    *,
+    provider_type: str | None = None,
+) -> "tuple[RuntimeProvider, str]":
     """Resolve ``(provider, provider_ref)`` for a file call (FAR-1050 R2b).
 
     Fails CLOSED: a missing/blank dispatch sandbox id, a missing E2B
@@ -1236,12 +1276,21 @@ async def _file_io_provider_for(sandbox_id: str | None) -> "tuple[RuntimeProvide
     handle to fall back to (FAR-1050 R6 deleted it). Key resolution mirrors
     the R1/R3 helpers (runtime bridge / ``MODULO_E2B_API_KEY``, then the
     legacy ``E2B_API_KEY`` env var).
+
+    FAR-1051: ``provider_type`` is the run's bound profile's declared type
+    (``None``/``"e2b"`` = the legacy route, unchanged above). Another
+    declared type resolves through the hub, so file I/O reaches that
+    provider; an unregistered one raises the typed
+    ``ProviderNotConfiguredError`` (its remediation env var) — never a
+    fallback to E2B or local.
     """
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import RuntimeProviderError
 
     if not isinstance(sandbox_id, str) or not sandbox_id:
         raise RuntimeProviderError("sandbox file I/O requires the dispatch sandbox id")
+    if not _is_legacy_e2b_route(provider_type):
+        return await _build_profile_provider(str(provider_type)), sandbox_id
     api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
     provider = await _build_file_io_provider(api_key) if api_key else None
     if provider is None:
@@ -1251,31 +1300,49 @@ async def _file_io_provider_for(sandbox_id: str | None) -> "tuple[RuntimeProvide
     return provider, sandbox_id
 
 
-async def _write_file_via_provider(sandbox_id: str | None, path: str, content: str) -> None:
+async def _write_file_via_provider(
+    sandbox_id: str | None,
+    path: str,
+    content: str,
+    *,
+    provider_type: str | None = None,
+) -> None:
     """ABC write prim (FAR-1050 R2b), replacing ``sandbox.files.write(path, content)``.
 
-    Text is UTF-8 encoded for the bytes-typed ABC primitive — the same
-    encoding the SDK applies to the ``str`` the legacy arm passes. The
-    caller keeps its ``asyncio.wait_for`` bound, so the I/O timeout
-    threading is identical on both arms.
+    Text is UTF-8 encoded for the bytes-typed ABC primitive (same encoding
+    the SDK applies to the ``str`` the legacy arm passes). The caller keeps
+    its ``asyncio.wait_for`` bound, so the I/O timeout threading is
+    identical on both arms. ``provider_type`` (FAR-1051) selects the
+    profile's provider exactly as :func:`_file_io_provider_for` documents.
     """
-    provider, ref = await _file_io_provider_for(sandbox_id)
+    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
     await provider.write_file(ref, path, content.encode("utf-8"))
 
 
-async def _read_file_via_provider(sandbox_id: str | None, path: str) -> str:
+async def _read_file_via_provider(
+    sandbox_id: str | None,
+    path: str,
+    *,
+    provider_type: str | None = None,
+) -> str:
     """ABC read prim (FAR-1050 R2b), replacing ``sandbox.files.read(path, format="text")``.
 
     Decodes the primitive's bytes the way the SDK's text read does (UTF-8,
     replacement on undecodable input) so both arms hand downstream code the
-    same ``str`` type and the same length semantics.
+    same ``str`` type and the same length semantics. ``provider_type``
+    (FAR-1051) selects the profile's provider.
     """
-    provider, ref = await _file_io_provider_for(sandbox_id)
+    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
     data = await provider.read_file(ref, path)
     return bytes(data).decode("utf-8", errors="replace")
 
 
-async def _get_info_via_provider(sandbox_id: str | None, path: str | None) -> "WorkspaceFileInfo":
+async def _get_info_via_provider(
+    sandbox_id: str | None,
+    path: str | None,
+    *,
+    provider_type: str | None = None,
+) -> "WorkspaceFileInfo":
     """ABC stat prim (FAR-1050 R2b), replacing ``sandbox.files.get_info(path)``.
 
     The returned :class:`WorkspaceFileInfo` carries ``.size``, which is the
@@ -1283,11 +1350,12 @@ async def _get_info_via_provider(sandbox_id: str | None, path: str | None) -> "W
     ``path`` is typed ``str | None`` because the watch-log probe is
     addressed by an optional node setting; a missing path fails the same
     way the legacy SDK call would (the probe's ``except Exception`` turns
-    it into a quiet probe failure).
+    it into a quiet probe failure). ``provider_type`` (FAR-1051) selects
+    the profile's provider exactly as :func:`_file_io_provider_for` documents.
     """
     from modulo.core.runtime_provider import RuntimeProviderError
 
-    provider, ref = await _file_io_provider_for(sandbox_id)
+    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
     if not isinstance(path, str) or not path:
         raise RuntimeProviderError("sandbox file I/O stat requires a non-empty path")
     return await provider.get_info(ref, path)
@@ -1299,6 +1367,7 @@ async def _list_fs_entries_via_provider(
     *,
     watch_log_path: str | None,
     watch_globs: list[str],
+    provider_type: str | None = None,
 ) -> "list[WorkspaceFileInfo]":
     """ABC list prim (FAR-1050 R2b), replacing the watchdog's ``sandbox.files.list`` probe.
 
@@ -1314,9 +1383,10 @@ async def _list_fs_entries_via_provider(
     discards are simply absent from the returned list, which leaves
     ``seen`` (and the prune that consumes it) identical to the legacy arm.
     A listing or stat failure propagates to the caller's existing
-    probe-failure handling.
+    probe-failure handling. ``provider_type`` (FAR-1051) selects the
+    profile's provider.
     """
-    provider, ref = await _file_io_provider_for(sandbox_id)
+    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
     paths = await provider.list_files(ref, path)
     entries: list[WorkspaceFileInfo] = []
     for raw_path in paths:
@@ -1341,21 +1411,77 @@ async def _list_fs_entries_via_provider(
 # provider-created but legacy-killed (or the reverse).
 
 
-async def _build_dispatch_provider() -> "RuntimeProvider | None":
-    """FAR-1050 R4 dispatch: resolve the E2B RuntimeProvider.
+def _is_legacy_e2b_route(provider_type: str | None) -> bool:
+    """True for the legacy / profile-less E2B dispatch route (FAR-1051).
+
+    Every provider seam in this module keeps its EXACT pre-FAR-1051
+    behaviour on this route (key-based E2B resolution, the same refusal
+    messages); only a profile that declares a different ``provider_type``
+    (``kubernetes`` today) takes the hub-resolved arm.
+    """
+    from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
+
+    return not provider_type or provider_type == RUNNER_PROVIDER_E2B
+
+
+@dataclass(frozen=True)
+class _ProfileTypeRef:
+    """Minimal profile view for :meth:`RuntimeProviderHub.resolve` (FAR-1051).
+
+    The hub's deterministic resolution reads only ``provider_hint`` and
+    ``provider_type`` off a profile (ADR 029), so a dispatch seam that knows
+    just the profile's DECLARED type — not the row — passes this instead of
+    re-loading it. Going through ``resolve`` (rather than ``get``) is what
+    keeps the no-silent-fallback guarantee intact: an unregistered known type
+    surfaces as the hub's own :class:`ProviderNotConfiguredError` carrying
+    the remediation env var, and an unrecognised type as
+    :class:`UnknownProviderTypeError`.
+    """
+
+    provider_type: str
+    provider_hint: str | None = None
+
+
+async def _build_profile_provider(provider_type: str) -> "RuntimeProvider":
+    """Resolve a profile-declared ``provider_type`` through the hub (FAR-1051).
+
+    No silent fallback: registration is decided by :func:`build_hub`'s
+    matrix, and an unregistered/unrecognised type raises the typed error
+    from :meth:`RuntimeProviderHub.resolve` — never another provider, never
+    ``local``. The hub is per-call (the same shape the Docker route and the
+    E2B arm use); its other registrations hold no external resources until
+    used, so the returned provider is the only handle the dispatch disposes.
+    """
+    from modulo.core.runtime_provider import build_hub
+
+    return build_hub().resolve(_ProfileTypeRef(provider_type))
+
+
+async def _build_dispatch_provider(provider_type: str | None = None) -> "RuntimeProvider | None":
+    """FAR-1050 R4 dispatch: resolve the run's RuntimeProvider.
 
     Builds a PER-DISPATCH fresh hub through :func:`build_hub` — the same
     shape the Docker route uses in ``resolve_sandbox_dispatch_route`` — and
-    returns its registered ``e2b`` provider. Returns ``None`` when the E2B
-    provider is not registered (no ``MODULO_E2B_API_KEY`` / runtime
-    override) or the hub cannot be constructed; the caller fails CLOSED with
-    a typed error rather than silently falling back to ``AsyncSandbox.create``.
+    returns the provider for the run's profile type. The legacy route
+    (``provider_type`` unset / ``"e2b"`` — the profile-less default) returns
+    the hub's registered ``e2b`` provider, or ``None`` when it is not
+    registered (no ``MODULO_E2B_API_KEY`` / runtime override) or the hub
+    cannot be constructed; the caller fails CLOSED with a typed error rather
+    than silently falling back to ``AsyncSandbox.create``.
+
+    FAR-1051: any OTHER declared type resolves through
+    :func:`_build_profile_provider`, which raises the typed
+    ``ProviderNotConfiguredError`` (with the env var that would register it)
+    instead of returning ``None`` — a ``kubernetes`` profile must never fall
+    back to E2B (or to local) when its provider is unregistered.
 
     Test seam: unit tests substitute a ``FakeRuntimeProvider`` by patching
     THIS name (the hub is never constructed in that case). The ephemeral
     hub's other registrations hold no external resources until used, so the
     returned provider is the only handle the dispatch needs to dispose.
     """
+    if not _is_legacy_e2b_route(provider_type):
+        return await _build_profile_provider(str(provider_type))
     from modulo.core.runtime_provider import build_hub
 
     try:
@@ -6841,6 +6967,7 @@ class _SandboxWatchdog:
         drained_chunks: list[str],
         wall_clock: _WatchdogWallClock,
         drain_window_bytes: int | None = None,
+        provider_type: str | None = None,
     ) -> None:
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
@@ -6848,6 +6975,12 @@ class _SandboxWatchdog:
         # FAR-1050 R2b: provider ref for the ABC file-I/O probes — the
         # ABC addresses a workspace by dispatch sandbox id, not by SDK handle.
         self._sandbox_ref: str | None = getattr(sandbox, "sandbox_id", None) or None
+        # FAR-1051: the run's bound profile provider type, threaded into every
+        # ABC probe below so a Kubernetes dispatch probes ITS provider (the
+        # probes fail open and would otherwise always resolve the legacy E2B
+        # route, leaving a kubernetes dispatch with a permanently failing
+        # connection-liveness probe — i.e. a healthy node read as stalled).
+        self._provider_type = provider_type
         self._stall = stall
         self._node_id = node_id
         self._run_id = run_id
@@ -6959,7 +7092,7 @@ class _SandboxWatchdog:
         # treats a prolonged probe failure as a genuine stall.
         try:
             info = await asyncio.wait_for(
-                _get_info_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH),
+                _get_info_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH, provider_type=self._provider_type),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
             # FAR-1088: a successful get_info proves only that the sandbox
@@ -6987,7 +7120,7 @@ class _SandboxWatchdog:
             return
         try:
             content = await asyncio.wait_for(
-                _read_file_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH),
+                _read_file_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH, provider_type=self._provider_type),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
         except asyncio.CancelledError:
@@ -7072,7 +7205,7 @@ class _SandboxWatchdog:
     async def probe_log_growth(self) -> None:
         try:
             info = await asyncio.wait_for(
-                _get_info_via_provider(self._sandbox_ref, self._watch_log_path),
+                _get_info_via_provider(self._sandbox_ref, self._watch_log_path, provider_type=self._provider_type),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
             size = int(getattr(info, "size", 0) or 0)
@@ -7102,6 +7235,7 @@ class _SandboxWatchdog:
                     "/",
                     watch_log_path=self._watch_log_path,
                     watch_globs=self._watch_globs,
+                    provider_type=self._provider_type,
                 ),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
@@ -8239,13 +8373,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
 
     # D8 (FAR-594): the provider tier attribution for the dispatch marker.
-    # Every path that reaches this point is the legacy E2B route ("e2b" or the
-    # historical "none" default) — the Bundled Runner returns above (it
-    # attributes via its own dispatch route).  The attribution is unconditional
-    # rather than a conditional fallback, so a future provider branch that
-    # forgets to set the variable would produce a type error, not a silent
-    # default (FAR-995).  Import is local to match this file's lazy-import
-    # convention for runner_capacity.
+    # Default = the legacy E2B route ("e2b" or the historical "none" default);
+    # a bound profile's declared provider_type overwrites it below (FAR-1051),
+    # so a Kubernetes dispatch is attributed to "kubernetes" instead of being
+    # silently counted as E2B. The attribution is unconditional rather than a
+    # conditional fallback, so a future provider branch that forgets to set
+    # the variable would produce a type error, not a silent default (FAR-995).
+    # Import is local to match this file's lazy-import convention for
+    # runner_capacity.
     from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
 
     _resolved_provider: str = RUNNER_PROVIDER_E2B
@@ -8267,6 +8402,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     #    conformance-context-only binding never silently activates).
     #  - e2b -> the legacy E2B path below, with a LOUD dispatch-time timeout
     #    validation (GraphValidator parity, no silent clamp).
+    #  - kubernetes (FAR-1051) -> the provider-mediated path below with the
+    #    hub-resolved Kubernetes provider; an unregistered provider raises the
+    #    typed ProviderNotConfiguredError naming MODULO_KUBERNETES_ENABLED
+    #    (no silent fallback to E2B or local).
     #  - none -> the historical E2B default route, unchanged.
     if session_factory is not None:
         from modulo.core.bundled_runner.runner_dispatch import (
@@ -8292,6 +8431,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
+        if _route.profile is not None:
+            # FAR-1051: the bound profile's declared provider type drives BOTH
+            # the marker attribution and the create / isolation / file-IO
+            # provider resolution below. Only "e2b" and "kubernetes" can reach
+            # this point ("runner_docker" returned above; local/local_docker
+            # raise in route resolution), so the value doubles as the egress
+            # tier name (both are registered in _TIER_ENFORCEMENT).
+            _resolved_provider = str(_route.provider_type)
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})
@@ -8805,19 +8952,27 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if resource_limits:
             _metadata["resource_limits"] = json.dumps(resource_limits)
         # FAR-1085: use canonical egress resolution instead of ad-hoc mapping.
-        # The E2B route threads the profile's network_policy (resolved above)
-        # so the canonical resolver can apply the node→profile→provider-default
-        # precedence chain.
+        # The route threads the profile's network_policy (resolved above) so
+        # the canonical resolver can apply the node→profile→provider-default
+        # precedence chain. FAR-1051: the TIER is the resolved provider type
+        # ("e2b" on the legacy route — unchanged; "kubernetes" for a
+        # Kubernetes-bound profile), so a tier that cannot enforce the policy
+        # (e.g. deny_all/selected on Kubernetes, where bounded egress is the
+        # customer's NetworkPolicy) refuses here by name instead of
+        # certifying an enforcement the provider never performs.
         from modulo.core.pipeline_engine.egress import resolve_egress
 
+        _egress_tier = _resolved_provider
         _egress_resolved = resolve_egress(
             node_egress_policy=egress_policy,
             node_egress_allowlist=egress_allowlist,
             profile_network_policy=_profile_net_policy,
-            tier="e2b",
+            tier=_egress_tier,
         )
         if _egress_resolved.refusal is not None:
-            raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on E2B tier: {_egress_resolved.refusal}")
+            raise SandboxTierRefusedError(
+                f"Node '{node_id}' egress refused on {_egress_tier} tier: {_egress_resolved.refusal}"
+            )
         if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
             _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
         # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
@@ -8846,7 +9001,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _provision_timeout = _sandbox_provisioning_timeout()
         _dispatch_spec: WorkspaceSpec | None = None
         _dispatch_ref: str | None = None
-        _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider())
+        _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider(_resolved_provider))
         # FAR-1050 R5: ``E2BRuntimeProvider.create_workspace`` now carries
         # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
         # (deny_all/selected/none -> False; default/None -> True), and the
@@ -8947,7 +9102,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
             write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
             await asyncio.wait_for(
-                _write_file_via_provider(_sandbox_id, write_path, write_content),
+                _write_file_via_provider(_sandbox_id, write_path, write_content, provider_type=_resolved_provider),
                 timeout=_SANDBOX_IO_TIMEOUT,
             )
 
@@ -8991,7 +9146,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             _file_content = _schema_file.read_text(encoding="utf-8")
                             _sandbox_rel = f"{_sandbox_schema_dir}/{node_id}/{_schema_file.name}"
                             await asyncio.wait_for(
-                                _write_file_via_provider(_sandbox_id, _sandbox_rel, _file_content),
+                                _write_file_via_provider(
+                                    _sandbox_id, _sandbox_rel, _file_content, provider_type=_resolved_provider
+                                ),
                                 timeout=_SANDBOX_IO_TIMEOUT,
                             )
                     # LLM mode: inject schema file paths into the rendered prompt.
@@ -9030,7 +9187,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _input_json = json.dumps(raw_input)
         if sandbox_mode == "script":
             await asyncio.wait_for(
-                _write_file_via_provider(_sandbox_id, "/home/user/input.json", _input_json),
+                _write_file_via_provider(
+                    _sandbox_id, "/home/user/input.json", _input_json, provider_type=_resolved_provider
+                ),
                 timeout=_SANDBOX_IO_TIMEOUT,
             )
         else:
@@ -9039,7 +9198,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
                 )
             await asyncio.wait_for(
-                _write_file_via_provider(_sandbox_id, "/home/user/prompt.md", rendered_prompt),
+                _write_file_via_provider(
+                    _sandbox_id, "/home/user/prompt.md", rendered_prompt, provider_type=_resolved_provider
+                ),
                 timeout=_SANDBOX_IO_TIMEOUT,
             )
 
@@ -9193,6 +9354,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     # FAR-1315: the claiming node's identity for the run's
                     # one-PR ledger (same typed carrier).
                     guard_owner=node_id,
+                    # FAR-1051: the profile's provider (legacy E2B route
+                    # unchanged; a kubernetes profile reaches its provider).
+                    provider_type=_resolved_provider,
                 )
             except asyncio.CancelledError:
                 raise
@@ -9313,6 +9477,8 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 # cap (so 5MB can actually be retained); "tail" keeps the legacy
                 # ``_MAX_DRAIN_WINDOW`` bound (and honors test patches of it).
                 drain_window_bytes=_stdout_cap if stdout_retention_mode == "full" else None,
+                # FAR-1051: the probes above run against the profile's provider.
+                provider_type=_resolved_provider,
             )
             # FAR-582: assign artifact_writer post-construction to keep
             # __init__ param count under 13 (S107).
@@ -9459,7 +9625,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         _bridge_port = await _bridge_server.start()
                         await asyncio.wait_for(
                             _write_file_via_provider(
-                                _sandbox_id, "/home/user/modulo_bridge.py", bridge_client_source()
+                                _sandbox_id,
+                                "/home/user/modulo_bridge.py",
+                                bridge_client_source(),
+                                provider_type=_resolved_provider,
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
@@ -9468,6 +9637,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                                 _sandbox_id,
                                 "/home/user/modulo_bridge_config.json",
                                 json.dumps(loop_intercept_config.model_dump(mode="json")),
+                                provider_type=_resolved_provider,
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
@@ -9487,7 +9657,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         # single-line and multi-line commands (one code path).
                         await asyncio.wait_for(
                             _write_file_via_provider(
-                                _sandbox_id, "/home/user/.modulo_bridge_cmd.sh", rendered_agent_command
+                                _sandbox_id,
+                                "/home/user/.modulo_bridge_cmd.sh",
+                                rendered_agent_command,
+                                provider_type=_resolved_provider,
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
@@ -9699,7 +9872,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # kill below (FAR-97 observability).
             from modulo.settings import get_settings
 
-            _sandbox_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+            _sandbox_log_tail = await _read_log_tail_via_provider(
+                _sandbox_id, max_bytes=6000, provider_type=_resolved_provider
+            )
             # The command stalled or timed out. Kill the sandbox BEFORE
             # reading output.json: the interrupted-but-alive process could
             # otherwise write a fabricated completion in the grace window
@@ -9749,7 +9924,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             if cmd_result is None:
                 try:
                     _fresh_log = await asyncio.wait_for(
-                        _read_file_via_provider(_sandbox_id, _SANDBOX_LOG_PATH),
+                        _read_file_via_provider(_sandbox_id, _SANDBOX_LOG_PATH, provider_type=_resolved_provider),
                         timeout=_SANDBOX_TAIL_READ_TIMEOUT,
                     )
                     if isinstance(_fresh_log, str):
@@ -9847,7 +10022,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             try:
                 _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
                 raw_output = await asyncio.wait_for(
-                    _read_file_via_provider(_sandbox_id, "/home/user/output.json"),
+                    _read_file_via_provider(_sandbox_id, "/home/user/output.json", provider_type=_resolved_provider),
                     timeout=_remaining_after_cmd,
                 )
                 output_json = json.loads(raw_output)
@@ -9911,7 +10086,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 # only serves live sandboxes.
                 from modulo.settings import get_settings
 
-                _no_output_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+                _no_output_log_tail = await _read_log_tail_via_provider(
+                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider
+                )
                 if watchdog.budget_killed:
                     # FAR-296 Phase 3b-3: the platform-side resource-cap killer
                     # fired. On the REAL kill path the command handle raises an
@@ -10119,7 +10296,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 )
                 from modulo.settings import get_settings
 
-                _schema_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+                _schema_log_tail = await _read_log_tail_via_provider(
+                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider
+                )
                 raise SandboxNodeFailedError(
                     _build_schema_failure_message(
                         schema_exc=str(_schema_exc),
@@ -10444,7 +10623,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # sandbox may already be dead, in which case the helper returns "".
         from modulo.settings import get_settings
 
-        _exc_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000)
+        _exc_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000, provider_type=_resolved_provider)
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
         # FAR-582: finalize artifacts before returning on exception path.
         await _finalize_artifact_writer(

@@ -88,6 +88,27 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
     # namespace isolation).  Refusing default would make the local fallback
     # tier impossible to run for zero security gain.
     "local": {"default": True, "deny_all": False, "selected": False},
+    # Kubernetes (FAR-1051): the pod's network is owned by the cluster CNI and
+    # bounded egress is deliberately NOT ours — it is the CUSTOMER's
+    # NetworkPolicy on the workspace namespace (opt-in, needs an enforcing
+    # CNI).  The provider therefore enforces nothing itself: only the
+    # unrestricted provider-default posture is supportable, and ``deny_all`` /
+    # ``selected`` return a NAMED refusal here (never a silent downgrade),
+    # matching KubernetesRuntimeProvider's typed
+    # ``ProviderCapabilityUnsupportedError`` for the same two requests.
+    "kubernetes": {"default": True, "deny_all": False, "selected": False},
+}
+
+# Per-tier remediation appended to a capability refusal, where the fix is not
+# "pick another tier" (FAR-1051). A refusal without this reads as a bare
+# capability gap; with it the operator is told where the control actually
+# lives. Tiers not listed here keep the historical message unchanged.
+_TIER_REFUSAL_NOTES: dict[str, str] = {
+    "kubernetes": (
+        "on Kubernetes, bounded egress is the customer's NetworkPolicy on the workspace "
+        "namespace (opt-in, requires an enforcing CNI) — the provider deliberately "
+        "enforces nothing inside the pod"
+    ),
 }
 
 
@@ -256,13 +277,14 @@ def resolve_egress(
             refusal=f"unknown tier {tier!r}; cannot determine enforcement capability",
         )
     if not tier_caps.get(effective if effective is not None else "default", False):
+        _note = _TIER_REFUSAL_NOTES.get(tier)
         return EgressResolution(
             policy=effective,
             allowlist=effective_allowlist,
             refusal=(
                 f"tier {tier!r} cannot enforce egress policy {effective!r}; "
                 f"available enforcement on this tier: "
-                f"{[k for k, v in tier_caps.items() if v]}"
+                f"{[k for k, v in tier_caps.items() if v]}" + (f"; {_note}" if _note else "")
             ),
         )
 

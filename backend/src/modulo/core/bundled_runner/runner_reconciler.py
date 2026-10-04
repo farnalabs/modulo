@@ -1,24 +1,32 @@
-"""Docker workspace-orphan reconciler sweep (FAR-590, D4 — ADR 029 leak repair).
+"""Workspace-orphan reconciler sweep (FAR-590, D4 — ADR 029 leak repair).
 
-Lists labelled workspace containers from the deployment's Docker engine,
+Lists labelled workspace containers from the deployment's Docker engine AND
+labelled workspace pods from the deployment's Kubernetes namespace (FAR-1051),
 cross-references ACTIVE runs, and destroys orphans past the grace period.
 Leak-repair WITHOUT the never-built ``WorkspaceLease``: the periodic sweep
 is the whole repair mechanism.
 
+Provider-neutral shape (FAR-1051): each tier contributes a workspace SOURCE
+(list + destroy + close) behind the same structural boundary, so the sweep
+logic — grace period, active-run spare, destroy-path re-check, max-lifetime
+backstop, fail-safe abort — is written ONCE and applies to every tier. The
+Docker source's behaviour is unchanged; the Kubernetes source reclaims
+``modulo-ws-*`` pods through the provider's own ref-only destroy primitive.
+
 Semantics committed by this delivery:
-  - **Orphan = a labelled workspace container whose ``modulo.run.id`` label
+  - **Orphan = a labelled workspace whose ``modulo.run.id`` label
     matches NO active (``running``/``awaiting_human``) run and whose age
     exceeds the 5-min grace period.**
   - **Fail-safe: ANY cross-reference query error aborts the sweep, destroys
     nothing, and emits** ``runner.reconciler.sweep_aborted``.
   - **Machine-scoped via the deployment-identity label**
     (``modulo.machine.id``, sourced from ``MODULO_RUNNER_MACHINE_ID`` with a
-    hostname fallback): two Modulo deployments sharing one engine never
-    destroy each other's workspaces.
+    hostname fallback): two Modulo deployments sharing one engine (or one
+    Kubernetes namespace) never destroy each other's workspaces.
   - **Log-only soak mode first** (settings flag
     ``runner_reconciler_destroy_enabled``, default False): orphans are
     logged loudly, not destroyed, until the operator flips the flag.
-  - 24h max-lifetime backstop destroys labelled containers regardless of
+  - 24h max-lifetime backstop destroys labelled workspaces regardless of
     run state (``runner.workspace.reclaimed_max_lifetime``).
   - The destroy path RE-CHECKS run status before destroying and aborts with
     ``runner.reconciler.suspected_false_positive`` when the run is active
@@ -28,9 +36,11 @@ Semantics committed by this delivery:
   - **Engine-less skip (FAR-1201 follow-up)**: when the deployment has NO
     Docker endpoint at all (no ``MODULO_DOCKER_HOST``/``DOCKER_HOST``/
     ``DOCKER_CONTEXT``, no Docker context, and no local socket aiodocker
-    would auto-detect), the sweep is NOT APPLICABLE — it skips with
+    would auto-detect), the Docker half is NOT APPLICABLE — it skips with
     ``runner.reconciler.skipped`` + an explicit reason instead of
-    attempting (and permanently failing) an engine connection.
+    attempting (and permanently failing) an engine connection. The
+    Kubernetes half has its own skip reason (provider not registered); a
+    sweep reports the skip envelope only when NEITHER tier is applicable.
 
 Runs under the system-cron path in a bypass-RLS session (the sweep is
 machine-scoped by deployment identity, not org-scoped).
@@ -47,7 +57,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 _log = logging.getLogger(__name__)
 
@@ -147,9 +157,94 @@ class _DockerWorkspaceSource:
                 self._client = None
 
 
+class _WorkspaceSource(Protocol):
+    """The provider-neutral workspace-source boundary the sweep drives.
+
+    Structural, so the Docker engine source and the Kubernetes pod source
+    (FAR-1051) satisfy it without inheriting from a shared base class — the
+    sweep logic stays written once. ``destroy_by_container_id`` keeps its
+    historical name; on the Kubernetes source the argument is the workspace
+    POD NAME (the provider ref), which is what ``destroy_workspace_by_ref``
+    addresses.
+    """
+
+    async def list_labelled_workspaces(self) -> list[_LabelledContainer]: ...
+
+    async def destroy_by_container_id(self, container_id: str) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+_KUBERNETES_PROVIDER_MODULE = "modulo.core.runtime_provider.k8s"
+
+
+class _KubernetesWorkspaceSource:
+    """Kubernetes pod boundary for the reconciler (FAR-1051).
+
+    Reuses the provider rather than a second hand-rolled client: the
+    provider owns the client configuration chain (in-cluster / kubeconfig),
+    the namespace resolution (``MODULO_KUBERNETES_NAMESPACE``) and the
+    deployment-identity annotation, and it owns the ref-only destroy
+    primitive — which refuses any pod without the
+    ``modulo.provider=kubernetes`` label, so the sweep can never delete a
+    foreign pod. The concrete provider module is imported dynamically (the
+    ``no-concrete-runtime-provider-imports`` contract keeps concrete
+    providers inside the ``runtime_provider`` package boundary), and only
+    when the Kubernetes half of the sweep is actually applicable.
+    """
+
+    def __init__(self) -> None:
+        self._provider: Any = None
+
+    def _get_provider(self) -> Any:
+        if self._provider is None:
+            import importlib
+
+            module = importlib.import_module(_KUBERNETES_PROVIDER_MODULE)
+            self._provider = module.KubernetesRuntimeProvider()
+        return self._provider
+
+    async def list_labelled_workspaces(self) -> list[_LabelledContainer]:
+        """List this deployment's workspace pods + their ages.
+
+        Pod labels are read through the provider's listing primitive (which
+        applies the provider-label selector and the machine-identity
+        annotation match); the run id and creation marker are read from the
+        pod labels using THIS module's label vocabulary, exactly as the
+        Docker source does for container labels. Pods without a
+        ``modulo.run.id`` label are skipped for the same reason as on
+        Docker: without a run id there is no cross-reference to fail-safe on.
+        """
+        pods = await self._get_provider().list_workspace_pods()
+        entries: list[_LabelledContainer] = []
+        for pod in pods:
+            run_id = str(pod.labels.get(_RUN_ID_LABEL, "") or "")
+            if not run_id:
+                continue
+            entries.append(
+                _LabelledContainer(
+                    id=str(pod.ref),
+                    run_id=run_id,
+                    created_age_s=float(pod.created_age_s or 0.0),
+                )
+            )
+        return entries
+
+    async def destroy_by_container_id(self, container_id: str) -> None:
+        # destroy_workspace_by_ref is idempotent and label-guarded (a foreign
+        # or already-gone pod is a logged no-op), so the sweep's decision is
+        # the only gate that matters here.
+        await self._get_provider().destroy_workspace_by_ref(container_id)
+
+    async def close(self) -> None:
+        if self._provider is not None:
+            provider, self._provider = self._provider, None
+            await provider.close()
+
+
 async def _reconcile_single_container(
     async_engine: Any,
-    source: _DockerWorkspaceSource,
+    source: _WorkspaceSource,
     container: _LabelledContainer,
     *,
     active_run_ids: set[str],
@@ -222,44 +317,66 @@ async def reconcile_runner_workspaces(
     grace_seconds: int = _GRACE_SECONDS_DEFAULT,
     max_lifetime_seconds: int = _MAX_LIFETIME_SECONDS_DEFAULT,
 ) -> dict[str, Any]:
-    """Docker-orphan reconciler sweep (D1 cadence; system-cron path).
+    """Workspace-orphan reconciler sweep (D1 cadence; system-cron path).
 
     Returns ``{"scanned": int, "orphans_destroyed": int}``. Raises
     :class:`ReconcilerSweepError` on failure (so SAQ's ``retries=2``
     engages) with the PARTIAL counts already achieved — a silently dead
-    sweep must never re-open the labelled-container leak invisibly.
+    sweep must never re-open the labelled-workspace leak invisibly.
 
-    FAR-1201 follow-up: when the deployment has NO Docker endpoint at all
-    (see :func:`docker_endpoint_skip_reason`), the sweep is NOT APPLICABLE
-    — it returns ``{"scanned": 0, "orphans_destroyed": 0, "skipped": <reason>}``
-    without constructing an engine client, logging
-    ``runner.reconciler.skipped`` with the explicit reason. A
-    CONFIGURED-but-unreachable endpoint still raises: outage stays a
-    reported failure, only "no endpoint at all" skips.
+    FAR-1201 follow-up + FAR-1051: each tier has its own applicability check
+    (see :func:`docker_endpoint_skip_reason` and
+    :func:`kubernetes_endpoint_skip_reason`). A tier that is NOT APPLICABLE
+    is skipped with ``runner.reconciler.skipped`` + its explicit reason
+    instead of attempting (and permanently failing) a connection; a
+    CONFIGURED-but-unreachable tier still raises: outage stays a reported
+    failure, only "not applicable at all" skips. When NO tier is applicable
+    the historical skip envelope is returned — ``{"scanned": 0,
+    "orphans_destroyed": 0, "skipped": <docker reason>}`` — so the
+    single-source contract every existing consumer keys on is unchanged;
+    the other tier's reason is logged alongside it.
     """
-    skip_reason = docker_endpoint_skip_reason()
-    if skip_reason is not None:
-        _log.info("runner.reconciler.skipped reason=%s", skip_reason)
-        return {"scanned": 0, "orphans_destroyed": 0, "skipped": skip_reason}
+    docker_skip = docker_endpoint_skip_reason()
+    kubernetes_skip = kubernetes_endpoint_skip_reason()
+    if docker_skip is not None and kubernetes_skip is not None:
+        if kubernetes_skip != docker_skip:
+            _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
+        _log.info("runner.reconciler.skipped reason=%s", docker_skip)
+        return {"scanned": 0, "orphans_destroyed": 0, "skipped": docker_skip}
+    if docker_skip is not None:
+        _log.info("runner.reconciler.skipped reason=%s scope=docker", docker_skip)
+    if kubernetes_skip is not None:
+        _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
 
     from modulo.settings import get_settings
 
     settings = get_settings()
     log_only = not bool(getattr(settings, "runner_reconciler_destroy_enabled", False))
-    source = _DockerWorkspaceSource(_resolve_docker_host())
+    sources: list[tuple[str, _WorkspaceSource]] = []
+    if docker_skip is None:
+        sources.append(("docker", _DockerWorkspaceSource(_resolve_docker_host())))
+    if kubernetes_skip is None:
+        sources.append(("kubernetes", _KubernetesWorkspaceSource()))
 
     scanned = 0
     orphans_destroyed = 0
+    source_by_name: dict[str, _WorkspaceSource] = dict(sources)
     try:
-        try:
-            listed = await source.list_labelled_workspaces()
-        except Exception as exc:
-            _log.exception("runner.reconciler.sweep_aborted stage=container_list")
-            raise ReconcilerSweepError(
-                f"Bundled Runner orphan sweeper aborted listing containers: {exc}",
-                scanned=0,
-                destroyed=0,
-            ) from exc
+        # List EVERY applicable tier before touching anything: a listing
+        # failure on the second tier must still destroy nothing (the
+        # fail-safe abort is per-sweep, not per-tier).
+        listed: list[tuple[str, _LabelledContainer]] = []
+        for source_name, source in sources:
+            try:
+                entries = await source.list_labelled_workspaces()
+            except Exception as exc:
+                _log.exception("runner.reconciler.sweep_aborted stage=container_list source=%s", source_name)
+                raise ReconcilerSweepError(
+                    f"Bundled Runner orphan sweeper aborted listing {source_name} workspaces: {exc}",
+                    scanned=0,
+                    destroyed=0,
+                ) from exc
+            listed.extend((source_name, entry) for entry in entries)
 
         active_run_ids, cross_ref_error = await _load_active_run_ids(async_engine)
         if cross_ref_error is not None:
@@ -270,11 +387,11 @@ async def reconcile_runner_workspaces(
                 destroyed=0,
             )
 
-        for container in listed:
+        for source_name, container in listed:
             scanned += 1
             if await _reconcile_single_container(
                 async_engine,
-                source,
+                source_by_name[source_name],
                 container,
                 active_run_ids=active_run_ids,
                 log_only=log_only,
@@ -283,7 +400,8 @@ async def reconcile_runner_workspaces(
             ):
                 orphans_destroyed += 1
     finally:
-        await source.close()
+        for _, source in sources:
+            await source.close()
     _log.info(
         "runner.reconciler.sweep_completed scanned=%d orphans_destroyed=%d log_only=%s",
         scanned,
@@ -402,6 +520,41 @@ def docker_endpoint_skip_reason() -> str | None:
         "Docker socket) — set MODULO_DOCKER_HOST to enable the "
         "workspace-orphan sweep"
     )
+
+
+def kubernetes_endpoint_skip_reason() -> str | None:
+    """Why the KUBERNETES half of the sweep is NOT APPLICABLE here, or ``None``.
+
+    FAR-1051: the sweep is applicable exactly when the deployment would
+    REGISTER the Kubernetes runtime provider, so the check delegates to the
+    registration matrix itself (:func:`modulo.core.runtime_provider.build_hub`
+    — ``MODULO_KUBERNETES_ENABLED`` gating plus the kubernetes-asyncio SDK
+    presence) instead of re-implementing the flag semantics here and letting
+    the two drift. That is also why an unregistered provider is a SKIP and
+    not a failure: no provider means no workspace pods were ever created for
+    this sweep to reclaim.
+
+    ``None`` means a provider IS registered — after which a configured-but-
+    unreachable cluster still surfaces as a reported sweep failure (the
+    listing call raises), never a skip. The probe's ephemeral hub is not
+    closed: a freshly built provider holds no client connections until first
+    use (the Kubernetes client configuration is lazy), exactly like the
+    per-dispatch hub in ``node_runner._build_dispatch_provider``.
+    """
+    from modulo.core.runtime_provider import build_hub
+
+    try:
+        provider_hub = build_hub()
+    except Exception:
+        _log.exception("runner.reconciler.kubernetes_probe_failed")
+        return "the runtime-provider hub could not be built — see logs; the workspace-pod sweep cannot run"
+    if provider_hub.get("kubernetes") is None:
+        return (
+            "the Kubernetes runtime provider is not registered — set "
+            "MODULO_KUBERNETES_ENABLED to an enabling value (and install the "
+            "kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
+        )
+    return None
 
 
 async def _load_active_run_ids(
