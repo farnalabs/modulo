@@ -54,8 +54,8 @@ import re as _re
 import socket
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
@@ -1082,6 +1082,7 @@ async def _read_log_tail_via_provider(
     *,
     max_bytes: int = 6000,
     provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
 ) -> str:
     """Read the workspace log tail via the ``read_log_tail`` ABC primitive (FAR-1050 R1).
 
@@ -1097,17 +1098,31 @@ async def _read_log_tail_via_provider(
     is unchanged on both arms (an unregistered provider degrades this
     best-effort probe to ``""`` — the probe is diagnostics, never
     enforcement).
+
+    ``borrowed_provider`` (FAR-1051 follow-up): the dispatch's own
+    already-resolved provider. When given (profile arm), it is reused and
+    NEVER closed here; when the seam builds one, it closes it in the
+    ``finally`` below so a probe can never leak a client. The legacy E2B
+    arm ignores it entirely (unchanged).
     """
     if not isinstance(sandbox_id, str) or not sandbox_id:
         return ""
     if not _is_legacy_e2b_route(provider_type):
+        profile_provider: RuntimeProvider | None = None
         try:
-            profile_provider = await _build_profile_provider(str(provider_type))
+            profile_provider = (
+                borrowed_provider
+                if borrowed_provider is not None
+                else await _build_profile_provider(str(provider_type))
+            )
             profile_raw = await profile_provider.read_log_tail(sandbox_id, max_bytes=max_bytes)
         except asyncio.CancelledError:
             raise
         except Exception:
             return ""
+        finally:
+            if borrowed_provider is None:
+                await _close_seam_provider(profile_provider)
         return bytes(profile_raw).decode("utf-8", errors="replace")
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
 
@@ -1150,6 +1165,7 @@ async def _apply_isolation_via_provider(
     single_pr_per_run: bool = False,
     guard_owner: str | None = None,
     provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
 ) -> str | None:
     """FAR-1050 R3: enforce the sandbox policy via ``apply_isolation`` (ADR 040).
 
@@ -1171,6 +1187,13 @@ async def _apply_isolation_via_provider(
     Kubernetes provider — and an unregistered one raises the typed
     ``ProviderNotConfiguredError`` carrying its remediation env var, never
     a fallback to E2B or local.
+
+    ``borrowed_provider`` (FAR-1051 follow-up): the dispatch's own
+    already-resolved provider. On the profile arm it is reused when given
+    (one provider per dispatch, closed by the dispatch's ``finally``); when
+    this seam builds its own, it closes that one in its own ``finally``
+    below — a built provider is never left to GC. The legacy arm ignores
+    the argument entirely (its historical behaviour is untouched).
 
     Failure semantics at this invocation point:
       - enforcement-critical step failures propagate UNCHANGED (the same
@@ -1207,6 +1230,11 @@ async def _apply_isolation_via_provider(
 
     if not isinstance(sandbox_id, str) or not sandbox_id:
         raise SandboxTierRefusedError("sandbox isolation requires the dispatch sandbox id")
+    # FAR-1051: tracks a provider THIS call built (profile arm, no borrowed
+    # handle) so its ``finally`` disposes it. ``None`` on the legacy arm and
+    # whenever the dispatch's own provider is borrowed — neither is ever
+    # closed here.
+    _seam_built_provider: RuntimeProvider | None = None
     if _is_legacy_e2b_route(provider_type):
         api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
         provider = await _build_isolation_provider(api_key) if api_key else None
@@ -1214,10 +1242,16 @@ async def _apply_isolation_via_provider(
             raise SandboxTierRefusedError(
                 "sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)"
             )
+    elif borrowed_provider is not None:
+        # FAR-1051: reuse the dispatch's already-resolved provider — no hub
+        # build per policy step; the dispatch's finally closes it.
+        provider = borrowed_provider
     else:
         # FAR-1051: hub-resolved for the profile's own provider type. The
-        # typed ProviderNotConfiguredError from the hub propagates unchanged.
-        provider = await _build_profile_provider(str(provider_type))
+        # typed ProviderNotConfiguredError from the hub propagates unchanged;
+        # the resolved provider (when the build succeeds) is closed below.
+        _seam_built_provider = await _build_profile_provider(str(provider_type))
+        provider = _seam_built_provider
     # WorkspaceSpec requires profile/org UUIDs; a session-factory-less
     # dispatch has no bound profile (unit tests / direct dispatch), so the
     # missing ids fall back to the nil UUID. E2B's apply_isolation does not
@@ -1247,6 +1281,12 @@ async def _apply_isolation_via_provider(
         raise SandboxTierRefusedError(
             f"Runtime provider refused in-sandbox isolation for sandbox {sandbox_id}: {exc}"
         ) from exc
+    finally:
+        if _seam_built_provider is not None:
+            # FAR-1051 client lifecycle: dispose the per-call provider on
+            # EVERY exit (success, mapped refusal, unexpected failure) —
+            # bounded and best-effort, never masking the result above.
+            await _close_seam_provider(_seam_built_provider)
 
 
 async def _build_file_io_provider(api_key: str) -> "RuntimeProvider | None":
@@ -1267,6 +1307,7 @@ async def _file_io_provider_for(
     sandbox_id: str | None,
     *,
     provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
 ) -> "tuple[RuntimeProvider, str]":
     """Resolve ``(provider, provider_ref)`` for a file call (FAR-1050 R2b).
 
@@ -1283,6 +1324,13 @@ async def _file_io_provider_for(
     provider; an unregistered one raises the typed
     ``ProviderNotConfiguredError`` (its remediation env var) — never a
     fallback to E2B or local.
+
+    ``borrowed_provider`` (FAR-1051 follow-up): the dispatch's OWN
+    already-resolved provider, threaded in by ``_sandbox_agent_impl`` so a
+    profile-typed file call reuses ONE provider for the whole dispatch
+    instead of building a hub per call. Only consulted on the profile arm
+    (the legacy E2B arm is byte-for-byte unchanged); ownership stays with
+    the caller — a borrowed provider is never closed here.
     """
     from modulo.core.runtime_config.key_bridge import get_e2b_api_key
     from modulo.core.runtime_provider import RuntimeProviderError
@@ -1290,6 +1338,8 @@ async def _file_io_provider_for(
     if not isinstance(sandbox_id, str) or not sandbox_id:
         raise RuntimeProviderError("sandbox file I/O requires the dispatch sandbox id")
     if not _is_legacy_e2b_route(provider_type):
+        if borrowed_provider is not None:
+            return borrowed_provider, sandbox_id
         return await _build_profile_provider(str(provider_type)), sandbox_id
     api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
     provider = await _build_file_io_provider(api_key) if api_key else None
@@ -1300,12 +1350,42 @@ async def _file_io_provider_for(
     return provider, sandbox_id
 
 
+@asynccontextmanager
+async def _file_io_provider_session(
+    sandbox_id: str | None,
+    *,
+    provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
+) -> AsyncIterator["tuple[RuntimeProvider, str]"]:
+    """Yield ``(provider, ref)`` for ONE file call, disposing what it built.
+
+    FAR-1051 client lifecycle: on a profile-declared route the session either
+    BORROWS the dispatch's already-resolved provider (no hub build; the
+    dispatch's ``finally`` closes it) or builds one per call — in which case
+    THIS scope owns it and closes it on exit, so a per-tick probe can never
+    leak a client. The legacy E2B arm never closes (historical behaviour,
+    unchanged): its per-call key-based provider is owned exactly as before.
+    """
+    provider, ref = await _file_io_provider_for(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    )
+    owns_provider = borrowed_provider is None and not _is_legacy_e2b_route(provider_type)
+    try:
+        yield provider, ref
+    finally:
+        if owns_provider:
+            await _close_seam_provider(provider)
+
+
 async def _write_file_via_provider(
     sandbox_id: str | None,
     path: str,
     content: str,
     *,
     provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
 ) -> None:
     """ABC write prim (FAR-1050 R2b), replacing ``sandbox.files.write(path, content)``.
 
@@ -1315,8 +1395,12 @@ async def _write_file_via_provider(
     identical on both arms. ``provider_type`` (FAR-1051) selects the
     profile's provider exactly as :func:`_file_io_provider_for` documents.
     """
-    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
-    await provider.write_file(ref, path, content.encode("utf-8"))
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        await provider.write_file(ref, path, content.encode("utf-8"))
 
 
 async def _read_file_via_provider(
@@ -1324,6 +1408,7 @@ async def _read_file_via_provider(
     path: str,
     *,
     provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
 ) -> str:
     """ABC read prim (FAR-1050 R2b), replacing ``sandbox.files.read(path, format="text")``.
 
@@ -1332,8 +1417,12 @@ async def _read_file_via_provider(
     same ``str`` type and the same length semantics. ``provider_type``
     (FAR-1051) selects the profile's provider.
     """
-    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
-    data = await provider.read_file(ref, path)
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        data = await provider.read_file(ref, path)
     return bytes(data).decode("utf-8", errors="replace")
 
 
@@ -1342,6 +1431,7 @@ async def _get_info_via_provider(
     path: str | None,
     *,
     provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
 ) -> "WorkspaceFileInfo":
     """ABC stat prim (FAR-1050 R2b), replacing ``sandbox.files.get_info(path)``.
 
@@ -1355,10 +1445,14 @@ async def _get_info_via_provider(
     """
     from modulo.core.runtime_provider import RuntimeProviderError
 
-    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
-    if not isinstance(path, str) or not path:
-        raise RuntimeProviderError("sandbox file I/O stat requires a non-empty path")
-    return await provider.get_info(ref, path)
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        if not isinstance(path, str) or not path:
+            raise RuntimeProviderError("sandbox file I/O stat requires a non-empty path")
+        return await provider.get_info(ref, path)
 
 
 async def _list_fs_entries_via_provider(
@@ -1368,6 +1462,7 @@ async def _list_fs_entries_via_provider(
     watch_log_path: str | None,
     watch_globs: list[str],
     provider_type: str | None = None,
+    borrowed_provider: "RuntimeProvider | None" = None,
 ) -> "list[WorkspaceFileInfo]":
     """ABC list prim (FAR-1050 R2b), replacing the watchdog's ``sandbox.files.list`` probe.
 
@@ -1384,19 +1479,25 @@ async def _list_fs_entries_via_provider(
     ``seen`` (and the prune that consumes it) identical to the legacy arm.
     A listing or stat failure propagates to the caller's existing
     probe-failure handling. ``provider_type`` (FAR-1051) selects the
-    profile's provider.
+    profile's provider; ``borrowed_provider`` threads the dispatch's own
+    provider through the per-call session (see
+    :func:`_file_io_provider_session`).
     """
-    provider, ref = await _file_io_provider_for(sandbox_id, provider_type=provider_type)
-    paths = await provider.list_files(ref, path)
-    entries: list[WorkspaceFileInfo] = []
-    for raw_path in paths:
-        if not isinstance(raw_path, str):
-            continue
-        if raw_path == _SANDBOX_LOG_PATH or (watch_log_path and raw_path == watch_log_path):
-            continue
-        if not _path_matches_any_glob(raw_path, watch_globs):
-            continue
-        entries.append(await provider.get_info(ref, raw_path))
+    async with _file_io_provider_session(
+        sandbox_id,
+        provider_type=provider_type,
+        borrowed_provider=borrowed_provider,
+    ) as (provider, ref):
+        paths = await provider.list_files(ref, path)
+        entries: list[WorkspaceFileInfo] = []
+        for raw_path in paths:
+            if not isinstance(raw_path, str):
+                continue
+            if raw_path == _SANDBOX_LOG_PATH or (watch_log_path and raw_path == watch_log_path):
+                continue
+            if not _path_matches_any_glob(raw_path, watch_globs):
+                continue
+            entries.append(await provider.get_info(ref, raw_path))
     return entries
 
 
@@ -1451,10 +1552,41 @@ async def _build_profile_provider(provider_type: str) -> "RuntimeProvider":
     ``local``. The hub is per-call (the same shape the Docker route and the
     E2B arm use); its other registrations hold no external resources until
     used, so the returned provider is the only handle the dispatch disposes.
+
+    Caller owns the result: every seam that builds through this helper either
+    hands the provider back to the dispatch (which closes it) or closes it
+    itself in a ``finally`` via :func:`_close_seam_provider` — a profile-typed
+    seam must never build a provider it does not dispose (FAR-1051 follow-up).
     """
     from modulo.core.runtime_provider import build_hub
 
     return build_hub().resolve(_ProfileTypeRef(provider_type))
+
+
+# Bound for a seam-built provider's close (FAR-1051 client lifecycle): the
+# dispose only releases the client the seam opened (no workspace teardown —
+# a seam-built provider never created one), so it must be quick AND bounded;
+# a hung backend cannot stall the caller's own result.
+_SEAM_PROVIDER_CLOSE_TIMEOUT = 30.0
+
+
+async def _close_seam_provider(provider: "RuntimeProvider | None") -> None:
+    """Close a provider a seam built for its own single call (FAR-1051).
+
+    Best-effort per the ABC ``close()`` contract: a failure is logged and
+    never masks the operation whose ``finally`` is running, and a
+    ``CancelledError`` propagates (it is already unwinding). A borrowed
+    provider (the dispatch's own) is NEVER passed here — the dispatch's
+    finally disposes that one.
+    """
+    if provider is None:
+        return
+    try:
+        await asyncio.wait_for(provider.close(), timeout=_SEAM_PROVIDER_CLOSE_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.debug("sandbox_agent.seam_provider_close_failed", exc_info=True)
 
 
 async def _build_dispatch_provider(provider_type: str | None = None) -> "RuntimeProvider | None":
@@ -6981,6 +7113,15 @@ class _SandboxWatchdog:
         # route, leaving a kubernetes dispatch with a permanently failing
         # connection-liveness probe — i.e. a healthy node read as stalled).
         self._provider_type = provider_type
+        # FAR-1051 follow-up: the dispatch's OWN already-resolved provider,
+        # assigned post-construction by ``_sandbox_agent_impl`` (same pattern
+        # as ``_artifact_writer`` — keeps __init__ param count stable). When
+        # set, every probe below borrows it instead of building a fresh
+        # hub+provider per tick (a per-tick build leaked a client per probe;
+        # a borrowed handle is closed once, by the dispatch's finally). When
+        # ``None`` (direct construction / legacy route) the probe builds its
+        # own and closes it, exactly as the seam documents.
+        self._dispatch_provider: "RuntimeProvider | None" = None  # noqa: UP037 - quotes needed: no `from __future__`
         self._stall = stall
         self._node_id = node_id
         self._run_id = run_id
@@ -7092,7 +7233,12 @@ class _SandboxWatchdog:
         # treats a prolonged probe failure as a genuine stall.
         try:
             info = await asyncio.wait_for(
-                _get_info_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH, provider_type=self._provider_type),
+                _get_info_via_provider(
+                    self._sandbox_ref,
+                    _SANDBOX_LOG_PATH,
+                    provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
+                ),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
             # FAR-1088: a successful get_info proves only that the sandbox
@@ -7120,7 +7266,12 @@ class _SandboxWatchdog:
             return
         try:
             content = await asyncio.wait_for(
-                _read_file_via_provider(self._sandbox_ref, _SANDBOX_LOG_PATH, provider_type=self._provider_type),
+                _read_file_via_provider(
+                    self._sandbox_ref,
+                    _SANDBOX_LOG_PATH,
+                    provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
+                ),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
         except asyncio.CancelledError:
@@ -7205,7 +7356,12 @@ class _SandboxWatchdog:
     async def probe_log_growth(self) -> None:
         try:
             info = await asyncio.wait_for(
-                _get_info_via_provider(self._sandbox_ref, self._watch_log_path, provider_type=self._provider_type),
+                _get_info_via_provider(
+                    self._sandbox_ref,
+                    self._watch_log_path,
+                    provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
+                ),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
             size = int(getattr(info, "size", 0) or 0)
@@ -7236,6 +7392,7 @@ class _SandboxWatchdog:
                     watch_log_path=self._watch_log_path,
                     watch_globs=self._watch_globs,
                     provider_type=self._provider_type,
+                    borrowed_provider=self._dispatch_provider,
                 ),
                 timeout=_SANDBOX_TAIL_READ_TIMEOUT,
             )
@@ -8407,6 +8564,19 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     #    typed ProviderNotConfiguredError naming MODULO_KUBERNETES_ENABLED
     #    (no silent fallback to E2B or local).
     #  - none -> the historical E2B default route, unchanged.
+    #
+    # FAR-1051: the route below may carry a HUB-RESOLVED provider
+    # (kubernetes). Pre-bound at function scope — BEFORE route resolution
+    # assigns them — so the provisioning site and the finally-block teardown
+    # reference them directly on every path (FAR-1315 pre-bind pattern). The
+    # runner_docker route returns above, and the e2b/none routes carry no
+    # provider, so only a hub-resolved (kubernetes) route populates them.
+    # Disposal: the dispatch's finally acloses the hub. On the pre-try
+    # early-return paths (template / idempotency skips) the route's provider
+    # has NOT been used yet — its API client is built lazily on first use —
+    # so nothing external is left open there.
+    _route_provider: RuntimeProvider | None = None
+    _route_hub: Any = None
     if session_factory is not None:
         from modulo.core.bundled_runner.runner_dispatch import (
             resolve_sandbox_dispatch_route,
@@ -8439,6 +8609,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # raise in route resolution), so the value doubles as the egress
             # tier name (both are registered in _TIER_ENFORCEMENT).
             _resolved_provider = str(_route.provider_type)
+            # FAR-1051: the route resolved — and fail-loud VALIDATED — the
+            # profile's provider through its hub (kubernetes). Reuse THAT
+            # instance as this dispatch's provider: one client for the whole
+            # dispatch instead of a second hub build at provisioning time
+            # (the e2b route carries no provider, so this stays None there).
+            # The route hub is aclosed in the finally below.
+            _route_provider = _route.provider
+            _route_hub = _route.hub
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})
@@ -9001,7 +9179,19 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _provision_timeout = _sandbox_provisioning_timeout()
         _dispatch_spec: WorkspaceSpec | None = None
         _dispatch_ref: str | None = None
-        _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider(_resolved_provider))
+        if _route_provider is not None:
+            # FAR-1051: the route already resolved — and fail-loud validated —
+            # the profile's provider (kubernetes), so THIS dispatch reuses that
+            # one instance instead of building a second hub. Its hub is
+            # aclosed in the finally (after this provider's own close, which
+            # is idempotent — a provider's close() only tears down state it
+            # still tracks).
+            _dispatch_provider = _require_dispatch_provider(_route_provider)
+        else:
+            # Legacy / profile-less shape (unchanged): resolve the run's own
+            # provider through a fresh hub — e2b (hub-registered) or None,
+            # which _require_dispatch_provider refuses with the typed error.
+            _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider(_resolved_provider))
         # FAR-1050 R5: ``E2BRuntimeProvider.create_workspace`` now carries
         # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
         # (deny_all/selected/none -> False; default/None -> True), and the
@@ -9102,7 +9292,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             write_path = raw_path.removesuffix(".b64") if raw_path.endswith(".b64") else raw_path
             write_content = base64.b64decode(raw_content).decode() if raw_path.endswith(".b64") else raw_content
             await asyncio.wait_for(
-                _write_file_via_provider(_sandbox_id, write_path, write_content, provider_type=_resolved_provider),
+                _write_file_via_provider(
+                    _sandbox_id,
+                    write_path,
+                    write_content,
+                    provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
+                ),
                 timeout=_SANDBOX_IO_TIMEOUT,
             )
 
@@ -9147,7 +9343,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                             _sandbox_rel = f"{_sandbox_schema_dir}/{node_id}/{_schema_file.name}"
                             await asyncio.wait_for(
                                 _write_file_via_provider(
-                                    _sandbox_id, _sandbox_rel, _file_content, provider_type=_resolved_provider
+                                    _sandbox_id,
+                                    _sandbox_rel,
+                                    _file_content,
+                                    provider_type=_resolved_provider,
+                                    borrowed_provider=_dispatch_provider,
                                 ),
                                 timeout=_SANDBOX_IO_TIMEOUT,
                             )
@@ -9188,7 +9388,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if sandbox_mode == "script":
             await asyncio.wait_for(
                 _write_file_via_provider(
-                    _sandbox_id, "/home/user/input.json", _input_json, provider_type=_resolved_provider
+                    _sandbox_id,
+                    "/home/user/input.json",
+                    _input_json,
+                    provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
                 ),
                 timeout=_SANDBOX_IO_TIMEOUT,
             )
@@ -9199,7 +9403,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 )
             await asyncio.wait_for(
                 _write_file_via_provider(
-                    _sandbox_id, "/home/user/prompt.md", rendered_prompt, provider_type=_resolved_provider
+                    _sandbox_id,
+                    "/home/user/prompt.md",
+                    rendered_prompt,
+                    provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
                 ),
                 timeout=_SANDBOX_IO_TIMEOUT,
             )
@@ -9356,7 +9564,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     guard_owner=node_id,
                     # FAR-1051: the profile's provider (legacy E2B route
                     # unchanged; a kubernetes profile reaches its provider).
+                    # ``borrowed_provider`` threads the dispatch's own
+                    # already-resolved instance so the policy step reuses it
+                    # instead of building a hub per call (closed by the
+                    # dispatch's finally, never here).
                     provider_type=_resolved_provider,
+                    borrowed_provider=_dispatch_provider,
                 )
             except asyncio.CancelledError:
                 raise
@@ -9483,6 +9696,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # FAR-582: assign artifact_writer post-construction to keep
             # __init__ param count under 13 (S107).
             watchdog._artifact_writer = _artifact_writer
+            # FAR-1051 follow-up: hand the watchdog the dispatch's own
+            # already-resolved provider (same post-construction pattern) so
+            # its per-tick probes borrow it instead of building a fresh
+            # hub+provider on every tick.
+            watchdog._dispatch_provider = _dispatch_provider
             _drain_fn = watchdog.drain_sandbox_log
 
             # FAR-844: streaming artifact writer for incremental stdout capture.
@@ -9629,6 +9847,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                                 "/home/user/modulo_bridge.py",
                                 bridge_client_source(),
                                 provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
@@ -9638,6 +9857,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                                 "/home/user/modulo_bridge_config.json",
                                 json.dumps(loop_intercept_config.model_dump(mode="json")),
                                 provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
@@ -9661,6 +9881,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                                 "/home/user/.modulo_bridge_cmd.sh",
                                 rendered_agent_command,
                                 provider_type=_resolved_provider,
+                                borrowed_provider=_dispatch_provider,
                             ),
                             timeout=_SANDBOX_IO_TIMEOUT,
                         )
@@ -9873,7 +10094,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             from modulo.settings import get_settings
 
             _sandbox_log_tail = await _read_log_tail_via_provider(
-                _sandbox_id, max_bytes=6000, provider_type=_resolved_provider
+                _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
             )
             # The command stalled or timed out. Kill the sandbox BEFORE
             # reading output.json: the interrupted-but-alive process could
@@ -9924,7 +10145,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             if cmd_result is None:
                 try:
                     _fresh_log = await asyncio.wait_for(
-                        _read_file_via_provider(_sandbox_id, _SANDBOX_LOG_PATH, provider_type=_resolved_provider),
+                        _read_file_via_provider(
+                            _sandbox_id,
+                            _SANDBOX_LOG_PATH,
+                            provider_type=_resolved_provider,
+                            borrowed_provider=_dispatch_provider,
+                        ),
                         timeout=_SANDBOX_TAIL_READ_TIMEOUT,
                     )
                     if isinstance(_fresh_log, str):
@@ -10022,7 +10248,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             try:
                 _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
                 raw_output = await asyncio.wait_for(
-                    _read_file_via_provider(_sandbox_id, "/home/user/output.json", provider_type=_resolved_provider),
+                    _read_file_via_provider(
+                        _sandbox_id,
+                        "/home/user/output.json",
+                        provider_type=_resolved_provider,
+                        borrowed_provider=_dispatch_provider,
+                    ),
                     timeout=_remaining_after_cmd,
                 )
                 output_json = json.loads(raw_output)
@@ -10087,7 +10318,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 from modulo.settings import get_settings
 
                 _no_output_log_tail = await _read_log_tail_via_provider(
-                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider
+                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
                 )
                 if watchdog.budget_killed:
                     # FAR-296 Phase 3b-3: the platform-side resource-cap killer
@@ -10297,7 +10528,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 from modulo.settings import get_settings
 
                 _schema_log_tail = await _read_log_tail_via_provider(
-                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider
+                    _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
                 )
                 raise SandboxNodeFailedError(
                     _build_schema_failure_message(
@@ -10623,7 +10854,9 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # sandbox may already be dead, in which case the helper returns "".
         from modulo.settings import get_settings
 
-        _exc_log_tail = await _read_log_tail_via_provider(_sandbox_id, max_bytes=6000, provider_type=_resolved_provider)
+        _exc_log_tail = await _read_log_tail_via_provider(
+            _sandbox_id, max_bytes=6000, provider_type=_resolved_provider, borrowed_provider=_dispatch_provider
+        )
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
         # FAR-582: finalize artifacts before returning on exception path.
         await _finalize_artifact_writer(
@@ -10862,6 +11095,21 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             except Exception:
                 _log.exception(
                     "sandbox_agent.dispatch_provider_close_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+        if _route_hub is not None:
+            # FAR-1051: dispose the ROUTE's hub (its registrations beyond the
+            # provider used above hold no client until used, so this is the
+            # ADR 029 bookkeeping pass — and a second, idempotent close() of
+            # the provider itself, which only tears down state it still
+            # tracks). Bounded + best-effort, same contract as above.
+            try:
+                await asyncio.wait_for(_route_hub.aclose(), timeout=_OUTPUT_READ_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.route_hub_aclose_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
         # Fenced dispatch-marker clear (3.11): runs in a finally REGARDLESS

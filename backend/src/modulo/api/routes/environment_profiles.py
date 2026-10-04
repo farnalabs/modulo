@@ -475,41 +475,24 @@ def _sse_event(event: str, detail: str) -> str:
 # Provider registry -> canonical egress tier.  The tier vocabulary is owned
 # by ``modulo.core.pipeline_engine.egress`` (``_TIER_ENFORCEMENT``); the
 # provider identity (``provider_id`` + ``provider_aliases``) is owned by the
-# runtime-provider classes.  Sourcing both means a new provider alias cannot
-# drift from the egress tier it maps to (FAR-1065 lesson).
-_PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
-    ("modulo.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
-    ("modulo.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
-    ("modulo.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
-    # FAR-1051: without this entry a ``kubernetes`` (or its ``k8s`` alias)
-    # profile falls through to the raw provider_type as the tier, so the
-    # alias reads as an unknown tier and a supported profile refuses.
-    ("modulo.core.runtime_provider.k8s", "KubernetesRuntimeProvider", "kubernetes"),
-)
-
-
+# runtime-provider classes.  The mapping itself now lives ONCE in
+# ``modulo.core.runtime_provider.egress_tier_for_provider_type`` (FAR-1051),
+# so this route, the dispatch-route workspace-spec mapper and the sandbox
+# capability certification all resolve the SAME tier for a provider_type —
+# this wrapper keeps the route's local name for its existing callers/tests.
 def _egress_tier_for_provider_type(provider_type: str) -> str | None:
     """Return the canonical egress tier for a profile ``provider_type``.
 
-    Provider aliases are read from the runtime-provider classes themselves
-    (the single source of truth) rather than duplicated here — ``local_docker``
-    is a Docker alias (``DockerRuntimeProvider.provider_aliases``), NOT the
-    host-process local tier.  Returns ``None`` for an unrecognised provider
-    type; the caller then fails closed.
+    Thin delegation to :func:`modulo.core.runtime_provider.egress_tier_for_provider_type`
+    (the single source of truth). Provider aliases are read from the
+    runtime-provider classes themselves — ``local_docker`` is a Docker alias
+    (``DockerRuntimeProvider.provider_aliases``), NOT the host-process local
+    tier.  Returns ``None`` for an unrecognised provider type; the caller then
+    fails closed.
     """
-    normalized = (provider_type or "").strip().lower()
-    from importlib import import_module
+    from modulo.core.runtime_provider import egress_tier_for_provider_type
 
-    for module_name, class_name, tier in _PROVIDER_TIER_SOURCES:
-        try:
-            provider_cls = getattr(import_module(module_name), class_name)
-        except ImportError:
-            # Optional provider dependency not installed — skip; the provider
-            # cannot have been resolved for this profile anyway.
-            continue
-        if normalized in {provider_cls.provider_id, *provider_cls.provider_aliases}:
-            return tier
-    return None
+    return egress_tier_for_provider_type(provider_type)
 
 
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:

@@ -33,7 +33,9 @@ from modulo.core.pipeline_engine.node_runner import (
     _apply_isolation_via_provider,
     _build_dispatch_provider,
     _file_io_provider_for,
+    _get_info_via_provider,
     _is_legacy_e2b_route,
+    _read_file_via_provider,
     _read_log_tail_via_provider,
     _write_file_via_provider,
 )
@@ -331,3 +333,106 @@ async def test_log_tail_stays_never_raising_for_a_profile_provider(monkeypatch: 
     tail = await _read_log_tail_via_provider("modulo-ws-1", provider_type="kubernetes")
 
     assert not tail
+
+
+# ---------------------------------------------------------------------------
+# Client lifecycle (FAR-1051 follow-up): build-and-close vs borrow
+# ---------------------------------------------------------------------------
+
+
+class _CloseTrackingProvider(_RecordingProvider):
+    """A provider that counts its ``close()`` calls (lifecycle assertions)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_calls = 0
+
+    async def close(self) -> None:
+        self.close_calls += 1
+
+    async def get_info(self, provider_ref: str, path: str) -> Any:
+        from modulo.core.runtime_provider import WorkspaceFileInfo
+
+        return WorkspaceFileInfo(path=path, size=1, is_dir=False)
+
+
+async def test_seams_close_a_provider_they_built(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1051: a profile-typed seam that BUILDS its own provider disposes it
+    before returning — a per-call hub must never leak a client (the previous
+    behaviour: five seam invocations, zero closes)."""
+    provider = _CloseTrackingProvider()
+    provider.read_log_tail = AsyncMock(return_value=b"pod tail")  # type: ignore[method-assign]
+    _patch_profile_provider(monkeypatch, provider)
+    _forbid_legacy_builder(monkeypatch)
+
+    await _write_file_via_provider("modulo-ws-1", "/home/user/prompt.md", "hi", provider_type="kubernetes")
+    await _read_file_via_provider("modulo-ws-1", "/home/user/prompt.md", provider_type="kubernetes")
+    await _get_info_via_provider("modulo-ws-1", "/home/user/prompt.md", provider_type="kubernetes")
+    tail = await _read_log_tail_via_provider("modulo-ws-1", provider_type="kubernetes")
+    status = await _apply_isolation_via_provider(
+        "modulo-ws-1",
+        provider_type="kubernetes",
+        **_isolation_kwargs(),
+    )
+
+    assert tail == "pod tail"
+    assert status is None
+    assert provider.close_calls == 5
+
+
+async def test_seams_borrow_the_dispatch_provider_and_never_close_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1051: when the dispatch's own already-resolved provider is threaded
+    in, the seam REUSES it — no hub build — and leaves disposal to the
+    dispatch's finally (closing it here would kill the live workspace)."""
+    builder = AsyncMock(side_effect=AssertionError("a borrowed provider must not trigger a hub build"))
+    monkeypatch.setattr(nr, "_build_profile_provider", builder)
+    borrowed = _CloseTrackingProvider()
+    borrowed.read_log_tail = AsyncMock(return_value=b"pod tail")  # type: ignore[method-assign]
+
+    await _write_file_via_provider(
+        "modulo-ws-1",
+        "/home/user/prompt.md",
+        "hi",
+        provider_type="kubernetes",
+        borrowed_provider=borrowed,
+    )
+    tail = await _read_log_tail_via_provider(
+        "modulo-ws-1",
+        provider_type="kubernetes",
+        borrowed_provider=borrowed,
+    )
+    resolved, ref = await _file_io_provider_for(
+        "modulo-ws-1",
+        provider_type="kubernetes",
+        borrowed_provider=borrowed,
+    )
+    status = await _apply_isolation_via_provider(
+        "modulo-ws-1",
+        provider_type="kubernetes",
+        borrowed_provider=borrowed,
+        **_isolation_kwargs(),
+    )
+
+    builder.assert_not_awaited()
+    assert resolved is borrowed
+    assert ref == "modulo-ws-1"
+    assert tail == "pod tail"
+    assert status is None
+    assert borrowed.close_calls == 0
+
+
+async def test_legacy_e2b_arm_keeps_its_unclosed_per_call_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Behaviour pin: the legacy (profile-less / ``e2b``) route is unchanged —
+    its key-based per-call provider is still built per call and NOT closed
+    here, exactly as before the FAR-1051 follow-up."""
+    provider = _CloseTrackingProvider()
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+    monkeypatch.setattr(nr, "_build_file_io_provider", AsyncMock(return_value=provider))
+
+    await _write_file_via_provider("sbx-1", "/home/user/prompt.md", "hi")
+
+    assert provider.close_calls == 0

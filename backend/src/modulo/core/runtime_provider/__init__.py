@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib
 import logging
 import os
 import posixpath
@@ -47,6 +48,7 @@ __all__ = [
     "WorkspaceSpec",
     "build_hub",
     "create_default_hub",
+    "egress_tier_for_provider_type",
     "env_var_for_provider_type",
     "validate_workspace_network",
 ]
@@ -237,6 +239,48 @@ _PROVIDER_ENV_VARS: dict[str, str] = {
 def env_var_for_provider_type(provider_type: str) -> str | None:
     """Return the env var that registers ``provider_type``, if one is documented."""
     return _PROVIDER_ENV_VARS.get(provider_type.strip().lower())
+
+
+# Provider class -> canonical egress-tier sources (FAR-1065 / FAR-1085,
+# FAR-1051). The tier a profile dispatches on is read from the runtime-provider
+# classes THEMSELVES (provider_id + provider_aliases) rather than restated here,
+# so a new provider alias cannot drift from the egress tier it maps to — the
+# same single-source rule ``_PROVIDER_ENV_VARS`` applies to remediation copy.
+_PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("modulo.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
+    ("modulo.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
+    ("modulo.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
+    # FAR-1051: without this entry a ``kubernetes`` (or its ``k8s`` alias)
+    # profile falls through to the raw provider_type as the tier, so the alias
+    # reads as an unknown tier and a supported profile refuses.
+    ("modulo.core.runtime_provider.k8s", "KubernetesRuntimeProvider", "kubernetes"),
+)
+
+
+def egress_tier_for_provider_type(provider_type: str) -> str | None:
+    """Return the canonical egress tier for a profile ``provider_type``.
+
+    Single source of truth for the provider_type -> tier mapping (the
+    ``_TIER_ENFORCEMENT`` key a dispatch's egress resolution must run under).
+    An optional provider dependency that cannot be imported is SKIPPED, never
+    fatal: a profile bound to that provider cannot have resolved either, and a
+    later dispatch surfaces the typed config error. Returns ``None`` for an
+    unrecognised provider type; callers fail closed by passing the raw value
+    through as the tier, which :func:`modulo.core.pipeline_engine.egress.resolve_egress`
+    refuses as an unknown tier rather than silently defaulting to an
+    enforceable one.
+    """
+    normalized = (provider_type or "").strip().lower()
+    for module_name, class_name, tier in _PROVIDER_TIER_SOURCES:
+        try:
+            provider_cls = getattr(importlib.import_module(module_name), class_name)
+        except ImportError:
+            # Optional provider dependency not installed — skip; the provider
+            # cannot have been resolved for this profile anyway.
+            continue
+        if normalized in {provider_cls.provider_id, *provider_cls.provider_aliases}:
+            return tier
+    return None
 
 
 def _env_flag_enabled(env_var: str) -> bool:

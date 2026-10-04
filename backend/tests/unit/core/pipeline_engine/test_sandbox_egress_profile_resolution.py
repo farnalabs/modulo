@@ -83,10 +83,18 @@ class _FakeProfile:
 
 @dataclass(frozen=True)
 class _FakeRoute:
-    """Minimal stand-in for RunnerDispatchRoute."""
+    """Minimal stand-in for RunnerDispatchRoute.
+
+    Carries ``provider`` / ``hub`` too (FAR-1051): ``node_runner`` reads the
+    route's hub-resolved provider so a hub-resolved route (kubernetes) reuses
+    that instance as the dispatch provider. The e2b/none routes this file
+    builds carry no provider, exactly like the real route dataclass defaults.
+    """
 
     provider_type: str
     profile: Any = None
+    provider: Any = None
+    hub: Any = None
 
 
 def _e2b_route(profile: Any | None = None) -> _FakeRoute:

@@ -429,6 +429,99 @@ def test_cert_vs_actual_egress_capability(
         assert certified is False, f"{description}: policy={runtime.policy!r} but certified={certified!r}"
 
 
+# --- FAR-1051: the certificate follows the profile's RESOLVED provider tier ---
+
+
+def test_kubernetes_profile_none_fails_closed_instead_of_certifying_deny_all() -> None:
+    """FAR-1051 regression: profile network_policy='none' on a KUBERNETES
+    profile used to certify ``sandbox.egress=False`` (the e2b reference tier
+    enforces deny_all) while dispatch REFUSES the very same combination. With
+    the profile's provider plumbed, the certificate is unknown (fail-closed) —
+    matching what dispatch actually does."""
+    caps = derive_sandbox_capabilities(
+        {"node_type": "sandbox_agent"},
+        profile_network_policy="none",
+        provider_type="kubernetes",
+    )
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is None
+
+
+def test_kubernetes_profile_default_posture_certifies_egress_allowed() -> None:
+    """The provider-default posture IS enforceable on Kubernetes, so the
+    certificate stays a real True (not an blanket unknown)."""
+    caps = derive_sandbox_capabilities(
+        {"node_type": "sandbox_agent"},
+        profile_network_policy="outbound",
+        provider_type="kubernetes",
+    )
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is True
+
+
+def test_unrecognised_provider_type_fails_closed() -> None:
+    """An unrecognised provider type passes through RAW as the tier, which
+    ``resolve_egress`` refuses as an unknown tier — never a silent default to
+    an enforceable one."""
+    caps = derive_sandbox_capabilities(
+        {"node_type": "sandbox_agent"},
+        profile_network_policy="none",
+        provider_type="quantum_entangler",
+    )
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is None
+
+
+def test_absent_provider_type_keeps_the_legacy_reference_tier() -> None:
+    """Backward compatibility: with no provider plumbed the reference tier
+    stays ``e2b`` (the profile-less dispatch default), so every existing
+    caller's certificate is unchanged."""
+    caps = derive_sandbox_capabilities(
+        {"node_type": "sandbox_agent"},
+        profile_network_policy="none",
+    )
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is False
+
+
+@pytest.mark.parametrize(
+    ("node_egress", "profile_network", "description"),
+    _CERT_CASES,
+    ids=[c[2] for c in _CERT_CASES],
+)
+def test_cert_vs_actual_matches_the_kubernetes_dispatch_tier(
+    node_egress: str | None,
+    profile_network: str | None,
+    description: str,
+) -> None:
+    """FAR-1051: with the bound profile's provider plumbed, the certified
+    capability tracks the KUBERNETES tier dispatch actually runs — i.e. it
+    equals ``resolve_egress`` on that tier for every combination, not the e2b
+    reference tier's answer."""
+    node_def: dict[str, object] = {"node_type": "sandbox_agent"}
+    if node_egress is not None:
+        node_def["egress_policy"] = node_egress
+    if node_egress == "selected":
+        node_def["egress_allowlist"] = [{"host": "x.com", "port": 443}]
+
+    allowlist_for_runtime = [{"host": "x.com", "port": 443}] if node_egress == "selected" else None
+    runtime = resolve_egress(
+        node_egress_policy=node_egress,
+        node_egress_allowlist=allowlist_for_runtime,
+        profile_network_policy=profile_network,
+        tier="kubernetes",
+    )
+    caps = derive_sandbox_capabilities(
+        node_def,
+        profile_network_policy=profile_network,
+        provider_type="kubernetes",
+    )
+    certified = caps.get(SANDBOX_CAPABILITY_EGRESS)
+
+    if runtime.refusal is not None:
+        assert certified is None, f"{description}: refused but certified={certified!r}"
+    elif runtime.policy is None:
+        assert certified is True, f"{description}: None policy but certified={certified!r}"
+    else:
+        assert certified is False, f"{description}: policy={runtime.policy!r} but certified={certified!r}"
+
+
 def test_non_sandbox_node_returns_empty_caps() -> None:
     """Non-sandbox_agent nodes return empty capability profile."""
     caps = derive_sandbox_capabilities({"node_type": "standard"})
