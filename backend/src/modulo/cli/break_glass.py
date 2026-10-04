@@ -130,13 +130,13 @@ def get_break_glass_engine(settings: Settings) -> AsyncEngine:
     ``api.dependencies.get_or_create_engine``'s module-level cache.
     """
     global _bg_engine, _bg_engine_url
-    url = settings.modulo_break_glass_database_url
-    if _bg_engine is None or _bg_engine_url != url:
+    keyed_url = settings.modulo_break_glass_database_url
+    if _bg_engine is None or _bg_engine_url != keyed_url:
         # FAR-1440: honour the operator's ``sslmode`` on the break-glass URL via
         # the shared translation (absent/disable → explicit plaintext;
         # require/verify-* fail closed). Hardcoding ``ssl=False`` silently
         # forced plaintext even when the operator asked for TLS.
-        engine_url, ssl_arg = split_engine_sslmode(url)
+        engine_url, ssl_arg = split_engine_sslmode(keyed_url)
         connect_args: dict[str, Any] = {"timeout": 10}
         if ssl_arg is not None:
             connect_args["ssl"] = ssl_arg
@@ -145,7 +145,10 @@ def get_break_glass_engine(settings: Settings) -> AsyncEngine:
             pool_pre_ping=True,
             connect_args=connect_args,
         )
-        _bg_engine_url = url
+        # Cache key stays the RAW settings URL: two operator URLs differing
+        # only by sslmode strip to the same effective DSN but must never share
+        # a cached engine.
+        _bg_engine_url = keyed_url
     return _bg_engine
 
 

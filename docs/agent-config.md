@@ -12,7 +12,7 @@ the model backend.
 |-------|--------|
 | `verbatim` | Identity (no translation). This is the default when no profile is set. |
 | `provider-strict` | Strips JSON Schema keywords the target provider does not support. See [Schema Reference](./schema-reference.md#schema-profiles) for per-provider keyword sets. |
-| `runtime-sdk` | Renders for the target runtime. Currently identity; reserved for future transforms. |
+| `runtime-sdk` | Renders for the target runtime. No keyword stripping, but `$ref` inlining still applies; reserved for future transforms. |
 
 ### Setting on an agent
 

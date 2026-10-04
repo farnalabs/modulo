@@ -147,6 +147,7 @@ from modulo.core.library_service import (
     get_primitive_by_slug,
     list_primitives,
 )
+from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
     check_tool_scope,
@@ -224,10 +225,12 @@ _MCP_BREAKDOWN_KEYS = frozenset(
         "amount_usd",
         "basis",
         "missing_self_report",
-        # FAR-1305: which of the two missing-self-report states applies —
-        # "agent_not_reported" (no cost key presented) vs
-        # "zero_report_unproven" (an explicit $0.00 was presented and refused).
-        # Sanitised as a string by _sanitize_cost_breakdown_entry like any other.
+        # FAR-1305/FAR-1308: which of the THREE missing-self-report states
+        # applies — "agent_not_reported" (no cost key presented),
+        # "zero_report_unproven" (an explicit $0.00 was presented and refused),
+        # or "sub_floor_rejected" (a positive value below the countable floor
+        # was presented and refused). Sanitised as a string by
+        # _sanitize_cost_breakdown_entry like any other.
         "missing_self_report_reason",
         "error",
         "total_clamped",
@@ -348,6 +351,11 @@ def _format_breakdown_line(entry: dict[str, Any]) -> str:
         # the agent did report, the trust boundary rejected it as unproven.
         if entry.get("missing_self_report_reason") == "zero_report_unproven":
             parts.append("(reported $0.00, rejected as unproven)")
+        elif entry.get("missing_self_report_reason") == "sub_floor_rejected":
+            # FAR-1308: a positive value below the countable floor was
+            # presented and refused - the agent DID report, so this must
+            # never render as "not reported".
+            parts.append("(reported a value below the countable minimum)")
         else:
             parts.append("(not reported)")
     if entry.get("error"):
@@ -384,6 +392,48 @@ _ctx_user_keys_enabled: contextvars.ContextVar[bool] = contextvars.ContextVar("m
 _ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "mcp_node_allowed_tools", default=None
 )
+
+
+def _bind_org_context(
+    request: Request | None,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+) -> None:
+    """Publish the MCP-resolved organisation where ERROR capture can see it (FAR-1417).
+
+    ``McpAuthMiddleware`` resolves the tenant into ``_ctx_org_id`` for the tool
+    handlers, but ``ErrorTrackingLogHandler`` reads a DIFFERENT contextvar
+    (``org_id_var``) synchronously on every log record — left unwired, every
+    ``_log.exception`` on this surface (auth DB failures, the tool-shell error
+    mapping, the HITL decision-budget check) was dropped before it could reach
+    ``error_events``.
+
+    Same two carriers as ``auth.dependencies.bind_principal_context``:
+
+    * ``org_id_var`` — visible to the middleware's own frame and, once
+      ``call_next`` creates the downstream task, to every tool handler
+      (asyncio copies the caller's context at task creation — the same
+      propagation the ``_ctx_*`` vars above rely on);
+    * ``request.state`` — ASGI-scope-backed, so an OUTER middleware
+      (``CatchAllMiddleware``) can re-bind after a failure raised above this
+      mounted sub-app, where the contextvar is not visible.
+
+    Call it (a) exactly where ``_ctx_org_id`` is set on the success paths, and
+    (b) BEFORE any database operation whose org was already resolved by an
+    earlier step — that is what makes the ``mcp.auth.db_unavailable`` failure
+    arms attributable. Never bind earlier than the resolution itself: when the
+    failing operation IS the org lookup, the record stays an announced drop
+    rather than being attributed to a guessed organisation.
+
+    ``request`` is ``None`` only where the caller frame has no request object
+    (``_verify_oauth_token_family``) — the contextvar carrier still applies.
+    """
+    org = str(org_id)
+    org_id_var.set(org)
+    if request is not None:
+        request.state.organisation_id = org
+        if account_id is not None:
+            request.state.user_id = str(account_id)
 
 
 class McpAuthContextError(LookupError):
@@ -1192,6 +1242,16 @@ async def _authenticate_api_key(
         if org_id is None:
             raise ApiKeyInvalidError
 
+        # FAR-1417 (auth-failure arm, mcp_server.py `_authenticate_api_key`):
+        # the org was resolved by the lookup above, so bind BEFORE the
+        # re-validation below — a SQLAlchemyError/TimeoutError from
+        # validate_api_key, the live-role read, or the user-scoped-flag read
+        # then reaches `_log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)` with the
+        # org in scope. A failure INSIDE the lookup itself stays unbound on
+        # purpose: that operation is what determines the org, so there is
+        # nothing real to attribute it to (announced drop, never a guess).
+        _bind_org_context(request, org_id)
+
         # Now re-validate within the correct RLS context.
         async with _session(org_id) as s:
             key = await validate_api_key(s, token, org_id=org_id)
@@ -1243,6 +1303,7 @@ async def _authenticate_api_key(
                 )
                 raise ApiKeyInvalidError
         _ctx_org_id.set(org_id)
+        _bind_org_context(request, org_id, key.account_id)
         _ctx_role.set(clamped)
         _ctx_key_id.set(key.id)
         _ctx_team_id.set(key.team_id)
@@ -1345,6 +1406,11 @@ async def _authenticate_oauth_jwt(
                 ),
                 None,
             )
+        # FAR-1417 (auth-failure arm, `_authenticate_oauth_jwt` fallback): the
+        # org comes from the locally decoded token claim (None ruled out above),
+        # so bind BEFORE the live-role read — its DB failure is then logged
+        # with the org in scope instead of being dropped.
+        _bind_org_context(request, principal.organisation_id, principal.account_id)
         try:
             async with _session(principal.organisation_id) as s:
                 live_role = await resolve_role_from_membership(
@@ -1374,6 +1440,7 @@ async def _authenticate_oauth_jwt(
                 None,
             )
         _ctx_org_id.set(principal.organisation_id)
+        _bind_org_context(request, principal.organisation_id, principal.account_id)
         _ctx_role.set(live_role)
         _ctx_key_id.set(uuid.UUID(int=0))
         _ctx_user_id.set(principal.account_id)
@@ -1402,6 +1469,12 @@ async def _verify_oauth_token_family(
     Returns ``None`` when the family is valid (the caller should continue), or
     the appropriate error ``Response`` otherwise.
     """
+    # FAR-1417 (auth-failure arm, `_verify_oauth_token_family`): the org is on
+    # the already-decoded OAuth claims — bind BEFORE the family check so a DB
+    # failure (and the generic `except Exception` arm below it) is attributed.
+    # This helper is called without a request object, so only the contextvar
+    # carrier applies here.
+    _bind_org_context(None, claims.organisation_id)
     try:
         async with _session(claims.organisation_id) as s:
             valid = await check_oauth_token_family_valid(
@@ -1469,6 +1542,11 @@ async def _finalize_oauth_principal(
     # on the very next call. Fail-closed: a DB read failure or
     # missing/deactivated membership denies.
     scope_role = scopes_required_role(claims.scopes)
+    # FAR-1417 (auth-failure arm, `_finalize_oauth_principal`): the org comes
+    # from the decoded OAuth claims — bind BEFORE the live-role read so its DB
+    # failure is attributed instead of dropped (the success-path bind below
+    # re-binds the same org together with the account).
+    _bind_org_context(request, claims.organisation_id, claims.account_id)
     try:
         async with _session(claims.organisation_id) as s:
             live_role = await resolve_role_from_membership(
@@ -1492,6 +1570,7 @@ async def _finalize_oauth_principal(
     role = clamp_oauth_role(scope_role, live_role)
 
     _ctx_org_id.set(claims.organisation_id)
+    _bind_org_context(request, claims.organisation_id, claims.account_id)
     _ctx_role.set(role)
     _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
     _ctx_user_id.set(claims.account_id)
@@ -2592,7 +2671,11 @@ async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
         "(hour/day/week) with per-bucket count, cost, tokens, duration, success rate, "
         "failure and stall counts, queue wait, claim→dispatch latency "
         "(`avg_dispatch_latency_ms` = dispatch_phase_entered_at - created_at, else "
-        "started_at - created_at), final idle, and output size. "
+        "started_at - created_at), final idle, output size, and node-deadline "
+        "watchdog firings (`node_deadline_watchdog_fired_count` = firings summed "
+        "across the bucket; > 0 means the watchdog fired — recorded whether the kill "
+        "re-dispatched or terminal-failed, so a value > 0 with no matching "
+        "`error_code=node_deadline_exceeded` means the kill re-dispatched). "
         "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
         "and error_code for filtering/grouping by failure code. `dimension` groups the "
         "series by a key — `trigger_type`, `trigger_id`, `status`, `pipeline`, `folder`, "

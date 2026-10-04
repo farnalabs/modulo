@@ -400,9 +400,19 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
             # predicate reads the bare ``checkpoints`` table, so the test DB
             # must have it or every reconcile scan fails with
             # UndefinedTableError (breaking the SAQ reconcile integration tests).
-            from modulo.core.pipeline_engine.modulo_saver import _MIGRATION_SQL as _CHECKPOINT_MIGRATION_SQL
+            #
+            # Replay MIGRATIONS (schema DDL + the boot-time autovacuum
+            # tuning), not the schema-only ``_MIGRATION_SQL``, so the shared
+            # DB mirrors what ``setup()`` leaves behind in production AND a
+            # change that breaks the tuning SQL is executed here. The unit
+            # twin tests only compare STRINGS, and ``integration-changed``
+            # runs only changed integration files — so without this replay a
+            # tuning statement with a syntax error could reach main unnoticed
+            # by PR CI. Every statement is idempotent and MIGRATIONS orders
+            # the CREATEs before the tuning ALTERs, so replaying them is safe.
+            from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
-            for _ddl in _CHECKPOINT_MIGRATION_SQL:
+            for _ddl in ModuloPostgresSaver.MIGRATIONS:
                 await conn.execute(text(_ddl))
 
             # Force RLS on all org-scoped tables so it applies to the testcontainers

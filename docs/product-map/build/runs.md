@@ -77,18 +77,23 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       rendered as a phantom `$0.000000` money line – and the response's
       structured `warnings` list (GET /api/v1/runs/{id}) carries a
       `missing_self_report` entry whose `missing_self_report_reason`
-      distinguishes the two missing states truthfully: `agent_not_reported`
-      (no cost key ever presented) vs `zero_report_unproven` (a node DID
+      distinguishes the THREE missing states truthfully: `agent_not_reported`
+      (no cost key ever presented), `zero_report_unproven` (a node DID
       present an explicit `model_cost_usd: 0.0` but the trust boundary
-      refused it as unproven – token usage not all-zero). The run-detail and
-      compute-run-warnings copy render the two states distinctly (a rejected
-      zero is never described as "not reported by the agent"), the reason
-      rides the MCP breakdown wire (`_MCP_BREAKDOWN_KEYS`), and GET
+      refused it as unproven – token usage not all-zero), and
+      `sub_floor_rejected` (FAR-1308: a node PRESENTED a positive value
+      below the countable minimum and the trust boundary refused it – the
+      agent DID report, it was simply not countable). The run-detail,
+      compute-run-warnings and MCP compact-line copy render the three states
+      distinctly (a rejected zero or sub-floor report is never described as
+      "not reported by the agent"), the reason rides the MCP breakdown wire
+      (`_MCP_BREAKDOWN_KEYS`), and GET
       /api/v1/runs carries `warnings_count` (a deferred single
       `cost_breakdown` load, never N+1) so the list renders a warning badge
       (`core/cost_controller/breakdown/params.py`,
       `core/cost_controller/breakdown/aggregate.py`,
-      `test_run_warnings.py`, `test_runs_endpoint.py`)
+      `test_run_warnings.py`, `test_runs_endpoint.py`,
+      `test_mcp_server_coverage_gaps.py`)
 - [x] Run-execution service identity (ADR 038): a run executes with the
       pipeline owner's authority (service identity scoped to `owner_team_id`),
       not the triggering user's grants. Referenced resources (schema, connector,
@@ -168,6 +173,17 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-04: **FAR-1308 three-state missing-cost truth** – a positive
+  self-reported cost below the countable floor was being labelled
+  `agent_not_reported` ("the agent did not report"), which is false: the
+  node DID report, the trust boundary refused the value as sub-floor.
+  Added the third `missing_self_report_reason` value `sub_floor_rejected`
+  alongside `zero_report_unproven` and `agent_not_reported`, surfaced it in
+  the run-detail warnings strip, the compute-run-warnings copy, the manifest
+  `feat-runs` registry entry, and the MCP compact-line renderer
+  (`_format_breakdown_line` now prints
+  "(reported a value below the countable minimum)" instead of
+  "(not reported)").
 - 2026-10-01: **Improve Architecture product-map walk** – closed the
   sub-surface gap left by FAR-1336 (delivery-signal provenance/confidence,
   merged as run classification record addenda) and FAR-228: the run-outcome
@@ -182,7 +198,9 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 - 2026-09-30: **Improve Architecture product-map walk** – reconciled this
   tracker with the shipped FAR-1305 missing-cost surface (merged 2026-09-30):
   the manifest `feat-runs` registry tracks the truthful
-  `missing_self_report_reason` (`agent_not_reported` vs `zero_report_unproven`)
+  `missing_self_report_reason` (at the time two states:
+  `agent_not_reported` vs `zero_report_unproven`; a third,
+  `sub_floor_rejected`, was added 2026-10-04 by FAR-1308 – see above)
   but the human-readable graph entry was stale. Added the checked behaviour
   line and the `core/cost_controller/` code + `test_run_warnings.py` /
   `test_cost_aggregate.py` / `test_runs_endpoint.py` unit citations.

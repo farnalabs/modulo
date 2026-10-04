@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import decimal
 import logging
+from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from decimal import ROUND_HALF_UP, Decimal
 from operator import attrgetter
@@ -23,6 +24,9 @@ from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
     MAX_REPORTABLE_USD_MIN,
     MAX_SELF_REPORTED_USD,
+    MISSING_REASON_AGENT_NOT_REPORTED,
+    MISSING_REASON_SUB_FLOOR_REJECTED,
+    MISSING_REASON_ZERO_REPORT_UNPROVEN,
     RAW_REPORTED_DISPLAY_CLAMP,
     TOTAL_CLAMPED_MARKER,
 )
@@ -217,6 +221,7 @@ def _eval_self_reported(
     component: CostComponentConfig,
     telemetry: RunCostTelemetry,
     rejected_zero_nodes: AbstractSet[str] = frozenset(),
+    rejection_reasons: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], Decimal]:
     rk = component.report_key or "model_cost_usd"
     amount = telemetry.reported.get(rk, Decimal(0)).quantize(_QUANT, rounding=ROUND_HALF_UP)
@@ -247,19 +252,70 @@ def _eval_self_reported(
             # rendering and the run-warnings surface, and stamp a reason so the
             # numeric basis is self-describing for audit. The renderer keys off
             # ``missing_self_report`` (see ``compute_run_warnings`` /
-            # ``RunDetailView``) and now also reads this reason to tell the two
-            # missing states apart (FAR-1305).
+            # ``RunDetailView``) and now also reads this reason to tell the
+            # missing states apart (FAR-1305, FAR-1308).
             #
             # ``zero_report_unproven`` — a node PRESENTED an explicit ``0.0``
             # and the trust boundary refused it as unproven: the agent did
             # report, so claiming ``agent_not_reported`` would be a lie.
+            # ``sub_floor_rejected`` — a node PRESENTED a positive value below
+            # the reportable floor and the boundary refused it as implausibly
+            # small: again a report WAS made, so ``agent_not_reported`` would
+            # be equally false (FAR-1308).
             # ``agent_not_reported`` — no cost key was presented at all.
             # The rejection marker is stamped only for the ``model_cost_usd``
-            # fold, so only that report_key earns the distinct reason.
-            entry["missing_self_report_reason"] = (
-                "zero_report_unproven" if rejected_zero_nodes and rk == "model_cost_usd" else "agent_not_reported"
+            # fold, so only that report_key earns a distinct reason.
+            entry["missing_self_report_reason"] = _missing_self_report_reason(
+                rk, rejected_zero_nodes, rejection_reasons
             )
     return entry, amount
+
+
+def _missing_self_report_reason(
+    rk: str,
+    rejected_zero_nodes: AbstractSet[str],
+    rejection_reasons: Mapping[str, str] | None,
+) -> str:
+    """Pick the truthful ``missing_self_report_reason`` for one component entry.
+
+    The gate on ``model_cost_usd`` is preserved: the rejection marker is
+    stamped only on the model-cost fold, so any other report_key keeps the
+    default ``agent_not_reported`` even when reasons are threaded.
+
+    Precedence when both maps are supplied: the per-node REASON map wins —
+    it is strictly newer and more precise (it names WHICH refusal class),
+    and ``rejected_zero_nodes`` is retained as the legacy boolean-only
+    fallback for callers that have not been updated to thread reasons
+    (FAR-1305 call sites). A reason map entry of ``zero_report_unproven``
+    and the legacy set membership agree by construction
+    (``finalize._rejected_zero_nodes`` derives from the same map).
+    """
+    if rk != "model_cost_usd":
+        return MISSING_REASON_AGENT_NOT_REPORTED
+    if rejection_reasons:
+        return _dominant_rejection_reason(rejection_reasons)
+    if rejected_zero_nodes:
+        return MISSING_REASON_ZERO_REPORT_UNPROVEN
+    return MISSING_REASON_AGENT_NOT_REPORTED
+
+
+def _dominant_rejection_reason(rejection_reasons: Mapping[str, str]) -> str:
+    """Collapse per-node refusal reasons to the ONE component-level label.
+
+    A component entry aggregates every sandbox node, so a run can carry mixed
+    refusals (one node refused as zero, another as sub-floor). Deterministic
+    precedence: ``zero_report_unproven`` first — it is the older, more
+    specific claim (an explicit $0.00 the boundary refused), so a mixed run
+    keeps the FAR-1305 label it rendered before FAR-1308 existed; otherwise
+    ``sub_floor_rejected``. Values outside the closed vocabulary are ignored
+    (never escalated into a label they do not justify).
+    """
+    reasons = set(rejection_reasons.values())
+    if MISSING_REASON_ZERO_REPORT_UNPROVEN in reasons:
+        return MISSING_REASON_ZERO_REPORT_UNPROVEN
+    if MISSING_REASON_SUB_FLOOR_REJECTED in reasons:
+        return MISSING_REASON_SUB_FLOOR_REJECTED
+    return MISSING_REASON_AGENT_NOT_REPORTED
 
 
 def _reporting_nodes(telemetry: RunCostTelemetry) -> set[str]:
@@ -277,6 +333,7 @@ def build_cost_breakdown(
     settings: Any = None,
     *,
     rejected_zero_nodes: AbstractSet[str] = frozenset(),
+    rejection_reasons: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], Decimal]:
     """Build the breakdown list + the summed total (written together).
 
@@ -292,8 +349,16 @@ def build_cost_breakdown(
     presented an explicit ``0.0`` self-report the trust boundary refused as
     unproven — derived from the enriched union by
     ``finalize._rejected_zero_nodes``. It is DIAGNOSTIC ONLY: it changes no
-    amount, no clamp, no acceptance decision — only which of the two truthful
-    ``missing_self_report_reason`` strings is stamped.
+    amount, no clamp, no acceptance decision — only which truthful
+    ``missing_self_report_reason`` is stamped.
+
+    ``rejection_reasons`` (FAR-1308, keyword-only) is the richer per-node map
+    ``{node_id: reason}`` from ``finalize._rejection_reasons``, carrying BOTH
+    refusal classes (``zero_report_unproven`` and ``sub_floor_rejected``). It
+    takes precedence over ``rejected_zero_nodes`` when supplied; both are
+    accepted so pre-FAR-1308 callers keep working unchanged. Same diagnostic-
+    only contract: it labels WHY a self-report is missing, never what is
+    counted.
 
     The whole block runs under a ``decimal.localcontext()`` with ONLY
     ``DivisionByZero`` trapped; any other eval failure surfaces as a generic
@@ -308,7 +373,7 @@ def build_cost_breakdown(
         total = Decimal(0)
         for component in live:
             if component.kind == "self_reported":
-                entry, amount = _eval_self_reported(component, telemetry, rejected_zero_nodes)
+                entry, amount = _eval_self_reported(component, telemetry, rejected_zero_nodes, rejection_reasons)
             else:
                 entry, amount = _eval_calculated(component, telemetry, settings)
             breakdown.append(entry)

@@ -699,6 +699,66 @@ class TestFAR1421DispatchLatency:
         assert by_key == {"cron": 500.0, "webhook": 5000.0}
 
 
+class TestFAR1463WatchdogFiringMetric:
+    """FAR-1463: node-deadline watchdog firings, summed per bucket.
+
+    The metric exists because a re-dispatched firing leaves NO other
+    fingerprint: the fenced pending-reset nulls ``error_code``, so
+    ``error_code=node_deadline_exceeded`` reads 0 in every bucket (the FAR-1423
+    misread). It must therefore (a) be selected, (b) be NULL-safe (the fact
+    column is NULL for pre-FAR-1463 rows and SUM over an all-NULL group is
+    NULL), and (c) be independent of ``failure_count`` — a run that fired and
+    then completed via re-dispatch counts here without failing.
+    """
+
+    def test_select_labels_the_metric_and_is_null_safe(self) -> None:
+        stmt, _ = build_facts_query(_query())
+        names = {k.name for k in stmt.selected_columns}
+        assert "node_deadline_watchdog_fired_count" in names, "the watchdog-firing metric must be selected"
+        expr = str(stmt.selected_columns["node_deadline_watchdog_fired_count"].element).lower()
+        assert "coalesce" in expr, "an all-NULL (pre-FAR-1463) group must read 0, never NULL"
+        assert "node_deadline_watchdog_fired_count" in expr, "the sum must read the fact column"
+
+    def test_bucket_sums_firings_and_stays_independent_of_failures(self) -> None:
+        # Row 1: a firing that RE-DISPATCHED and the run later completed —
+        # no failure, no error_code, yet the firing is still counted.
+        rows = [
+            _row(date(2026, 8, 5), count=1, node_deadline_watchdog_fired_count=2),
+            _row(date(2026, 8, 5), count=1, node_deadline_watchdog_fired_count=1),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["node_deadline_watchdog_fired_count"] == 3
+        assert out[0]["failure_count"] == 0, "a re-dispatched firing is not a failure — the metrics stay distinct"
+
+    def test_row_without_the_attribute_counts_zero(self) -> None:
+        # Hand-built / legacy row doubles without the attribute degrade to 0,
+        # like every other metric's getattr default.
+        out = bucket_rows(
+            [_row(date(2026, 8, 5), count=1)],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["node_deadline_watchdog_fired_count"] == 0
+
+    def test_zero_filled_bucket_reports_zero(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 1),
+        )
+        assert out[0]["node_deadline_watchdog_fired_count"] == 0
+
+
 class TestDimensionedSelect:
     """The dimension column must be in the SELECT list, not just GROUP BY.
 
@@ -1141,6 +1201,7 @@ class TestExtractedBucketHelpers:
         assert out["stall_count"] == 0
         assert out["avg_duration_ms"] is None
         assert out["avg_dispatch_latency_ms"] is None
+        assert out["node_deadline_watchdog_fired_count"] == 0
 
     def test_emit_bucket_row_populated_bucket_computes_aggregates(self) -> None:
         b = {
@@ -1163,6 +1224,7 @@ class TestExtractedBucketHelpers:
             "output_bytes_n": 2,
             "dispatch_latency_sum": 6000.0,
             "dispatch_latency_n": 3,
+            "node_deadline_watchdog_fired": 2,
         }
         out = _emit_bucket_row(b, datetime(2026, 8, 6, 10, 0, tzinfo=UTC), None)
         assert out["date"] == "2026-08-06T10:00:00"
@@ -1178,6 +1240,7 @@ class TestExtractedBucketHelpers:
         assert out["avg_final_idle_ms"] == 5.0
         assert out["avg_output_bytes"] == 1024.0
         assert out["avg_dispatch_latency_ms"] == 2000.0
+        assert out["node_deadline_watchdog_fired_count"] == 2
 
 
 class TestHourGranularity:

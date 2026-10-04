@@ -14,7 +14,7 @@
           <div class="flex min-w-0 items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-identity">
             <h2 class="truncate text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
             <button type="button" :class="btnToolbarIcon" :aria-label="$t('views.PipelineEditorView.rename_pipeline')" :title="$t('views.PipelineEditorView.rename_pipeline')" data-testid="pipeline-editor-rename" @click="openRenameDialog">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+              <PencilIcon class="h-3 w-3" aria-hidden="true" />
             </button>
             <span v-if="pipeline?.archived_at" class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.archived') }}</span>
             <span v-if="folderPath.length > 0" class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
@@ -41,7 +41,7 @@
           <!-- Group: graph file actions -->
           <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-file">
             <button type="button" :class="btnToolbarSecondary" :disabled="savingGraph" data-testid="pipeline-editor-save" @click="saveGraph">
-              <svg v-if="savingGraph" class="h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+              <LoaderCircleIcon v-if="savingGraph" class="h-3 w-3 animate-spin" aria-hidden="true" />
               {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
             </button>
             <button v-if="planStore.featureEnabled('pipeline_diff_rollback')" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-version-timeline" @click="showVersionTimeline = !showVersionTimeline">
@@ -65,9 +65,10 @@
                 <button
                   type="button"
                   class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
+                  data-testid="pipeline-editor-save-as-composite"
                   @click="openSaveAsComposite"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-indigo-400" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8M4.93 10.93 12 18l7.07-7.07"/><path d="M4 20h16"/></svg>
+                  <DownloadIcon class="h-4 w-4 text-indigo-400" aria-hidden="true" />
                   {{ $t('views.PipelineEditorView.composite') }}
                 </button>
               </div>
@@ -77,7 +78,7 @@
           <!-- Group: run -->
           <div class="flex items-center gap-1.5" data-testid="pipeline-editor-toolbar-group-run">
             <button type="button" :class="btnToolbarPrimary" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" data-testid="pipeline-editor-run" @click="openRunDialog">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <PlayIcon class="h-3 w-3" aria-hidden="true" />
               {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
             </button>
             <span v-if="saveGraphError" class="max-w-40 truncate text-xs text-destructive" :title="saveGraphError" data-testid="pipeline-editor-save-error">{{ saveGraphError }}</span>
@@ -327,6 +328,7 @@
                   <button
                     type="button"
                     class="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                    data-testid="pipeline-editor-retry-policy-close"
                     @click="closeRetryPolicy"
                   >
                     {{ $t('views.PipelineEditorView.cancel') }}
@@ -365,7 +367,7 @@
               data-testid="pipeline-editor-add-node"
               @click="addNode()"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <PlusIcon class="h-3 w-3" aria-hidden="true" />
               {{ $t('views.PipelineEditorView.add_node') }}
             </button>
             <button
@@ -375,7 +377,7 @@
               data-testid="pipeline-editor-fit-view"
               @click="() => fitView()"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              <Maximize2Icon class="h-3 w-3" aria-hidden="true" />
               {{ $t('views.PipelineEditorView.fit_to_view') }}
             </button>
           </div>
@@ -411,7 +413,7 @@
               data-testid="pipeline-editor-legacy-hitl-banner-dismiss"
               @click="showLegacyHitlBanner = false"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <XIcon class="h-3 w-3" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -425,9 +427,9 @@
           </div>
           <div class="flex items-center gap-2 pointer-events-auto">
             <Button size="small" type="button" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
-            <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
-            <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
-            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
+            <button v-if="!pipeline?.archived_at" type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-archive" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
+            <button v-else type="button" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" data-testid="pipeline-editor-empty-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" type="button" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" data-testid="pipeline-editor-empty-delete" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
             <Select
               v-model="newNodeType"
               :options="nodeTypeOptions"
@@ -463,9 +465,10 @@
                 type="button"
                 class="text-muted-foreground hover:text-foreground transition-colors"
                 @click="closeRunDialog"
+                data-testid="pipeline-editor-run-dialog-close"
                 :aria-label="$t('views.PipelineEditorView.close')"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <XIcon class="h-5 w-5" aria-hidden="true" />
               </button>
             </div>
             <p class="text-sm text-muted-foreground">
@@ -494,21 +497,17 @@
               <button
                 type="button"
                 class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+                data-testid="pipeline-editor-run-dialog-cancel"
                 @click="closeRunDialog"
               >
                 {{ $t('views.PipelineEditorView.cancel') }}
               </button>
               <Button v-if="!isWebhookTriggered" type="button" class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running" @click="triggerRun" data-testid="pipeline-editor-run-submit">
-                <svg
+                <LoaderCircleIcon
                   v-if="running"
                   class="animate-spin h-4 w-4 mr-1"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+                  aria-hidden="true"
+                />
                 {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
               </Button>
             </div>
@@ -625,7 +624,7 @@
                 class="mt-0.5 inline-flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-400"
               >
                 {{ $t('views.PipelineEditorView.view_agent') }}
-                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                <ExternalLinkIcon class="h-2.5 w-2.5" aria-hidden="true" />
               </router-link>
             </div>
             <div v-if="agentModelBackendId(selectedNodeData.agent_id)">
@@ -1178,6 +1177,7 @@
             <button
               type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              data-testid="pipeline-editor-edge-panel-close"
               @click="selectedEdgeData = null"
             >
               {{ $t('views.PipelineEditorView.close') }}
@@ -1409,6 +1409,7 @@ import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
+import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
 
 function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
   const ctrl = new AbortController()

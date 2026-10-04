@@ -83,16 +83,34 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
   })
 
   test('claiming and approving the gate completes the run, lists it, and audits the decision', { tag: '@regression' }, async ({ page, env }) => {
-    // The recovery wait below is bounded by a 180 s deadline, but that budget
+    // The recovery wait below is bounded by a 90 s deadline, but that budget
     // is spent inside the shared test/beforeEach-hook timeout and the test
     // timeout BEGINS at hook start (Playwright: the test timeout is shared
-    // with beforeEach). This test's beforeEach logs in and runs the
-    // afterEach-style cleanup, so the default 180 s can be consumed by the
-    // hook before the deadline is honoured. Extend the timeout so deadline +
-    // teardown always fit: the pre-recovery setup (including a park poll
-    // bounded at 120 s), the 180 s recovery, the post-recovery UI/audit
-    // assertions and teardown.
-    test.setTimeout(540_000)
+    // with beforeEach) — Playwright's default 180 s can be consumed by the
+    // hook alone before any in-test deadline is honoured. Size the timeout as
+    // the sum of the budgets that can legitimately stack, plus margin, so
+    // deadline + teardown always fit:
+    //
+    //   hook/login + pipeline setup         ~60 s
+    //   park poll (bounded)                120 s
+    //   UI: gate card / claim / approve     45 s
+    //   bounded recovery + boundary observe 95 s
+    //   post-recovery UI/list/audit         75 s
+    //   best-effort cleanup                 30 s
+    //   margin                              25 s
+    //                                     ------
+    //                                     450 s
+    //
+    // This is the same formula #1208 used for its 540 s (540 = 450 + the
+    // extra 90 s it added to the recovery window). That window existed only
+    // to ride out the "staging 503 storm", which was then proven to be a
+    // deterministic approve-path product defect (FAR-1408/#1230), not an
+    // outage — no window rides out a defect that reproduces on every request.
+    // The window is back to #1183's 90 s, which covers a genuine transient
+    // blip (each helper request already retries an explicit 502/503/504 up to
+    // 4x20 s with linear backoff before this loop is even needed), so the
+    // timeout comes back down by the same 90 s.
+    test.setTimeout(450_000)
     const apiBase = apiBaseFor(env)
     const token = await apiLogin(env)
     const cleanup: JourneyCleanup = { pipelineIds: [], schemaIds: [], token, apiBase }
@@ -120,44 +138,44 @@ test.describe('Real-stack journeys: run parks at HITL and completes on approval'
       await page.getByTestId('hitl-gate-notes').fill('E2E journey approval')
       await page.getByTestId('hitl-gate-approve').click()
 
-      // The run must really resume and complete on the backend. Staging's DB
-      // and backend can transiently 503 mid-approve, which leaves the run
-      // parked at its still-claimed gate (the UI approve 503s, and a recovery
-      // attempt's own approve 503s AFTER its claim has already flipped the run
-      // to `claimed`). The outage is not always a single blip: the 2026-10-02
-      // staging deploy saw an unbroken 503 storm for ~4.5 minutes, which
-      // outlasted the previous 90 s-per-attempt budget once Playwright's two
-      // retries were spent. Re-issue the decision through the real API until
-      // the run completes; the bounded recovery loop and its rationale live in
-      // waitForRunCompletionWithHitlRecovery. It is deadline-bounded (never a
-      // fixed iteration count, whose worst case overran the hook timeout), and
-      // its own re-issue — NOT the committed-decision reconcile, which skips a
-      // claimed-but-undecided row unconditionally — is what carries that run to
-      // completion rather than reporting it as a hard failure. Size each
-      // attempt (180 s) so a single attempt rides out a multi-minute outage;
-      // Playwright's two retries stack three such budgets (~9 min total).
+      // The run must really resume and complete on the backend. A GENUINE
+      // transient failure of the approve request (an explicit 502/503/504 from
+      // a staging DB/connection blip, which rolls back and is safe to
+      // re-issue) is tolerated: every helper request already retries that
+      // status with bounded linear backoff (apiFetch), and if the run is still
+      // short of a decision the loop below re-issues the approve through the
+      // real API until its deadline. Recovery MUST bypass the UI — the first
+      // approve keeps the control disabled while in flight, and once the
+      // re-claim has flipped the run to `claimed` the UI claim is refused —
+      // and the loop's own re-issue, NOT the committed-decision reconcile
+      // (which skips a claimed-but-undecided row unconditionally), is what
+      // carries such a run to completion. The loop and its rationale live in
+      // waitForRunCompletionWithHitlRecovery; it is deadline-bounded (never a
+      // fixed iteration count, whose worst case overran the hook timeout).
+      //
+      // A run that has NOT completed when that window closes FAILS this test.
+      // That deliberately reverses #1214's skip: the "sustained staging 503
+      // storm" the skip was written for was not an infrastructure outage but a
+      // deterministic product defect in the endpoint itself — `approve_review`
+      // queried `_validate_choice_answer` outside any transaction on a DI
+      // session built with `autobegin=False`, raising
+      // `sqlalchemy.exc.InvalidRequestError` (a `SQLAlchemyError` subclass)
+      // that the error map reported as 503 "Database temporarily unavailable."
+      // on EVERY approve request, reproduced 3/3 with no database fault and
+      // fixed in #1230 (FAR-1408). The signature was visible in the failures
+      // themselves: status polls kept returning 200 `claimed` while approve
+      // 503'd, so the API and DB were reachable the whole time. Skipping on
+      // that signature let this journey pass without ever observing its own
+      // claim — the one thing a regression gate must never do.
       const outcome = await waitForRunCompletionWithHitlRecovery(apiBase, token, run.run_id, {
-        deadlineMs: 180_000,
+        deadlineMs: 90_000,
         notes: 'E2E journey approval',
       })
-      if (outcome.kind === 'infra-blocked') {
-        // Every re-issue over the whole bounded window failed transiently —
-        // staging's DB was 503ing the approve transaction for minutes
-        // (observed 2026-10-02: an unbroken ~9 min storm across the suite's
-        // attempts), possibly interleaved with gateway timeouts that never
-        // reached the API — so the journey could not observe its product
-        // claim: the run was neither observable as complete nor provably
-        // wedged. Failing here would block an already-successful deploy on an
-        // infrastructure outage; skip loudly instead so the outage is visible
-        // without misreporting it as a product regression. A run that stays
-        // incomplete while the API IS reachable (a re-issue returned a
-        // deterministic 4xx/500) is NOT infra-blocked and still fails below.
-        test.skip(true, `staging transient-outage storm left the HITL gate unobservable (run ${run.run_id}): ${outcome.lastError}`)
-      }
       if (outcome.kind !== 'complete') {
         throw new Error(
-          `run ${run.run_id} did not complete after re-issuing the approve decision; ` +
-            `last poll: ${outcome.lastError}`,
+          `run ${run.run_id} did not complete after re-issuing the approve decision within the ` +
+            `bounded recovery window (a persistent approve 5xx is a product failure, not an outage): ` +
+            `${outcome.lastError}`,
         )
       }
 

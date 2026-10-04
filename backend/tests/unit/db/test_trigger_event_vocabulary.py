@@ -139,12 +139,15 @@ _MIGRATION_PATH = (
 # 0272_oauth_client_revoke_lookup_indexes chained onto 0271,
 # 0273_runs_dispatch_phase chained onto 0272,
 # 0274_policy_gate_pin_fingerprint_operator_control chained onto 0273, and
-# 0275_run_cancel_reason_vocabulary chained onto 0274,
+# 0275_run_cancel_reason_vocabulary chained onto 0274, and
 # 0276_runs_autovacuum_enabled chained onto 0275, and
-# 0277_run_daily_facts_trigger_dispatch_phase chained onto 0276 as the chain head.
+# 0277_run_daily_facts_trigger_dispatch_phase chained onto 0276, and
+# 0278_runs_workspace_drift_sweep_index chained onto 0277, and
+# 0279_table_autovacuum_tuning chained onto 0278, and
+# 0280_runs_node_deadline_watchdog_fired_count chained onto 0279_table_autovacuum_tuning as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0277_run_daily_facts_trigger_dispatch_phase"
+_CHAIN_HEAD_MIGRATION_NAME = "0280_runs_node_deadline_watchdog_fired_count"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -21,7 +21,8 @@ status: covered
 Liveness and readiness endpoints for deployment health monitoring, plus the production
 uptime watchdog that alerts on outage (FAR-400). Liveness (`/healthz`) is advisory — it
 never flips readiness. Readiness (`/healthz/ready`) aggregates database, Redis,
-checkpointer schema, Alembic migration status, worker/cron/scheduler liveness, stale-run
+checkpointer schema, Alembic migration status, database hygiene (dead-tuple bloat +
+wraparound age), worker/cron/scheduler liveness, stale-run
 recovery and returns 503 whenever any gate is unavailable. The AI agent can also be
 redirected to this infra-health surface via `feat-infra-health`.
 
@@ -32,6 +33,13 @@ redirected to this infra-health surface via `feat-infra-health`.
 - [x] Redis connectivity check (degraded when not configured)
 - [x] Checkpointer schema accessibility check (degraded on failure)
 - [x] Alembic migration status check (degraded when migrations are pending)
+- [x] Database-hygiene sub-check (FAR-1445) — worst-table dead-tuple ratio
+      (`n_dead_tup / (n_live_tup + n_dead_tup)` from `pg_stat_user_tables`, over a
+      configurable dead-tuple floor, zero-size relations excluded from the pick) plus
+      `age(datfrozenxid)` against the server's own `autovacuum_freeze_max_age`;
+      degrades (never `unavailable`, so never 503s readiness alone) on bloat at/above
+      the configured ratio or on freeze age past 50% of the ceiling; thresholds via
+      `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` / `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO`
 - [x] SAQ worker liveness check — a stopped worker pool for 4+ consecutive probe ticks 503s readiness (Plan F7)
 - [x] System-cron liveness watchdog — fire_due_triggers missing 2x cadence 503s readiness (Plan F8)
 - [x] Stale-run recovery check — stalled/never-dispatched runs block readiness

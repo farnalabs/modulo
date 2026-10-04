@@ -94,18 +94,23 @@ both are present, the node-level profile wins. Absent on both defaults to
 |---------|-----------|
 | `verbatim` | Identity. The schema is passed to the provider unchanged. |
 | `provider-strict` | Strips JSON Schema keywords the target provider does not support in strict mode. Keywords are stripped per-provider (OpenAI, Anthropic, Google, DeepSeek each have their own unsupported set). Advisory keywords (`default`, `examples`, `title`, `description`, `format`) are always stripped for the strictest common denominator. Structural keywords (`type`, `properties`, `required`, `items`, `anyOf`, `oneOf`, `allOf`, `not`, `if/then/else`, `enum`, `const`, `$ref`, `$defs`) are never stripped. |
-| `runtime-sdk` | Renders the schema for the target runtime. Currently identity (pass-through); reserved for future runtime-specific transforms. |
+| `runtime-sdk` | Renders the schema for the target runtime. No keyword stripping is applied, but `$ref` inlining and top-level `$defs`/`definitions` cleanup still run (see below); reserved for future runtime-specific transforms. |
 
 ### Rendering details
 
-The rendering pass (FAR-900) is **best-effort** and **never blocks a node**. It
-inlines `$ref`/`$defs` (local pointers only; external refs are rejected),
-strips unsupported keywords per the profile, and caches results in a bounded
-LRU keyed by (schema content SHA-256, profile, provider_id, renderer_version).
+The rendering pass (FAR-900) is **best-effort** and **never blocks a node**.
+It runs three steps in order: inline `$ref`s (local pointers only; external
+refs are rejected), drop top-level `$defs`/`definitions` blocks left over
+from inlining, then strip unsupported keywords per the profile. Results are
+cached in a bounded LRU keyed by (schema content SHA-256, profile,
+provider_id, renderer_version). Any translation failure falls back to
+`verbatim`.
 
 Hard limits on `$ref` flattening: max depth 32, max expanded nodes 10,000.
-Exceeding either falls back to `verbatim`. Abstract schemas (only `$ref` or
-composition keywords, no concrete type/properties) are skipped.
+Exceeding either falls back to `verbatim`. Pointer-only schemas (no concrete
+keys: only `$`-prefixed keys plus `title`/`description`) are skipped as
+abstract. Note that composition keywords (`anyOf`/`oneOf`/`allOf`) count as
+concrete keys, so a schema built only from them is rendered, not skipped.
 
 ### Design-time warnings
 
@@ -117,14 +122,20 @@ running a pipeline.
 ### Per-provider keyword sets
 
 The following keywords are stripped in `provider-strict` mode per provider.
-Advisory keywords (always stripped) are in addition to these.
+Advisory keywords (always stripped) are in addition to these. `$defs` is
+NOT stripped by this pass even though `$ref`s were inlined from it: it sits
+on the never-strip keep-list alongside the other structural keywords, so no
+warning is emitted for it either. (Top-level `$defs`/`definitions` blocks
+are already gone by this point, removed right after `$ref` inlining.) A
+provider with no entry here (anything outside the four rows) falls back to
+advisory-only stripping.
 
 | Provider | Provider-specific stripped keywords |
 |----------|--------------------------------------|
-| `openai` | `$id`, `$schema`, `$defs`, `definitions`, `default`, `examples`, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `pattern`, `minProperties`, `maxProperties` |
-| `anthropic` | `$id`, `$schema`, `$defs`, `definitions`, `default`, `examples`, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `patternProperties`, `additionalProperties`, `minProperties`, `maxProperties` |
-| `google` | `$id`, `$schema`, `$defs`, `definitions`, `default`, `examples`, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `pattern`, `patternProperties`, `minProperties`, `maxProperties` |
-| `deepseek` | `$id`, `$schema`, `$defs`, `definitions`, `default`, `examples`, `pattern`, `patternProperties`, `minProperties`, `maxProperties`, `minItems`, `maxItems` |
+| `openai` | `$id`, `$schema`, `definitions`, `default`, `examples`, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `pattern`, `minProperties`, `maxProperties` |
+| `anthropic` | `$id`, `$schema`, `definitions`, `default`, `examples`, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `patternProperties`, `additionalProperties`, `minProperties`, `maxProperties` |
+| `google` | `$id`, `$schema`, `definitions`, `default`, `examples`, `minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `pattern`, `patternProperties`, `minProperties`, `maxProperties` |
+| `deepseek` | `$id`, `$schema`, `definitions`, `default`, `examples`, `pattern`, `patternProperties`, `minProperties`, `maxProperties`, `minItems`, `maxItems` |
 
 ## Validation semantics
 
@@ -209,8 +220,10 @@ schemas/
 - **Canonical** files carry the raw, sanitised schema (free-text keywords
   stripped, `default` preserved).
 - **Active** files carry the rendered form. When the profile is `verbatim`,
-  active equals canonical. When the profile is `provider-strict` or
-  `runtime-sdk`, active is the rendered (keyword-stripped) version.
+  active equals canonical. When the profile is `provider-strict`, active is
+  the rendered (keyword-stripped) version; when it is `runtime-sdk`, active is
+  the `$ref`-inlined form (top-level `$defs`/`definitions` removed, no keyword
+  stripping).
 
 ### Sanitisation rules
 
