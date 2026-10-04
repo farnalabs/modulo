@@ -574,3 +574,18 @@ def _account_role(db_url: str, email: str) -> str:
             await engine.dispose()
 
     return run_db(go)
+
+
+def test_engine_and_factory_translates_sslmode_for_tls_deploy() -> None:
+    """FAR-1440: the CLI engine must translate a preserved ``sslmode`` into
+    asyncpg's ``ssl`` connect arg (a raw URL raises TypeError at first connect)."""
+    from unittest.mock import MagicMock, patch
+
+    mock_engine = MagicMock()
+    with patch.object(users_module, "create_async_engine", return_value=mock_engine) as mock_create:
+        engine, _factory = users_module._engine_and_factory("postgresql+asyncpg://u:p@h/db?sslmode=require")
+
+    args, kwargs = mock_create.call_args
+    assert args[0] == "postgresql+asyncpg://u:p@h/db"
+    assert kwargs["connect_args"]["ssl"] == "require"
+    assert engine is mock_engine

@@ -1490,7 +1490,11 @@ class _ProviderCommands:
             raise RuntimeError("background command start is dispatched through exec_command_stream (FAR-1050 R4)")
         result = await self._provider.exec_command(
             self._provider_ref,
-            ["sh", "-c", command],
+            # FAR-1470: bash, not sh — ``sh`` on the sandbox image is dash
+            # (no ``pipefail``), which aborted every ``agent_commands`` script
+            # that started with ``set -euo pipefail``. bash is a superset of
+            # sh for the POSIX helper scripts routed through here.
+            ["bash", "-c", command],
             cmd_timeout=int(timeout) if timeout else None,
         )
         if result.exit_code != 0:
@@ -9519,7 +9523,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _exec_process = await asyncio.wait_for(
                 _require_dispatch_provider(_dispatch_provider).exec_command_stream(
                     _sandbox_id or "",
-                    ["sh", "-c", wrapped_command],
+                    # FAR-1470: bash, not sh — ``sh`` on the sandbox image is
+                    # dash, which has no ``pipefail`` and aborted any
+                    # ``set -euo pipefail`` agent command. bash -c (NOT -lc)
+                    # matches today's env behaviour exactly: ``sh -c`` was a
+                    # non-login shell inheriting the exec env, and a login
+                    # shell would re-source the profile and change PATH.
+                    ["bash", "-c", wrapped_command],
                     environment=sandbox_envs,
                 ),
                 timeout=_cmd_start_bound,

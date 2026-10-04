@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -66,7 +66,8 @@ async def admin_list_config(
     except ProgrammingError:
         logger.exception("admin_system_config.admin_list_config")
         raise HTTPException(status_code=501, detail=_MSG_DATABASE_NOT_AVAILABLE_RUN) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_system_config.admin_list_config")
         logger.exception(_CODE_ROUTES_ADMIN_SYSTEM_CONFIG)
 
         raise HTTPException(
@@ -119,7 +120,8 @@ async def admin_set_config(
     except ProgrammingError:
         logger.exception("admin_system_config.admin_set_config")
         raise HTTPException(status_code=501, detail=_MSG_DATABASE_NOT_AVAILABLE_RUN) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_system_config.admin_set_config")
         logger.exception(_CODE_ROUTES_ADMIN_SYSTEM_CONFIG)
 
         raise HTTPException(
@@ -162,7 +164,8 @@ async def admin_delete_config(
     except ProgrammingError:
         logger.exception("admin_system_config.admin_delete_config")
         raise HTTPException(status_code=501, detail=_MSG_DATABASE_NOT_AVAILABLE_RUN) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_system_config.admin_delete_config")
         logger.exception(_CODE_ROUTES_ADMIN_SYSTEM_CONFIG)
 
         raise HTTPException(

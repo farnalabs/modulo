@@ -3,9 +3,9 @@
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else-if="run">
-      <nav aria-label="Breadcrumb" class="mb-4 flex items-center gap-1 text-sm text-muted-foreground">
-        <router-link to="/runs" class="hover:text-foreground transition-colors">{{ $t('views.RunDetailView.runs') }}</router-link>
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3.5 w-3.5"><polyline points="9 18 15 12 9 6"/></svg>
+      <nav :aria-label="$t('views.RunDetailView.breadcrumb')" class="mb-4 flex items-center gap-1 text-sm text-muted-foreground">
+        <router-link to="/runs" data-testid="run-detail-breadcrumb-runs" class="hover:text-foreground transition-colors">{{ $t('views.RunDetailView.runs') }}</router-link>
+        <ChevronRight aria-hidden="true" class="h-3.5 w-3.5" />
         <span class="text-foreground font-medium">{{ run.pipeline_name || (run.run_number != null ? '#' + run.run_number : shortId(run.run_id)) }}</span>
       </nav>
       <!-- Run Header -->
@@ -16,12 +16,13 @@
             <span :class="statusBadgeClass" class="capitalize" :title="runStatusDescription(run.status, t)" :aria-label="runStatusDescription(run.status, t)">{{ runStatusLabel(run.status) }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
-            Pipeline: <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
+            {{ $t('views.RunDetailView.pipeline_label') }} <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
           </p>
           <p class="text-xs text-muted-foreground">
-            Run ID: <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ shortId(run.run_id) }}</code>
+            {{ $t('views.RunDetailView.run_id_label') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ shortId(run.run_id) }}</code>
             <button
               type="button"
+              data-testid="run-detail-copy-run-id"
               :aria-label="$t('views.RunDetailView.copy_run_id')"
               class="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
               @click="copyRunId"
@@ -32,7 +33,7 @@
         </div>
         <div class="text-right text-xs text-muted-foreground">
           <div v-if="run.total_cost_usd != null" class="text-base font-semibold tabular-nums text-foreground">
-            Total: {{ formatMoney(Number(formattedCost), currencyCode, 6) }}
+            {{ $t('views.RunDetailView.total_label') }} {{ formatMoney(Number(formattedCost), currencyCode, 6) }}
           </div>
           <button
             type="button"
@@ -248,8 +249,8 @@
           class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
           @click="cancelRun"
         >
-          <svg v-if="cancelling" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-          <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          <LoaderCircle v-if="cancelling" aria-hidden="true" class="h-4 w-4 animate-spin" />
+          <CircleStop v-else aria-hidden="true" class="h-4 w-4" />
           {{ cancelling ? $t('views.RunDetailView.stopping') : $t('views.RunDetailView.stop') }}
         </button>
         <span v-if="cancelError" role="alert" class="ml-3 text-xs text-destructive">{{ cancelError }}</span>
@@ -265,7 +266,7 @@
           class="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50"
           @click="onRerunClick"
         >
-          <svg v-if="rerunning" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <LoaderCircle v-if="rerunning" aria-hidden="true" class="h-4 w-4 animate-spin" />
           <RotateCcw v-else class="h-4 w-4" aria-hidden="true" />
           {{ rerunning ? $t('views.RunDetailView.rerunning') : (rerunConfirming ? $t('views.RunDetailView.rerun_confirm') : $t('views.RunDetailView.rerun')) }}
         </button>
@@ -297,7 +298,7 @@
           data-testid="run-detail-view-trace"
           class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          <ExternalLink aria-hidden="true" class="h-3.5 w-3.5" />
           {{ $t('views.RunDetailView.view_trace') }}
         </a>
       </div>
@@ -446,7 +447,7 @@
                   class="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="copyText(node.name)"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <Copy aria-hidden="true" class="h-3 w-3" />
                 </button>
               </td>
               <td class="py-3 pr-4">
@@ -790,9 +791,9 @@
         <template #header>
           <div>
             <div class="text-lg font-semibold">
-              Prompt — {{ selectedPrompt.nodeName }}
+              {{ $t('views.RunDetailView.prompt_dialog_title', { node: selectedPrompt.nodeName }) }}
               <span v-if="selectedPrompt.tokenCount != null" class="ml-2 text-sm font-normal text-muted-foreground">
-                ~{{ selectedPrompt.tokenCount.toLocaleString() }} tokens
+                {{ $t('views.RunDetailView.prompt_dialog_token_count', { count: selectedPrompt.tokenCount.toLocaleString() }) }}
               </span>
             </div>
           </div>
@@ -845,7 +846,7 @@
         <template #footer>
           <div class="flex justify-end">
             <Button data-testid="run-detail-override-submit" :disabled="overrideSubmitting" @click="submitOverride">
-              {{ overrideSubmitting ? '...' : $t('views.RunDetailGuardrailSummary.override_guardrail') }}
+              {{ overrideSubmitting ? $t('views.RunDetailGuardrailSummary.override_submitting') : $t('views.RunDetailGuardrailSummary.override_guardrail') }}
             </Button>
           </div>
         </template>
@@ -882,7 +883,7 @@ import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { Check, X, AlertTriangle, RotateCcw, Download } from '@lucide/vue'
+import { Check, X, AlertTriangle, RotateCcw, Download, ChevronRight, CircleStop, Copy, ExternalLink, LoaderCircle } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null

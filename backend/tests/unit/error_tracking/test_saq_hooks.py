@@ -384,6 +384,28 @@ class TestGetEnginePrepPing:
         finally:
             saq_hooks._ENGINE = saved
 
+    def test_translates_sslmode_require_onto_connect_args(self) -> None:
+        saved = saq_hooks._ENGINE
+        try:
+            saq_hooks._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db?sslmode=require"
+            mock_engine = MagicMock()
+            with (
+                patch.object(saq_hooks, "_ENGINE", None),
+                patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch("modulo.settings.get_settings", return_value=settings_mock),
+            ):
+                saq_hooks._get_engine()
+            kwargs = mock_create.call_args.kwargs
+            # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
+            # leaving it in the URL raises TypeError at first connect (FAR-1440).
+            assert kwargs["url"] == "postgresql+asyncpg://u:p@h/db"
+            assert kwargs["connect_args"]["ssl"] == "require"
+            assert kwargs["connect_args"]["statement_cache_size"] == 0
+        finally:
+            saq_hooks._ENGINE = saved
+
     def test_honours_sslmode_require(self) -> None:
         """FAR-1441: sslmode=require must reach asyncpg as ssl='require'
         (TLS required, fail-closed), never silently downgraded to ssl=False."""

@@ -48,6 +48,7 @@ from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
+from modulo.db.url_utils import split_engine_sslmode
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -131,22 +132,16 @@ def get_break_glass_engine(settings: Settings) -> AsyncEngine:
     global _bg_engine, _bg_engine_url
     keyed_url = settings.modulo_break_glass_database_url
     if _bg_engine is None or _bg_engine_url != keyed_url:
-        # FAR-1441: translate the operator's ``sslmode`` into asyncpg's ``ssl``
-        # connect arg instead of hardcoding ``ssl=False`` (which silently
-        # downgrades ``sslmode=require``). Guard on the URL's ACTUAL driver
-        # scheme, not on any modulo_db knob: a non-Postgres break-glass URL
-        # passes through unchanged with no ssl connect arg.
-        effective_url = keyed_url
+        # FAR-1440: honour the operator's ``sslmode`` on the break-glass URL via
+        # the shared translation (absent/disable → explicit plaintext;
+        # require/verify-* fail closed). Hardcoding ``ssl=False`` silently
+        # forced plaintext even when the operator asked for TLS.
+        engine_url, ssl_arg = split_engine_sslmode(keyed_url)
         connect_args: dict[str, Any] = {"timeout": 10}
-        from sqlalchemy.engine import make_url
-
-        if str(make_url(keyed_url).drivername).startswith("postgres"):
-            from modulo.db.bootstrap import split_postgres_sslmode
-
-            effective_url, ssl_arg = split_postgres_sslmode(keyed_url)
+        if ssl_arg is not None:
             connect_args["ssl"] = ssl_arg
         _bg_engine = create_async_engine(
-            effective_url,
+            engine_url,
             pool_pre_ping=True,
             connect_args=connect_args,
         )

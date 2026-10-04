@@ -23,7 +23,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors._safe_int import safe_int as _safe_int
@@ -729,6 +729,7 @@ async def dashboard_summary(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "dashboard.dashboard_summary")
         _log.exception("dashboard.dashboard_summary")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -974,6 +975,7 @@ async def dashboard_trends(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "dashboard.dashboard_trends")
         _log.exception("dashboard.dashboard_trends")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1030,6 +1032,7 @@ async def daily_run_counts(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "dashboard.daily_run_counts")
         _log.exception(_CODE_DASHBOARD_DAILY_RUN_COUNTS)
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

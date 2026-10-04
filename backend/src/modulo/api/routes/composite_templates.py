@@ -15,7 +15,7 @@ from modulo.api.constants import (
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_INTERNAL_SERVER_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node, resolve_and_reject_mask_sentinels
 from modulo.auth.dependencies import get_current_tenant_user
@@ -168,7 +168,8 @@ async def list_composite_templates_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.list_composite_templates_endpoint")
         logger.exception("composite_templates.list_composite_templates_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -228,7 +229,8 @@ async def create_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.create_composite_template_endpoint")
         logger.exception("composite_templates.create_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -261,7 +263,8 @@ async def get_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.get_composite_template_endpoint")
         logger.exception("composite_templates.get_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -322,7 +325,8 @@ async def update_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.update_composite_template_endpoint")
         logger.exception("composite_templates.update_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -358,7 +362,8 @@ async def delete_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.delete_composite_template_endpoint")
         logger.exception("composite_templates.delete_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -393,7 +398,8 @@ async def restore_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.restore_composite_template_endpoint")
         logger.exception("composite_templates.restore_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -507,7 +513,8 @@ async def save_composite_editor_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.save_composite_editor_endpoint")
         logger.exception("composite_templates.save_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -655,7 +662,8 @@ async def publish_composite_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "composite_templates.publish_composite_endpoint")
         logger.exception("composite_templates.publish_composite_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

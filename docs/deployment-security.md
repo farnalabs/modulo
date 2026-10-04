@@ -198,10 +198,21 @@ multi-tenant isolation.
 
 ### 3.2 Connection Encryption
 
-- **In-transit:** Postgres connections must use TLS. Set `sslmode=require` in
-  `DATABASE_URL`: `postgresql+asyncpg://user:pass@host:5432/db?sslmode=require`
+- **In-transit:** Postgres connections must use TLS. The `sslmode` in
+  `DATABASE_URL` is honoured end-to-end (asyncpg's `ssl` connect arg is built
+  from it): `postgresql+asyncpg://user:pass@host:5432/db?sslmode=require`
 - **Certificate validation:** Use `sslmode=verify-full` with a CA certificate
   in production to prevent MITM within the VPC.
+- **Accepted values:** `disable`, `require`, `verify-ca`, `verify-full`.
+  `prefer` / `allow` are REJECTED at startup — they map to a certificate-none
+  SSL context that silently downgrades to plaintext, so they cannot describe a
+  security posture. An unknown value fails the boot rather than being guessed.
+- **Default posture:** with NO `sslmode` in the URL, Modulo connects with
+  explicit plaintext (`ssl=False`) — deliberately NOT asyncpg's own
+  "prefer TLS" default, which raises `ConnectionResetError` against servers
+  without a TLS listener (e.g. Fly's internal Postgres on its private
+  WireGuard network). If your database terminates TLS, set `sslmode=require`
+  (or stronger); unset means plaintext by design.
 - Redis connections should use TLS if Redis is configured with
   `tls-port` and `tls-cert-file`:
   `rediss://user:pass@host:6379/0`
@@ -640,7 +651,7 @@ before marking a production deployment as complete.
 
 - [ ] RLS is enabled on all tenant-scoped tables
 - [ ] RLS test suite passes: `uv run pytest tests/unit/db/test_rls.py -v`
-- [ ] Postgres connections use `sslmode=require` (or `verify-full`)
+- [ ] Postgres connections use `sslmode=require` (or `verify-full`) — accepted values are `disable`, `require`, `verify-ca`, `verify-full`; `prefer`/`allow` fail the boot (never a silent downgrade)
 - [ ] Alembic advisory lock ID does not conflict with other applications on the same Postgres instance
 - [ ] Backup encryption passphrase is 32+ characters and stored separately
 - [ ] Backup integrity verified: `uv run scripts/restore.py --input <backup> --dry-run`

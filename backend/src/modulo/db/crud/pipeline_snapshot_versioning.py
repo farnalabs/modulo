@@ -26,6 +26,7 @@ from modulo.db.crud.hitl_review_guard import (
     enforce_guardrail_binding_strip,
     resolve_effective_privilege,
 )
+from modulo.db.crud.pipeline import GRAPH_UPDATED_EVENT, graph_update_audit_payload
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -220,6 +221,11 @@ async def rollback_to_snapshot(
     flag; for ``"rest"`` with ``account_id`` the live role is re-read under the
     lock.
 
+    FAR-1471: the rollback itself also appends a ``pipeline.graph_updated``
+    audit event (actor, pipeline id, before/after node+edge summary) so every
+    graph mutation is attributable — the ``hitl_review_removed`` event above
+    only fires for gate weakenings.
+
     Does not affect in-flight runs (they continue on their original snapshot).
     Returns the new snapshot, or None if the target snapshot doesn't exist.
     """
@@ -255,6 +261,12 @@ async def rollback_to_snapshot(
         }
         for e in old_rows
     ]
+
+    # FAR-1471: the pre-write node snapshot for the ``pipeline.graph_updated``
+    # audit summary (same defense in depth as ``old_edges``), captured BEFORE
+    # any write so the event describes the graph as it was, not post-write
+    # ORM state.
+    previous_nodes: list[dict[str, Any]] = copy.deepcopy(list(pipeline.graph_nodes_json or []))
 
     # FAR-309 PR A review: service-layer guardrail-binding strip guard. A
     # non-admin may not roll back to a snapshot that drops a guardrail-bound
@@ -338,6 +350,32 @@ async def rollback_to_snapshot(
         )
         session.add(new_edge)
     await session.flush()
+
+    # FAR-1471: a rollback IS a pipeline graph mutation, so it emits the SAME
+    # ``pipeline.graph_updated`` event a graph write does — until now this
+    # path rewrote ``pipeline.graph_nodes_json`` while recording only
+    # ``hitl_review_removed`` (which fires ONLY for gate weakenings), leaving
+    # an ordinary rollback unattributed. Written AFTER the graph rows flush
+    # but in the SAME transaction as the rollback itself (mirroring the emit
+    # in ``replace_pipeline_graph``), so the event and the write commit or
+    # roll back together. Actor is the rollback caller's account id.
+    await append_audit_event(
+        session,
+        org_id=pipeline.organisation_id,
+        event_type=GRAPH_UPDATED_EVENT,
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json=graph_update_audit_payload(
+            pipeline_id=pipeline_id,
+            caller_type=caller_type,
+            account_id=account_id,
+            previous_nodes=previous_nodes,
+            new_nodes=snapshot_nodes,
+            previous_edge_count=len(old_edges),
+            new_edge_count=len(new_edges),
+        ),
+    )
 
     new_snapshot = await create_snapshot_from_live_graph(
         session,

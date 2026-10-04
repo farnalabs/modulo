@@ -2,6 +2,7 @@
 
 import uuid
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -79,7 +80,36 @@ def _target_snapshot(sid: uuid.UUID, pipeline_id: uuid.UUID, *, version: int = 1
     return target
 
 
+def _hitl_audits(audit: AsyncMock) -> list[Any]:
+    """The ``hitl_review_removed`` appends on a patched ``append_audit_event``.
+
+    ``rollback_to_snapshot`` now also appends ``pipeline.graph_updated`` on
+    every successful rollback (FAR-1471), so assertions about the HITL audit
+    must select that event type instead of counting every append (mirrors
+    ``_hitl_audits`` in tests/unit/db/test_pipeline_guard.py).
+    """
+    return [call for call in audit.await_args_list if call.kwargs.get("event_type") == "hitl_review_removed"]
+
+
 class TestRollbackToSnapshot:
+    @pytest.fixture(autouse=True)
+    def _stub_rollback_audit_append(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Route rollback's audit appends through a mock for this class.
+
+        Every test here drives ``rollback_to_snapshot`` against an
+        ``AsyncMock`` session, which cannot host the real
+        ``append_audit_event``'s ``session.begin_nested()``. FAR-1471 made a
+        ``pipeline.graph_updated`` append unconditional on every successful
+        rollback, so the real function now runs on paths that previously
+        never reached it. The two tests that assert on the audit install
+        their own ``with patch(...)`` on the same symbol, which shadows this
+        one and keeps their assertions on the mock they hold.
+        """
+        monkeypatch.setattr(
+            "modulo.db.crud.pipeline_snapshot_versioning.append_audit_event",
+            AsyncMock(),
+        )
+
     async def test_rollback_to_snapshot_creates_new_snapshot(self):
         session = AsyncMock()
         pid = uuid.uuid4()
@@ -455,8 +485,9 @@ class TestRollbackToSnapshot:
                 caller_type="rest",
             )
 
-        mock_audit.assert_awaited_once()
-        audit_kwargs = mock_audit.await_args.kwargs
+        hitl_calls = _hitl_audits(mock_audit)
+        assert len(hitl_calls) == 1, f"expected exactly one hitl_review_removed append, got {len(hitl_calls)}"
+        audit_kwargs = hitl_calls[0].kwargs
         assert audit_kwargs["event_type"] == "hitl_review_removed"
         assert audit_kwargs["org_id"] == org_id
         assert audit_kwargs["actor_user_id"] == account_id
@@ -520,10 +551,11 @@ class TestRollbackToSnapshot:
             result = await rollback_to_snapshot(session, pid, target_sid, is_privileged=True, caller_type="rest")
 
         assert result is new_snapshot
-        mock_audit.assert_awaited_once()
-        assert mock_audit.await_args.kwargs["event_type"] == "hitl_review_removed"
-        assert mock_audit.await_args.kwargs["resource_id"] == pid
-        payload = mock_audit.await_args.kwargs["payload_json"]
+        hitl_calls = _hitl_audits(mock_audit)
+        assert len(hitl_calls) == 1, f"expected exactly one hitl_review_removed append, got {len(hitl_calls)}"
+        assert hitl_calls[0].kwargs["event_type"] == "hitl_review_removed"
+        assert hitl_calls[0].kwargs["resource_id"] == pid
+        payload = hitl_calls[0].kwargs["payload_json"]
         assert payload["denied"] is False
         assert payload["caller_type"] == "rest"
         assert payload["affected_edges"][0]["weakening_types"] == ["human_only"]

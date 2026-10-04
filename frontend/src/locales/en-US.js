@@ -1594,6 +1594,10 @@ export default {
       "known_fix_reference": "View documentation",
       "copy_run_id": "Copy run ID",
       "copy": "Copy",
+      "breadcrumb": "Breadcrumb",
+      "pipeline_label": "Pipeline:",
+      "run_id_label": "Run ID:",
+      "total_label": "Total:",
       "final_output": "Final Output",
       "no_node_data": "No node data available for this run.",
       "no_node_data_failed": "No node-level data recorded for this failed run. The error may have occurred during pipeline setup or before any node started execution.",
@@ -1735,6 +1739,8 @@ export default {
       "artifact_download_aria": "Download {stream} log (attempt {attempt})",
       "artifact_load_error": "Failed to load artifact listing.",
       "artifact_load_retry": "Retry",
+      "prompt_dialog_title": "Prompt — {node}",
+      "prompt_dialog_token_count": "~{count} tokens",
       "artifact_load_retry_aria": "Retry loading the artifact listing",
     },
     "AdminRunRetentionView": {
@@ -3491,7 +3497,8 @@ export default {
       "override_failed": "Override failed.",
       "override_disclosure": "The override re-runs the guardrail pass on the input you supply. This is re-block safe — if the corrected input still violates a blocking guardrail, the run stays blocked.",
       "override_requires_operator": "Only operators and admins can override a guardrail block.",
-      "override_invalid_json": "The corrected input payload must be valid JSON."
+      "override_invalid_json": "The corrected input payload must be valid JSON.",
+      "override_submitting": "Overriding..."
     }
   },
   "components": {

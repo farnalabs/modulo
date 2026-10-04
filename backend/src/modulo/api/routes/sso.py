@@ -12,7 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
     get_system_db_session,
@@ -312,6 +312,7 @@ async def oidc_callback(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "sso.oidc_callback")
         _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -419,6 +420,7 @@ async def _saml_login_redirect(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "sso._saml_login_redirect")
         _log.warning("SAML login DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -519,6 +521,7 @@ async def saml_acs_provider(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "sso.saml_acs_provider")
         _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -689,6 +692,7 @@ async def saml_acs(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "sso.saml_acs")
         _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

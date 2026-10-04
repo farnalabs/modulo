@@ -16,7 +16,7 @@ from modulo.api.constants import (
     MSG_INTERNAL_SERVER_ERROR,
     MSG_RESOURCE_ALREADY_EXISTS,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.api_key import (
     _UNSET,
@@ -363,7 +363,8 @@ async def _mint_api_key(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "api_keys._mint_api_key")
         logger.exception(_CODE_API_KEYS_CREATE_API)
         logger.warning("create_api_key SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -463,7 +464,8 @@ async def list_api_keys_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "api_keys.list_api_keys_endpoint")
         logger.exception("api_keys.list_api_keys_endpoint")
         logger.warning("list_api_keys SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -580,7 +582,8 @@ async def _apply_key_update(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "api_keys._apply_key_update")
         logger.exception(_CODE_API_KEYS_UPDATE_API)
         logger.warning(
             "update_api_key SQLAlchemyError",
@@ -649,7 +652,8 @@ async def revoke_api_key_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "api_keys.revoke_api_key_endpoint")
         logger.exception(_CODE_API_KEYS_REVOKE_API)
         logger.warning(
             "revoke_api_key SQLAlchemyError",

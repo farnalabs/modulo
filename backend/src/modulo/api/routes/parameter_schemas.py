@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.parameter_schema import (
@@ -297,7 +297,8 @@ async def list_parameter_schemas_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.list_parameter_schemas_endpoint")
         logger.exception("parameter_schemas.list")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -350,7 +351,8 @@ async def create_parameter_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.create_parameter_schema_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -391,7 +393,8 @@ async def get_parameter_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.get_parameter_schema_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_GET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -443,7 +446,8 @@ async def update_parameter_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.update_parameter_schema_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -490,7 +494,8 @@ async def delete_parameter_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.delete_parameter_schema_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -528,7 +533,8 @@ async def restore_parameter_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.restore_parameter_schema_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -561,7 +567,8 @@ async def diff_parameter_schema_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.diff_parameter_schema_endpoint")
         logger.exception("parameter_schemas.diff")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -631,7 +638,8 @@ async def get_parameter_schema_references_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.get_parameter_schema_references_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -674,7 +682,8 @@ async def validate_parameter_values_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.validate_parameter_values_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_VALIDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -728,7 +737,8 @@ async def list_parameter_sets_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.list_parameter_sets_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_LIST_SETS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -783,7 +793,8 @@ async def create_parameter_set_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.create_parameter_set_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -825,7 +836,8 @@ async def get_parameter_set_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.get_parameter_set_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_GET_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -879,7 +891,8 @@ async def update_parameter_set_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.update_parameter_set_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -930,7 +943,8 @@ async def delete_parameter_set_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.delete_parameter_set_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -972,7 +986,8 @@ async def restore_parameter_set_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.restore_parameter_set_endpoint")
         logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1017,7 +1032,8 @@ async def get_parameter_set_references_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Parameter sets are not available. Run database migrations to enable it.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "parameter_schemas.get_parameter_set_references_endpoint")
         logger.exception(_CODE_PARAMETER_SETS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

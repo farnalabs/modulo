@@ -9,7 +9,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.library import LibraryPrimitiveResponse
 from modulo.auth.jwt import TenantPrincipal
@@ -98,7 +98,8 @@ async def create_contribution(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "contributions.create_contribution")
         _log.exception("create_contribution: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -148,7 +149,8 @@ async def submit_for_review(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONTRIBUTION_NOT_FOUND) from None
     except ContributionInvalidTransitionError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "contributions.submit_for_review")
         _log.exception("submit_for_review: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -201,7 +203,8 @@ async def publish_contribution_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONTRIBUTION_NOT_FOUND) from None
     except ContributionInvalidTransitionError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "contributions.publish_contribution_endpoint")
         _log.exception("publish_contribution_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -280,7 +283,8 @@ async def submit_contribution_version_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONTRIBUTION_NOT_FOUND) from None
     except ContributionInvalidTransitionError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "contributions.submit_contribution_version_endpoint")
         _log.exception("submit_contribution_version_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -327,7 +331,8 @@ async def list_contribution_versions_endpoint(
         ) from None
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONTRIBUTION_NOT_FOUND) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "contributions.list_contribution_versions_endpoint")
         _log.exception("list_contribution_versions_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -384,7 +389,8 @@ async def list_contributions_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "contributions.list_contributions_endpoint")
         _log.exception("list_contributions_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

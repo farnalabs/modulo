@@ -29,6 +29,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _delta_ratio,
     _persist_full_stderr_artifact,
     _persist_full_stdout_artifact,
+    _ProviderCommands,
     _read_log_tail_via_provider,
     _StallDetector,
     _wait_command_with_exec_process,
@@ -36,6 +37,7 @@ from modulo.core.pipeline_engine.node_runner import (
     make_sandbox_agent_fn,
     resolve_env_var_refs,
 )
+from tests.unit.pipeline_engine.conftest import FakeDispatchProvider, FakeFileIOProvider, install_fake_dispatch
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
@@ -3262,3 +3264,70 @@ def test_wrap_log_redirect_bash_executes_command_already_ending_with_newline(tmp
     log_text = (tmp_path / "agent.log").read_text()
     assert "far651-newline-tail" in log_text
     assert "here-document" not in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# FAR-1470: the dispatch hands the provider ``["bash", "-c", ...]``, not
+# ``["sh", "-c", ...]`` — ``sh`` on the sandbox image is dash, which has no
+# ``pipefail`` (PR Reviewer outage 2026-10-03: every ``agent_commands`` script
+# starting with ``set -euo pipefail`` aborted instantly). Each assertion below
+# FAILS on the pre-fix dispatch; the wrapped payload must stay byte-for-byte
+# identical — only the shell changes.
+# ---------------------------------------------------------------------------
+
+# The FAR-651 newline-safe log-redirect wrap the dispatch applies.
+_EXPECTED_WRAPPED_REDIRECT = f"(\n{_AGENT_COMMAND}\n) > /home/user/agent.log 2>&1"
+_FAR1470_OUTPUT = b'{"status": "completed", "summary": "done"}'
+
+
+async def test_agent_command_dispatched_under_bash(monkeypatch):
+    """The agent command reaches the provider as ``["bash", "-c", <wrap>]``.
+
+    Full ``make_sandbox_agent_fn`` dispatch through a fake provider (the same
+    harness ``test_e2b_dispatch_rewire_r4`` uses), so the assertion observes
+    the REAL argv built at the ``exec_command_stream`` call site — not a
+    re-statement of it.
+    """
+    # Log-tail seam: keep the dispatch off the real urllib tail probe.
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        AsyncMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"far1470-tail"))),
+    )
+    # File-I/O seam: serve output.json so the run completes cleanly.
+    file_io = FakeFileIOProvider(files={"/home/user/output.json": _FAR1470_OUTPUT})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
+        AsyncMock(return_value=file_io),
+    )
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-far1470", exit_code=0)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30))
+    with patch(
+        "e2b.AsyncSandbox.create",
+        new=AsyncMock(side_effect=AssertionError("the legacy AsyncSandbox.create must not run")),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert dispatch.last_command is not None
+    # FAR-1470: bash, not sh (dash has no `pipefail`).
+    assert dispatch.last_command[:2] == ["bash", "-c"], dispatch.last_command
+    # One-token change only: the wrapped payload is byte-for-byte today's wrap.
+    assert dispatch.last_command[2] == _EXPECTED_WRAPPED_REDIRECT
+
+
+async def test_provider_commands_helper_dispatched_under_bash():
+    """The mediated ``commands.run`` helper path also dispatches under bash.
+
+    ``_ProviderCommands.run`` is the ``sandbox.commands.run`` stand-in the
+    workspace-input / drift-probe helpers call; FAR-1470 keeps BOTH
+    ``node_runner`` dispatch sites on the same shell. bash is a superset of sh
+    for the POSIX helper scripts, so behaviour is unchanged.
+    """
+    provider = FakeDispatchProvider(exit_code=0)
+    commands = _ProviderCommands(provider, "sbx-far1470")
+
+    result = await commands.run("set -euo pipefail; echo ok")
+
+    assert provider.last_command == ["bash", "-c", "set -euo pipefail; echo ok"]
+    assert result.exit_code == 0

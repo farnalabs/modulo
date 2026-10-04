@@ -20,7 +20,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
@@ -200,7 +200,8 @@ async def list_all_deliveries(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.list_all_deliveries")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_all_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -366,7 +367,8 @@ async def retry_all_failed_deliveries(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.retry_all_failed_deliveries")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -437,7 +439,8 @@ async def replay_failed_deliveries(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.replay_failed_deliveries")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "replay_failed_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -598,7 +601,8 @@ async def _record_delivery_result(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications._record_delivery_result")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries.record"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -641,7 +645,8 @@ async def _record_delivery_error(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications._record_delivery_error")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries.error_record"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -701,7 +706,8 @@ async def list_webhooks(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.list_webhooks")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_webhooks"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -755,7 +761,8 @@ async def create_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.create_webhook")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "create_webhook"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -795,7 +802,8 @@ async def get_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.get_webhook")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -853,7 +861,8 @@ async def update_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.update_webhook")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -896,7 +905,8 @@ async def delete_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.delete_webhook")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -940,7 +950,8 @@ async def test_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.test_webhook")
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1042,7 +1053,8 @@ async def re_enable_webhook(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications.re_enable_webhook")
         logger.exception(
             _CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
         )
@@ -1149,7 +1161,8 @@ async def _fetch_webhook_deliveries(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications._fetch_webhook_deliveries")
         logger.exception(
             _CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
         )
@@ -1241,7 +1254,8 @@ async def _fetch_delivery_for_retry(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin_notifications._fetch_delivery_for_retry")
         logger.exception(
             _CODE_NOTIFICATIONS_DB_ERROR,
             extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},

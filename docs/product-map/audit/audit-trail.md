@@ -60,6 +60,16 @@ guarded against tampering at both the ORM and the database layer.
 - [x] `GET /api/v1/admin/audit/export` streams a paginated CSV export
       (items/total/page/page_size) honouring the same filters — compliance
       evidence surface
+- [x] `GET /api/v1/admin/audit/scan` streams the WHOLE matching event set in
+      ONE response (NDJSON by default, or a Content-Disposition CSV attachment)
+      — the server-side scan companion to `/export` with the same typed filters
+      and `audit_viewer` + `audit.manage` gates, but no offset/limit pagination:
+      the server keyset-paginates over the stable `(created_at, id)` order in
+      fixed page batches so memory stays bounded for any org size
+      (`core/audit_logger/__init__.py` `stream_export_chain`,
+      `api/routes/audit.py` `scan_chain_endpoint`,
+      `tests/unit/api/test_audit_scan_route.py`,
+      `TestScanChain` in `tests/unit/api/test_audit.py`)
 - [x] `GET /api/v1/admin/audit/batch-detail` resolves a batch of event ids into
       full records
 - [x] The audit surface is admin-only and gated by the `audit_viewer` feature
@@ -76,6 +86,14 @@ guarded against tampering at both the ORM and the database layer.
   chain.
 
 ## QA History
+- 2026-10-03: **Improve Architecture product-map walk** — closed the
+  feat-audit deferral "the export surface is paginated JSON only (no server-side
+  streaming / scan export for the whole org in one response)." New
+  `GET /api/v1/admin/audit/scan` streams the whole org event set as NDJSON/CSV
+  (the server keyset-paginates over `created_at ASC, id ASC` in fixed batches),
+  mirroring the feat-analytics `/scan` surface; unit + TestClient coverage pins
+  the core generator, the wire shape, error mapping and the 401/403/422 gates.
+  Removed the deferral from the manifest registry and the tracker.
 - 2026-10-02: **Improve Architecture product-map walk** — closed
   the `personas/marcus-ciso.feature` "Marcus verifies the audit log is
   append-only" journey gap (pinned `@awaiting-implementation` since 2026-08

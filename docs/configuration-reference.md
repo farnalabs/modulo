@@ -365,6 +365,13 @@ See [`docs/operations/backup.md`](./operations/backup.md) for backup configurati
 | `EMAIL_FROM` | No | – | From-address for outgoing emails |
 | `SMTP_TIMEOUT` | No | `30` | SMTP connection/send timeout in seconds |
 
+The same variables also drive the Docker Compose **health watchdog**'s email
+alerts (`watchdog` service in the root `docker-compose.yml`) — one SMTP setup
+serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
+`EMAIL_FROM` and `ALERT_EMAIL_TO` are all set; leaving them unset is a
+supported state where monitoring still runs and only the emails are skipped.
+See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
+
 ---
 
 ## Worker Liveness Watchdog
@@ -375,7 +382,7 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 |----------|----------|---------|-------------|
 | `WATCHDOG_ENABLED` | No | `true` | Enable the watchdog tick |
 | `WATCHDOG_TICK_SECONDS` | No | `30` | Tick interval in seconds |
-| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Sustained window before an alert fires — applies to BOTH the SAQ-worker liveness condition AND the system-cron (`fire_due_triggers`) heartbeat condition, each of which must look bad continuously for this many seconds |
+| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Sustained window before an alert fires - applies to BOTH the SAQ-worker liveness condition AND the system-cron (`fire_due_triggers`) heartbeat condition, each of which must look bad continuously for this many seconds |
 | `WATCHDOG_ALERT_STATE_TTL_SECONDS` | No | `604800` | Edge-triggered alert state TTL (default 7 days) |
 | `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
 | `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
@@ -501,10 +508,19 @@ per-check override is set to a positive value.
 | `MODULO_HEALTH_REDIS_TIMEOUT_SECONDS` | No | `0` | Redis check timeout; `0` = use global |
 | `MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS` | No | `0` | Checkpointer schema check timeout; `0` = use global |
 | `MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS` | No | `0` | Alembic migration check timeout; `0` = use global |
+| `MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS` | No | `1` | Database-hygiene check timeout (seconds); `0` = use global |
+| `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor - a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
+| `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO` | No | `0.60` | Database-hygiene: worst-table dead-tuple ratio at/above which a table over the floor grades `degraded` (`0`–`1`) |
 
-A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations)
-or `unavailable` (database) with a "timed out after Ns" detail message instead of
-blocking readiness indefinitely.
+A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations/
+db_hygiene) or `unavailable` (database) with a "timed out after Ns" detail message
+instead of blocking readiness indefinitely.
+
+The database-hygiene sub-check's two thresholds (`MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES`,
+`MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO`) are grading settings, not timeouts: the check
+reports the worst table from `pg_stat_user_tables` plus this database's freeze age
+against `autovacuum_freeze_max_age`, and grades `degraded` (never `unavailable`, so it
+never 503s readiness on its own) when either threshold is breached.
 
 ---
 

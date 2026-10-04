@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -122,6 +122,7 @@ async def complete_model_backend_setup(
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_setup.complete_model_backend_setup")
         _log.exception("mcp_setup.complete_model_backend_setup: database error for backend %s", backend_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

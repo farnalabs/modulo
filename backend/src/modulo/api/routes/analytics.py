@@ -35,6 +35,7 @@ from starlette import status as http_status
 from starlette.responses import StreamingResponse
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.analytics.builder import (
@@ -457,7 +458,8 @@ async def _resolve_scoped_team_ids(
                 )
             )
             return tuple(rows.scalars().all())
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "analytics._resolve_scoped_team_ids")
         _log.exception("analytics.route.team_boundary_db_error", extra={"org_id": str(org_id)})
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

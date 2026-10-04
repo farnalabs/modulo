@@ -20,6 +20,7 @@ from modulo.api.constants import (
     MSG_NO_ORGANISATION,
     MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
 )
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -240,6 +241,7 @@ async def _merge_stored_forwarder_config(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_forwarder_config._merge_stored_forwarder_config")
         _log.exception(_CODE_ERROR_FORWARDER_CONFIG_TEST)
         _log.warning("error_tracking.test_forwarder_db_error")
         raise HTTPException(
@@ -277,6 +279,7 @@ async def _record_test_result(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_forwarder_config._record_test_result")
         _log.exception(_CODE_ERROR_FORWARDER_CONFIG_TEST)
         _log.warning("error_tracking.test_forwarder_save_db_error")
         raise HTTPException(
@@ -318,6 +321,7 @@ async def list_forwarders(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_forwarder_config.list_forwarders")
         _log.exception("error_forwarder_config.list_forwarders")
         _log.warning("error_tracking.list_forwarders_db_error")
         raise HTTPException(
@@ -397,6 +401,7 @@ async def configure_forwarder(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_forwarder_config.configure_forwarder")
         _log.exception("error_forwarder_config.configure_forwarder")
         _log.warning("error_tracking.configure_forwarder_db_error")
         raise HTTPException(
@@ -517,6 +522,7 @@ async def delete_forwarder(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_forwarder_config.delete_forwarder")
         _log.exception("error_forwarder_config.delete_forwarder")
         _log.warning("error_tracking.delete_forwarder_db_error")
         raise HTTPException(
@@ -573,6 +579,7 @@ async def restore_forwarder(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "error_forwarder_config.restore_forwarder")
         _log.exception("error_forwarder_config.restore_forwarder")
         _log.warning("error_tracking.restore_forwarder_db_error")
         raise HTTPException(

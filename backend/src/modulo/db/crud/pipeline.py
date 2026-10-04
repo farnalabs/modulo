@@ -96,6 +96,10 @@ _OWNER_CHANGED_EVENTS: dict[str, str] = {
 # FAR-1184: audit event written when a raise/clear of the threshold is refused
 # because the caller lacks ``cost.manage``.
 CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT = "pipeline.circuit_breaker_threshold_change_denied"
+# FAR-1471: audit event written on EVERY successful pipeline graph mutation.
+# Distinct from the ``pipeline.graph.update`` permission code string so the two
+# vocabularies never collide (permission codes live in the auth layer).
+GRAPH_UPDATED_EVENT = "pipeline.graph_updated"
 _MSG_THRESHOLD_NOT_A_NUMBER = "circuit_breaker_threshold must be a number (USD) or null"
 
 
@@ -1060,7 +1064,24 @@ def _resolve_read_session_factory(
 
     if async_url is None:
         raise RuntimeError("cannot derive an async read URL from the clone source session")
-    read_engine = create_async_engine(async_url, poolclass=NullPool)
+    # FAR-1440: the source engine's URL is clean (``sslmode`` was extracted
+    # into ``connect_args`` by the upstream engine factory), so a naive
+    # ``create_async_engine`` here would connect with asyncpg's default
+    # ``prefer`` — CERT_NONE with a silent plaintext retry — on a production
+    # read path. Re-translate the operator's ``sslmode`` (absent/disable →
+    # explicit ``ssl=False``; require/verify-* kept fail-closed; prefer/allow
+    # rejected) exactly like every other engine in the process.
+    connect_args: dict[str, Any] = {}
+    url_for_engine: Any = async_url
+    if str(async_url.drivername).startswith("postgres"):
+        from modulo.db.url_utils import split_postgres_sslmode
+
+        # URL.__str__ masks the password ("u:***@h"); render with the password
+        # kept so the clone engine connects with the real credentials.
+        url_str = async_url.render_as_string(hide_password=False)
+        url_for_engine, ssl_arg = split_postgres_sslmode(url_str)
+        connect_args["ssl"] = ssl_arg
+    read_engine = create_async_engine(url_for_engine, poolclass=NullPool, connect_args=connect_args)
     return async_sessionmaker(read_engine, expire_on_commit=False, class_=AsyncSession), read_engine
 
 
@@ -1259,6 +1280,51 @@ def enforce_manual_node_output_schemas(nodes: list[dict[str, Any]]) -> None:
             raise ManualNodeOutputSchemaError(str(raw_id) if raw_id is not None else "unknown")
 
 
+def graph_update_audit_payload(
+    *,
+    pipeline_id: uuid.UUID,
+    caller_type: Literal["rest", "mcp"],
+    account_id: uuid.UUID | None,
+    previous_nodes: list[dict[str, Any]],
+    new_nodes: list[dict[str, Any]],
+    previous_edge_count: int,
+    new_edge_count: int,
+) -> dict[str, Any]:
+    """Build the ``pipeline.graph_updated`` audit payload (FAR-1471).
+
+    A concise before/after summary: node/edge counts plus the node IDS that
+    were added, removed, or whose ``agent_commands`` changed. Deliberately
+    IDs-and-counts ONLY — never node payloads, ``env_vars``, ``context_files``
+    or any parameter value — so no masked secret can enter the audit chain.
+
+    Emitted for EVERY successful graph replacement (including a write that
+    changes nothing): the point of the event is attribution — who wrote this
+    graph, from which surface, and when — which the HITL-only audit left blank
+    for plain writes such as an ``agent_commands`` edit (the 2026-10-03 PR
+    Reviewer outage was untraceable for exactly this reason).
+    """
+    previous_by_id = {str(n.get("id")): n for n in previous_nodes if n.get("id") is not None}
+    new_by_id = {str(n.get("id")): n for n in new_nodes if n.get("id") is not None}
+    previous_ids = set(previous_by_id)
+    new_ids = set(new_by_id)
+    return {
+        "pipeline_id": str(pipeline_id),
+        "caller_type": caller_type,
+        "changed_by": str(account_id) if account_id is not None else None,
+        "previous_node_count": len(previous_nodes),
+        "new_node_count": len(new_nodes),
+        "previous_edge_count": previous_edge_count,
+        "new_edge_count": new_edge_count,
+        "added_node_ids": sorted(new_ids - previous_ids),
+        "removed_node_ids": sorted(previous_ids - new_ids),
+        "agent_commands_changed_node_ids": sorted(
+            node_id
+            for node_id in previous_ids & new_ids
+            if previous_by_id[node_id].get("agent_commands") != new_by_id[node_id].get("agent_commands")
+        ),
+    }
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -1289,6 +1355,11 @@ async def replace_pipeline_graph(
     flag (admin-level, the ``guardrail.manage`` privilege — distinct from the
     operator+ ``is_privileged``); for ``"rest"`` with ``account_id`` the live
     role is re-read under the lock.
+
+    FAR-1471: a successful write ALSO appends a ``pipeline.graph_updated``
+    audit event (actor, pipeline id, before/after node+edge summary) so every
+    graph mutation is attributable — the HITL-gate-removal event below only
+    fires for gate weakenings.
     """
     result = await session.execute(
         select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update()
@@ -1324,6 +1395,11 @@ async def replace_pipeline_graph(
         }
         for e in old_rows
     ]
+
+    # FAR-1471: the node-side snapshot (same defense in depth as old_edges),
+    # captured BEFORE any write so the graph_updated audit summary always
+    # describes the pre-write state rather than post-write ORM state.
+    previous_nodes: list[dict[str, Any]] = copy.deepcopy(list(pipeline.graph_nodes_json or []))
 
     # FAR-309 PR A review: service-layer guardrail-binding strip guard. A
     # non-admin may not remove a guardrail-bound node (that would drop the
@@ -1403,4 +1479,27 @@ async def replace_pipeline_graph(
     ]
     session.add_all(persisted_edges)
     await session.flush()
+
+    # FAR-1471: every successful graph replacement is attributable. Written
+    # AFTER the graph rows flush but in the SAME transaction (mirroring the
+    # other append_audit_event call sites in this file), so the event and the
+    # write commit or roll back together — a graph write that commits without
+    # an audit event is no longer possible.
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type=GRAPH_UPDATED_EVENT,
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json=graph_update_audit_payload(
+            pipeline_id=pipeline_id,
+            caller_type=caller_type,
+            account_id=account_id,
+            previous_nodes=previous_nodes,
+            new_nodes=nodes,
+            previous_edge_count=len(old_edges),
+            new_edge_count=len(edges),
+        ),
+    )
     return list(pipeline.graph_nodes_json), persisted_edges

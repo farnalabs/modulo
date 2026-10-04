@@ -15,7 +15,7 @@ from modulo.api.constants import (
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.runs import _mask_output_value, _serialize_node_token_usage
 from modulo.auth.jwt import TenantPrincipal
@@ -271,7 +271,8 @@ async def create_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.create_group")
         _log.exception(_CODE_VARIANTS_CREATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -315,7 +316,8 @@ async def list_groups(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.list_groups")
         _log.exception(_CODE_VARIANTS_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -355,7 +357,8 @@ async def get_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.get_group")
         _log.exception(_CODE_VARIANTS_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -414,7 +417,8 @@ async def update_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.update_group")
         _log.exception(_CODE_VARIANTS_UPDATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -456,7 +460,8 @@ async def delete_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.delete_group")
         _log.exception(_CODE_VARIANTS_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -497,7 +502,8 @@ async def restore_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.restore_group")
         _log.exception(_CODE_VARIANTS_RESTORE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -576,7 +582,8 @@ async def run_variant(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.run_variant")
         _log.exception(_CODE_VARIANTS_RUN_VARIANT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -661,7 +668,8 @@ async def run_batch(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.run_batch")
         _log.exception(_CODE_VARIANTS_RUN_VARIANT_BATCH)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -728,7 +736,8 @@ async def coverage_gaps(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.coverage_gaps")
         _log.exception(_CODE_VARIANTS_COVERAGE_GAPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -774,7 +783,8 @@ async def prompt_diffs(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.prompt_diffs")
         _log.exception(_CODE_VARIANTS_PROMPT_DIFFS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -862,7 +872,8 @@ async def batch_compare(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "variants.batch_compare")
         _log.exception(_CODE_VARIANTS_BATCH_COMPARE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

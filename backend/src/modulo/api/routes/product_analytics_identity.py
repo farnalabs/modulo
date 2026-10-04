@@ -15,6 +15,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.product_analytics.hmac_verify import verify_hmac
@@ -115,7 +116,8 @@ async def get_identity(
             status_code=501,
             detail="Database not available. Run migrations.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "product_analytics_identity.get_identity")
         _log.exception(_LOG_IDENTITY)
         raise HTTPException(
             status_code=503,
@@ -200,7 +202,8 @@ async def rotate_identity_secret(
             status_code=501,
             detail="Database not available. Run migrations.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "product_analytics_identity.rotate_identity_secret")
         _log.exception(_LOG_ROTATE)
         raise HTTPException(
             status_code=503,

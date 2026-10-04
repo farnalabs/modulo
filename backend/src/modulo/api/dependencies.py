@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.api.team_scope import TeamScopeProvider, team_membership_exists
 from modulo.auth.dependencies import (
@@ -367,7 +368,8 @@ def require_target_org_role(
                     role = await _resolve_live_org_role(session, current_user.account_id, org_id)
                     enforce = await resolve_authz_enforce(session, org_id)
                 token = set_authz_enforce(enforce)
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
+                raise_session_contract_error(exc, "dependencies._check")
                 logger.exception("permission.live_role_read_failed")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -501,7 +503,8 @@ def _team_membership_or_admin_dep(
                         )
                 else:
                     is_member = True
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "dependencies._check")
             logger.exception("permission.team_scope_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -635,11 +638,10 @@ def pg_connection_string(database_url: str) -> str:
     (try TLS, fall back to plaintext). This helper must NEVER silently
     force ``sslmode=disable`` (FAR-1426): forcing plaintext breaks every
     real checkpointer connection built here (boot schema init, HITL
-    resume) on a deployment whose Postgres requires TLS. Note that a
-    "preserve the URL's sslmode" branch cannot save a settings-derived
-    URL either: Settings strips every ``sslmode`` from
-    ``settings.database_url`` before this function ever sees it
-    (``modulo.db.url_utils``).
+    resume) on a deployment whose Postgres requires TLS. Settings now
+    PRESERVES an operator's ``sslmode`` on Postgres URLs (FAR-1440, see
+    ``modulo.db.url_utils``), so a settings-derived URL reaches this
+    helper with its ``sslmode`` intact and libpq honours it directly.
     """
     return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"
@@ -747,21 +749,33 @@ def get_or_create_system_engine() -> AsyncEngine:
             if _SYSTEM_ASYNC_ENGINE is None:
                 settings = get_settings()
                 if settings.modulo_system_database_url:
+                    from sqlalchemy.engine import make_url
                     from sqlalchemy.ext.asyncio import create_async_engine
 
+                    # Guard on the URL's actual driver scheme, not an env-var
+                    # assumption: a non-Postgres system URL (SQLite) must build
+                    # WITHOUT the asyncpg connect knobs — its driver has no
+                    # ssl/statement_cache_size params and
+                    # split_postgres_sslmode rejects non-Postgres schemes.
+                    system_url = settings.modulo_system_database_url
+                    system_connect_args: dict[str, Any] = {
+                        "timeout": 10,
+                        "command_timeout": _SYSTEM_DB_COMMAND_TIMEOUT_SECONDS,
+                    }
+                    if str(make_url(system_url).drivername).startswith("postgres"):
+                        from modulo.db.url_utils import split_postgres_sslmode
+
+                        system_url, system_ssl_arg = split_postgres_sslmode(system_url)
+                        system_connect_args["ssl"] = system_ssl_arg
+                        system_connect_args["statement_cache_size"] = 0
                     _SYSTEM_ASYNC_ENGINE = create_async_engine(
-                        settings.modulo_system_database_url,
+                        system_url,
                         pool_pre_ping=True,
                         pool_size=20,
                         max_overflow=10,
                         pool_recycle=3600,
                         pool_timeout=30,
-                        connect_args={
-                            "ssl": False,
-                            "statement_cache_size": 0,
-                            "timeout": 10,
-                            "command_timeout": _SYSTEM_DB_COMMAND_TIMEOUT_SECONDS,
-                        },
+                        connect_args=system_connect_args,
                     )
                 else:
                     _SYSTEM_ENGINE_IS_FALLBACK = True
@@ -1015,7 +1029,8 @@ def deny_break_glass_mint_dependency(
             now = datetime.now(UTC)
             async with session.begin():
                 account = await session.get(Account, principal.account_id)
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_session_contract_error(exc, "dependencies._check")
             logger.exception("permission.break_glass_mint_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

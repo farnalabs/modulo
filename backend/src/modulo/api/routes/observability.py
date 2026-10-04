@@ -13,6 +13,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.jwt import TenantPrincipal
@@ -216,6 +217,7 @@ async def update_observability_settings(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "observability.update_observability_settings")
         _log.exception("observability.update_observability_settings")
         _log.warning(
             "observability.put.db_error",

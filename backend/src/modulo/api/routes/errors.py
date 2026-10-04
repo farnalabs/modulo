@@ -20,7 +20,7 @@ from modulo.api.constants import (
     MSG_NO_ORGANISATION,
     MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.models.error import (
     ErrorEventInput,
@@ -220,6 +220,7 @@ async def ingest_errors(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "errors.ingest_errors")
         _log.exception(_CODE_ERRORS_INGEST_ERRORS)
         _log.warning("error_tracking.db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
@@ -334,6 +335,7 @@ async def ingest_errors_public(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "errors.ingest_errors_public")
         _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         _log.warning("error_tracking.public_ingest_db_error", extra={"ip": client_ip})
         raise HTTPException(
@@ -479,6 +481,7 @@ async def list_error_groups(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "errors.list_error_groups")
         _log.exception("errors.list_error_groups")
         _log.warning("error_tracking.list_groups_db_error")
         raise HTTPException(
@@ -581,6 +584,7 @@ async def get_error_group_detail(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "errors.get_error_group_detail")
         _log.exception("errors.get_error_group_detail")
         _log.warning("error_tracking.get_group_detail_db_error")
         raise HTTPException(
@@ -643,6 +647,7 @@ async def patch_error_group(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "errors.patch_error_group")
         _log.exception("errors.patch_error_group")
         _log.warning("error_tracking.patch_group_db_error")
         raise HTTPException(
@@ -706,6 +711,7 @@ async def list_error_events(
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "errors.list_error_events")
         _log.exception("errors.list_error_events")
         _log.warning("error_tracking.list_events_db_error")
         raise HTTPException(

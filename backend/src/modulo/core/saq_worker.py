@@ -1923,8 +1923,19 @@ def _get_system_async_engine() -> AsyncEngine:
     if _SYSTEM_ASYNC_ENGINE is None:
         settings = get_settings()
         if settings.modulo_system_database_url:
-            from sqlalchemy.engine import make_url
             from sqlalchemy.ext.asyncio import create_async_engine
+
+            from modulo.db.url_utils import split_engine_sslmode
+
+            # FAR-1440: the system URL preserves the operator's ``sslmode``, so
+            # translate it into asyncpg's ``ssl`` connect arg (absent/disable →
+            # explicit plaintext; require/verify-* kept fail-closed). Passing
+            # the raw URL straight through raises TypeError at first connect.
+            _system_url, _system_ssl_arg = split_engine_sslmode(settings.modulo_system_database_url)
+            _system_connect_args: dict[str, Any] = {}
+            if _system_ssl_arg is not None:
+                _system_connect_args["ssl"] = _system_ssl_arg
+                _system_connect_args["statement_cache_size"] = 0
 
             effective_pool = _effective_db_pool_size(settings.saq_worker_db_pool_size, settings.saq_worker_concurrency)
             if effective_pool != settings.saq_worker_db_pool_size:
@@ -1936,25 +1947,12 @@ def _get_system_async_engine() -> AsyncEngine:
                         "concurrency": settings.saq_worker_concurrency,
                     },
                 )
-            # FAR-1441: translate the operator's ``sslmode`` into asyncpg's
-            # ``ssl`` connect arg instead of hardcoding ``ssl=False`` (which
-            # silently downgrades ``sslmode=require``). Guard on the URL's
-            # ACTUAL driver scheme, not on any modulo_db knob: a non-Postgres
-            # system URL keeps only the asyncpg knobs it understands.
-            system_url = settings.modulo_system_database_url
-            connect_args: dict[str, Any] = {}
-            if str(make_url(system_url).drivername).startswith("postgres"):
-                from modulo.db.bootstrap import split_postgres_sslmode
-
-                system_url, ssl_arg = split_postgres_sslmode(system_url)
-                connect_args["ssl"] = ssl_arg
-                connect_args["statement_cache_size"] = 0
             _SYSTEM_ASYNC_ENGINE = create_async_engine(
-                system_url,
+                _system_url,
                 pool_pre_ping=True,
                 pool_size=effective_pool,
                 max_overflow=0,
-                connect_args=connect_args,
+                connect_args=_system_connect_args,
             )
         else:
             _log.error(

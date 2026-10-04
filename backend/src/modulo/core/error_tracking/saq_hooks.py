@@ -29,6 +29,7 @@ from saq import Status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from modulo.db.url_utils import split_engine_sslmode
 from modulo.version import get_version
 
 _log = logging.getLogger(__name__)
@@ -85,20 +86,14 @@ def _get_engine() -> AsyncEngine:
                 from modulo.settings import get_settings
 
                 settings = get_settings()
-                url = settings.database_url
-                kw: dict[str, Any] = {"url": url}
-                # FAR-1441: translate the operator's ``sslmode`` into asyncpg's
-                # ``ssl`` connect arg instead of hardcoding ``ssl=False`` (which
-                # silently downgrades ``sslmode=require``). Guard on the URL's
-                # ACTUAL driver scheme, not on the modulo_db knob: a non-Postgres
-                # URL passes through with no asyncpg-only connect args at all.
-                from sqlalchemy.engine import make_url
-
-                if str(make_url(url).drivername).startswith("postgres"):
-                    from modulo.db.bootstrap import split_postgres_sslmode
-
-                    url, ssl_arg = split_postgres_sslmode(url)
-                    kw["url"] = url
+                # FAR-1440: guard on the URL's ACTUAL driver scheme, not the
+                # independent ``modulo_db`` knob, and translate the preserved
+                # ``sslmode`` into asyncpg's ``ssl`` connect arg — the raw URL
+                # raises TypeError at first connect once Settings stops
+                # stripping sslmode.
+                engine_url, ssl_arg = split_engine_sslmode(settings.database_url)
+                kw: dict[str, Any] = {"url": engine_url}
+                if ssl_arg is not None:
                     kw["connect_args"] = {"timeout": 10, "ssl": ssl_arg, "statement_cache_size": 0}
                     kw["pool_pre_ping"] = True
                     kw["pool_recycle"] = 3600

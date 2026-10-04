@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin import _raise_bg_pgcode
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
@@ -326,7 +327,8 @@ async def list_users(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.list_users")
         _log.exception(_CODE_SCIM_LIST_USERS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -404,7 +406,8 @@ async def create_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.create_user")
         _log.exception(_CODE_SCIM_CREATE_USER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -447,7 +450,8 @@ async def get_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.get_user")
         _log.exception(_CODE_SCIM_GET_USER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -517,6 +521,7 @@ async def replace_user(
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.replace_user")
         _log.exception(_CODE_SCIM_REPLACE_USER)
         _raise_bg_pgcode(
             exc,
@@ -642,6 +647,7 @@ async def patch_user(
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.patch_user")
         _log.exception(_CODE_SCIM_PATCH_USER)
         _raise_bg_pgcode(
             exc,
@@ -720,6 +726,7 @@ async def delete_user(
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.delete_user")
         _log.exception(_CODE_SCIM_DELETE_USER)
         _raise_bg_pgcode(
             exc,
@@ -793,7 +800,8 @@ async def list_groups(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.list_groups")
         _log.exception(_CODE_SCIM_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -885,7 +893,8 @@ async def create_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.create_group")
         _log.exception(_CODE_SCIM_CREATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -949,7 +958,8 @@ async def get_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.get_group")
         _log.exception(_CODE_SCIM_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1016,7 +1026,8 @@ async def replace_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.replace_group")
         _log.exception(_CODE_SCIM_REPLACE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1184,7 +1195,8 @@ async def patch_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.patch_group")
         _log.exception(_CODE_SCIM_PATCH_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1231,7 +1243,8 @@ async def delete_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "scim.delete_group")
         _log.exception(_CODE_SCIM_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
