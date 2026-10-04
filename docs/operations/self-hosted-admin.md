@@ -258,7 +258,7 @@ RETURNING name, ('mk_' || (SELECT token FROM new_key)) AS bearer_token;
 ```
 
 The `RETURNING` clause prints the one-time `Bearer` token (`mk_<token>`). Use it
-directly in the `Authorization` header — there is no separate prefix/secret to
+directly in the `Authorization` header - there is no separate prefix/secret to
 concatenate, exactly like a normally minted key:
 ```bash
 curl -H "Authorization: Bearer mk_<token>" https://modulo.example.com/api/v1/admin/settings
