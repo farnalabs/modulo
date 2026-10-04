@@ -12,9 +12,11 @@ Schema (org-scoped entity)
         └── definition_json (JSON Schema)
 ```
 
-Each pipeline node declares `input_schema` and `output_schema` bindings. The
-graph validator checks schema compatibility between connected nodes at save-time
-and run-time.
+Schema bindings are opt-in: an agent declares `input_schema` and `output_schema`
+only when it wants a typed contract, and both are nullable. The graph validator
+checks schema compatibility between connected nodes only when both sides declare
+a schema (an untyped boundary passes through unchecked), at save-time and
+run-time.
 
 ## Schema entity
 
