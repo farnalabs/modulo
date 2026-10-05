@@ -63,7 +63,12 @@ from typing import Any
 import httpx
 import redis.asyncio as aioredis
 
-from modulo.core.alert_context import alert_context_html, alert_context_text, alert_environment_line
+from modulo.core.alert_context import (
+    alert_context_html,
+    alert_context_text,
+    alert_environment_line,
+    stamp_stdout,
+)
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
@@ -361,23 +366,6 @@ def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
     return [address.strip() for address in alert_email_to.split(",") if address.strip()]
 
 
-def _stamp(message: str) -> None:
-    """Best-effort stdout stamp for an alert event (``fly logs`` renders JSON
-    logs unreliably — same lesson as the alert prints above).
-
-    STRICTLY best-effort: the ALERT stamp runs AFTER the incident key was
-    claimed (SET NX) and the RECOVERY stamp AFTER it was GETDEL-ed, so a
-    ``print`` failure (``UnicodeEncodeError`` on a non-UTF-8 stdout,
-    ``BrokenPipeError``, ...) must never propagate — a raise here would skip
-    ``_send_alerts`` and NO alert / recovery email would ever go out (until
-    the 7-day TTL). Best-effort fails open, with a log.
-    """
-    try:
-        print(message, flush=True)  # noqa: T201
-    except Exception:
-        _log.warning("watchdog.stamp_print_failed", exc_info=True)
-
-
 async def _send_email_alert(
     settings: Settings,
     conditions: list[str],
@@ -511,14 +499,23 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
             return
         # Stamp carries only the conditions + the environment line: ALERT_CONTEXT
         # is repr=False precisely to keep it out of logs, so it never goes to
-        # stdout. Best-effort (see _stamp) — it cannot skip the fan-out below.
-        _stamp(f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)} | {alert_environment_line(settings)}")
+        # stdout. Best-effort (see alert_context.stamp_stdout) — it cannot skip
+        # the fan-out below.
+        stamp_stdout(
+            f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)} | {alert_environment_line(settings)}",
+            logger=_log,
+            log_event="watchdog.stamp_print_failed",
+        )
         await _send_alerts(settings, conditions)
     else:
         state = await _claim_recovery(redis)
         if state is None:
             return  # nothing was alerted — healthy state, stay silent
-        _stamp(f"[watchdog] RECOVERY worker-liveness: conditions cleared | {alert_environment_line(settings)}")
+        stamp_stdout(
+            f"[watchdog] RECOVERY worker-liveness: conditions cleared | {alert_environment_line(settings)}",
+            logger=_log,
+            log_event="watchdog.stamp_print_failed",
+        )
         await _send_alerts(settings, [], recovery_state=state)
 
 

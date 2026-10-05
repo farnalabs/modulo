@@ -16,6 +16,7 @@ depending on it.
 from __future__ import annotations
 
 import html
+import logging
 
 from modulo.settings import Settings
 
@@ -74,3 +75,25 @@ def alert_context_html(settings: Settings) -> str:
     """
     items = "".join(f"<li>{html.escape(line)}</li>" for line in alert_context_lines(settings))
     return f"<ul>{items}</ul>"
+
+
+def stamp_stdout(message: str, *, logger: logging.Logger, log_event: str) -> None:
+    """Best-effort stdout stamp for an operator alert event.
+
+    ``fly logs`` renders JSON logs unreliably, so an alert event needs plain
+    stdout visibility. This is STRICTLY best-effort: a ``print`` failure
+    (``UnicodeEncodeError`` on a non-UTF-8 stdout, ``BrokenPipeError``, ...)
+    must never propagate. Callers stamp at a point where a raise would lose
+    work — the readiness alert between delivering its email and committing its
+    dedup state, the watchdog between claiming/clearing the incident key and
+    the email fan-out — so this fails open, logging at ``log_event`` on the
+    caller's ``logger``. ``message`` must never carry ``ALERT_CONTEXT`` (it is
+    ``repr=False`` specifically to keep the free text out of logs).
+
+    Single-sourced here (rather than copied into each alert module) so the two
+    best-effort stamps can never drift apart.
+    """
+    try:
+        print(message, flush=True)  # noqa: T201
+    except Exception:
+        logger.warning(log_event, exc_info=True)
