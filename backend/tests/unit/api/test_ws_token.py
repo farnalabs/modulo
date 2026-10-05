@@ -20,7 +20,9 @@ from modulo.auth.jwt import (
     create_ws_token,
     decode_principal,
 )
+from modulo.core.audit_coverage import audit_session
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _CSRF = "ws-token-csrf"
@@ -37,6 +39,25 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session() -> Generator[None, None, None]:
+    """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
+    fresh ``audit_session`` (a real engine — no database in the unit tier), so
+    stub that seam; the dependency itself still runs."""
+
+    async def _override() -> AsyncGenerator[AsyncMock, None]:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        yield session
+
+    app.dependency_overrides[audit_session] = _override
+    yield
+    app.dependency_overrides.pop(audit_session, None)
 
 
 def _make_settings() -> Settings:

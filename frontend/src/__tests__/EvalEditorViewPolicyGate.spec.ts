@@ -144,10 +144,10 @@ async function openEditor(wrapper: ViewWrapper, evalId: string) {
 }
 
 function warnChecked(wrapper: ViewWrapper) {
-  return (wrapper.find('[data-test-id="policy-gate-action-warn"]').element as HTMLInputElement).checked
+  return (wrapper.find('[data-testid="policy-gate-action-warn"]').element as HTMLInputElement).checked
 }
 function blockChecked(wrapper: ViewWrapper) {
-  return (wrapper.find('[data-test-id="policy-gate-action-block"]').element as HTMLInputElement).checked
+  return (wrapper.find('[data-testid="policy-gate-action-block"]').element as HTMLInputElement).checked
 }
 
 describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
@@ -174,7 +174,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const wrapper = mountView()
     await flush()
 
-    expect(wrapper.find('[data-test-id="policy-gate-heading"]').text()).toBe('Policy Gate')
+    expect(wrapper.find('[data-testid="policy-gate-heading"]').text()).toBe('Policy Gate')
     expect(warnChecked(wrapper)).toBe(true)
     expect(blockChecked(wrapper)).toBe(false)
     expect(wrapper.text()).toContain('Log and continue')
@@ -194,7 +194,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(blockChecked(wrapper)).toBe(true)
     expect(warnChecked(wrapper)).toBe(false)
     // exists=true → the delete affordance is present
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(true)
   })
 
   // Criteria 13 + 24 — no gate on the server → defaults, no stale identity.
@@ -209,8 +209,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     expect(apiGET).toHaveBeenCalledWith(GATE_URL, { params: { path: { eval_id: 'eval-2' } } })
     expect(warnChecked(wrapper)).toBe(true)
     expect(blockChecked(wrapper)).toBe(false)
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(false)
   })
 
   // Criterion 15 — policy gates are reachable only inside the eval editor.
@@ -235,7 +235,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await selectPipeline(wrapper)
     await flush()
 
-    const badges = wrapper.findAll('[data-test-id="policy-gate-badge"]')
+    const badges = wrapper.findAll('[data-testid="policy-gate-badge"]')
     expect(badges).toHaveLength(2)
     const texts = badges.map((b) => b.text())
     expect(texts).toContain('block')
@@ -275,7 +275,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await selectPipeline(wrapper)
     await flush()
     await openEditor(wrapper, 'eval-1')
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
@@ -295,7 +295,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    const del = wrapper.find('[data-test-id="policy-gate-delete"]')
+    const del = wrapper.find('[data-testid="policy-gate-delete"]')
     expect(del.attributes('aria-label')).toBe('Delete policy gate')
     await del.trigger('click')
     await nextTick()
@@ -308,15 +308,15 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await noBtn!.trigger('click')
     await nextTick()
     expect(apiDELETE).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-test-id="policy-gate-confirm-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-confirm-delete"]').exists()).toBe(false)
 
     // Confirm issues DELETE and resets the section.
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    await wrapper.find('[data-test-id="policy-gate-confirm-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-confirm-delete"]').trigger('click')
     await flush()
     expect(apiDELETE).toHaveBeenCalledWith(GATE_URL, { params: { path: { eval_id: 'eval-1' } } })
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(false)
     expect(warnChecked(wrapper)).toBe(true)
   })
 
@@ -329,7 +329,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
     expect(wrapper.text()).toContain('Are you sure you want to delete this policy gate?')
     expect(wrapper.text()).not.toContain('This gate is set to block runs. Deleting it will stop blocking.')
@@ -372,7 +372,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await (wrapper.vm as unknown as { loadEvals: () => Promise<void> }).loadEvals()
     await flush()
     await openEditor(wrapper, 'new-eval')
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
@@ -385,9 +385,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     // form and closed the editor, so re-open it first (the fetched gate marks
     // the section as existing → delete affordance present).
     await openEditor(wrapper, 'new-eval')
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    await wrapper.find('[data-test-id="policy-gate-confirm-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-confirm-delete"]').trigger('click')
     await flush()
     expect(apiDELETE).toHaveBeenCalledWith(GATE_URL, { params: { path: { eval_id: 'new-eval' } } })
   })
@@ -402,16 +402,16 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await selectPipeline(wrapper)
     await flush()
     await openEditor(wrapper, 'eval-1')
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
 
     // Gate half: explicit error state with retry; the form did NOT reset.
-    const errBox = wrapper.find('[data-test-id="policy-gate-error"]')
+    const errBox = wrapper.find('[data-testid="policy-gate-error"]')
     expect(errBox.exists()).toBe(true)
     expect(errBox.text()).toContain('Gate save failed. The eval was saved successfully.')
-    expect(errBox.find('[data-test-id="policy-gate-retry"]').exists()).toBe(true)
+    expect(errBox.find('[data-testid="policy-gate-retry"]').exists()).toBe(true)
     expect((wrapper.find('[data-testid="eval-editor-name"]').element as HTMLInputElement).value)
       .toBe('Existing Eval')
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(true)
@@ -424,16 +424,16 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const gatePuts = apiPUT.mock.calls.filter((c) => c[0] === GATE_URL)
     expect(gatePuts).toHaveLength(1)
     expect(gatePuts[0][1].body).toEqual({ action: 'block' })
-    await wrapper.find('[data-test-id="policy-gate-retry"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-retry"]').trigger('click')
     await flush()
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(true)
     expect(apiPUT.mock.calls.filter((c) => c[0] === GATE_URL)).toHaveLength(2)
 
     // Retry 2 succeeds — error state exits.
     responders.gatePut = ok({ id: 'g1', action: 'block', version: 3 })
-    await wrapper.find('[data-test-id="policy-gate-retry"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-retry"]').trigger('click')
     await flush()
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(false)
 
     // Snapshot updated to the saved state: a subsequent save does not re-PUT
     // the gate. (The successful retry itself was one gate PUT — the claim is
@@ -459,7 +459,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
 
-    const errBox = wrapper.find('[data-test-id="policy-gate-error"]')
+    const errBox = wrapper.find('[data-testid="policy-gate-error"]')
     expect(errBox.exists()).toBe(true)
     expect(errBox.text()).toContain('Gate save failed. The eval was saved successfully.')
     // The eval half succeeded and the form did not reset.
@@ -468,13 +468,13 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       .toBe('Fresh Eval')
 
     responders.gatePut = ok({ id: 'g-new', action: 'warn', version: 1 })
-    await wrapper.find('[data-test-id="policy-gate-retry"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-retry"]').trigger('click')
     await flush()
     expect(apiPUT).toHaveBeenCalledWith(GATE_URL, {
       params: { path: { eval_id: 'new-eval' } },
       body: { action: 'warn' },
     })
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(false)
   })
 
   // Criterion 24 — every lifecycle transition resets the gate state.
@@ -492,7 +492,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await nextTick()
     expect(warnChecked(wrapper)).toBe(true)
     expect(blockChecked(wrapper)).toBe(false)
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(false)
   })
 
@@ -513,7 +513,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-2')
     expect(warnChecked(wrapper)).toBe(true)
     expect(blockChecked(wrapper)).toBe(false)
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(false)
   })
 
   // Finding 1: Radio labels come from $t() — no hardcoded "Warn"/"Block" text.
@@ -524,8 +524,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     // The warn/block radio labels must render the locale values, not empty
     // strings (which would indicate a missing $t() key or a hardcoded fallback).
     // The locale file defines actionWarnLabel="Warn" and actionBlockLabel="Block".
-    const warnRadio = wrapper.find('[data-test-id="policy-gate-action-warn"]')
-    const blockRadio = wrapper.find('[data-test-id="policy-gate-action-block"]')
+    const warnRadio = wrapper.find('[data-testid="policy-gate-action-warn"]')
+    const blockRadio = wrapper.find('[data-testid="policy-gate-action-block"]')
     expect(warnRadio.exists()).toBe(true)
     expect(blockRadio.exists()).toBe(true)
 
@@ -564,10 +564,10 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     // Open the delete confirmation dialog.
-    const delBtn = wrapper.find('[data-test-id="policy-gate-delete"]')
+    const delBtn = wrapper.find('[data-testid="policy-gate-delete"]')
     await delBtn.trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="policy-gate-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-confirm-dialog"]').exists()).toBe(true)
 
     // Click "No" to cancel.
     const noBtn = wrapper.findAll('button').find((b) => b.text() === 'No')
@@ -576,13 +576,13 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await nextTick()
 
     // Focus should be on the delete button, not on <body>.
-    const deleteBtn = wrapper.find('[data-test-id="policy-gate-delete"]').element as HTMLElement
+    const deleteBtn = wrapper.find('[data-testid="policy-gate-delete"]').element as HTMLElement
     // jsdom doesn't track focus across re-renders perfectly, but we can verify
     // that the delete button exists and is focusable after cancel.
     expect(deleteBtn).toBeDefined()
     expect(deleteBtn.tagName).toBe('BUTTON')
     // The confirm dialog should be gone.
-    expect(wrapper.find('[data-test-id="policy-gate-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-confirm-dialog"]').exists()).toBe(false)
   })
 
   // Finding 3: Dialog has role="dialog", aria-modal, Escape-dismiss, Tab-trap.
@@ -595,10 +595,10 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
 
-    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
     expect(dialog.attributes('role')).toBe('dialog')
     expect(dialog.attributes('aria-modal')).toBe('true')
@@ -614,15 +614,15 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="policy-gate-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-confirm-dialog"]').exists()).toBe(true)
 
     // Dispatch a native KeyboardEvent with key='Escape' on the dialog element.
-    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flush()
-    expect(wrapper.find('[data-test-id="policy-gate-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-confirm-dialog"]').exists()).toBe(false)
     // No DELETE should have been issued.
     expect(apiDELETE).not.toHaveBeenCalled()
   })
@@ -636,10 +636,10 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
 
-    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
 
     // Structural verification: the dialog element has the @keydown handler wired,
@@ -678,23 +678,23 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     // Change the gate action to dirty it.
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
     // Click cancel — the in-app dialog should appear.
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
 
-    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
     expect(dialog.attributes('role')).toBe('dialog')
     expect(dialog.attributes('aria-modal')).toBe('true')
     expect(dialog.text()).toContain('unsaved policy gate changes')
 
     // "Keep editing" keeps the form intact.
-    await wrapper.find('[data-test-id="dirty-confirm-stay"]').trigger('click')
+    await wrapper.find('[data-testid="dirty-confirm-stay"]').trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(true)
     expect(blockChecked(wrapper)).toBe(true)
   })
@@ -709,18 +709,18 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     // Change the gate action to dirty it.
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
     // Click cancel — dialog appears.
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(true)
 
     // "Discard" proceeds with the cancel.
-    await wrapper.find('[data-test-id="dirty-confirm-proceed"]').trigger('click')
+    await wrapper.find('[data-testid="dirty-confirm-proceed"]').trigger('click')
     await flush()
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(false)
     // Form was reset — cancel button is gone.
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(false)
   })
@@ -739,7 +739,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
 
     // No dialog should appear — the form resets immediately.
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(false)
   })
 
@@ -757,20 +757,20 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     // Change the gate action to dirty it.
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
     // Try to switch evals — dialog should appear.
     await openEditor(wrapper, 'eval-2')
 
-    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
     expect(dialog.text()).toContain('unsaved policy gate changes')
 
     // "Keep editing" stays on eval-1.
-    await wrapper.find('[data-test-id="dirty-confirm-stay"]').trigger('click')
+    await wrapper.find('[data-testid="dirty-confirm-stay"]').trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(false)
     // Should still be on eval-1 (switch was rejected).
     expect(blockChecked(wrapper)).toBe(true)
   })
@@ -789,7 +789,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     // Change the gate action to dirty it.
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
     // Try to switch evals — dialog appears.
@@ -798,13 +798,13 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const switchPromise = openEditor(wrapper, 'eval-2')
     await nextTick()
 
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(true)
 
     // "Discard" proceeds with the switch.
-    await wrapper.find('[data-test-id="dirty-confirm-proceed"]').trigger('click')
+    await wrapper.find('[data-testid="dirty-confirm-proceed"]').trigger('click')
     await switchPromise
 
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(false)
     // Now on eval-2 — warn is checked (eval-2 has warn gate).
     expect(warnChecked(wrapper)).toBe(true)
   })
@@ -818,18 +818,18 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(true)
 
     // Escape dismisses the dialog (resolves with false = stay).
-    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await nextTick()
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(false)
     // Form was NOT reset — the user chose to stay.
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(true)
     expect(blockChecked(wrapper)).toBe(true)
@@ -844,13 +844,13 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
 
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
 
-    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
     expect(dialog.attributes('role')).toBe('dialog')
     expect(dialog.attributes('aria-modal')).toBe('true')
@@ -881,11 +881,11 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     // Change the gate and save — gate fails, eval succeeds.
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(true)
 
     // Reset the GET mock call count to isolate the retry's badge refresh.
     apiGET.mockClear()
@@ -894,7 +894,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     // Make retry succeed.
     responders.gatePut = ok({ id: 'g1', action: 'block', version: 3 })
-    await wrapper.find('[data-test-id="policy-gate-retry"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-retry"]').trigger('click')
     await flush()
 
     // The badge refresh calls GET for each eval — verify the gate GET was
@@ -902,7 +902,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const gateGets = apiGET.mock.calls.filter((c) => c[0] === GATE_URL)
     expect(gateGets.length).toBeGreaterThanOrEqual(1)
     // Error state should be cleared.
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(false)
   })
 
   // jsdom does not move document.activeElement on .focus(), so the trap tests
@@ -926,9 +926,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const first = buttons[0].element as HTMLElement
     const last = buttons[buttons.length - 1].element as HTMLElement
@@ -950,9 +950,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const first = buttons[0].element as HTMLElement
     const last = buttons[buttons.length - 1].element as HTMLElement
@@ -974,9 +974,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
     const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
@@ -1000,11 +1000,11 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const first = buttons[0].element as HTMLElement
     const last = buttons[buttons.length - 1].element as HTMLElement
@@ -1034,7 +1034,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
 
     expect(blockChecked(wrapper)).toBe(true)
     // action present → exists, even with no id
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(true)
   })
 
   // Coverage — eval-create response without an id skips the gate phase.
@@ -1062,12 +1062,12 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await selectPipeline(wrapper)
     await flush()
     await openEditor(wrapper, 'eval-1')
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
 
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(false)
     expect(blockChecked(wrapper)).toBe(false) // form reset → create-mode default
   })
 
@@ -1084,7 +1084,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
 
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(false)
   })
 
   // Coverage — retry success with a bare payload exercises the nullish fallbacks.
@@ -1097,16 +1097,16 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await selectPipeline(wrapper)
     await flush()
     await openEditor(wrapper, 'eval-1')
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(true)
 
     responders.gatePut = ok({})
-    await wrapper.find('[data-test-id="policy-gate-retry"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-retry"]').trigger('click')
     await flush()
-    expect(wrapper.find('[data-test-id="policy-gate-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(false)
   })
 
   // Coverage — non-Tab, non-Escape keys fall through the dialog key handlers.
@@ -1119,19 +1119,19 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    const gateDialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const gateDialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     gateDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
     expect(gateDialog.exists()).toBe(true)
 
     await (wrapper.vm as unknown as { cancelGateDelete: () => void }).cancelGateDelete()
     await nextTick()
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    const dirtyDialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dirtyDialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     dirtyDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
     expect(dirtyDialog.exists()).toBe(true)
   })
@@ -1146,19 +1146,19 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    const gateDialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const gateDialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     gateDialog.element.innerHTML = ''
     gateDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
 
     await (wrapper.vm as unknown as { cancelGateDelete: () => void }).cancelGateDelete()
     await nextTick()
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    const dirtyDialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dirtyDialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     dirtyDialog.element.innerHTML = ''
     dirtyDialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
 
@@ -1175,9 +1175,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
     const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
@@ -1200,11 +1200,11 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
     const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
@@ -1227,11 +1227,11 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="dirty-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="dirty-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
     const lastFocus = vi.spyOn(buttons[buttons.length - 1].element as HTMLElement, 'focus')
@@ -1290,17 +1290,17 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await flush()
     await openEditor(wrapper, 'eval-1')
 
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-cancel"]').trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(true)
 
     // A pipeline change resets the form while the confirm promise is pending.
     await (wrapper.vm as unknown as { onPipelineChange: () => Promise<void> }).onPipelineChange()
     await flush()
 
-    expect(wrapper.find('[data-test-id="dirty-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dirty-confirm-dialog"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="eval-editor-cancel"]').exists()).toBe(false)
   })
 
@@ -1323,7 +1323,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
 
     expect(warnChecked(wrapper)).toBe(true)
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(false)
   })
 
   // Coverage — the eval-save request throwing is reported as a form error.
@@ -1364,14 +1364,14 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       return ok({})
     })
 
-    await wrapper.find('[data-test-id="policy-gate-action-block"]').setValue(true)
+    await wrapper.find('[data-testid="policy-gate-action-block"]').setValue(true)
     await nextTick()
     await wrapper.find('[data-testid="eval-editor-save"]').trigger('click')
     await flush()
 
-    const errBox = wrapper.find('[data-test-id="policy-gate-error"]')
+    const errBox = wrapper.find('[data-testid="policy-gate-error"]')
     expect(errBox.exists()).toBe(true)
-    expect(errBox.find('[data-test-id="policy-gate-retry"]').exists()).toBe(true)
+    expect(errBox.find('[data-testid="policy-gate-retry"]').exists()).toBe(true)
   })
 
   // Coverage — delete treats a 404 as "already deleted" and a 5xx as an error.
@@ -1385,12 +1385,12 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
     responders.gateDelete = fail(404, 'Policy gate not found')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    await wrapper.find('[data-test-id="policy-gate-confirm-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-confirm-delete"]').trigger('click')
     await flush()
 
-    expect(wrapper.find('[data-test-id="policy-gate-delete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-delete"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Policy gate not found')
   })
 
@@ -1404,9 +1404,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await openEditor(wrapper, 'eval-1')
     responders.gateDelete = fail(500, 'delete exploded')
 
-    await wrapper.find('[data-test-id="policy-gate-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-delete"]').trigger('click')
     await nextTick()
-    await wrapper.find('[data-test-id="policy-gate-confirm-delete"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-confirm-delete"]').trigger('click')
     await flush()
 
     expect(wrapper.text()).toContain('delete exploded')
@@ -1424,7 +1424,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     await selectPipeline(wrapper)
     await flush()
     await openEditor(wrapper, 'eval-1')
-    expect(wrapper.find('[data-test-id="policy-gate-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-toggle"]').exists()).toBe(true)
     return wrapper
   }
 
@@ -1441,7 +1441,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    const toggle = wrapper.find('[data-testid="policy-gate-toggle"]')
     expect(toggle.attributes('aria-checked')).toBe('true')
     responders.gateToggle = ok({ enabled: false, enabled_at: null, disabled_at: '2026-02-02T00:00:00Z' })
 
@@ -1465,7 +1465,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: null,
       disabled_at: '2026-01-01T00:00:00Z',
     })
-    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    const toggle = wrapper.find('[data-testid="policy-gate-toggle"]')
     expect(toggle.attributes('aria-checked')).toBe('false')
     responders.gateToggle = ok({ enabled: true, enabled_at: '2026-02-02T00:00:00Z', disabled_at: null })
 
@@ -1487,22 +1487,22 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    const toggle = wrapper.find('[data-testid="policy-gate-toggle"]')
 
     await toggle.trigger('click')
     await nextTick()
     // Confirmation dialog opens; nothing has been PATCHed yet.
-    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]').exists()).toBe(true)
     expect(togglePatchCalls()).toHaveLength(0)
 
     responders.gateToggle = ok({ enabled: false, enabled_at: null, disabled_at: '2026-02-02T00:00:00Z' })
-    await wrapper.find('[data-test-id="policy-gate-confirm-toggle-disable"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-confirm-toggle-disable"]').trigger('click')
     await flush()
 
     const calls = togglePatchCalls()
     expect(calls).toHaveLength(1)
     expect(calls[0][1].body).toEqual({ enabled: false })
-    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
     expect(toggle.attributes('aria-checked')).toBe('false')
   })
 
@@ -1515,17 +1515,17 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    const toggle = wrapper.find('[data-testid="policy-gate-toggle"]')
 
     await toggle.trigger('click')
     await nextTick()
-    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]').exists()).toBe(true)
 
-    await wrapper.find('[data-test-id="policy-gate-cancel-toggle-disable"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-cancel-toggle-disable"]').trigger('click')
     await flush()
 
     expect(togglePatchCalls()).toHaveLength(0)
-    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
     expect(toggle.attributes('aria-checked')).toBe('true')
   })
 
@@ -1538,7 +1538,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    const toggle = wrapper.find('[data-testid="policy-gate-toggle"]')
     responders.gateToggle = fail(500, 'toggle exploded')
 
     await toggle.trigger('click')
@@ -1559,7 +1559,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    const toggle = wrapper.find('[data-testid="policy-gate-toggle"]')
     // A network-level rejection (not an error envelope) must be caught.
     apiPATCH.mockRejectedValueOnce(new Error('network down'))
 
@@ -1580,7 +1580,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    const toggle = wrapper.find('[data-test-id="policy-gate-toggle"]')
+    const toggle = wrapper.find('[data-testid="policy-gate-toggle"]')
     responders.gateToggle = ok({})
 
     await toggle.trigger('click')
@@ -1625,11 +1625,11 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       disabled_at: null,
     })
     // action present → exists, but no id → the write guard returns.
-    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-toggle"]').trigger('click')
     await flush()
 
     expect(togglePatchCalls()).toHaveLength(0)
-    expect(wrapper.find('[data-test-id="policy-gate-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="policy-gate-toggle"]').attributes('aria-checked')).toBe('true')
   })
 
   it('dismisses the toggle-disable dialog on Escape (F9)', async () => {
@@ -1641,15 +1641,15 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-toggle"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]')
     expect(dialog.exists()).toBe(true)
 
     dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flush()
 
-    expect(wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]').exists()).toBe(false)
     expect(togglePatchCalls()).toHaveLength(0)
   })
 
@@ -1662,9 +1662,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-toggle"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const first = buttons[0].element as HTMLElement
     const last = buttons[buttons.length - 1].element as HTMLElement
@@ -1691,9 +1691,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-toggle"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]')
     dialog.element.innerHTML = ''
     dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
 
@@ -1709,9 +1709,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-toggle"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]')
     const buttons = dialog.findAll('button')
     const firstFocus = vi.spyOn(buttons[0].element as HTMLElement, 'focus')
     const last = buttons[buttons.length - 1].element as HTMLElement
@@ -1741,9 +1741,9 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
       enabled_at: '2026-01-01T00:00:00Z',
       disabled_at: null,
     })
-    await wrapper.find('[data-test-id="policy-gate-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="policy-gate-toggle"]').trigger('click')
     await nextTick()
-    const dialog = wrapper.find('[data-test-id="policy-gate-toggle-confirm-dialog"]')
+    const dialog = wrapper.find('[data-testid="policy-gate-toggle-confirm-dialog"]')
 
     dialog.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
 
