@@ -296,6 +296,111 @@ class TestCreateApiKeySuccess(AuthContext):
         assert result["team_id"] is None
 
 
+class TestCreateApiKeyGrants(AuthContext):
+    """FAR-1477: MCP create_api_key accepts ``grants`` through the REST mint-cap."""
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("admin")
+
+    @contextlib.contextmanager
+    def _env(self, *, flag: bool = True, role: str | None = "admin"):
+        with (
+            _patch_create_env(role=role) as mock_session,
+            patch("modulo.api.mcp_server.api_key_grants_enabled", new=AsyncMock(return_value=flag)),
+            patch(
+                "modulo.api.routes.api_keys.resolve_role_from_membership",
+                new=AsyncMock(return_value=role),
+            ),
+        ):
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            yield
+
+    async def test_grants_passed_to_crud_and_echoed(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
+        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            result = await create_api_key(name="CI", grants=["run.list", "run.cancel"])
+        assert mock_crud.await_args.kwargs["grants"] == ["run.list", "run.cancel"]
+        assert result["grants"] == ["run.cancel", "run.list"]
+
+    async def test_omitted_grants_stay_null(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
+        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            result = await create_api_key(name="CI")
+        assert mock_crud.await_args.kwargs["grants"] is None
+        assert result["grants"] is None
+
+    async def test_empty_grants_is_explicit_deny_all(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
+        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            result = await create_api_key(name="CI", grants=[])
+        sent = mock_crud.await_args.kwargs["grants"]
+        assert sent is not None
+        assert not sent
+        assert result["grants"] is not None
+        assert not result["grants"]
+
+    async def test_flag_off_rejected_422(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        with self._env(flag=False):
+            result = await create_api_key(name="CI", grants=["run.list"])
+        assert result["error"] == "validation_error"
+        assert result["status"] == 422
+
+    async def test_flag_read_failure_returns_503(self) -> None:
+        """FAR-1477: a transient grants-flag read failure fails closed as a
+        retryable 503, matching the REST mint path — never misreported as the
+        permanent-looking 422 "not enabled"."""
+        from modulo.api.mcp_server import create_api_key
+        from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+
+        with (
+            _patch_create_env(role="admin") as mock_session,
+            patch(
+                "modulo.api.mcp_server.api_key_grants_enabled",
+                new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError),
+            ),
+        ):
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            result = await create_api_key(name="CI", grants=["run.list"])
+        assert result["error"] == "service_unavailable"
+        assert result["status"] == 503
+
+    async def test_unknown_grant_rejected_422(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        with self._env():
+            result = await create_api_key(name="CI", grants=["no.such.permission"])
+        assert result["error"] == "validation_error"
+        assert result["status"] == 422
+
+    async def test_non_delegable_grant_denied(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        with self._env():
+            result = await create_api_key(name="CI", grants=["api_key.create"])
+        assert result["error"] == "insufficient_scope"
+        assert "cannot be delegated" in result["detail"]
+
+    async def test_grant_above_caller_capability_denied(self) -> None:
+        from modulo.api.mcp_server import _ctx_role, create_api_key
+
+        _ctx_role.set("runner")
+        with self._env(role="runner"):
+            result = await create_api_key(name="CI", role="runner", grants=["org.email.manage"])
+        assert result["error"] == "insufficient_scope"
+        assert "live role" in result["detail"]
+
+
 class TestListApiKeys(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:

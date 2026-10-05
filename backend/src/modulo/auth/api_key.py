@@ -23,13 +23,15 @@ import logging
 import secrets
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.auth.permissions import parse_grants, serialize_grants
+from modulo.core.feature_flags import get_registry
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -41,6 +43,14 @@ _log = logging.getLogger(__name__)
 class ApiKeyInvalidError(PermissionError):
     def __init__(self, detail: str = "API key is invalid or revoked") -> None:
         super().__init__(detail)
+
+
+class ApiKeyGrantsUnavailableError(Exception):
+    """The ``api_key_grants`` flag could not be read for a grant-bearing key.
+
+    Distinct from ``ApiKeyInvalidError``: the key may be perfectly valid, so
+    callers answer 503 (retry) rather than 401. Still fail-closed (never allows).
+    """
 
 
 class ApiKeyScopeError(ValueError):
@@ -55,6 +65,58 @@ _MK_PREFIX = "mk_"
 # covers org-wide AND team-scoped AND per-run keys); 'user' = per-user key
 # that acts as its creator's identity. IMMUTABLE post-mint.
 KEY_SCOPES: frozenset[str] = frozenset({"org", "user"})
+
+# FAR-1477 / ADR 058: org-level flag gating API-key grant-sets (default OFF).
+FLAG_API_KEY_GRANTS = "api_key_grants"
+# User-scoped keys: 90-day default AND maximum lifetime (grants flag ON only).
+USER_KEY_MAX_TTL_DAYS = 90
+
+
+async def api_key_grants_enabled(org_id: uuid.UUID, *, strict: bool = False) -> bool:
+    """Resolve the per-org ``api_key_grants`` flag.
+
+    Default (mint/UI paths): any read error is OFF (fail-closed). ``strict=True``
+    (enforcement path for grant-bearing keys) raises
+    ``ApiKeyGrantsUnavailableError`` instead, so a transient read failure is not
+    mistaken for "flag OFF" (401 invalid key) — it must surface as 503.
+    """
+    try:
+        # strict propagates the registry's org-override read error (the default
+        # path swallows it and falls through to the tier default, which would
+        # make a DB blip indistinguishable from "flag OFF").
+        return bool(await get_registry().resolve_flag(FLAG_API_KEY_GRANTS, org_id=org_id, raise_on_error=strict))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("feature_flag.api_key_grants_read_failed", exc_info=True)
+        if strict:
+            raise ApiKeyGrantsUnavailableError from None
+        return False
+
+
+async def resolve_key_grants(key: OrgApiKey) -> frozenset[str] | None:
+    """Return the key's effective grant-set for enforcement, or raise if it must die.
+
+    Tri-state: a NULL column -> ``None`` (legacy role bundle) WITHOUT reading
+    the flag, so pre-existing keys are byte-identical with the flag OFF. A
+    non-NULL grant-set (including the explicit empty deny-all) with the flag
+    OFF raises ``ApiKeyInvalidError`` — the key is DENIED rather than silently
+    widened to its full role bundle (revoke-don't-broaden, the FAR-620 pattern).
+    A malformed (non-str, non-NULL) value is DENIED too, never read as legacy.
+    A flag-read failure raises ``ApiKeyGrantsUnavailableError`` (503, fail-closed).
+    """
+    # getattr: duck-typed key fakes without the column read as legacy (real rows always have it).
+    raw = getattr(key, "grants", None)
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        _log.error("api_key.grants_malformed", extra={"key_id": str(key.id)})
+        raise ApiKeyInvalidError
+    if not await api_key_grants_enabled(key.organisation_id, strict=True):
+        _log.info("api_key.grants_key_denied_flag_off", extra={"key_id": str(key.id)})
+        raise ApiKeyInvalidError
+    return parse_grants(raw)
+
 
 _UNSET = object()  # sentinel: ``team_id`` not provided in an update payload
 
@@ -98,6 +160,7 @@ async def create_api_key(
     team_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
     scope: str = "org",
+    grants: Iterable[str] | None = None,
 ) -> tuple[OrgApiKey, str]:
     """Create an API key. Returns (OrgApiKey, full_key). full_key is shown once.
 
@@ -121,6 +184,7 @@ async def create_api_key(
         hashed_secret=hashed,
         role=role,
         scope=scope,
+        grants=serialize_grants(grants),
         account_id=account_id,
         team_id=team_id,
         expires_at=expires_at,
@@ -360,7 +424,7 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
     # ``scope`` is always present on real rows (NOT NULL, server_default 'org');
     # the isinstance guard keeps serialisation of test doubles stable.
     raw_scope = getattr(k, "scope", None)
-    return {
+    out: dict[str, Any] = {
         "id": str(k.id),
         "name": k.name,
         "role": k.role,
@@ -377,6 +441,12 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
         "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None,
         "is_active": is_active,
     }
+    # FAR-1477: emitted ONLY for grant-bearing keys so legacy (NULL) keys
+    # serialise byte-identically. An empty list is the explicit deny-all.
+    raw_grants = getattr(k, "grants", None)
+    if isinstance(raw_grants, str):
+        out["grants"] = sorted(raw_grants.split())
+    return out
 
 
 async def list_api_keys(
