@@ -66,6 +66,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
+from modulo.core.alert_context import alert_context_html, alert_context_text
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
@@ -276,7 +277,7 @@ def _host() -> str:
     return resolve_instance_identity()
 
 
-def _alert_html(status: str, conditions: list[str], observed_at: str) -> str:
+def _alert_html(settings: Settings, status: str, conditions: list[str], observed_at: str) -> str:
     items = "".join(f"<li>{html.escape(condition)}</li>" for condition in conditions)
     return (
         "<html><body>"
@@ -286,20 +287,27 @@ def _alert_html(status: str, conditions: list[str], observed_at: str) -> str:
         f"<p>Detected at {html.escape(observed_at)} on {html.escape(_host())}</p>"
         "<p>This is the first notification for this incident — no further alert "
         "emails will be sent until readiness recovers.</p>"
+        f"{alert_context_html(settings)}"
         "</body></html>"
     )
 
 
-def _alert_text(status: str, conditions: list[str], observed_at: str) -> str:
+def _alert_text(settings: Settings, status: str, conditions: list[str], observed_at: str) -> str:
     return (
         "Modulo: readiness degraded\n"
         f"Readiness is now {status}. Failing checks:\n"
         + "\n".join(f"- {condition}" for condition in conditions)
-        + f"\nDetected at {observed_at} on {_host()}"
+        + f"\nDetected at {observed_at} on {_host()}\n"
+        + alert_context_text(settings)
     )
 
 
-def _recovery_html(prior_conditions: list[str], duration_seconds: float | None, resolved_at: str) -> str:
+def _recovery_html(
+    settings: Settings,
+    prior_conditions: list[str],
+    duration_seconds: float | None,
+    resolved_at: str,
+) -> str:
     items = "".join(f"<li>{html.escape(condition)}</li>" for condition in prior_conditions)
     duration = f" after {duration_seconds:.0f}s" if duration_seconds is not None else ""
     return (
@@ -308,18 +316,31 @@ def _recovery_html(prior_conditions: list[str], duration_seconds: float | None, 
         f"<p>The following conditions have cleared{html.escape(duration)}:</p>"
         f"<ul>{items}</ul>"
         f"<p>Resolved at {html.escape(resolved_at)} on {html.escape(_host())}</p>"
+        f"{alert_context_html(settings)}"
         "</body></html>"
     )
 
 
-def _recovery_text(prior_conditions: list[str], duration_seconds: float | None, resolved_at: str) -> str:
+def _recovery_text(
+    settings: Settings,
+    prior_conditions: list[str],
+    duration_seconds: float | None,
+    resolved_at: str,
+) -> str:
     duration = f" after {duration_seconds:.0f}s" if duration_seconds is not None else ""
     return (
         "Modulo: readiness recovered\n"
         f"The following conditions have cleared{duration}:\n"
         + "\n".join(f"- {condition}" for condition in prior_conditions)
-        + f"\nResolved at {resolved_at} on {_host()}"
+        + f"\nResolved at {resolved_at} on {_host()}\n"
+        + alert_context_text(settings)
     )
+
+
+def _context_oneline(settings: Settings) -> str:
+    """The context flattened onto one line for the stdout alert stamp
+    (``fly logs`` renders JSON logs unreliably — same lesson as the watchdog)."""
+    return alert_context_text(settings).replace("\n", "; ")
 
 
 async def _notify_alert(
@@ -344,8 +365,8 @@ async def _notify_alert(
         settings,
         recipients,
         f"[Modulo] Readiness {status}",
-        _alert_html(status, conditions, observed_at),
-        _alert_text(status, conditions, observed_at),
+        _alert_html(settings, status, conditions, observed_at),
+        _alert_text(settings, status, conditions, observed_at),
     )
     if not delivered:
         return "send_failed"
@@ -354,7 +375,10 @@ async def _notify_alert(
     state.since = now
     # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
     # event needs stdout visibility (same lesson as the watchdog).
-    print(f"[health-alert] ALERT readiness={status}: {'; '.join(conditions)}", flush=True)  # noqa: T201
+    print(  # noqa: T201
+        f"[health-alert] ALERT readiness={status}: {'; '.join(conditions)} | {_context_oneline(settings)}",
+        flush=True,
+    )
     return "alert"
 
 
@@ -377,15 +401,18 @@ async def _notify_recovery(
         settings,
         recipients,
         "[Modulo] Readiness recovered",
-        _recovery_html(prior_conditions, duration_seconds, resolved_at),
-        _recovery_text(prior_conditions, duration_seconds, resolved_at),
+        _recovery_html(settings, prior_conditions, duration_seconds, resolved_at),
+        _recovery_text(settings, prior_conditions, duration_seconds, resolved_at),
     )
     if not delivered:
         return "send_failed"
     state.notified = "healthy"
     state.conditions = []
     state.since = None
-    print(f"[health-alert] RECOVERY readiness=ok: {'; '.join(prior_conditions)}", flush=True)  # noqa: T201
+    print(  # noqa: T201
+        f"[health-alert] RECOVERY readiness=ok: {'; '.join(prior_conditions)} | {_context_oneline(settings)}",
+        flush=True,
+    )
     return "recovery"
 
 

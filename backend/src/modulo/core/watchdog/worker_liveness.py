@@ -60,6 +60,7 @@ from typing import Any
 import httpx
 import redis.asyncio as aioredis
 
+from modulo.core.alert_context import alert_context_html, alert_context_text
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
@@ -343,6 +344,13 @@ def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
     return [address.strip() for address in alert_email_to.split(",") if address.strip()]
 
 
+def _context_oneline(settings: Settings) -> str:
+    """The alert context flattened onto one line for the stdout stamp
+    (``fly logs`` renders JSON logs unreliably — same lesson as the alert
+    prints above)."""
+    return alert_context_text(settings).replace("\n", "; ")
+
+
 async def _send_email_alert(
     settings: Settings,
     conditions: list[str],
@@ -362,6 +370,12 @@ async def _send_email_alert(
         _log.warning("watchdog.email_no_smtp_host")
         return
 
+    # FAR-1495: every alert email names the deployment environment and carries
+    # the operator's ALERT_CONTEXT free text (shared renderer, one source of
+    # the format for both alert channels).
+    context_html = alert_context_html(settings)
+    context_text = "\n" + alert_context_text(settings)
+
     if recovery_state is not None:
         subject = "[Modulo Watchdog] Worker-liveness recovered"
         prior = recovery_state.get("conditions") or []
@@ -371,10 +385,9 @@ async def _send_email_alert(
             "<p>The following worker-liveness conditions have cleared:</p>"
             "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in prior) + "</ul>"
             f"<p>Resolved at {html.escape(datetime.now(UTC).isoformat())} "
-            f"on {html.escape(_hostname())}</p>"
-            "</body></html>"
+            f"on {html.escape(_hostname())}</p>" + context_html + "</body></html>"
         )
-        body_text = _recovery_text(recovery_state)
+        body_text = _recovery_text(recovery_state) + context_text
     else:
         subject = "[Modulo Watchdog] Worker-liveness alert"
         body_html = (
@@ -383,10 +396,9 @@ async def _send_email_alert(
             "<p>The in-process watchdog detected one or more worker-liveness conditions:</p>"
             "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in conditions) + "</ul>"
             f"<p>Detected at {html.escape(datetime.now(UTC).isoformat())} "
-            f"on {html.escape(_hostname())}</p>"
-            "</body></html>"
+            f"on {html.escape(_hostname())}</p>" + context_html + "</body></html>"
         )
-        body_text = _alert_text(conditions)
+        body_text = _alert_text(conditions) + context_text
     try:
         await asyncio.to_thread(
             send_email,
@@ -470,13 +482,19 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
             return
         # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
         # event needs stdout visibility (repo lesson).
-        print(f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)}", flush=True)  # noqa: T201
+        print(  # noqa: T201
+            f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)} | {_context_oneline(settings)}",
+            flush=True,
+        )
         await _send_alerts(settings, conditions)
     else:
         state = await _claim_recovery(redis)
         if state is None:
             return  # nothing was alerted — healthy state, stay silent
-        print("[watchdog] RECOVERY worker-liveness: conditions cleared", flush=True)  # noqa: T201
+        print(  # noqa: T201
+            f"[watchdog] RECOVERY worker-liveness: conditions cleared | {_context_oneline(settings)}",
+            flush=True,
+        )
         await _send_alerts(settings, [], recovery_state=state)
 
 

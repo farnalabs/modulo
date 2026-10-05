@@ -154,6 +154,8 @@ primary_region = 'lhr'
 
 [env]
   MODULO_DB = "postgres"
+  # Deployment environment name stamped on every operator alert email (FAR-1495).
+  MODULO_ENV = "production"
   # MODULO_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
   # derives it from DATABASE_URL with the modulo_system role (LOGIN, BYPASSRLS)
   # and entrypoint.sh exports it. It contains a password, so no literal value.

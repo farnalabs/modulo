@@ -1235,3 +1235,69 @@ class TestAdditionalFailOpenPaths:
 
         assert sleeps["n"] == 1  # the loop survived the connect failure and kept ticking
         assert "watchdog.tick_failed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-1495: every alert email identifies the deployment environment and
+# appends the operator's ALERT_CONTEXT free text — rendered by the shared
+# core.alert_context helpers, in the HTML part and the text part alike.
+# ---------------------------------------------------------------------------
+
+
+def _alert_context_settings() -> Settings:
+    return _make_settings(
+        ALERT_EMAIL_TO="ops@example.com",
+        smtp_host="smtp.example.com",
+        # Settings keys match the field's env alias case-insensitively (see
+        # tests/unit/core/test_alert_context.py) — hence these spellings.
+        MODULO_ENV="staging",
+        ALERT_CONTEXT="runbook: https://example.com/runbook\npage the on-call",
+    )
+
+
+class TestAlertContextOnEmails:
+    async def test_alert_email_carries_environment_and_context(self) -> None:
+        settings = _alert_context_settings()
+        send = MagicMock(return_value=True)
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+        ):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+
+        send.assert_called_once()
+        html_body = send.call_args.args[3]
+        text_body = send.call_args.args[4]
+        for part in (html_body, text_body):
+            assert "Environment: staging" in part
+            assert "runbook: https://example.com/runbook" in part
+            assert "page the on-call" in part
+        # The context follows the detection stamp, in both parts.
+        assert text_body.index("Detected at") < text_body.index("Environment: staging")
+        assert html_body.index("Detected at") < html_body.index("Environment: staging")
+
+    async def test_recovery_email_carries_environment_and_context(self) -> None:
+        settings = _alert_context_settings()
+        send = MagicMock(return_value=True)
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+        ):
+            await wl._send_email_alert(
+                settings,
+                [],
+                recovery_state={"conditions": ["no live SAQ worker"], "started_at": time.time() - 60},
+            )
+
+        send.assert_called_once()
+        html_body = send.call_args.args[3]
+        text_body = send.call_args.args[4]
+        for part in (html_body, text_body):
+            assert "Environment: staging" in part
+            assert "runbook: https://example.com/runbook" in part
+        assert text_body.index("Resolved at") < text_body.index("Environment: staging")
+        assert html_body.index("Resolved at") < html_body.index("Environment: staging")

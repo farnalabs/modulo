@@ -622,3 +622,44 @@ async def test_owned_redis_client_is_created_and_closed() -> None:
         )
     from_url.assert_called_once()
     assert result["notified"] == "none"
+
+
+async def test_alert_and_recovery_bodies_carry_environment_and_context() -> None:
+    """FAR-1495: BOTH the alert and the recovery email identify the deployment
+    environment and append the operator's ALERT_CONTEXT free text — in the
+    HTML part and the text part alike, with the context after the detection
+    stamp in the text part."""
+    settings = _make_settings(
+        # Settings keys match the field's env alias case-insensitively (see
+        # test_alert_context.py) — hence MODULO_ENV / ALERT_CONTEXT here.
+        MODULO_ENV="staging",
+        ALERT_CONTEXT="runbook: https://example.com/runbook\npage the on-call",
+    )
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _unhealthy()
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+
+    alert = sender.sent[0]
+    for part in (alert["html"], alert["text"]):
+        assert "Environment: staging" in part
+        assert "runbook: https://example.com/runbook" in part
+        assert "page the on-call" in part
+    # The context follows the detection stamp in the text part.
+    assert alert["text"].index("Detected at") < alert["text"].index("Environment: staging")
+
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 2
+
+    recovery = sender.sent[1]
+    for part in (recovery["html"], recovery["text"]):
+        assert "Environment: staging" in part
+        assert "runbook: https://example.com/runbook" in part
+    assert recovery["text"].index("Resolved at") < recovery["text"].index("Environment: staging")
