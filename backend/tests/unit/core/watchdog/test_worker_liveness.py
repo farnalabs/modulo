@@ -1304,6 +1304,52 @@ class TestAlertContextOnEmails:
         assert html_body.index("Resolved at") < html_body.index("Environment: staging")
 
 
+class TestAlertContextOnWebhooks:
+    """FAR-1495: the webhook channels carry the SAME environment / context
+    suffix as email (single-sourced), so a webhook recipient can tell staging
+    from production and the channels cannot drift."""
+
+    def _webhook_settings(self, **overrides: Any) -> Settings:
+        return _make_settings(
+            MODULO_ENV="staging",
+            ALERT_CONTEXT="runbook: https://example.com/runbook\npage the on-call",
+            **overrides,
+        )
+
+    async def _post_bodies(self, settings: Settings, **kwargs: Any) -> list[dict[str, Any]]:
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+            await wl._send_alerts(settings, kwargs.pop("conditions", ["no live SAQ worker"]), **kwargs)
+        return [json.loads(call.kwargs["content"]) for call in client.post.await_args_list]
+
+    async def test_generic_webhook_carries_environment_and_context(self) -> None:
+        settings = self._webhook_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        [body] = await self._post_bodies(settings)
+        assert "no live SAQ worker" in body["text"]
+        assert "Environment: staging" in body["text"]
+        assert "runbook: https://example.com/runbook" in body["text"]
+        # The context follows the detection stamp, as in the email text part.
+        assert body["text"].index("Detected at") < body["text"].index("Environment: staging")
+
+    async def test_teams_webhook_carries_environment_and_context(self) -> None:
+        settings = self._webhook_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/abc")
+        [body] = await self._post_bodies(settings)
+        assert "Environment: staging" in body["text"]
+        assert "runbook: https://example.com/runbook" in body["text"]
+
+    async def test_recovery_webhook_carries_environment_and_context(self) -> None:
+        settings = self._webhook_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        [body] = await self._post_bodies(
+            settings,
+            conditions=[],
+            recovery_state={"conditions": ["no live SAQ worker"], "started_at": time.time() - 60},
+        )
+        assert "Environment: staging" in body["text"]
+        assert body["text"].index("Resolved at") < body["text"].index("Environment: staging")
+
+
 # ---------------------------------------------------------------------------
 # FAR-1495 follow-up: the stdout stamp is STRICTLY best-effort (a print failure
 # must never block the alert/recovery fan-out that follows it) and it carries

@@ -16,7 +16,9 @@
 # on PR #1285: `changelog: none` applied at 07:57:56, but the `opened` run,
 # started at 07:58:10, still saw only `agent-generated` and failed). Reading
 # the live labels removes that race. The payload is only a fallback for when
-# the labels API call fails.
+# the labels API call fails. The live read requests per_page=100 so a PR
+# carrying more than the endpoint's default 30 labels cannot have a
+# changelog:* label truncated out of the list (edge case, belt-and-braces).
 
 name: "Check: Changelog classification"
 
@@ -86,7 +88,7 @@ jobs:
           LABELS_JSON="$EVENT_LABELS_JSON"
           HAS_LABEL="false"
           for attempt in 1 2 3; do
-            LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '[.[].name]' 2>/dev/null || true)"
+            LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '[.[].name]' 2>/dev/null || true)"
             if [ -n "$LIVE_LABELS_JSON" ]; then
               LABELS_JSON="$LIVE_LABELS_JSON"
             fi
