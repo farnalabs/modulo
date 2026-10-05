@@ -2743,12 +2743,42 @@ async def test_get_sandbox_concurrency_limit_fail_open_on_missing_org():
 # ---------------------------------------------------------------------------
 
 
+def _empty_execute_result() -> MagicMock:
+    """A plain-MagicMock DB result whose scalar readers return nothing.
+
+    The capacity/claim path performs best-effort reads (org row for the
+    run-concurrency cap, pipeline name for the run_started audit summary,
+    audit chain head) against every mocked session. A plain MagicMock is
+    required here: it must NOT be a child of the AsyncMock session, because
+    attribute children of an AsyncMock are AsyncMocks whose calls return
+    never-awaited coroutines (the source of PytestUnraisableException noise
+    FAR-739). Returning None keeps the existing mock-only semantics: the
+    fail-safe paths (_read_org_int_limit, _safe_pipeline_name, audit head)
+    treat a missing row as no-cap / nameless summary / first chain event.
+    """
+    result = MagicMock()
+    result.scalar.return_value = None
+    result.scalar_one.return_value = None
+    result.scalar_one_or_none.return_value = None
+    result.fetchone.return_value = None
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    result.scalars.return_value = scalars_mock
+    return result
+
+
 def _make_capacity_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Every admissible-claim test exercises the real fail-safe DB reads
+    # (org run-cap settings, pipeline-name audit lookup, audit chain head)
+    # against this shared session; an unconfigured AsyncMock execute leaks a
+    # never-awaited coroutine the moment its result's scalar readers are
+    # called (FAR-739). Give it a plain-MagicMock result instead.
+    session.execute = AsyncMock(return_value=_empty_execute_result())
     return session
 
 

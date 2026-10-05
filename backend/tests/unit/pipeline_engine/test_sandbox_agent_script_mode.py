@@ -801,8 +801,19 @@ def _run_api_key_session_factory(account_id: uuid.UUID | None = _ACCOUNT_ID):
     the admin fallback path); the mint helper then calls the patched
     ``mint_run_api_key``. ``set_rls_org`` takes the generic-backend branch
     (the mock's dialect is not 'postgresql') and only writes ``session.info``.
+
+    The RLS preamble runs against the (unpatched) session mock, so
+    ``in_transaction`` and ``get_bind`` must be SYNC MagicMock methods: on a
+    bare AsyncMock they return never-awaited coroutines (the source of
+    PytestUnraisableException noise FAR-739). The generic dialect keeps the
+    tenant filter on ``session.info`` and leaves the production
+    ``set_config``-per-statement path unexercised, matching pre-fix behaviour.
     """
     session = AsyncMock()
+    session.in_transaction = MagicMock(return_value=True)
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.get_bind = MagicMock(return_value=bind)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
@@ -907,6 +918,10 @@ async def test_sandbox_mint_helper_binds_the_run_account_id():
         return MagicMock(), _FAKE_RUN_KEY
 
     session = AsyncMock()
+    session.in_transaction = MagicMock(return_value=True)
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.get_bind = MagicMock(return_value=bind)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
@@ -943,6 +958,10 @@ async def test_sandbox_mint_helper_falls_back_to_first_active_admin():
         return MagicMock(), _FAKE_RUN_KEY
 
     session = AsyncMock()
+    session.in_transaction = MagicMock(return_value=True)
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.get_bind = MagicMock(return_value=bind)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
