@@ -23,4 +23,4 @@ def generate_token() -> str:
 
 def hash_token(token: str) -> str:
     """SHA-256 hex of a token plaintext — the value persisted at rest."""
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
