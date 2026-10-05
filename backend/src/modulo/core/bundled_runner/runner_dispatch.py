@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 import jinja2
 
 from modulo.core.bundled_runner.profile import (
+    TEMPLATE_CONFIG_JSON,
     is_placeholder_bundled_runner_image_ref,
 )
 from modulo.core.runtime_provider import (
@@ -352,13 +353,23 @@ def _workspace_spec_for_dispatch(
     # directly to the DB could bypass the route validation.
     raw_network = cfg.get("workspace_network")
     validated_network = validate_workspace_network(raw_network)
+    # FAR-1051 (qa-iterate): the FALLBACK timeout is read from the shipped
+    # profile default block (``TEMPLATE_CONFIG_JSON["timeout_seconds"]``) —
+    # the same constant the seeded profile's own config starts from — so the
+    # dispatch default and the profile default can never drift apart. An
+    # EXPLICITLY-set ``config_json.timeout_seconds`` keeps its historical
+    # coercion exactly (``int(...)`` on the raw value, including a
+    # TypeError on a non-numeric one — never a silent substitute default).
+    _timeout_seconds = (
+        int(cfg["timeout_seconds"]) if "timeout_seconds" in cfg else int(TEMPLATE_CONFIG_JSON["timeout_seconds"])
+    )
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=org_id,  # type: ignore[arg-type]
         run_id=run_uuid,
         image_ref=getattr(profile, "image_ref", None) or "",
         capabilities=getattr(profile, "capabilities_json", None) or [],
-        timeout_seconds=int(cfg.get("timeout_seconds", 3600)),
+        timeout_seconds=_timeout_seconds,
         resource_limits={"memory_mb": int(cfg.get("memory_mb", 1024))},
         egress_policy=spec_egress,
         persistence_policy=getattr(profile, "persistence_policy", "ephemeral"),

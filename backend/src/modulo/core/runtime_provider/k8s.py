@@ -78,6 +78,7 @@ import logging
 import os
 import re
 import shlex
+import socket
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -321,8 +322,17 @@ class KubernetesRuntimeProvider(RuntimeProvider):
 
     @staticmethod
     def _deployment_identity() -> str:
-        """Machine deployment identity for pod annotations (future reconciler scoping)."""
-        return os.environ.get(_DEPLOYMENT_IDENTITY_ENV) or "unspecified"
+        """Machine deployment identity for pod annotations (reconciler scoping).
+
+        ``MODULO_RUNNER_MACHINE_ID`` first, hostname fallback — Docker parity
+        (``DockerRuntimeProvider._deployment_identity``). The constant
+        fallback this had (``"unspecified"``) collapsed two deployments
+        sharing one namespace onto ONE identity, so each reconciler would
+        sweep the other's pods as same-machine; a hostname (unique per
+        machine) keeps them distinct even when the operator never set the
+        env var.
+        """
+        return os.environ.get(_DEPLOYMENT_IDENTITY_ENV) or socket.gethostname()
 
     @staticmethod
     def _sanitize_label_value(raw: str) -> str:
@@ -338,19 +348,33 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         labels carry a sanitised copy of the same entries plus the identity
         keys a label-selector sweep filters on, so an arbitrary metadata
         value can never produce an invalid pod spec.
+
+        Reserved identity keys are stamped AFTER the metadata loop (ordering
+        mirror of ``DockerRuntimeProvider._build_workspace_labels``) and win
+        outright: operator-supplied ``workspace_metadata`` carrying
+        ``modulo.provider`` / ``modulo.created_at`` / ``modulo.machine.id``
+        must never re-stamp them. A pod whose ``modulo.provider`` label said
+        anything but ``kubernetes`` would be refused by
+        ``destroy_workspace_by_ref`` and filtered out by
+        ``list_workspace_pods`` — a permanent, unreclaimable leak. Identity
+        keys are ASSIGNED (not ``setdefault``): the identity is this
+        provider's own fact, never caller input. Non-reserved keys (e.g.
+        ``modulo.run.id``, stamped by dispatch) still flow through.
         """
         metadata = dict(spec.workspace_metadata or {})
-        annotations = dict(metadata)
-        annotations[_PROVIDER_LABEL] = _PROVIDER_LABEL_VALUE
-        annotations[_MACHINE_ANNOTATION] = self._deployment_identity()
 
-        labels: dict[str, str] = {
-            _PROVIDER_LABEL: _PROVIDER_LABEL_VALUE,
-            _CREATED_AT_LABEL: str(int(time.time())),
-        }
+        labels: dict[str, str] = {}
         for key, value in metadata.items():
             if _LABEL_KEY_RE.match(key) and len(key) <= _LABEL_VALUE_MAX:
                 labels[key] = self._sanitize_label_value(str(value))
+        # Reserved identity labels — applied last, always authoritative.
+        labels[_PROVIDER_LABEL] = _PROVIDER_LABEL_VALUE
+        labels[_CREATED_AT_LABEL] = str(int(time.time()))
+
+        annotations = dict(metadata)
+        # Reserved identity annotations — likewise applied last.
+        annotations[_PROVIDER_LABEL] = _PROVIDER_LABEL_VALUE
+        annotations[_MACHINE_ANNOTATION] = self._deployment_identity()
         return labels, annotations
 
     @staticmethod

@@ -9153,6 +9153,22 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
         if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
             _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
+        # FAR-1051 (qa-iterate): run/org/node attribution rides the spec's
+        # workspace_metadata — the SAME provider-neutral keys the Docker
+        # route stamps in ``runner_dispatch._workspace_spec_for_dispatch``.
+        # Without them the Kubernetes workspace pod carries no
+        # ``modulo.run.id`` LABEL, and the workspace-orphan reconciler
+        # deliberately skips pods without one (no run to cross-reference),
+        # so a pod that outlives its dispatch could never be reclaimed.
+        # Empty identity values are dropped (parity with that mapper's
+        # ``if value`` filter) rather than stamped as "".
+        for _attribution_key, _attribution_value in (
+            ("modulo.run.id", run_id),
+            ("modulo.org.id", org_id),
+            ("modulo.node.id", node_id),
+        ):
+            if _attribution_value:
+                _metadata[_attribution_key] = str(_attribution_value)
         # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
         # exhausted) are TRANSIENT. Retry ``AsyncSandbox.create`` with
         # exponential backoff, bounded by the create timeout window and the

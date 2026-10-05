@@ -12,6 +12,10 @@ and the sweep's early return when NO Docker endpoint is resolvable.
 FAR-1051: the Kubernetes workspace source — the provider-neutral sweep
 drives a second source so ``modulo-ws-*`` pods are reclaimed too, each tier
 keeping its own applicability check (``kubernetes_endpoint_skip_reason``).
+
+FAR-1051 (qa-iterate): the dispatch-attribution test — the spec ``node_runner``
+actually builds carries ``modulo.run.id``, so the sweep's run-id filter can
+match a pod that outlives its dispatch.
 """
 
 import logging
@@ -663,3 +667,84 @@ async def test_sweep_skips_the_kubernetes_source_when_the_provider_is_unregister
 
     assert result == {"scanned": 1, "orphans_destroyed": 0}
     k8s_factory.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1051 (qa-iterate F3): the dispatch stamps the run id the sweep keys on
+# ---------------------------------------------------------------------------
+
+
+async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dispatched workspace must be reclaimable: the spec the REAL
+    ``node_runner`` dispatch builds carries ``modulo.run.id`` (plus org/node)
+    in ``workspace_metadata``, and the pod labels derived from it satisfy the
+    reconciler's own run-id filter.
+
+    Without the stamp the Kubernetes pod carries no ``modulo.run.id`` label,
+    the source skips it (no run to cross-reference) and a pod outliving its
+    dispatch can never be reclaimed — driving the dispatch here rather than
+    hand-building a spec is what proves the CALL SITE stamps it.
+    """
+    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+    from tests.unit.pipeline_engine.conftest import FakeFileIOProvider, install_fake_dispatch
+
+    run_id = str(uuid.uuid4())
+    org_id = str(uuid.uuid4())
+    node_id = "n1"
+
+    # Route the dispatch's provider / file-IO / log-tail seams to fakes so the
+    # real spec build runs with no live sandbox, cluster or network.
+    file_io = FakeFileIOProvider(files={"/home/user/output.json": b'{"status": "completed", "summary": "done"}'})
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
+        AsyncMock(return_value=file_io),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        AsyncMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"f3-tail"))),
+    )
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-f3", exit_code=0)
+
+    fn = make_sandbox_agent_fn(
+        {
+            "id": node_id,
+            "agent_prompt": "Do the thing",
+            "agent_commands": ["echo hi"],
+            "timeout_seconds": 30,
+        }
+    )
+    await fn(
+        {
+            "run_context": {"input": {}},
+            "_run_id": run_id,
+            "_pipeline_id": "pipe-f3",
+            "_org_id": org_id,
+        }
+    )
+
+    spec = dispatch.created_spec
+    assert spec is not None
+    assert spec.workspace_metadata[runner_reconciler._RUN_ID_LABEL] == run_id
+    assert spec.workspace_metadata["modulo.org.id"] == org_id
+    assert spec.workspace_metadata["modulo.node.id"] == node_id
+
+    # ...and a pod labelled from that spec passes the reconciler's OWN filter:
+    # map the metadata through the real Kubernetes provider, then run the
+    # source's listing over it.
+    from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+
+    labels, _annotations = KubernetesRuntimeProvider()._build_metadata(spec)
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    k8s_provider = MagicMock()
+    k8s_provider.list_workspace_pods = AsyncMock(
+        return_value=[WorkspacePodRef(ref="modulo-ws-f3", labels=labels, created_age_s=42.0)]
+    )
+    source._provider = k8s_provider
+
+    listed = await source.list_labelled_workspaces()
+
+    assert [entry.run_id for entry in listed] == [run_id]
+    assert listed[0].created_age_s == 42.0

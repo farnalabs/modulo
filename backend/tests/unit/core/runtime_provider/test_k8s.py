@@ -9,6 +9,10 @@ Coverage (the Kubernetes client is MOCKED throughout — no live cluster):
 * ``exec_command_stream`` lifecycle: chunks, healthy exit codes, and the
   stream-error XOR (an error carries ``exit_code=None`` — never a fabricated 0);
 * destroy idempotency: tracked destroy, by-ref 404 / foreign-pod / failure;
+* pod listing: the reconciler's own selector + deployment-identity scoping
+  exercised against the REAL filtering code (client mocked, never a cluster);
+* reserved identity labels: operator ``workspace_metadata`` cannot re-stamp
+  ``modulo.provider`` / ``modulo.created_at`` / ``modulo.machine.id``;
 * typed-error paths: capability refusals (egress), provision timeout,
   unreachable backend, unknown ref;
 * structural parity for the CHECK-widening migration 0281 (mirrors the 0178
@@ -19,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import socket
+import time
 import uuid
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -145,6 +151,18 @@ def _pod(phase: str = "Running", labels: dict[str, str] | None = None, note: str
     return SimpleNamespace(
         status=SimpleNamespace(phase=phase, container_statuses=statuses),
         metadata=SimpleNamespace(labels=labels if labels is not None else {"modulo.provider": "kubernetes"}),
+    )
+
+
+def _listed_pod(
+    name: str,
+    *,
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+) -> SimpleNamespace:
+    """One pod as ``list_namespaced_pod`` hands it back (name + labels + annotations)."""
+    return SimpleNamespace(
+        metadata=SimpleNamespace(name=name, labels=labels if labels is not None else {}, annotations=annotations or {}),
     )
 
 
@@ -291,6 +309,52 @@ class TestCreateWorkspace:
         assert body.metadata.annotations["modulo.provider"] == "kubernetes"
         assert body.metadata.labels["modulo.provider"] == "kubernetes"
         assert "modulo.run.id" in body.metadata.labels
+
+    async def test_metadata_cannot_restamp_a_reserved_identity_label(self) -> None:
+        """Reserved identity keys are stamped AFTER the metadata loop (F2).
+
+        Operator-supplied ``workspace_metadata`` carrying ``modulo.provider`` /
+        ``modulo.created_at`` / ``modulo.machine.id`` must never re-stamp them:
+        a pod labelled ``modulo.provider=local_docker`` is invisible to
+        ``destroy_workspace_by_ref`` and ``list_workspace_pods`` (both key on
+        ``modulo.provider=kubernetes``), so the pod could never be reclaimed —
+        a permanent leak. Non-reserved attribution keys still flow through.
+        """
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        provider = _provider(core=core)
+
+        ref = await provider.create_workspace(
+            _spec(
+                workspace_metadata={
+                    "modulo.provider": "local_docker",
+                    "modulo.created_at": "1",
+                    "modulo.machine.id": "evil-deployment",
+                    "modulo.run.id": "7d9f0000-0000-4000-8000-000000000001",
+                }
+            )
+        )
+
+        body = core.create_namespaced_pod.await_args.kwargs["body"]
+        labels = body.metadata.labels
+        annotations = body.metadata.annotations
+        # The identity keys win outright — assignment, not setdefault.
+        assert labels["modulo.provider"] == "kubernetes"
+        assert annotations["modulo.provider"] == "kubernetes"
+        assert annotations["modulo.machine.id"] == provider._deployment_identity()
+        # A fresh creation stamp, never the caller's backdated value.
+        assert int(labels["modulo.created_at"]) > 1
+        # Non-reserved attribution keys still round-trip.
+        assert labels["modulo.run.id"] == "7d9f0000-0000-4000-8000-000000000001"
+
+        # Behavioural proof: the pod the API would hand back (carrying exactly
+        # those labels) is still recognised as ours by the reclamation
+        # primitive — the leak the ordering bug opened is closed.
+        core.read_namespaced_pod.return_value = SimpleNamespace(
+            metadata=SimpleNamespace(labels=dict(labels)),
+        )
+        assert await provider.destroy_workspace_by_ref(ref) is True
+        core.delete_namespaced_pod.assert_awaited_once()
 
     async def test_provision_timeout_is_typed_and_reclaims_the_pod(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(k8s_mod, "_PROVISION_POLL_INTERVAL", 0.01)
@@ -568,6 +632,113 @@ class TestDestroyAndStatus:
         assert not await provider.read_log_tail("modulo-ws-gone", max_bytes=5)
 
         assert not await provider.read_log_tail("", max_bytes=5)
+
+
+# ---------------------------------------------------------------------------
+# deployment identity (reconciler scoping — F4)
+# ---------------------------------------------------------------------------
+
+
+class TestDeploymentIdentity:
+    def test_falls_back_to_the_hostname_never_a_shared_constant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Docker parity: ``MODULO_RUNNER_MACHINE_ID`` first, hostname second.
+
+        The constant fallback this had (``"unspecified"``) collapsed two
+        deployments sharing one namespace onto ONE identity, so each
+        reconciler would sweep the other's pods as same-machine.
+        """
+        monkeypatch.delenv("MODULO_RUNNER_MACHINE_ID", raising=False)
+
+        assert KubernetesRuntimeProvider._deployment_identity() == socket.gethostname()
+
+        monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "explicit-machine")
+
+        assert KubernetesRuntimeProvider._deployment_identity() == "explicit-machine"
+
+
+# ---------------------------------------------------------------------------
+# list_workspace_pods (the reconciler's listing primitive — behavioural)
+# ---------------------------------------------------------------------------
+
+
+class TestListWorkspacePods:
+    """Real selector / identity matching for the reconciler's listing (F6).
+
+    The reconciler tests mock ``list_workspace_pods``; these exercise the
+    provider's OWN filtering code instead — the Kubernetes client is still
+    mocked (no live cluster), but the scoping logic is not.
+    """
+
+    async def test_returns_this_deployment_pods_with_labels_and_age(self) -> None:
+        core = AsyncMock()
+        identity = KubernetesRuntimeProvider._deployment_identity()
+        now = int(time.time())
+        ours = _listed_pod(
+            "modulo-ws-ours",
+            labels={
+                "modulo.provider": "kubernetes",
+                "modulo.created_at": str(now - 30),
+                "modulo.run.id": "run-1",
+            },
+            annotations={k8s_mod._MACHINE_ANNOTATION: identity},
+        )
+        core.list_namespaced_pod.return_value = SimpleNamespace(items=[ours])
+        provider = _provider(core=core)
+
+        entries = await provider.list_workspace_pods()
+
+        # Server-side selector: foreign pods never reach the client-side pass.
+        core.list_namespaced_pod.assert_awaited_once_with(
+            namespace="modulo",
+            label_selector=f"{k8s_mod._PROVIDER_LABEL}={k8s_mod._PROVIDER_LABEL_VALUE}",
+        )
+        assert [entry.ref for entry in entries] == ["modulo-ws-ours"]
+        # The reconciler's own label vocabulary survives the listing.
+        assert entries[0].labels["modulo.run.id"] == "run-1"
+        age = entries[0].created_age_s
+        assert age >= 25.0
+        assert age <= 60.0
+
+    async def test_excludes_foreign_and_identity_less_pods(self) -> None:
+        """Client-side deployment-identity match: a same-label pod of ANOTHER
+        Modulo deployment (and a pod with no identity annotation at all) is
+        never listed — two deployments sharing one namespace stay disjoint."""
+        core = AsyncMock()
+        identity = KubernetesRuntimeProvider._deployment_identity()
+        now = int(time.time())
+        items = [
+            _listed_pod(
+                "modulo-ws-foreign",
+                labels={"modulo.provider": "kubernetes", "modulo.created_at": str(now)},
+                annotations={k8s_mod._MACHINE_ANNOTATION: "some-other-deployment"},
+            ),
+            _listed_pod(
+                "modulo-ws-no-identity",
+                labels={"modulo.provider": "kubernetes", "modulo.created_at": str(now)},
+                annotations={},
+            ),
+            _listed_pod(
+                "modulo-ws-ours",
+                labels={"modulo.provider": "kubernetes", "modulo.created_at": str(now)},
+                annotations={k8s_mod._MACHINE_ANNOTATION: identity},
+            ),
+        ]
+        core.list_namespaced_pod.return_value = SimpleNamespace(items=items)
+        provider = _provider(core=core)
+
+        entries = await provider.list_workspace_pods()
+
+        assert [entry.ref for entry in entries] == ["modulo-ws-ours"]
+
+    async def test_listing_failure_propagates_never_a_silent_empty_list(self) -> None:
+        """A configured-but-unreachable cluster is a reported sweep failure,
+        never an empty listing the sweep would read as "nothing to reclaim"."""
+        core = AsyncMock()
+        core.list_namespaced_pod.side_effect = ConnectionRefusedError("apiserver gone")
+        provider = _provider(core=core)
+
+        with pytest.raises(ConnectionRefusedError):
+            await provider.list_workspace_pods()
 
 
 # ---------------------------------------------------------------------------

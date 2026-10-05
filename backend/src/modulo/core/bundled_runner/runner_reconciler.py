@@ -491,10 +491,14 @@ def _context_endpoint_configured() -> bool:
 
 
 def docker_endpoint_skip_reason() -> str | None:
-    """Why the orphan sweep is NOT APPLICABLE here, or ``None`` if it is.
+    """Why the DOCKER half of the orphan sweep is NOT APPLICABLE here, or ``None``.
 
-    FAR-1201 follow-up: the sweep skips only when NO Docker endpoint can be
-    resolved at all — mirroring aiodocker's own host-resolution chain
+    FAR-1201 follow-up + FAR-1051 (provider-neutral sweep): this reason
+    scopes the Docker source only — the sweep as a whole runs whenever ANY
+    tier is applicable, and the Kubernetes half carries its own reason
+    (:func:`kubernetes_endpoint_skip_reason`). The Docker source skips only
+    when NO Docker endpoint can be resolved at all — mirroring aiodocker's
+    own host-resolution chain
     (explicit url → Docker context → auto-detected local socket), which is
     exactly the case where ``aiodocker.Docker(url=None)`` raises at
     construction (the permanently-degraded engine-unreachable check on
@@ -502,7 +506,7 @@ def docker_endpoint_skip_reason() -> str | None:
     ``DOCKER_HOST`` and no local socket). Corroborated by ``build_hub``
     (``runtime_provider``): the Docker provider only REGISTERS when an env
     endpoint is set, so an engine-less deployment creates no workspace
-    containers for this sweep to reconcile.
+    containers for the Docker source to reconcile.
 
     A CONFIGURED-but-unreachable endpoint returns ``None``: outage must keep
     reporting engine-unreachable, never skip. Only "nothing configured at
