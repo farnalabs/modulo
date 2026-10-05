@@ -967,7 +967,13 @@ class Settings(BaseSettings):
     # settings can override this per-organisation via the admin email-settings API.
     smtp_timeout: int = Field(30, ge=1, le=120)
 
-    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
+    # populate_by_name (FAR-1500): constructor kwargs may use a field's NAME as
+    # well as its alias. Without it, a name-keyed kwarg for an aliased field is
+    # silently dropped by ``extra="ignore"`` — ``Settings(environment="prod")``
+    # kept the default while ``Settings(MODULO_ENV="prod")`` worked, a silent
+    # footgun for every caller that constructs Settings in Python. Aliases stay
+    # authoritative for env-var sources; this only widens the init-key space.
+    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore", "populate_by_name": True}
 
     @field_validator("secret_key")
     @classmethod

@@ -219,3 +219,70 @@ def test_hitl_cancel_grace_new_env_wins_over_deprecated(
 
     assert settings.hitl_review_cancel_grace_seconds == 900
     assert "deprecated" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-1500 populate_by_name — constructor keys accept the field NAME as well
+# as the alias. Without it, a name-keyed kwarg for an ALIASED field was
+# silently dropped by extra="ignore": Settings(environment="staging") kept the
+# default while Settings(MODULO_ENV="staging") worked, with no error either way.
+# ---------------------------------------------------------------------------
+
+
+def test_environment_accepts_the_env_alias_key() -> None:
+    """The alias key (the env-var spelling) keeps working unchanged."""
+    assert _make(MODULO_ENV="staging").environment == "staging"
+
+
+def test_environment_accepts_the_field_name_key() -> None:
+    """FAR-1500: a ``environment=`` kwarg now populates the field instead of
+    being silently ignored (it does NOT case-fold onto the ``MODULO_ENV``
+    alias, which is why this key was dropped before ``populate_by_name``)."""
+    assert _make(environment="staging").environment == "staging"
+
+
+def test_alert_context_accepts_the_env_alias_key() -> None:
+    assert _make(ALERT_CONTEXT="ops note").alert_context == "ops note"
+
+
+def test_alert_context_accepts_the_field_name_key() -> None:
+    """``alert_context`` previously worked by case-folding onto its own
+    ``ALERT_CONTEXT`` alias — now it works by name too, for the same reason
+    ``environment`` does, not by accident of spelling."""
+    assert _make(alert_context="ops note").alert_context == "ops note"
+
+
+def test_another_divergent_alias_also_accepts_the_field_name_key() -> None:
+    """The fix is model-wide, not ``environment``-specific: any field whose
+    alias differs from its name (here ``runner_machine_id`` ->
+    ``MODULO_RUNNER_MACHINE_ID``) accepts a name-keyed constructor kwarg."""
+    assert _make(runner_machine_id="machine-1").runner_machine_id == "machine-1"
+
+
+def test_the_alias_key_wins_when_both_keys_are_supplied() -> None:
+    """Aliases stay authoritative: a field supplied under BOTH its alias and
+    its name resolves to the alias value (the env-var spelling is unambiguous,
+    the name-keyed duplicate never shadows it)."""
+    settings = _make(MODULO_ENV="production", environment="staging")
+    assert settings.environment == "production"
+
+
+def test_populate_by_name_also_widens_env_var_matching_to_the_field_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Side effect worth pinning: ``populate_by_name`` widens ENV-var matching
+    too, so ``ENVIRONMENT`` (the field name) is now read where only
+    ``MODULO_ENV`` was before."""
+    monkeypatch.delenv("MODULO_ENV", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "host-generic-var")
+    assert _make().environment == "host-generic-var"
+
+
+def test_the_env_alias_still_outranks_a_field_name_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The widening cannot shadow the documented spelling: when BOTH
+    ``MODULO_ENV`` and a generic ``ENVIRONMENT`` are set, the alias wins."""
+    monkeypatch.setenv("ENVIRONMENT", "host-generic-var")
+    monkeypatch.setenv("MODULO_ENV", "staging")
+    assert _make().environment == "staging"
