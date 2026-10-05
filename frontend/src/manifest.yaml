@@ -4447,6 +4447,15 @@ elements:
       - testid: settings-mcp-org-scope-note
         type: element
         dynamic_testid: false
+      - testid: settings-mcp-grants-loading
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-load-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-retry
+        type: button
+        dynamic_testid: false
       - testid: settings-mcp-key-created-done
         type: button
         dynamic_testid: false
