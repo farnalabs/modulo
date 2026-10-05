@@ -533,8 +533,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             await self._wait_until_running(pod_name, wait_bound_s)
         except BaseException:
             # Provision failed or was cancelled — reclaim the pod so a failed
-            # create never leaks it (the shipped reconciler sweep is
-            # Docker-only; this is the only cleanup on this path).
+            # create never leaks it. The provider-neutral reconciler sweep now
+            # reclaims Kubernetes pods too (FAR-1051), but deleting here keeps a
+            # failed create from lingering until the next sweep.
             await self._delete_pod_best_effort(pod_name)
             raise
 
