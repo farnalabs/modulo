@@ -616,7 +616,7 @@ async def _apply_key_update(
         Depends(deny_break_glass_mint),
         Depends(
             audited("api_key_updated", "api_key", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )

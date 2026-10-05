@@ -92,7 +92,7 @@ class DeleteOAuthClientResponse(BaseModel):
         require_feature("mcp_server"),
         Depends(
             audited("oauth_client_created", "oauth_client", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -244,7 +244,7 @@ async def list_oauth_clients_endpoint(
         require_feature("mcp_server"),
         Depends(
             audited("oauth_client_deleted", "oauth_client", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -332,7 +332,7 @@ class ConsentApproveResponse(BaseModel):
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )

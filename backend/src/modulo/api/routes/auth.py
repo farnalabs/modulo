@@ -1333,7 +1333,7 @@ async def _resolve_live_org_role(
     dependencies=[
         Depends(
             audited("ws_token_issued", "ws_token", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

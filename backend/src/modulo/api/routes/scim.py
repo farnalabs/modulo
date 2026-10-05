@@ -406,7 +406,7 @@ async def list_users(
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -539,7 +539,7 @@ async def get_user(
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -685,7 +685,7 @@ def _apply_user_patch_ops(account: Account, operations: list[ScimPatchOperation]
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -767,7 +767,7 @@ async def patch_user(
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -938,7 +938,7 @@ async def list_groups(
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -1104,7 +1104,7 @@ async def get_group(
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -1293,7 +1293,7 @@ async def _build_group_member_refs(session: AsyncSession, group: Any, base_url: 
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -1370,7 +1370,7 @@ async def patch_group(
                 principal_dep=get_scim_audit_principal,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
