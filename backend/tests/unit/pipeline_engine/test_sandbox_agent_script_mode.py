@@ -746,7 +746,15 @@ async def test_resource_limits_passed_as_metadata():
 
 
 async def test_no_resource_limits_metadata_omitted():
-    """With no resource_limits, metadata is None (no empty resource_limits key)."""
+    """With no resource_limits, NO ``resource_limits`` metadata key is stamped.
+
+    FAR-1051: the identity attribution keys (``modulo.run.id`` / ``modulo.org.id``
+    / ``modulo.node.id``) ride workspace_metadata UNCONDITIONALLY — provider-neutral
+    parity with the Docker dispatch route (``runner_dispatch._workspace_spec_for_dispatch``)
+    so a Kubernetes workspace pod is reclaimable by the orphan reconciler. What
+    must be omitted is the ``resource_limits`` key when no limits are configured
+    (no empty cap entry).
+    """
     node_def = _script_node_def()
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _script_sandbox_mock()
@@ -755,7 +763,15 @@ async def test_no_resource_limits_metadata_omitted():
         await fn(_run_state())
 
     kwargs = create_mock.await_args.kwargs
-    assert kwargs.get("metadata") is None
+    metadata = kwargs.get("metadata")
+    assert metadata is not None
+    assert "resource_limits" not in metadata
+    assert "egress_allowlist" not in metadata
+    # Identity attribution rides the same carrier so the reconciler can
+    # cross-reference the workspace against its run.
+    assert metadata["modulo.run.id"] == _DEFAULT_RUN_ID
+    assert metadata["modulo.org.id"] == _ORG_ID
+    assert metadata["modulo.node.id"] == node_def["id"]
 
 
 def test_shared_validator_rejects_invalid_egress_policy():
