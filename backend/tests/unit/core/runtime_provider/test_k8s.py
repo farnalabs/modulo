@@ -778,6 +778,14 @@ class TestApplyIsolation:
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
             await provider.apply_isolation("modulo-ws-abc", _spec(), policy)
 
+    async def test_selected_egress_without_allowlist_is_refused(self) -> None:
+        """A direct caller passing ``selected`` with no allowlist is refused, not silently ignored."""
+        provider = _provider(core=AsyncMock())
+        policy = IsolationPolicy(egress_policy="selected", egress_allowlist=[])
+
+        with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
+            await provider.apply_isolation("modulo-ws-abc", _spec(), policy)
+
     async def test_egress_none_is_refused(self) -> None:
         provider = _provider(core=AsyncMock())
 
@@ -975,6 +983,22 @@ class TestExitStatusResolution:
     def test_unparseable_error_payload_is_reported_not_fabricated(self) -> None:
         """A garbage error-channel payload yields ``(None, note)`` — never a 0."""
         exit_code, note = k8s_mod._resolve_exit_code("{not json")
+
+        assert exit_code is None
+        assert note is not None
+        assert "unparseable" in note
+
+    def test_error_payload_with_empty_causes_is_reported_not_raised(self) -> None:
+        """A ``{"status":"Failure","details":{"causes":[]}}`` payload (parser IndexError) yields ``(None, note)``."""
+        exit_code, note = k8s_mod._resolve_exit_code('{"status":"Failure","details":{"causes":[]}}')
+
+        assert exit_code is None
+        assert note is not None
+        assert "unparseable" in note
+
+    def test_non_dict_error_payload_is_reported_not_raised(self) -> None:
+        """A non-dict JSON payload (parser AttributeError on ``.get``) yields ``(None, note)``, never raises."""
+        exit_code, note = k8s_mod._resolve_exit_code('["not", "a", "dict"]')
 
         assert exit_code is None
         assert note is not None
