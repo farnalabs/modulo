@@ -926,6 +926,53 @@ async def test_programming_error_at_the_version_read_still_returns_none() -> Non
     session.flush.assert_not_awaited()
 
 
+async def test_programming_error_after_the_version_read_propagates() -> None:
+    """A ``ProgrammingError`` raised AFTER the version read completes (during
+    the guardrail/policy pin loads or the insert) is NOT the pre-existing
+    "missing column" signal and must propagate, so a real schema fault is never
+    masked as "no snapshot". The ``version_read_completed`` guard distinguishes
+    the two: only a failure at the version read itself maps to ``None``."""
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        _scalar_result(0),  # the version read completes ...
+        ProgrammingError("SELECT evals", {}, Exception("relation does not exist")),  # ... then a later read fails
+    ]
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)), pytest.raises(ProgrammingError):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert session.begin_nested.call_count == 1
+    session.flush.assert_not_awaited()
+
+
+async def test_zero_allocation_attempts_still_fails_loudly() -> None:
+    """The guard after the retry loop is reachable when
+    ``SNAPSHOT_VERSION_ATTEMPTS`` is misconfigured below 1: with an empty
+    attempt range the loop body never runs, and the function must still raise
+    the typed allocation error rather than silently return ``None``."""
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [_scalar_result(pipeline), _scalars_result([edge])]
+
+    with (
+        _bind_lock_connection(session, _lock_attempt_result(True)),
+        patch("modulo.db.crud.pipeline_snapshot.SNAPSHOT_VERSION_ATTEMPTS", 0),
+        pytest.raises(SnapshotVersionAllocationError) as excinfo,
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert excinfo.value.attempts == 0
+    session.begin_nested.assert_not_called()
+    session.flush.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # FAR-1287 Part 2 (Workstream A): the operator snapshot-lock diagnostic and
 # the terminate-only-matching-holders clear path.
