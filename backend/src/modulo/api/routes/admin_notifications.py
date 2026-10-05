@@ -22,8 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.core.audit_coverage import audited
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
@@ -334,7 +336,12 @@ async def _count_deliveries(
     return count_result.scalar() or 0
 
 
-@router.post("/deliveries/retry-all-failed")
+@router.post(
+    "/deliveries/retry-all-failed",
+    dependencies=[
+        Depends(audited("notification_deliveries_retried", "notification", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("admin.notifications.retry_all_failed_deliveries")
 async def retry_all_failed_deliveries(
     session: AsyncSession = Depends(get_db_session),
@@ -395,7 +402,12 @@ async def retry_all_failed_deliveries(
     return {"retried": retried, "errors": errors, "success": len(errors) == 0}
 
 
-@router.post("/{webhook_id}/deliveries/replay")
+@router.post(
+    "/{webhook_id}/deliveries/replay",
+    dependencies=[
+        Depends(audited("notification_deliveries_replayed", "notification", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("admin.notifications.replay_failed_deliveries")
 async def replay_failed_deliveries(
     webhook_id: uuid.UUID,
@@ -724,7 +736,15 @@ async def list_webhooks(
     return [_ep_to_response(ep) for ep in endpoints]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    dependencies=[
+        Depends(
+            audited("notification_endpoint_created", "notification_endpoint", principal_dep=get_current_tenant_user)
+        )
+    ],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.notifications.create_webhook")
 async def create_webhook(
     req: WebhookCreate,
@@ -822,7 +842,14 @@ async def get_webhook(
     return _ep_to_response(ep)
 
 
-@router.put("/{webhook_id}")
+@router.put(
+    "/{webhook_id}",
+    dependencies=[
+        Depends(
+            audited("notification_endpoint_updated", "notification_endpoint", principal_dep=get_current_tenant_user)
+        )
+    ],
+)
 @handle_db_errors("admin.notifications.update_webhook")
 async def update_webhook(
     webhook_id: uuid.UUID,
@@ -882,7 +909,20 @@ async def update_webhook(
     return _ep_to_response(ep)
 
 
-@router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{webhook_id}",
+    dependencies=[
+        Depends(
+            audited(
+                "notification_endpoint_deleted",
+                "notification_endpoint",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 @handle_db_errors("admin.notifications.delete_webhook")
 async def delete_webhook(
     webhook_id: uuid.UUID,
@@ -1026,7 +1066,14 @@ async def test_webhook(
 # ── Re-enable ──────────────────────────────────────────────────────────
 
 
-@router.post("/{webhook_id}/re-enable")
+@router.post(
+    "/{webhook_id}/re-enable",
+    dependencies=[
+        Depends(
+            audited("notification_endpoint_re_enabled", "notification_endpoint", principal_dep=get_current_tenant_user)
+        )
+    ],
+)
 @handle_db_errors("admin.notifications.re_enable_webhook")
 async def re_enable_webhook(
     webhook_id: uuid.UUID,
@@ -1199,7 +1246,12 @@ def _delivery_entry_from_row(row: NotificationDeliveryLog, endpoint_url: str) ->
 # ── Manual retry ───────────────────────────────────────────────────────
 
 
-@router.post("/{webhook_id}/deliveries/{delivery_id}/retry")
+@router.post(
+    "/{webhook_id}/deliveries/{delivery_id}/retry",
+    dependencies=[
+        Depends(audited("notification_delivery_retried", "notification", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("admin.notifications.retry_delivery")
 async def retry_delivery(
     webhook_id: uuid.UUID,

@@ -40,6 +40,7 @@ from modulo.api.dependencies import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
@@ -751,7 +752,11 @@ async def _create_or_adopt_account(
     return account, membership
 
 
-@router.post("/users", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users",
+    dependencies=[Depends(audited("user_created_by_admin", "user", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.admin_create_user")
 async def admin_create_user(
     req: CreateUserRequest,
@@ -831,7 +836,10 @@ class AdminCreateTeamResponse(BaseModel):
 @router.post(
     "/teams",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_feature("team_rbac")],
+    dependencies=[
+        Depends(audited("team_created", "team", principal_dep=get_current_tenant_user)),
+        require_feature("team_rbac"),
+    ],
 )
 async def admin_create_team(
     req: AdminCreateTeamRequest,
@@ -955,7 +963,10 @@ async def admin_get_org(
     )
 
 
-@router.put("/org")
+@router.put(
+    "/org",
+    dependencies=[Depends(audited("organisation_updated", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("admin.admin_update_org")
 async def admin_update_org(
     req: UpdateOrgRequest,
@@ -1010,7 +1021,14 @@ async def admin_update_org(
     )
 
 
-@router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK, dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/org/regenerate-api-key",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("org_api_key_regenerated", "api_key", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("admin.admin_regenerate_api_key")
 async def admin_regenerate_api_key(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1149,7 +1167,9 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
 
 
-@router.put("/users/{user_id}")
+@router.put(
+    "/users/{user_id}", dependencies=[Depends(audited("user_updated", "user", principal_dep=get_current_tenant_user))]
+)
 @handle_db_errors("admin.admin_update_user")
 async def admin_update_user(
     user_id: uuid.UUID,
@@ -1353,7 +1373,10 @@ def _raise_bg_pgcode(
         ) from None
 
 
-@router.post("/users/{user_id}/deactivate")
+@router.post(
+    "/users/{user_id}/deactivate",
+    dependencies=[Depends(audited("user_deactivated", "user", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
 async def admin_deactivate_user(
     user_id: uuid.UUID,
@@ -1479,7 +1502,10 @@ async def admin_deactivate_user(
     return _to_user_list_item(account, org_role, org_membership=membership)
 
 
-@router.post("/users/{user_id}/reactivate")
+@router.post(
+    "/users/{user_id}/reactivate",
+    dependencies=[Depends(audited("user_reactivated", "user", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
 async def admin_reactivate_user(
     user_id: uuid.UUID,
@@ -1577,7 +1603,10 @@ class AdminResetPasswordResponse(BaseModel):
     temporary_password: str
 
 
-@router.post("/users/{user_id}/reset-password")
+@router.post(
+    "/users/{user_id}/reset-password",
+    dependencies=[Depends(audited("user_password_reset_by_admin", "user", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("admin.admin_reset_password")
 async def admin_reset_password(
     user_id: uuid.UUID,
@@ -1752,7 +1781,11 @@ async def _append_invite_audit_event_fail_open(
         )
 
 
-@router.post("/users/invite", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users/invite",
+    dependencies=[Depends(audited("invite_created", "invitation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.admin_invite_user")
 async def admin_invite_user(
     req: InviteUserRequest,
@@ -1873,7 +1906,20 @@ async def admin_list_invitations(
     )
 
 
-@router.delete("/users/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/users/invitations/{invitation_id}",
+    dependencies=[
+        Depends(
+            audited(
+                "invite_revoked",
+                "invitation",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 @handle_db_errors("admin.admin_revoke_invitation")
 async def admin_revoke_invitation(
     invitation_id: uuid.UUID,
@@ -2037,7 +2083,13 @@ async def _update_team_or_raise(
     return team
 
 
-@router.put("/teams/{team_id}", dependencies=[require_feature("team_rbac")])
+@router.put(
+    "/teams/{team_id}",
+    dependencies=[
+        Depends(audited("team_updated", "team", principal_dep=get_current_tenant_user)),
+        require_feature("team_rbac"),
+    ],
+)
 async def admin_update_team(
     team_id: uuid.UUID,
     req: AdminUpdateTeamRequest,
@@ -2106,7 +2158,10 @@ class BulkReassignResponse(BaseModel):
 
 @router.post(
     "/teams/{team_id}/reassign-all",
-    dependencies=[require_feature("team_rbac")],
+    dependencies=[
+        Depends(audited("team_resources_reassigned", "team", principal_dep=get_current_tenant_user)),
+        require_feature("team_rbac"),
+    ],
 )
 @handle_db_errors("admin.reassign_all_team_resources")
 async def admin_reassign_all_team_resources(
@@ -2163,7 +2218,21 @@ async def admin_reassign_all_team_resources(
     return BulkReassignResponse(reassigned=reassigned, resource_types=touched)
 
 
-@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("team_rbac")])
+@router.delete(
+    "/teams/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "team_deleted",
+                "team",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("team_rbac"),
+    ],
+)
 async def admin_delete_team(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -2415,6 +2484,16 @@ class DeletionRequestResponse(BaseModel):
 
 @router.post(
     "/org/deletion-request",
+    dependencies=[
+        Depends(
+            audited(
+                "org_deletion_requested",
+                "organisation",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
     status_code=status.HTTP_202_ACCEPTED,
 )
 @handle_db_errors(_CODE_ADMIN_REQUEST_ORG_DELETION)
@@ -2493,7 +2572,10 @@ class ConfirmDeletionResponse(BaseModel):
     hard_deleted_runs: int
 
 
-@router.post("/org/deletion-confirm")
+@router.post(
+    "/org/deletion-confirm",
+    dependencies=[Depends(audited("org_deletion_confirmed", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_CONFIRM_ORG_DELETION)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
@@ -2547,7 +2629,10 @@ class OrgExportResponse(BaseModel):
     exported_at: str
 
 
-@router.patch("/org/deletion-cancel")
+@router.patch(
+    "/org/deletion-cancel",
+    dependencies=[Depends(audited("org_deletion_cancelled", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_CANCEL_ORG_DELETION)
 async def cancel_org_deletion(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
@@ -2618,7 +2703,10 @@ async def export_org_data(
     )
 
 
-@router.delete("/org")
+@router.delete(
+    "/org",
+    dependencies=[Depends(audited("org_deletion_requested", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
 async def delete_org_immediate(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
@@ -3202,7 +3290,11 @@ async def admin_list_publishers(
     )
 
 
-@router.post("/publishers", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/publishers",
+    dependencies=[Depends(audited("publisher_created", "publisher", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.admin_create_publisher")
 async def admin_create_publisher(
     req: PublisherCreateRequest,
@@ -3292,7 +3384,10 @@ async def _enforce_publisher_key_uniqueness(
         )
 
 
-@router.put("/publishers/{publisher_id}")
+@router.put(
+    "/publishers/{publisher_id}",
+    dependencies=[Depends(audited("publisher_updated", "publisher", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("admin.admin_update_publisher")
 async def admin_update_publisher(
     publisher_id: uuid.UUID,
@@ -3349,7 +3444,20 @@ async def admin_update_publisher(
     return _to_publisher_response(publisher)
 
 
-@router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/publishers/{publisher_id}",
+    dependencies=[
+        Depends(
+            audited(
+                "publisher_deleted",
+                "publisher",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 @handle_db_errors("admin.admin_delete_publisher")
 async def admin_delete_publisher(
     publisher_id: uuid.UUID,
@@ -3383,7 +3491,21 @@ class RetentionPurgeRequest(BaseModel):
     max_age_days: int = 90
 
 
-@router.post("/purge/runs", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.post(
+    "/purge/runs",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "run_retention_purge",
+                "run",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_retention_purge_runs(
     req: RetentionPurgeRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3422,7 +3544,21 @@ class ManualPurgeRequest(BaseModel):
     older_than: str
 
 
-@router.post("/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.post(
+    "/purge",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "run_purge",
+                "run",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_manual_purge(
     req: ManualPurgeRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3473,7 +3609,21 @@ class PurgeRunsResponse(BaseModel):
     purged_count: int
 
 
-@router.post("/runs/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.post(
+    "/runs/purge",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "stale_run_purge",
+                "run",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_purge_stale_runs(
     request: PurgeRunsRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3600,7 +3750,14 @@ async def admin_get_retention(
     return RetentionConfigResponse(retention_days=_retention_days_from_setting(row))
 
 
-@router.put("/runs/retention", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.put(
+    "/runs/retention",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("run_retention_updated", "run_retention", principal_dep=get_current_tenant_user)),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_update_retention(
     req: UpdateRetentionRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3791,7 +3948,13 @@ async def admin_get_sandbox_concurrency(
     return SandboxConcurrencyResponse(sandbox_concurrency_limit=limit.cap, is_default=limit.is_default)
 
 
-@router.put("/org/sandbox-concurrency", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/sandbox-concurrency",
+    dependencies=[
+        Depends(audited("sandbox_concurrency_updated", "organisation", principal_dep=get_current_tenant_user))
+    ],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_sandbox_concurrency(
     req: UpdateSandboxConcurrencyRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3910,7 +4073,13 @@ async def admin_get_hitl_review_window(
     return HitlReviewWindowResponse(hitl_review_window_seconds=value, is_default=is_default)
 
 
-@router.put("/org/hitl-review-window", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/hitl-review-window",
+    dependencies=[
+        Depends(audited("hitl_review_window_updated", "organisation", principal_dep=get_current_tenant_user))
+    ],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_hitl_review_window(
     req: UpdateHitlReviewWindowRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4012,7 +4181,13 @@ async def admin_get_work_item_agent_minting(
     return WorkItemAgentMintingResponse(work_item_agent_minting_enabled=enabled)
 
 
-@router.put("/org/work-item-agent-minting", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/work-item-agent-minting",
+    dependencies=[
+        Depends(audited("work_item_agent_minting_updated", "organisation", principal_dep=get_current_tenant_user))
+    ],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_work_item_agent_minting(
     req: UpdateWorkItemAgentMintingRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4106,7 +4281,11 @@ async def admin_get_community_objects(
     return CommunityObjectsResponse(community_objects_enabled=enabled)
 
 
-@router.put("/org/community-objects", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/community-objects",
+    dependencies=[Depends(audited("community_objects_updated", "organisation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_community_objects(
     req: UpdateCommunityObjectsRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4191,7 +4370,11 @@ async def admin_get_run_concurrency(
     return RunConcurrencyResponse(run_concurrency_limit=limit)
 
 
-@router.put("/org/run-concurrency", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/run-concurrency",
+    dependencies=[Depends(audited("run_concurrency_updated", "organisation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_run_concurrency(
     req: UpdateRunConcurrencyRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4288,7 +4471,11 @@ async def _admin_journey_write(
     await _record_org_audit(session, current_user, audit_event, audit_payload)
 
 
-@router.post("/org/journeys/dismiss", status_code=status.HTTP_200_OK)
+@router.post(
+    "/org/journeys/dismiss",
+    dependencies=[Depends(audited("journey_dismissed", "journey", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_dismiss_journey(
     req: JourneyDismissRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4317,7 +4504,11 @@ async def admin_dismiss_journey(
     return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=True)
 
 
-@router.post("/org/journeys/restore", status_code=status.HTTP_200_OK)
+@router.post(
+    "/org/journeys/restore",
+    dependencies=[Depends(audited("journey_restored", "journey", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_restore_journey(
     req: JourneyRestoreRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4468,7 +4659,11 @@ async def get_telemetry_status(
     return TelemetryStatusResponse(enabled=is_telemetry_enabled())
 
 
-@router.put("/telemetry", response_model=TelemetryStatusResponse)
+@router.put(
+    "/telemetry",
+    dependencies=[Depends(audited("telemetry_status_updated", "organisation", principal_dep=get_current_tenant_user))],
+    response_model=TelemetryStatusResponse,
+)
 @handle_db_errors("admin.set_telemetry_status")
 async def set_telemetry_status(
     req: TelemetryToggleRequest,

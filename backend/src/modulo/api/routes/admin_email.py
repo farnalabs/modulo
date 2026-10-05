@@ -17,8 +17,10 @@ from modulo.api.dependencies import (
     require_feature,
     require_target_org_role,
 )
+from modulo.api.routes.admin_orgs import resolve_audit_principal
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped, encrypt_stored_secret
+from modulo.core.audit_coverage import audited
 from modulo.core.email_service import (
     EmailSendingError,
     EmailSendLimiter,
@@ -122,7 +124,11 @@ async def admin_get_email_settings(
 
 @router.put(
     "/{org_id}/email-settings",
-    dependencies=[require_feature("email_config"), Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("email_settings_updated", "organisation", principal_dep=resolve_audit_principal)),
+        require_feature("email_config"),
+        Depends(deny_break_glass_mint),
+    ],
 )
 @handle_db_errors("admin.email.admin_update_email_settings")
 async def admin_update_email_settings(
