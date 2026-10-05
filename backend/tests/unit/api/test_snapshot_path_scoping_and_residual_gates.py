@@ -511,10 +511,12 @@ async def test_restore_resolver_opts_out_of_the_global_soft_delete_filter() -> N
     assert restored.owner_team_id == _TEAM_ID
     assert restored.visibility == "team"
     # The stock statement carries the explicit deleted filter...
-    assert stock_stmts and "deleted_at" in str(stock_stmts[0]), stock_stmts
+    assert stock_stmts, stock_stmts
+    assert "deleted_at" in str(stock_stmts[0]), stock_stmts
     # ...and neither predicate: no explicit one, and the execution option that
     # makes the global listener skip its injection is set.
-    assert restore_stmts and "deleted_at" not in str(restore_stmts[0]), restore_stmts
+    assert restore_stmts, restore_stmts
+    assert "deleted_at" not in str(restore_stmts[0]), restore_stmts
     assert restore_stmts[0].get_execution_options().get("include_deleted") is True, restore_stmts[0]
 
 

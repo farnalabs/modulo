@@ -26,7 +26,9 @@ from modulo.api.dependencies import (
     require_permission,
 )
 from modulo.api.middleware.sensitive_mask import SensitiveValue
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sso_presets import list_presets, resolve_preset
@@ -276,6 +278,12 @@ async def list_presets_endpoint(
     return [PresetInfo(**p) for p in list_presets()]
 
 
+# FAR-1472 audit-coverage exemption (baseline entry kept deliberately): the CRUD
+# layer already appends its own RICHER audit event for this route —
+# ``db.crud.sso_provider.create_provider`` writes ``sso_provider.created`` with
+# the provider id and name. Adding the coarse ``audited(...)`` dependency would
+# append a SECOND event of the same type to the append-only audit chain on every
+# create, so the route stays out of the dependency and in the baseline instead.
 @router.post(
     "/providers",
     status_code=status.HTTP_201_CREATED,
@@ -367,6 +375,9 @@ async def create_provider_endpoint(
     return _provider_response(provider, settings)
 
 
+# FAR-1472 exemption: already audited by ``db.crud.sso_provider.update_provider``
+# (``sso_provider.updated`` with provider id + name); a coarse duplicate would
+# append a second same-typed event to the append-only chain.
 @router.put(
     "/providers/{provider_id}",
     dependencies=[Depends(deny_break_glass_mint)],
@@ -455,6 +466,8 @@ async def update_provider_endpoint(
     return _provider_response(provider, settings)
 
 
+# FAR-1472 exemption: already audited by ``db.crud.sso_provider.delete_provider``
+# (``sso_provider.deleted`` with provider id + name); no coarse duplicate.
 @router.delete(
     "/providers/{provider_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -510,6 +523,9 @@ async def delete_provider_endpoint(
         )
 
 
+# FAR-1472 exemption (read-only POST): this endpoint reads the provider and
+# probes the IdP — it writes nothing, so chaining an audit event per probe would
+# only add noise. Deliberately left in audit_coverage_baseline.txt.
 @router.post("/providers/{provider_id}/test")
 @handle_db_errors("admin.sso.test_provider_connection")
 async def test_provider_connection(
@@ -747,6 +763,8 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     )
 
 
+# FAR-1472 exemption: already audited by ``db.crud.sso_provider.toggle_provider``
+# (``sso_provider.toggled`` with provider id + name); no coarse duplicate.
 @router.put("/providers/{provider_id}/toggle", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("admin.sso.toggle_provider_endpoint")
 async def toggle_provider_endpoint(
@@ -813,7 +831,22 @@ class GroupMappingsResponse(BaseModel):
     mappings: list[GroupMappingItem]
 
 
-@router.put("/providers/{provider_id}/group-mappings")
+# Group mappings decide which IdP groups map into which org roles, so a silent
+# write would make an authorization change unattributable -> fail closed.
+@router.put(
+    "/providers/{provider_id}/group-mappings",
+    dependencies=[
+        Depends(
+            audited(
+                "sso_group_mappings_updated",
+                "sso_provider",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("admin.sso.set_group_mappings_endpoint")
 async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,

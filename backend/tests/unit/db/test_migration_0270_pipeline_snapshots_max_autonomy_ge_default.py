@@ -191,7 +191,8 @@ class TestUpgrade:
         assert logger.info.call_count == 1, "the repair rowcount must be logged exactly once"
         fmt, *args = logger.info.call_args.args
         assert "%s" in fmt or "%d" in fmt, fmt
-        assert args and args[0] == 7, f"the logged value must be the rowcount, got {args}"
+        assert args, f"the logged value must be the rowcount, got {args}"
+        assert args[0] == 7, f"the logged value must be the rowcount, got {args}"
 
     def test_repair_selects_exactly_the_inverted_rows(self) -> None:
         """``ceiling IS NOT NULL`` AND ``rank(default) > rank(ceiling)``.
