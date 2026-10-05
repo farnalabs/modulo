@@ -358,6 +358,30 @@ class TestInitialise:
         assert isinstance(provider, KubernetesRuntimeProvider)
         assert provider.provider_id == "kubernetes"
 
+    async def test_registers_kubernetes_with_config_values(self) -> None:
+        """FAR-1051 review: ``initialise`` honours the kubernetes provider's
+        per-provider config keys (namespace / default_image / kubeconfig /
+        provision_timeout_s), matching the docker and e2b arms instead of
+        silently ignoring provider_config contents."""
+        hub = RuntimeProviderHub()
+        await hub.initialise(
+            {
+                "pod-runtime": {
+                    "type": "kubernetes",
+                    "namespace": "ws-ns",
+                    "default_image": "ghcr.io/acme/agent:1",
+                    "kubeconfig": "/etc/kube/config",
+                    "provision_timeout_s": 321,
+                }
+            }
+        )
+        provider = hub.get("pod-runtime")
+        assert isinstance(provider, KubernetesRuntimeProvider)
+        assert provider._namespace == "ws-ns"
+        assert provider._default_image == "ghcr.io/acme/agent:1"
+        assert provider._kubeconfig == "/etc/kube/config"
+        assert provider._provision_timeout_s == 321
+
     async def test_registers_kubernetes_alias_type(self) -> None:
         """The ``k8s`` alias registers too — a name that is in the vocabulary
         must never warn-and-skip (the pre-FAR-1051 behaviour)."""

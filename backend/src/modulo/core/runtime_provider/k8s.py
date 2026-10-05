@@ -61,6 +61,13 @@ WorkspaceSpec mapping
   falls back to 120s when unset/zero. Direct callers are themselves
   wrapped by the dispatch provisioning watchdog.
 - ``egress_policy`` -> ``none`` refused (see security posture).
+- ``persistence_policy`` -> NOT honoured on this tier: every workspace pod
+  uses an ephemeral ``emptyDir`` and ``restart_policy=Never``, so
+  ``retained`` / ``cache`` do not survive the workspace and are never
+  presented as durable. Parity with the e2b tier (only ``runner_docker``
+  refuses non-ephemeral at route resolution via
+  ``validate_persistence_for_provider``); this note exists so an operator
+  binding a kubernetes profile is not surprised by the ephemeral reality.
 
 Deliberately deferred (FAR-1051's "not frozen" list): pod-lifetime deadline
 scoping (no ``active_deadline_seconds`` — the default 3600s spec timeout

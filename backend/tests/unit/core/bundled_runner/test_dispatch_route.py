@@ -104,6 +104,8 @@ async def test_e2b_profile_resolves_e2b_route() -> None:
     assert route.provider_type == "e2b"
     assert route.profile is not None
     assert route.provider is None
+    # The e2b route keeps the node's own template_id; no image override.
+    assert route.image_ref_override is None
 
 
 async def test_legacy_inert_local_provider_is_dispatch_unbound() -> None:
@@ -171,6 +173,10 @@ async def test_kubernetes_profile_resolves_hub_provider(monkeypatch: pytest.Monk
         assert route.profile is not None
         assert route.provider is not None
         assert route.hub is not None
+        # FAR-1051 review: the profile's declared image_ref rides the route so
+        # node_runner's sandbox spec uses the same image the bundled-runner
+        # mapper maps, instead of the node's E2B template_id.
+        assert route.image_ref_override == "modulo-runner:opencode@sha256:" + "a" * 64
         from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
 
         assert isinstance(route.provider, KubernetesRuntimeProvider)

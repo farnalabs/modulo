@@ -81,6 +81,11 @@ class RunnerDispatchRoute:
     profile: Any = None
     provider: Any = None
     hub: RuntimeProviderHub | None = None
+    # FAR-1051 review: on a kubernetes route the bound profile's declared
+    # image_ref is the authoritative workspace/pod image. Carried on the route
+    # so node_runner's sandbox spec uses the same source as the bundled-runner
+    # mapper (``_workspace_spec_for_dispatch``); None on every other route.
+    image_ref_override: str | None = None
 
 
 async def load_environment_profile(
@@ -235,6 +240,10 @@ async def resolve_sandbox_dispatch_route(
             profile=profile,
             provider=provider,
             hub=hub,
+            # FAR-1051 review: the operator's declared image_ref governs the pod
+            # image, matching the bundled-runner mapper — so the sandbox route
+            # never silently substitutes the node's E2B template_id.
+            image_ref_override=getattr(profile, "image_ref", None),
         )
     raise SandboxDispatchUnboundError(f"Environment profile provider_type '{provider_type}' is not dispatchable.")
 

@@ -34,7 +34,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1349,6 +1349,7 @@ class _RouteProfile:
     """Minimal stand-in for a bound environment profile row."""
 
     network_policy: str = "outbound"
+    image_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1359,6 +1360,31 @@ class _Route:
     profile: Any = None
     provider: Any = None
     hub: Any = None
+    image_ref_override: str | None = None
+
+
+class _RouteSession:
+    """Minimal async-context-manager session for the route tests.
+
+    ``_read_org_stdout_retention_ceiling`` opens ``session_factory()`` and
+    awaits ``read_system_config`` on the yielded session. A bare ``MagicMock``
+    there leaves unawaited ``__aenter__``/``__aexit__`` AsyncMock coroutines
+    behind on every run (PytestUnraisableExceptionWarning); a real async CM
+    keeps that read a clean, fail-open no-op.
+    """
+
+    def begin(self) -> Self:
+        return self
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+def _route_session_factory() -> _RouteSession:
+    return _RouteSession()
 
 
 class _FileCapableDispatchProvider(FakeDispatchProvider):
@@ -1406,12 +1432,44 @@ async def test_route_resolved_provider_is_reused_and_its_hub_is_aclosed(
     fresh_hub = AsyncMock(side_effect=AssertionError("a route-resolved provider must not build a fresh hub"))
     monkeypatch.setattr(nr, "_build_dispatch_provider", fresh_hub)
 
-    result = await make_sandbox_agent_fn(_base_node_def(), session_factory=MagicMock())(_run_state())
+    result = await make_sandbox_agent_fn(_base_node_def(), session_factory=_route_session_factory())(_run_state())
 
     assert result["output"]["status"] == "completed"
     assert provider.events[0] == "create"
     fresh_hub.assert_not_awaited()
     hub.aclose.assert_awaited_once()
+    # No profile image_ref -> the node's E2B template_id remains the pod image.
+    assert provider.created_spec is not None
+    assert provider.created_spec.image_ref == "opencode"
+
+
+async def test_route_uses_the_kubernetes_profiles_image_ref(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
+    """FAR-1051 review: on a kubernetes route the profile's declared image_ref is
+    the pod image — the same source the bundled-runner mapper reads — so one
+    profile resolves one image whichever dispatch arm runs it. Without this the
+    sandbox route silently used the node's E2B template_id instead."""
+    _install_log_tail(monkeypatch)
+    provider = _FileCapableDispatchProvider(ref="sbx-route-image", exit_code=0)
+    provider.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
+    hub = MagicMock()
+    hub.aclose = AsyncMock()
+    route = _Route(
+        provider_type="kubernetes",
+        profile=_RouteProfile(image_ref="ghcr.io/acme/agent:1.2.3"),
+        provider=provider,
+        hub=hub,
+        image_ref_override="ghcr.io/acme/agent:1.2.3",
+    )
+    monkeypatch.setattr(
+        "modulo.core.bundled_runner.runner_dispatch.resolve_sandbox_dispatch_route",
+        AsyncMock(return_value=route),
+    )
+
+    result = await make_sandbox_agent_fn(_base_node_def(), session_factory=_route_session_factory())(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert provider.created_spec is not None
+    assert provider.created_spec.image_ref == "ghcr.io/acme/agent:1.2.3"
 
 
 async def test_route_hub_aclose_failure_is_logged_not_raised(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
@@ -1427,7 +1485,7 @@ async def test_route_hub_aclose_failure_is_logged_not_raised(monkeypatch: pytest
         AsyncMock(return_value=route),
     )
 
-    result = await make_sandbox_agent_fn(_base_node_def(), session_factory=MagicMock())(_run_state())
+    result = await make_sandbox_agent_fn(_base_node_def(), session_factory=_route_session_factory())(_run_state())
 
     assert result["output"]["status"] == "completed"
     hub.aclose.assert_awaited_once()
@@ -1447,7 +1505,7 @@ async def test_route_hub_aclose_cancellation_propagates(monkeypatch: pytest.Monk
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await make_sandbox_agent_fn(_base_node_def(), session_factory=MagicMock())(_run_state())
+        await make_sandbox_agent_fn(_base_node_def(), session_factory=_route_session_factory())(_run_state())
 
 
 async def test_dispatch_drops_empty_attribution_values(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:

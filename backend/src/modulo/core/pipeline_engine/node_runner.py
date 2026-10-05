@@ -8584,6 +8584,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     # so nothing external is left open there.
     _route_provider: RuntimeProvider | None = None
     _route_hub: Any = None
+    # FAR-1051 review: a kubernetes-bound profile's declared image_ref is the
+    # authoritative pod image, exactly as the bundled-runner mapper
+    # (runner_dispatch._workspace_spec_for_dispatch) treats it. Pre-bound so the
+    # legacy / non-kubernetes paths keep using the node's E2B template_id.
+    _route_image_ref: str | None = None
     if session_factory is not None:
         from modulo.core.bundled_runner.runner_dispatch import (
             resolve_sandbox_dispatch_route,
@@ -8624,6 +8629,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # The route hub is aclosed in the finally below.
             _route_provider = _route.provider
             _route_hub = _route.hub
+            # FAR-1051 review: a kubernetes route carries the bound profile's
+            # declared image_ref (None on every other route), so one profile
+            # resolves the SAME pod image on both dispatch arms. Read
+            # branchlessly here; the template_id fallback lives at the spec
+            # build below.
+            _route_image_ref = _route.image_ref_override
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})
@@ -9230,14 +9241,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             run_id=_parse_uuid_opt(run_id),
             # T2 parity with the legacy create kwargs: same template, same
             # strictly-greater-than-command lifetime (FAR-487/FAR-489).
-            # NOTE (FAR-1051): on a kubernetes route this E2B-template value is
-            # used directly as the pod's container image, so the
-            # kubernetes-bound profile's own image_ref is NOT consulted here —
-            # unlike the bundled-runner mapper (runner_dispatch.py), which maps
-            # profile.image_ref. A node without an image-shaped template_id
-            # therefore fails loudly at provision time (ImagePullBackOff ->
-            # ProvisionTimeoutError).
-            image_ref=template_id,
+            # NOTE (FAR-1051): on a kubernetes route ``_route_image_ref`` is the
+            # kubernetes-bound profile's own ``image_ref`` when set (same source
+            # the bundled-runner mapper, runner_dispatch.py, reads), so one
+            # profile resolves one image on both arms. Only when the profile
+            # declares no image_ref does the E2B-template ``template_id`` fall
+            # through as the pod image — and a non-image template_id then fails
+            # loudly at provision time (ImagePullBackOff ->
+            # ProvisionTimeoutError). Non-kubernetes routes are unchanged.
+            image_ref=_route_image_ref or template_id,
             timeout_seconds=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
             resource_limits=dict(resource_limits or {}),
             egress_policy=_egress_resolved.policy,
