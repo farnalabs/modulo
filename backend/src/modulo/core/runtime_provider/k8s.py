@@ -672,7 +672,25 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         *,
         environment: dict[str, str] | None = None,
     ) -> Any:
-        """Open the pods/exec WebSocket for *provider_ref* (unawaited-ready)."""
+        """Open the pods/exec WebSocket for *provider_ref* and return it ready.
+
+        kubernetes-asyncio's exec call resolves in TWO awaits against a real
+        cluster (aiohttp 3.14, kubernetes-asyncio 36.1.0):
+
+        1. ``connect_get_namespaced_pod_exec(...)`` returns a coroutine that
+           runs the request; awaiting it yields ``WsApiClient.request``'s
+           return value — aiohttp's ``_WSRequestContextManager`` from
+           ``ClientSession.ws_connect()``.
+        2. Awaiting *that* context manager enters it and yields the actual
+           ``ClientWebSocketResponse``.
+
+        Returning after one await handed the caller the context manager, so
+        every exec died with ``AttributeError: '_BaseRequestContextManager'
+        object has no attribute 'recv'`` (FAR-1504). The websocket is
+        returned bare (not via ``async with``): leaving that block would
+        close the socket on return, and the callers close it explicitly
+        through :meth:`_close_ws`.
+        """
         ws_core = await self._get_ws_core()
         exec_command = self._command_with_environment(command, environment)
         try:
@@ -687,7 +705,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 tty=False,
                 _preload_content=False,
             )
-            return await context_manager
+            return await (await context_manager)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -730,10 +748,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         ERROR, never a silent end with a fabricated success code) and ends
         the stream. Unknown channels with payload are routed to stderr so
         diagnostic output is never silently dropped.
+
+        Reads go through ``receive()`` — aiohttp 3.14 removed
+        ``ClientWebSocketResponse.recv()`` (FAR-1504), and a missing method
+        would surface as a stream error rather than output.
         """
         while True:
             try:
-                message = await ws.recv()
+                message = await ws.receive()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

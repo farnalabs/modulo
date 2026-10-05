@@ -8,6 +8,9 @@ Coverage (the Kubernetes client is MOCKED throughout — no live cluster):
   exec subresource's error-channel payload, timeout, typed stream failures);
 * ``exec_command_stream`` lifecycle: chunks, healthy exit codes, and the
   stream-error XOR (an error carries ``exit_code=None`` — never a fabricated 0);
+* exec WebSocket contract (FAR-1504): ``_open_exec`` resolves the client's
+  two-await shape to the real websocket, and frame reading uses aiohttp 3.14's
+  ``receive()`` (``recv()`` no longer exists) over a full TEXT frame sequence;
 * destroy idempotency: tracked destroy, by-ref 404 / foreign-pod / failure;
 * pod listing: the reconciler's own selector + deployment-identity scoping
   exercised against the REAL filtering code (client mocked, never a cluster);
@@ -69,19 +72,32 @@ def _frame(channel: int, text: str) -> SimpleNamespace:
     return SimpleNamespace(type=WSMsgType.BINARY, data=bytes([channel]) + text.encode("utf-8"))
 
 
+def _text_frame(channel: int, text: str) -> SimpleNamespace:
+    """One TEXT exec frame — aiohttp hands decoded ``str`` payloads for TEXT."""
+    return SimpleNamespace(type=WSMsgType.TEXT, data=chr(channel) + text)
+
+
 def _close_frame() -> SimpleNamespace:
     return SimpleNamespace(type=WSMsgType.CLOSE, data=None)
 
 
 class _FakeWs:
-    """Minimal aiohttp-WebSocket stand-in for the exec subresource."""
+    """Minimal aiohttp-WebSocket stand-in for the exec subresource.
+
+    Mirrors the aiohttp 3.14 ``ClientWebSocketResponse`` interface: it
+    exposes ``receive()`` and deliberately NOT ``recv()``, which aiohttp 3.14
+    removed (FAR-1504). A provider that still calls ``recv`` raises
+    ``AttributeError`` inside ``_read_exec_frames``, which the stream turns
+    into ``state.error`` — so every healthy-exit assertion in this module
+    fails if the provider regresses.
+    """
 
     def __init__(self, messages: list[SimpleNamespace], *, receive_exc: BaseException | None = None) -> None:
         self._messages = list(messages)
         self._receive_exc = receive_exc
         self.closed = False
 
-    async def recv(self) -> SimpleNamespace:
+    async def receive(self) -> SimpleNamespace:
         if self._messages:
             return self._messages.pop(0)
         if self._receive_exc is not None:
@@ -95,17 +111,38 @@ class _FakeWs:
 
 
 class _BlockingWs:
-    """A ws whose recv never completes (for the cmd_timeout path)."""
+    """A ws whose receive never completes (for the cmd_timeout path)."""
 
     def __init__(self) -> None:
         self.closed = False
 
-    async def recv(self) -> SimpleNamespace:
+    async def receive(self) -> SimpleNamespace:
         await asyncio.Event().wait()  # never set — blocks until wait_for cancels
         raise AssertionError("unreachable")
 
     def close(self) -> None:
         self.closed = True
+
+
+class _WsConnectContextManager:
+    """Stand-in for aiohttp's ``_WSRequestContextManager``.
+
+    One await lands here (kubernetes-asyncio's ``WsApiClient.request``
+    returns ``ClientSession.ws_connect(...)`` without awaiting it); a second
+    await yields the websocket — the real two-await shape against a cluster
+    (FAR-1504 Bug A).
+    """
+
+    __slots__ = ("_ws",)
+
+    def __init__(self, ws: _FakeWs) -> None:
+        self._ws = ws
+
+    def __await__(self) -> Any:
+        async def _enter() -> _FakeWs:
+            return self._ws
+
+        return _enter().__await__()
 
 
 class _FakeWsCore:
@@ -123,8 +160,8 @@ class _FakeWsCore:
         ws = self._ws
         assert ws is not None
 
-        async def _awaitable() -> _FakeWs:
-            return ws
+        async def _awaitable() -> _WsConnectContextManager:
+            return _WsConnectContextManager(ws)
 
         return _awaitable()
 
@@ -543,6 +580,90 @@ class TestExecCommandStream:
         await process.kill()
 
         assert ws.closed is True
+
+
+# ---------------------------------------------------------------------------
+# exec WebSocket contract (FAR-1504 — real-cluster shape, mocked client)
+# ---------------------------------------------------------------------------
+
+
+class TestExecWebSocketContract:
+    """Regression tests for the two exec-path breakages found on a real cluster.
+
+    The fakes model aiohttp 3.14 / kubernetes-asyncio 36.1.0 honestly:
+
+    * ``connect_get_namespaced_pod_exec`` resolves over **two** awaits — the
+      ``ws_connect`` context manager first, the websocket second (Bug A);
+    * the websocket exposes ``receive()`` and **not** ``recv()``, which
+      aiohttp 3.14 removed (Bug B).
+
+    The unit suite faked a one-await, ``recv()``-shaped world, so it stayed
+    green while every real exec died. Either bug reappearing fails these
+    tests (and the whole module — a ``recv`` call becomes ``state.error``,
+    which XORs away every healthy exit code).
+    """
+
+    async def test_open_exec_returns_the_websocket_not_the_context_manager(self) -> None:
+        ws = _FakeWs([_frame(3, _EXIT_SUCCESS), _close_frame()])
+        provider = _provider(ws_core=_FakeWsCore(ws))
+
+        opened = await provider._open_exec("modulo-ws-abc", ["sh"])
+
+        # One await deep lands on _WsConnectContextManager (no receive());
+        # the second lands on the websocket the readers expect.
+        assert opened is ws
+        assert callable(getattr(opened, "receive", None))
+
+    async def test_text_frames_stream_in_order_with_parsed_exit_status(self) -> None:
+        ws = _FakeWs(
+            [
+                _text_frame(1, "first line\n"),
+                _text_frame(2, "a warning\n"),
+                _text_frame(1, "second line\n"),
+                _text_frame(3, _exit_failure(7)),
+                _close_frame(),
+            ]
+        )
+        provider = _provider(ws_core=_FakeWsCore(ws))
+
+        process = await provider.exec_command_stream("modulo-ws-abc", ["sh"])
+        chunks = await _drain(process)
+
+        assert [(c.stream, c.data) for c in chunks] == [
+            ("stdout", "first line\n"),
+            ("stderr", "a warning\n"),
+            ("stdout", "second line\n"),
+        ]
+        assert process.exit_code == 7
+        assert process.error is None
+
+    async def test_collect_then_return_exec_reads_text_frames(self) -> None:
+        ws = _FakeWs([_text_frame(1, "hello"), _text_frame(2, "warn"), _text_frame(3, _EXIT_SUCCESS), _close_frame()])
+        provider = _provider(ws_core=_FakeWsCore(ws))
+
+        result = await provider.exec_command("modulo-ws-abc", ["sh", "-c", "echo hi"])
+
+        assert result.exit_code == 0
+        assert result.stdout == "hello"
+        assert result.stderr == "warn"
+
+    async def test_stream_error_still_never_fabricates_a_zero(self) -> None:
+        ws = _FakeWs([_text_frame(1, "partial")], receive_exc=ConnectionResetError("proxy died"))
+        provider = _provider(ws_core=_FakeWsCore(ws))
+
+        process = await provider.exec_command_stream("modulo-ws-abc", ["sh"])
+        chunks = await _drain(process)
+
+        assert [c.data for c in chunks] == ["partial"]
+        assert process.error is not None
+        assert process.exit_code is None
+
+    def test_fake_websocket_is_receive_only(self) -> None:
+        """The fake must not re-grow ``recv`` — that hollows out the guard."""
+        ws = _FakeWs([])
+        assert hasattr(ws, "receive")
+        with pytest.raises(AttributeError):
+            cast(Any, ws).recv()
 
 
 # ---------------------------------------------------------------------------
