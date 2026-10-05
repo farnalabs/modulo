@@ -103,6 +103,78 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
 ---
 
+## Health watchdog (Docker Compose)
+
+The root `docker-compose.yml` ships a **`watchdog` service** — a [Gatus](https://gatus.io)
+instance that runs **by default**, so `docker compose up -d` starts it along with
+the rest of the stack. It exists for the one failure Modulo cannot report about
+itself: Modulo being down.
+
+| | |
+|---|---|
+| **What it monitors** | `GET http://backend:8000/healthz/ready` over the compose network, asserting **both** the HTTP status (`200`) **and** the body's top-level `status` (`ok`) |
+| **Why both** | `/healthz/ready` answers `200` with `"status": "degraded"` when a non-gating sub-check is degraded, and only answers `503` for `"unavailable"` — a status-code-only check would pass exactly the degradation it is there to catch |
+| **Cadence** | every 60s; alerts after **3 consecutive failures** (~3 minutes, so one blip does not page you), clears after **2 consecutive successes**, and sends a *resolved* message so an outage has a visible end |
+| **Dashboard** | <http://127.0.0.1:8082> (loopback-only, like every other published port in this file) |
+| **Health** | the service has its own Docker healthcheck, so a wedged watchdog shows as `unhealthy` in `docker ps` |
+| **Config** | [`deploy/watchdog/`](../deploy/watchdog/) — config-as-code, mounted read-only into the container |
+
+### Enabling email alerting
+
+Monitoring is on from the first `up`. **Email alerting is off until you set the
+SMTP variables** — the same ones the app already uses for HITL email alerts, so
+one SMTP setup serves both:
+
+| Variable | Required for watchdog alerts | Purpose |
+|---|---|---|
+| `SMTP_HOST` | **Yes** | SMTP server hostname |
+| `SMTP_PORT` | **Yes** | SMTP server port (e.g. `587`) |
+| `EMAIL_FROM` | **Yes** | From-address |
+| `ALERT_EMAIL_TO` | **Yes** | Comma-separated recipients |
+| `SMTP_USERNAME` | Only if your server requires auth | SMTP username |
+| `SMTP_PASSWORD` | Only if your server requires auth | SMTP password |
+
+Leaving all of them unset is a **supported state, not a misconfiguration**: the
+watchdog still starts, still probes, still updates the dashboard — it just never
+sends mail. It says so once at startup, rather than failing silently:
+
+```text
+watchdog: email alerting DISABLED (not set: SMTP_HOST SMTP_PORT EMAIL_FROM ALERT_EMAIL_TO). Monitoring is ON - ... set those variables to enable email alerts (see docs/deployment.md).
+```
+
+Gatus adds its own confirmation on the next line
+(`Ignoring provider=email due to error=from and to fields are required` when off,
+`configuredProviders=[email]` when on), so the state is visible in
+`docker compose logs watchdog` either way. Nothing about the missing credentials
+can stop the container: with them absent the service starts, runs, and reports
+health normally.
+
+Two caveats on the values themselves (both are Gatus behaviour, verified against
+the pinned image):
+
+- A literal `$` in a value must be written `$$` — Gatus expands `${VAR}` in the
+  config before parsing it, and treats a lone `$` as a variable reference.
+- Because expansion happens *before* YAML parsing, a `"` or `\` inside
+  `SMTP_PASSWORD` would break the parse. Use a password without those characters
+  (or escape them for YAML).
+
+### Notes
+
+- The watchdog does **not** `depends_on` the backend — it has to start when the
+  backend does not, because reporting that is its job.
+- The config lives in [`deploy/watchdog/config.yaml`](../deploy/watchdog/config.yaml);
+  edits apply on the next `docker compose up -d watchdog` (the file is mounted,
+  so no rebuild is needed).
+- Scope: the root `docker-compose.yml` and the production compose
+  (`deploy/compose/docker-compose.prod.yml`). The two probe different targets:
+  the production compose runs the all-in-one image, so it probes
+  `GET http://modulo:80/healthz/ready` (service `modulo` behind nginx on port
+  80 — uvicorn's own `127.0.0.1:8000` is loopback-bound inside the container),
+  and its dashboard is loopback-bound at `127.0.0.1:8083`. The Helm chart does
+  not have it.
+
+---
+
 ## TLS / HTTPS
 
 For production, terminate TLS at a reverse proxy:
@@ -375,7 +447,7 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 docker compose -f deploy/compose/docker-compose.prod.yml up
 ```
 
-The native single-install script is a *different* path — it installs a
+The native single-install script is a *different* path - it installs a
 self-contained bundle (own Python runtime, PostgreSQL, Redis) for a workstation
 or single machine without Docker; it does not bootstrap this Compose stack.
 Download it to a file and run it rather than streaming it into a shell:
@@ -400,9 +472,9 @@ Redis is required: the dispatcher enqueues every run to SAQ's Redis queue and cr
 ### Kubernetes (production, multi-replica)
 
 A maintained, vendor-neutral Helm chart ships in this repository at
-`deploy/helm/modulo/`. It deploys the **Modulo stack** — backend API, SAQ
+`deploy/helm/modulo/`. It deploys the **Modulo stack** - backend API, SAQ
 runner and system workers, frontend, and an optional in-cluster Redis, against
-an external PostgreSQL — and includes ResourceQuota, LimitRange, optional HPA,
+an external PostgreSQL - and includes ResourceQuota, LimitRange, optional HPA,
 ingress and namespace templates. `deploy/helm/modulo/values.eks.example.yaml`
 is a validated EKS example (RDS, ElastiCache, ALB), and the chart was deployed
 end-to-end on a real EKS cluster on 2026-09-23 (FAR-1052); see
@@ -410,8 +482,8 @@ end-to-end on a real EKS cluster on 2026-09-23 (FAR-1052); see
 and which follow-ups remain open.
 
 **Stack versus runtime provider.** The chart installs the stack, not the agent
-runtime. The Kubernetes *runtime provider* — which runs agent workspaces as
-pods — is not available yet (tracked as FAR-1051). On Kubernetes today, agents
+runtime. The Kubernetes *runtime provider*, which runs agent workspaces as
+pods, is not available yet (tracked as FAR-1051). On Kubernetes today, agents
 therefore still execute through the Docker or E2B runtime providers; the K8s
 runtime provider is the recommended future shape.
 

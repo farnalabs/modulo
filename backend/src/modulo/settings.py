@@ -1032,12 +1032,14 @@ class Settings(BaseSettings):
         """Delegate to the shared boot URL contract (modulo.db.url_utils).
 
         One implementation serves the container bootstrap and the Settings
-        validator (FAR-671). The unified semantics strip EVERY sslmode
-        parameter (the safer superset of the two historical variants —
-        documented in url_utils); the legacy asyncmy driver prefix is still
-        rewritten, with the historical warning. The actual SSL posture is set
-        via connect_args in get_or_create_engine() (dependencies.py); that
-        module MUST always set ssl=False for Postgres to match this.
+        validator (FAR-671). ``fix_database_url`` rewrites the legacy
+        ``postgres://`` / ``mysql+asyncmy`` driver prefixes; ``sslmode`` is
+        PRESERVED on Postgres URLs (FAR-1440 — the operator's explicit TLS
+        setting is honoured) and stripped only from MySQL URLs. The engine
+        factories translate the preserved ``sslmode`` into an explicit
+        ``ssl`` connect arg (modulo.db.session / api.dependencies system
+        engine); absent ``sslmode`` still means explicit plaintext
+        (``ssl=False``) — see docs/deployment-security.md §3.2.
         """
         url = self.database_url
         if url.startswith("mysql+asyncmy://"):

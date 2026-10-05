@@ -18,7 +18,7 @@ from modulo.api.constants import (
     MSG_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
@@ -386,7 +386,8 @@ async def list_agents_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.list_agents_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -468,7 +469,8 @@ async def create_agent_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.create_agent_endpoint")
         _log.exception("Database operation failed during agent creation")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -502,7 +504,8 @@ async def get_agent_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.get_agent_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -541,7 +544,8 @@ async def update_agent_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.update_agent_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -617,7 +621,8 @@ async def update_agent_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.update_agent_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -659,7 +664,8 @@ async def optimize_prompt(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.optimize_prompt")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -688,7 +694,8 @@ async def optimize_prompt(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.optimize_prompt")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -719,7 +726,8 @@ async def optimize_prompt(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.optimize_prompt")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -822,7 +830,8 @@ async def apply_optimized_prompt(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.apply_optimized_prompt")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -858,7 +867,8 @@ async def list_prompt_versions(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.list_prompt_versions")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -909,7 +919,8 @@ async def get_prompt_version_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.get_prompt_version_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -969,7 +980,8 @@ async def rollback_prompt(
         # the CRUD gate failed closed before any mutation. Surface 422 instead
         # of the generic-handler 500 (same mapping as the Agent save paths).
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.rollback_prompt")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1012,7 +1024,8 @@ async def diff_prompt_versions(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.diff_prompt_versions")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1085,7 +1098,8 @@ async def delete_agent_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.delete_agent_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1152,7 +1166,8 @@ async def list_bindings_endpoint(
             if agent is None or agent.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
             bindings = await list_bindings_for_agent(session, agent_id)
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.list_bindings_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1240,7 +1255,8 @@ async def replace_bindings_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid binding: reserved or malformed target_env_var, or unknown source_field",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.replace_bindings_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1296,7 +1312,8 @@ async def delete_binding_endpoint(
                 resource_id=agent_id,
                 payload_json={"binding_id": str(binding_id), "operation": "delete"},
             )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "agents.delete_binding_endpoint")
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

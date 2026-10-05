@@ -454,10 +454,13 @@ class TestGetEngine:
         try:
             rsched._ENGINE = None
             mock_engine = MagicMock()
+            settings_mock = MagicMock()
+            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
+            settings_mock.modulo_db = "postgres"
             with (
                 patch.object(rsched, "_ENGINE", None),
                 patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch.object(rsched, "get_settings"),
+                patch.object(rsched, "get_settings", return_value=settings_mock),
             ):
                 e1 = _get_engine()
                 e2 = _get_engine()
@@ -486,9 +489,12 @@ class TestGetEngine:
             rsched._TEST_ENGINE = None
             rsched._ENGINE = None
             real = MagicMock()
+            settings_mock = MagicMock()
+            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
+            settings_mock.modulo_db = "postgres"
             with (
                 patch.object(rsched, "create_async_engine", return_value=real) as mock_create,
-                patch.object(rsched, "get_settings"),
+                patch.object(rsched, "get_settings", return_value=settings_mock),
             ):
                 rsched._set_test_engine(real)
                 assert _get_engine() is real
@@ -507,6 +513,7 @@ class TestGetEngine:
             rsched._ENGINE = None
             settings_mock = MagicMock()
             settings_mock.modulo_db = "postgres"
+            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
             mock_engine = MagicMock()
             with (
                 patch.object(rsched, "_ENGINE", None),
@@ -518,6 +525,56 @@ class TestGetEngine:
             assert kwargs["pool_pre_ping"] is True
             assert kwargs["connect_args"]["statement_cache_size"] == 0
             assert kwargs["connect_args"]["ssl"] is False
+        finally:
+            rsched._ENGINE = saved
+
+    def test_translates_sslmode_require_onto_connect_args(self) -> None:
+        import modulo.core.reports.scheduler as rsched
+
+        saved = rsched._ENGINE
+        try:
+            rsched._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.modulo_db = "postgres"
+            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db?sslmode=require"
+            mock_engine = MagicMock()
+            with (
+                patch.object(rsched, "_ENGINE", None),
+                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch.object(rsched, "get_settings", return_value=settings_mock),
+            ):
+                _get_engine()
+            args, kwargs = mock_create.call_args
+            # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
+            # leaving it in the URL raises TypeError at first connect (FAR-1440).
+            assert args[0] == "postgresql+asyncpg://u:p@h/db"
+            assert kwargs["connect_args"]["ssl"] == "require"
+            assert kwargs["connect_args"]["statement_cache_size"] == 0
+        finally:
+            rsched._ENGINE = saved
+
+    def test_non_postgres_engine_url_omits_ssl_connect_args(self) -> None:
+        import modulo.core.reports.scheduler as rsched
+
+        saved = rsched._ENGINE
+        try:
+            rsched._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.modulo_db = "sqlite"
+            settings_mock.database_url = "sqlite+aiosqlite:///./reports.db"
+            mock_engine = MagicMock()
+            with (
+                patch.object(rsched, "_ENGINE", None),
+                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch.object(rsched, "get_settings", return_value=settings_mock),
+            ):
+                _get_engine()
+            args, kwargs = mock_create.call_args
+            # A non-asyncpg driver returns ssl=None from the shared gate, so no
+            # asyncpg-only connect args may be injected and the URL passes
+            # through unchanged (FAR-1440).
+            assert args[0] == "sqlite+aiosqlite:///./reports.db"
+            assert kwargs["connect_args"] == {"timeout": 10}
         finally:
             rsched._ENGINE = saved
 

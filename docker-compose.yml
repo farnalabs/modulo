@@ -95,5 +95,43 @@ services:
     ports:
       - "127.0.0.1:5173:80"
 
+  # Health watchdog — Gatus (https://gatus.io), config-as-code in
+  # deploy/watchdog/. Probes the backend's readiness over the compose network
+  # and tells the operator when Modulo is unhealthy — including when the app is
+  # fully down, which is the one failure the app cannot report about itself.
+  # Enabled by default: it comes up with `docker compose up`.
+  #
+  # No `depends_on` on the backend, deliberately — this service is the thing
+  # that reports the backend being unhealthy, so it must start regardless.
+  #
+  # Monitoring is on from the first `up`; email alerting stays off until
+  # SMTP_HOST / SMTP_PORT / EMAIL_FROM / ALERT_EMAIL_TO are set (the same
+  # variables the app uses for HITL email — one SMTP setup serves both). With
+  # them unset the container logs one line saying so and keeps monitoring.
+  # See deploy/watchdog/README.md and docs/deployment.md §Health watchdog.
+  watchdog:
+    build: ./deploy/watchdog
+    restart: unless-stopped
+    environment:
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+    volumes:
+      - ./deploy/watchdog/config.yaml:/config/config.yaml:ro
+    ports:
+      - "127.0.0.1:8082:8080"
+    healthcheck:
+      # Exec form — the derived image has busybox wget but no shell-form is
+      # needed. Exits non-zero when the dashboard does not answer, so a wedged
+      # watchdog is visible as `unhealthy` in `docker ps`.
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   pgdata:

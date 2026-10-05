@@ -28,7 +28,7 @@ from modulo.api.constants import (
     MSG_THIS_FEATURE_NOT_AVAILABLE,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
@@ -803,7 +803,8 @@ async def admin_create_user(
             exc_info=True,
         )
         _raise_conflict()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_create_user")
         logger.exception("admin_create_user: DB error")
         _raise_db_unavailable("Database error occurred. Please try again later.")
 
@@ -867,7 +868,8 @@ async def admin_create_team(
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_create_team")
         logger.exception("admin_create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_temporarily_unavailable()
     except Exception:
@@ -937,7 +939,8 @@ async def admin_get_org(
     except ProgrammingError:
         logger.exception("admin_get_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_get_org")
         logger.exception("admin_get_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_unavailable("Database error while fetching org profile.")
 
@@ -991,7 +994,8 @@ async def admin_update_org(
     except ProgrammingError:
         logger.exception("admin_update_org ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_update_org")
         logger.exception("admin_update_org SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_unavailable("Database error while updating org profile.")
 
@@ -1036,7 +1040,8 @@ async def admin_regenerate_api_key(
             extra={"org_id": str(current_user.organisation_id)},
         )
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_regenerate_api_key")
         logger.exception(
             "admin_regenerate_api_key SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id)},
@@ -1443,6 +1448,7 @@ async def admin_deactivate_user(
         logger.exception(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_deactivate_user")
         logger.exception(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
         logger.warning(
             "admin_deactivate_user SQLAlchemyError",
@@ -1542,7 +1548,8 @@ async def admin_reactivate_user(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_reactivate_user")
         logger.exception(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
         logger.warning(
             "admin_reactivate_user SQLAlchemyError",
@@ -1813,7 +1820,8 @@ async def admin_invite_user(
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_invite_user")
         logger.exception("admin_invite_user SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_temporarily_unavailable()
 
@@ -1852,7 +1860,8 @@ async def admin_list_invitations(
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
         _raise_this_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_list_invitations")
         logger.exception("admin_list_invitations SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_temporarily_unavailable()
 
@@ -1896,7 +1905,8 @@ async def admin_revoke_invitation(
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_revoke_invitation")
         logger.exception("admin_revoke_invitation SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_temporarily_unavailable()
 
@@ -1959,7 +1969,8 @@ async def admin_list_teams(
     except ProgrammingError:
         logger.exception("admin_list_teams ProgrammingError", extra={"org_id": str(current_user.organisation_id)})
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_list_teams")
         logger.exception("admin_list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         _raise_db_temporarily_unavailable()
     except HTTPException:
@@ -2046,7 +2057,8 @@ async def admin_update_team(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_ADMIN_UPDATE_TEAM)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_update_team")
         logger.exception(
             "admin_update_team SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -2132,7 +2144,8 @@ async def admin_reassign_all_team_resources(
     except ProgrammingError:
         logger.exception("admin.admin_reassign_all_team_resources")
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_reassign_all_team_resources")
         logger.exception(
             "admin_reassign_all_team_resources SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -2194,7 +2207,8 @@ async def admin_delete_team(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_ADMIN_DELETE_TEAM)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_delete_team")
         logger.exception(
             "admin_delete_team SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -2444,7 +2458,8 @@ async def request_org_deletion(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.request_org_deletion")
         logger.exception(_CODE_ADMIN_REQUEST_ORG_DELETION)
         _raise_db_unavailable("Database error while requesting org deletion.")
 
@@ -2508,7 +2523,8 @@ async def confirm_org_deletion(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.confirm_org_deletion")
         logger.exception(_CODE_ADMIN_CONFIRM_ORG_DELETION)
         _raise_db_unavailable("Database error while confirming org deletion.")
 
@@ -2553,7 +2569,8 @@ async def cancel_org_deletion(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_CANCEL_ORG_DELETION)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.cancel_org_deletion")
         logger.exception(_CODE_ADMIN_CANCEL_ORG_DELETION)
         _raise_db_unavailable("Database error while cancelling org deletion.")
 
@@ -2583,7 +2600,8 @@ async def export_org_data(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_EXPORT_ORG_DATA)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.export_org_data")
         logger.exception(_CODE_ADMIN_EXPORT_ORG_DATA)
         _raise_db_unavailable("Database error while exporting org data.")
 
@@ -2647,7 +2665,8 @@ async def delete_org_immediate(
     except ProgrammingError:
         logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.delete_org_immediate")
         logger.exception(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
         _raise_db_unavailable("Database error while deleting org.")
 
@@ -2895,7 +2914,8 @@ async def eval_dashboard(
     except ProgrammingError:
         logger.exception("admin.eval_dashboard")
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.eval_dashboard")
         logger.warning("Eval dashboard DB error", exc_info=True)
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
 
@@ -2989,7 +3009,8 @@ async def eval_regressions(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Query timed out. Please try again or reduce the lookback period.",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.eval_regressions")
         logger.exception("Eval regressions DB error")
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
@@ -3075,7 +3096,8 @@ async def okr_progress(
     except ProgrammingError:
         logger.exception("admin.okr_progress")
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.okr_progress")
         logger.exception("OKR progress DB error")
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
@@ -3383,7 +3405,8 @@ async def admin_retention_purge_runs(
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_this_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_retention_purge_runs")
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -3429,7 +3452,8 @@ async def admin_manual_purge(
     except ProgrammingError:
         logger.exception("admin.admin_manual_purge")
         _raise_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_manual_purge")
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -3480,7 +3504,8 @@ async def admin_purge_stale_runs(
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_this_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_purge_stale_runs")
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -3537,7 +3562,8 @@ async def _load_org_retention_setting(
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_this_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin._load_org_retention_setting")
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -3605,7 +3631,8 @@ async def admin_update_retention(
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_this_feature_not_available()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin.admin_update_retention")
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
@@ -3680,7 +3707,8 @@ async def _run_admin_rls_txn(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "admin._run_admin_rls_txn")
         logger.exception(_CODE_ROUTES_ADMIN)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

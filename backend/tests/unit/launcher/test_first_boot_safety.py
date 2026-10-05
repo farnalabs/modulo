@@ -179,13 +179,9 @@ def test_clear_guard_via_set_first_boot_guard_none(monkeypatch: pytest.MonkeyPat
 def test_settings_validator_delegates_to_url_utils(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     settings = Settings(**{**_settings_kwargs(), "database_url": "postgres://modulo:pw@db:5432/modulo?sslmode=disable"})  # type: ignore[arg-type]
-    assert settings.database_url == "postgresql+asyncpg://modulo:pw@db:5432/modulo"
-
-
-def test_settings_validator_strips_all_sslmode_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    settings = Settings(**{**_settings_kwargs(), "database_url": "postgres://modulo:pw@db:5432/modulo?sslmode=require"})  # type: ignore[arg-type]
-    assert settings.database_url == "postgresql+asyncpg://modulo:pw@db:5432/modulo"
+    # sslmode is PRESERVED on postgres URLs (FAR-1440); translation to an
+    # explicit ssl connect arg happens in the engine factories.
+    assert settings.database_url == "postgresql+asyncpg://modulo:pw@db:5432/modulo?sslmode=disable"
 
 
 def test_settings_validator_rewrites_asyncmy_prefix(monkeypatch: pytest.MonkeyPatch) -> None:

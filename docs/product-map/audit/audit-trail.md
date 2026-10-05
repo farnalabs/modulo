@@ -6,6 +6,9 @@ code:
   - backend/src/modulo/api/routes/audit.py
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py
+  - backend/src/modulo/db/crud/pipeline.py
+  - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/models/audit_event.py
   - frontend/src/views/AdminAuditView.vue
 unit-tests:
@@ -14,6 +17,7 @@ unit-tests:
   - backend/tests/unit/api/test_audit.py
   - backend/tests/unit/api/test_audit_bdd.py
   - backend/tests/unit/api/test_audit_gating.py
+  - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
   - backend/tests/integration/test_audit_append_only.py
   - backend/tests/integration/test_audit_immutability.py
 bdd:
@@ -78,6 +82,20 @@ guarded against tampering at both the ORM and the database layer.
 - [x] Cross-domain product events are recorded: HITL output delivery, HITL
       claim expiry, org deletion requests, fernet key rotation, and run
       lifecycle (event_recording.feature scenarios)
+- [x] Pipeline graph mutations are ALWAYS audited (FAR-1471): every successful
+      `replace_pipeline_graph` write AND every `rollback_to_snapshot` appends
+      one `pipeline.graph_updated` event in the SAME transaction as the write
+      (so a graph write can never commit without its audit event), carrying a
+      concise before/after summary — node/edge counts plus the added / removed
+      / `agent_commands`-changed node IDS only, never node payloads,
+      `env_vars`, `context_files` or parameter values, so no masked secret can
+      enter the chain. MCP graph writes attribute the event to the caller's
+      account id (`changed_by`; a session without one honestly records null,
+      never a bogus id), and the previously HITL-only audit left plain writes
+      such as an `agent_commands` edit unattributable
+      (`db/crud/pipeline.py` `graph_update_audit_payload` + `GRAPH_UPDATED_EVENT`,
+      `db/crud/pipeline_snapshot_versioning.py`, `api/mcp_server.py`,
+      `test_pipeline_graph_updated_audit.py`)
 
 ## Known Gaps
 
@@ -86,6 +104,15 @@ guarded against tampering at both the ORM and the database layer.
   chain.
 
 ## QA History
+- 2026-10-05: **Improve Architecture product-map walk** — closed the untracked
+  FAR-1471 surface: every pipeline graph mutation (the `replace_pipeline_graph`
+  write path and `rollback_to_snapshot`) now appends a `pipeline.graph_updated`
+  audit event in the same transaction, with an IDs-and-counts-only before/after
+  payload, and MCP graph writes stamp the caller's account id as `changed_by`.
+  Added the checked behaviour line plus the `db/crud/pipeline.py`,
+  `db/crud/pipeline_snapshot_versioning.py`, `api/mcp_server.py` code citations
+  and the `test_pipeline_graph_updated_audit.py` unit citation.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-03: **Improve Architecture product-map walk** — closed the
   feat-audit deferral "the export surface is paginated JSON only (no server-side
   streaming / scan export for the whole org in one response)." New

@@ -24,7 +24,8 @@ export default {
       "reject": "Reject",
       "rejecting": "Rejecting...",
       "approved_banner": "Gate was approved. The pipeline has resumed.",
-      "rejected_banner": "Gate was rejected. The pipeline was routed to the reject target.",
+      "rejected_banner": "Gate was rejected. The run was routed to {target}.",
+      "rejected_banner_no_route": "Gate was rejected. The run continues along the normal path.",
       "claim_token_label": "Claim Token",
       "claimed_by_you": "You",
       "claim_failed": "Claim failed:",
@@ -36,7 +37,8 @@ export default {
       "no_claim_token_claim_the_gate_first": "No claim token. Claim / re-claim the gate first.",
       "gate_claimed_you_can_now_approve_or_reject": "Gate claimed. You can now approve or reject.",
       "gate_approved_pipeline_resuming": "Gate approved. Pipeline resuming.",
-      "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to reject target.",
+      "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to {target}.",
+      "gate_rejected_no_reject_route": "Gate rejected. The run continues along the normal path.",
       "rejected_by_reviewer": "Rejected by reviewer",
       "edit_subject": "Edit subject",
       "save_and_approve": "Save & approve",
@@ -876,7 +878,6 @@ export default {
       "reject": "Reject",
       "rejecting": "Rejecting...",
       "approved_banner": "Gate was approved. The pipeline has resumed.",
-      "rejected_banner": "Gate was rejected. The pipeline was routed to the reject target.",
       "claim_token_label": "Claim Token",
       "claim_failed": "Claim failed:",
       "approve_failed": "Approve failed:",
@@ -1712,8 +1713,6 @@ export default {
       "cost_so_far": "Cost so far",
       "tokens": "tokens",
       "hitl_review": "HITL Gate",
-      "queued_waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
-      "queued_starting_soon": "Queued — starting soon",
       "work_items": "Work items",
       "work_item_kind_github": "GitHub",
       "work_item_kind_github_pr": "PR",
@@ -1739,6 +1738,8 @@ export default {
       "artifact_download_aria": "Download {stream} log (attempt {attempt})",
       "artifact_load_error": "Failed to load artifact listing.",
       "artifact_load_retry": "Retry",
+      "prompt_dialog_title": "Prompt — {node}",
+      "prompt_dialog_token_count": "~{count} tokens",
       "artifact_load_retry_aria": "Retry loading the artifact listing",
     },
     "AdminRunRetentionView": {
@@ -3348,7 +3349,29 @@ export default {
       "create_lifecycle_map": "Create Lifecycle Map",
       "name": "Name",
       "description": "Description",
-      "edit": "Edit"
+      "edit": "Edit",
+      "title": "Lifecycle Maps",
+      "search_placeholder": "Search maps...",
+      "filter_owner": "All teams",
+      "filter_owner_aria": "Filter by owner team",
+      "new_map": "New Map",
+      "empty_search_title": "No maps match your search",
+      "empty_search_description": "Try a different search term or clear the filters.",
+      "empty_title": "No Lifecycle Maps yet",
+      "empty_description": "Create one to model your SDLC.",
+      "empty_create_map": "Create Map",
+      "stages_count": "{count} stage | {count} stages",
+      "graduated_count": "{count} graduated",
+      "owner_fallback": "Unassigned",
+      "updated": "Updated {date}",
+      "previous": "Previous",
+      "page_of": "Page {page} of {total}",
+      "next": "Next",
+      "name_placeholder": "My Delivery Lifecycle",
+      "description_placeholder": "Optional description",
+      "cancel": "Cancel",
+      "create": "Create",
+      "creating": "Creating..."
     },
     "LifecycleMapView": {
       "version_label": "Version:",
@@ -3495,7 +3518,8 @@ export default {
       "override_failed": "Override failed.",
       "override_disclosure": "The override re-runs the guardrail pass on the input you supply. This is re-block safe — if the corrected input still violates a blocking guardrail, the run stays blocked.",
       "override_requires_operator": "Only operators and admins can override a guardrail block.",
-      "override_invalid_json": "The corrected input payload must be valid JSON."
+      "override_invalid_json": "The corrected input payload must be valid JSON.",
+      "override_submitting": "Overriding..."
     }
   },
   "components": {
@@ -4146,6 +4170,10 @@ export default {
       "minutes_seconds_ago": "{m}m {s}s ago",
       "hours_minutes_ago": "{h}h {m}m ago",
       "days_hours_ago": "{d}d {h}h ago"
+    },
+    "queue": {
+      "waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
+      "starting_soon": "Queued — starting soon"
     }
   },
   "nav": {

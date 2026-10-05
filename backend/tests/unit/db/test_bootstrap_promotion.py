@@ -40,13 +40,14 @@ def deploy_shim() -> Any:
     ("url", "expected"),
     [
         ("postgres://modulo:pw@db.internal:5432/modulo", "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo"),
+        # sslmode PRESERVED on postgres URLs (FAR-1440)
         (
             "postgres://modulo:pw@db.internal:5432/modulo?sslmode=require",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=require",
         ),
         (
             "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=disable",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=disable",
         ),
     ],
 )
@@ -83,10 +84,16 @@ def test_promoted_bootstrap_main_writes_fixed_env_files(
 
     bootstrap_module.main()
 
-    assert written["/tmp/database_admin_url.env"] == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo"
+    # FAR-1440: sslmode in DATABASE_ADMIN_URL is preserved through the fixed
+    # URL (the operator's TLS setting is honoured end-to-end). DATABASE_URL
+    # carries no sslmode; the system URL derives from the fixed DATABASE_URL.
+    assert (
+        written["/tmp/database_admin_url.env"]
+        == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo?sslmode=require"
+    )
     assert written["/tmp/database_url.env"] == "postgresql+asyncpg://app:pw@db.internal:5432/modulo"
     assert written["/tmp/system_database_url.env"] == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
-    assert os.environ["DATABASE_ADMIN_URL"] == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo"
+    assert os.environ["DATABASE_ADMIN_URL"] == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo?sslmode=require"
     assert os.environ["MODULO_SYSTEM_DATABASE_URL"] == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
 
 

@@ -3512,8 +3512,12 @@ class PipelineExecutor:
             await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
 
             # Atomic sandbox-capacity enforcement (FAR-1306 TOCTOU fix).
-            # Skipped for reject/terminate paths (check_sandbox_capacity=False)
-            # because those routes do not resume sandbox execution.
+            # Skipped for reject resumes (check_sandbox_capacity=False) as a
+            # POLICY choice — a human rejection already committed is never
+            # bounced off the gate by a transient capacity limit — NOT because
+            # a rejection avoids sandbox work: it does not, a reject resume
+            # continues downstream execution along the reject route (or, with
+            # no reject route, the normal path). See hitl.reject_review.
             if check_sandbox_capacity:
                 await self._enforce_resume_sandbox_capacity(
                     session,

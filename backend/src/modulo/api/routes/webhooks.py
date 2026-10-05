@@ -28,7 +28,7 @@ from modulo.api.constants import (
     MSG_INTERNAL_SERVER_ERROR,
     MSG_TRIGGER_NOT_FOUND,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
@@ -532,6 +532,7 @@ async def receive_webhook(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "webhooks.receive_webhook")
         log_service_unavailable(
             "db_transient",
             exc,
@@ -880,6 +881,7 @@ async def replay_webhook(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "webhooks.replay_webhook")
         log_service_unavailable(
             "db_transient",
             exc,
@@ -956,6 +958,7 @@ async def cleanup_expired(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "webhooks.cleanup_expired")
         log_service_unavailable(
             "db_transient",
             exc,

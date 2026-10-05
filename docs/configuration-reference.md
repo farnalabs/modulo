@@ -365,6 +365,24 @@ See [`docs/operations/backup.md`](./operations/backup.md) for backup configurati
 | `EMAIL_FROM` | No | – | From-address for outgoing emails |
 | `SMTP_TIMEOUT` | No | `30` | SMTP connection/send timeout in seconds |
 
+The same variables also drive the Docker Compose **health watchdog**'s email
+alerts (`watchdog` service in the root `docker-compose.yml`) — one SMTP setup
+serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
+`EMAIL_FROM` and `ALERT_EMAIL_TO` are all set; leaving them unset is a
+supported state where monitoring still runs and only the emails are skipped.
+See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
+
+### Readiness health alerts
+
+The same SMTP configuration also drives the system worker's in-app readiness alerting: when **both** `SMTP_HOST` and `ALERT_EMAIL_TO` are set, the `health_readiness_alert` cron (every 5 minutes) evaluates health through the same checks as `/healthz/ready` and emails `ALERT_EMAIL_TO`:
+
+- **One alert email** when readiness *confirmedly* transitions into `degraded` or `unavailable` — the email lists each failing sub-check with its detail.
+- **One recovery email** when readiness returns to `ok`, so an incident has a visible end.
+
+Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled — quiet, not silent.
+
+This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
+
 ---
 
 ## Worker Liveness Watchdog
@@ -375,11 +393,11 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 |----------|----------|---------|-------------|
 | `WATCHDOG_ENABLED` | No | `true` | Enable the watchdog tick |
 | `WATCHDOG_TICK_SECONDS` | No | `30` | Tick interval in seconds |
-| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Sustained window before an alert fires — applies to BOTH the SAQ-worker liveness condition AND the system-cron (`fire_due_triggers`) heartbeat condition, each of which must look bad continuously for this many seconds |
+| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Sustained window before an alert fires - applies to BOTH the SAQ-worker liveness condition AND the system-cron (`fire_due_triggers`) heartbeat condition, each of which must look bad continuously for this many seconds |
 | `WATCHDOG_ALERT_STATE_TTL_SECONDS` | No | `604800` | Edge-triggered alert state TTL (default 7 days) |
 | `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
 | `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
-| `ALERT_EMAIL_TO` | No | – | Comma-separated email recipients for watchdog alerts |
+| `ALERT_EMAIL_TO` | No | – | Comma-separated email recipients for watchdog alerts and readiness-degradation alerts (see [Readiness health alerts](#readiness-health-alerts)) |
 
 ---
 
@@ -502,7 +520,7 @@ per-check override is set to a positive value.
 | `MODULO_HEALTH_CHECKPOINTER_TIMEOUT_SECONDS` | No | `0` | Checkpointer schema check timeout; `0` = use global |
 | `MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS` | No | `0` | Alembic migration check timeout; `0` = use global |
 | `MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS` | No | `1` | Database-hygiene check timeout (seconds); `0` = use global |
-| `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor — a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
+| `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor - a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
 | `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO` | No | `0.60` | Database-hygiene: worst-table dead-tuple ratio at/above which a table over the floor grades `degraded` (`0`–`1`) |
 
 A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations/

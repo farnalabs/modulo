@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.node_category import (
@@ -101,7 +101,8 @@ async def list_node_categories_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "node_categories.list_node_categories_endpoint")
         logger.warning("node_categories.list.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -160,7 +161,8 @@ async def create_node_category_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "node_categories.create_node_category_endpoint")
         logger.warning("node_categories.create.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -205,7 +207,8 @@ async def get_node_category_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "node_categories.get_node_category_endpoint")
         logger.warning("node_categories.get.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -254,7 +257,8 @@ async def update_node_category_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "node_categories.update_node_category_endpoint")
         logger.warning("node_categories.update.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -308,7 +312,8 @@ async def delete_node_category_endpoint(
             detail=f"Cannot delete: the category is referenced by {len(e.pipelines)} "
             f"pipeline(s): {', '.join(str(p.get('name')) for p in e.pipelines)}",
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "node_categories.delete_node_category_endpoint")
         logger.warning("node_categories.delete.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -347,7 +352,8 @@ async def restore_node_category_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "node_categories.restore_node_category_endpoint")
         logger.warning("node_categories.restore.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

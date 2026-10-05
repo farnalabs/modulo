@@ -1,7 +1,7 @@
 """Unit tests for the boot-time DATABASE_URL handling in deploy/fly/bootstrap_db.py.
 
 Covers the pure derivation helpers extracted from the container-startup script:
-``fix_database_url`` (async scheme conversion + sslmode strip) and
+``fix_database_url`` (async scheme conversion, per-family sslmode handling) and
 ``derive_system_database_url`` (username swap to ``modulo_system``). The boot
 side effects (env writes, the alembic_version bootstrap connection, /tmp file
 writes) are exercised only via ``main()``'s warning path with those side
@@ -122,32 +122,29 @@ def test_main_warns_when_system_url_derivation_fails(
             "postgres://modulo:pw@db.internal:5432/modulo",
             "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
         ),
-        # sslmode stripped as the only query param (trailing ? removed)
+        # sslmode PRESERVED on postgres URLs (FAR-1440 — honoured upstream)
         (
             "postgres://modulo:pw@db.internal:5432/modulo?sslmode=require",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=require",
         ),
         (
             "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=disable",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=disable",
         ),
-        # sslmode not the first query param — kept params survive
+        # sslmode not the first query param — everything survives untouched
         (
             "postgres://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
         ),
         # already-async URL with no postgres:// prefix is left otherwise untouched
         (
             "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
             "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
         ),
-        # sslmode as the FIRST query param followed by others — the leading
-        # "?sslmode=require" is stripped, leaving "&connect_timeout=10" attached
-        # to the path (pre-existing behavior carried through this PR; the
-        # trailing param is currently dropped rather than re-anchored with "?").
+        # sslmode FIRST followed by others — untouched on postgres (no wart)
         (
             "postgres://modulo:pw@db.internal:5432/modulo?sslmode=require&connect_timeout=10",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo&connect_timeout=10",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=require&connect_timeout=10",
         ),
     ],
 )
@@ -163,7 +160,7 @@ def test_set_path_fixes_system_url_like_database_url(bootstrap_db) -> None:
     # MODULO_SYSTEM_DATABASE_URL set explicitly is fixed exactly like DATABASE_URL.
     set_url = "postgres://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require"
     assert bootstrap_db.fix_database_url(set_url) == (
-        "postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo"
+        "postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require"
     )
 
 
@@ -172,4 +169,4 @@ def test_derivation_runs_on_the_fixed_database_url(bootstrap_db) -> None:
     # from the fixed value (password and host/port preserved, username swapped).
     fixed = bootstrap_db.fix_database_url("postgres://modulo:pw@db.internal:5432/modulo?sslmode=require")
     derived = bootstrap_db.derive_system_database_url(fixed)
-    assert derived == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
+    assert derived == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?sslmode=require"

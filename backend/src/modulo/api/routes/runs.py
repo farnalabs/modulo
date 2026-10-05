@@ -28,7 +28,7 @@ from modulo.api.constants import (
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_UNEXPECTED_ERROR,
 )
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
@@ -640,7 +640,8 @@ async def list_runs_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.list_runs_endpoint")
         _log.exception(_CODE_ROUTE_DB_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1225,7 +1226,8 @@ async def trigger_run(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.trigger_run")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1405,7 +1407,8 @@ async def trigger_rerun(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.trigger_rerun")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1475,7 +1478,8 @@ async def get_run_stats_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_stats_endpoint")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1512,7 +1516,8 @@ async def get_run_heatmap_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_heatmap_endpoint")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1559,7 +1564,8 @@ async def get_run_status(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_status")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1662,7 +1668,8 @@ async def cancel_run(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.cancel_run")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1938,7 +1945,8 @@ async def get_run_io_endpoint(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_io_endpoint")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2023,7 +2031,8 @@ async def get_run_work_item_enrichment(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_work_item_enrichment")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2083,7 +2092,8 @@ async def export_run_fixture(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.export_run_fixture")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2203,7 +2213,8 @@ async def get_run_workspace_events(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_workspace_events")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2324,7 +2335,8 @@ async def get_run_node_output(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_node_output")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2485,7 +2497,8 @@ async def observe_run_node(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.observe_run_node")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2526,7 +2539,8 @@ async def observe_run_node(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.observe_run_node")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2699,7 +2713,8 @@ async def recover_run_node(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.recover_run_node")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2857,7 +2872,8 @@ async def guardrail_override_run(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.guardrail_override_run")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3380,6 +3396,7 @@ async def reveal_node_prompt(
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.reveal_node_prompt")
         _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
         _log.warning("prompt_reveal.db_error", extra={"error": str(exc)[:200]})
         raise HTTPException(
@@ -3467,7 +3484,8 @@ async def diff_node_output(
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.diff_node_output")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3570,7 +3588,8 @@ async def list_run_artifacts(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.list_run_artifacts")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3740,7 +3759,8 @@ async def get_run_artifact(
                     )
                 )
             ).scalar_one_or_none()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_artifact")
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -215,7 +215,14 @@ def _validate_password_strength(password: str) -> None:
 
 
 def _engine_and_factory(url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    engine = create_async_engine(url)
+    from modulo.db.url_utils import split_engine_sslmode
+
+    # FAR-1440: the resolved URL preserves the operator's ``sslmode``; translate
+    # it to asyncpg's ``ssl`` connect arg so a TLS deployment does not raise
+    # TypeError at first connect.
+    engine_url, ssl_arg = split_engine_sslmode(url)
+    connect_args: dict[str, Any] = {"ssl": ssl_arg} if ssl_arg is not None else {}
+    engine = create_async_engine(engine_url, connect_args=connect_args)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher import doctor as doctor_module  # noqa: F401 — re-exported for fault injection in recipes
+from modulo.launcher import doctor as doctor_module
 from modulo.launcher.doctor import (
     EXIT_DEGRADED,
     EXIT_HEALTHY,
@@ -862,3 +862,25 @@ def test_run_doctor_json_includes_exit_code_and_warnings(tmp_path: Path, capsys:
     stale = next(c for c in payload["checks"] if c["name"] == "stale-backup")
     assert stale["warning"] is True
     assert stale["ok"] is True
+
+
+def test_probe_migrations_at_head_translates_sslmode() -> None:
+    """FAR-1440: the doctor's migration probe must translate a preserved
+    ``sslmode`` into asyncpg's ``ssl`` connect arg rather than build a raw
+    engine (which TypeErrors at first connect on a TLS deploy)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    composed = {"DATABASE_URL": "postgresql+asyncpg://u:p@h/db?sslmode=require"}
+    probe = doctor_module._build_database_probes(composed, 5432, "redis://localhost:6379/0")[3]
+
+    mock_engine = MagicMock()
+    mock_engine.dispose = AsyncMock()
+    with (
+        patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine) as create_engine,
+        patch("modulo.db.health_checks.db_is_at_migration_head", AsyncMock(return_value=True)),
+    ):
+        assert probe() is True
+
+    args, kwargs = create_engine.call_args
+    assert args[0] == "postgresql+asyncpg://u:p@h/db"
+    assert kwargs["connect_args"]["ssl"] == "require"

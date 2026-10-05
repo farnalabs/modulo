@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -70,6 +71,16 @@ class _SnapshotRow:
         self.pipeline_id = pipeline_id or uuid.uuid4()
         self.graph_json = graph_json
         self.snapshot_version = 1
+
+
+def _hitl_audits(audit: AsyncMock) -> list[Any]:
+    """The ``hitl_review_removed`` appends on a patched ``append_audit_event``.
+
+    ``replace_pipeline_graph`` now also appends ``pipeline.graph_updated`` on
+    every successful graph write (FAR-1471), so assertions about the HITL audit
+    must select that event type instead of counting every append.
+    """
+    return [call for call in audit.await_args_list if call.kwargs.get("event_type") == "hitl_review_removed"]
 
 
 def _build_session(*results: MagicMock) -> AsyncMock:
@@ -170,7 +181,7 @@ async def test_replace_pipeline_graph_guard_runs_before_delete(monkeypatch: pyte
     # statement).
     assert session.execute.await_count == 3
     session.add_all.assert_not_called()
-    audit.assert_not_awaited()  # denied path: no allowed-weakening audit
+    assert not _hitl_audits(audit)  # denied path: no allowed-weakening audit
 
 
 async def test_rollback_to_snapshot_guard_runs_before_delete(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -195,7 +206,7 @@ async def test_rollback_to_snapshot_guard_runs_before_delete(monkeypatch: pytest
         )
     assert excinfo.value.reason_code == REASON_LEGACY_SNAPSHOT_AMBIGUOUS
     assert session.execute.await_count == 4  # snapshot + row lock + edge load + guardrail rows
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +364,7 @@ async def test_mcp_caller_type_is_always_denied_even_when_privileged(
             caller_type="mcp",
         )
     assert excinfo.value.reason_code == REASON_MCP_NOT_PERMITTED
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_mcp_non_weakening_write_is_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -384,7 +395,7 @@ async def test_mcp_non_weakening_write_is_allowed(monkeypatch: pytest.MonkeyPatc
         caller_type="mcp",
     )
     assert result is not None
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +423,7 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
             is_privileged=False,
             caller_type="rest",
         )
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
     # Allowed for privileged (admin) — the write proceeds and audit fires.
     async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> str:
@@ -433,8 +444,8 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
         account_id=uuid.uuid4(),
     )
     assert result is not None
-    audit.assert_awaited_once()
-    call_kwargs = audit.call_args.kwargs
+    assert len(_hitl_audits(audit)) == 1
+    call_kwargs = _hitl_audits(audit)[-1].kwargs
     assert call_kwargs["event_type"] == "hitl_review_removed"
     assert call_kwargs["payload_json"]["caller_type"] == "rest"
     assert call_kwargs["payload_json"]["denied"] is False
@@ -478,7 +489,7 @@ async def test_replace_denies_node_level_hitl_config_weakening_for_non_privilege
     assert excinfo.value.weakening_types == ["human_only"]
     assert (_NODE_A, _NODE_A, "hitl_node") in excinfo.value.correlation_keys
     session.add_all.assert_not_called()
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_replace_allows_node_level_weakening_for_privileged_with_audit(
@@ -519,8 +530,8 @@ async def test_replace_allows_node_level_weakening_for_privileged_with_audit(
         account_id=uuid.uuid4(),
     )
     assert result is not None
-    audit.assert_awaited_once()
-    payload = audit.call_args.kwargs["payload_json"]
+    assert len(_hitl_audits(audit)) == 1
+    payload = _hitl_audits(audit)[-1].kwargs["payload_json"]
     assert payload["denied"] is False
     assert payload["affected_nodes"][0]["node_id"] == _NODE_A
     assert payload["affected_nodes"][0]["weakening_types"] == ["human_only"]
@@ -574,7 +585,7 @@ async def test_replace_untouched_hitl_config_is_not_weakening(
         caller_type="rest",
     )
     assert result is not None
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_allowed_weakening_with_live_admin_role_under_lock(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -601,7 +612,7 @@ async def test_allowed_weakening_with_live_admin_role_under_lock(monkeypatch: py
         account_id=uuid.uuid4(),
     )
     assert result is not None
-    audit.assert_awaited_once()
+    assert len(_hitl_audits(audit)) == 1
 
 
 async def test_live_role_demotion_denies_even_when_route_flag_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -740,7 +751,7 @@ async def test_replace_preserves_gate_when_config_key_omitted(monkeypatch: pytes
     persisted = result[1]
     assert len(persisted) == 1
     assert persisted[0].hitl_review_config == _GATE, "omitted key must preserve the stored gate, not write None"
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -774,7 +785,7 @@ async def test_replace_preserves_gate_when_presence_flag_false(monkeypatch: pyte
     assert result is not None
     persisted = result[1]
     assert persisted[0].hitl_review_config == _GATE
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_replace_omitted_key_on_new_edge_still_writes_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -806,7 +817,7 @@ async def test_replace_omitted_key_on_new_edge_still_writes_none(monkeypatch: py
     assert result is not None
     persisted = result[1]
     assert persisted[0].hitl_review_config is None
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -839,7 +850,7 @@ async def test_replace_explicit_null_still_denies_for_non_privileged(monkeypatch
             caller_type="rest",
         )
     assert excinfo.value.reason_code == REASON_CORRELATION_KEY_MISMATCH
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -874,9 +885,11 @@ async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pyt
     assert result is not None
     persisted = result[1]
     assert persisted[0].hitl_review_config is None
-    audit.assert_awaited_once()
-    assert audit.call_args.kwargs["event_type"] == "hitl_review_removed"
-    assert audit.call_args.kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == ["structural:gate_removed"]
+    assert len(_hitl_audits(audit)) == 1
+    assert _hitl_audits(audit)[-1].kwargs["event_type"] == "hitl_review_removed"
+    assert _hitl_audits(audit)[-1].kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == [
+        "structural:gate_removed"
+    ]
 
 
 async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -909,7 +922,7 @@ async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.Mo
             caller_type="mcp",
         )
     assert excinfo.value.reason_code == REASON_MCP_NOT_PERMITTED
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 async def test_replace_present_false_with_config_on_new_edge_ignores_value(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -945,7 +958,7 @@ async def test_replace_present_false_with_config_on_new_edge_ignores_value(monke
     assert result is not None
     persisted = result[1]
     assert persisted[0].hitl_review_config is None, "present=False must ignore the provided gate value"
-    audit.assert_not_awaited()
+    assert not _hitl_audits(audit)
 
 
 # ---------------------------------------------------------------------------
