@@ -213,6 +213,17 @@ class ApplyGraphConnectorBinding(BaseModel):
 
     type: str = Field(min_length=1, max_length=100)
     instance_id: uuid.UUID
+    # FAR-1141: connector-binding operation verb (API ConnectorBinding twin).
+    # Declared explicitly because extra="forbid" would reject the key the API
+    # now stores — a silently-dropped declarative field would create plan drift.
+    operation: Literal["query", "write", "dispatch"] = "query"
+    # FAR-1141: for operation="dispatch", the CI-runner method to call.
+    dispatch_action: Literal[
+        "trigger_run",
+        "get_run_status",
+        "get_run_logs",
+        "list_runs",
+    ] = "trigger_run"
 
 
 class ApplyGraphSchemaPin(BaseModel):
@@ -260,7 +271,7 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
     agent: str | None = None
     position: ApplyGraphPosition
     connector_binding: ApplyGraphConnectorBinding | None = None

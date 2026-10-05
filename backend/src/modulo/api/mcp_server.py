@@ -3256,14 +3256,35 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+# FAR-1141: connector-binding operation verbs and CI dispatch selectors the API
+# model enforces via Literal — MCP writes raw graph dicts, so it validates the
+# same vocabulary itself instead of persisting a value the read path rejects.
+_BIND_OPERATIONS = ("query", "write", "dispatch")
+_BIND_DISPATCH_ACTIONS = ("trigger_run", "get_run_status", "get_run_logs", "list_runs")
+
+
 def _apply_node_connector_binding(
     pipeline: Any,
     nid: uuid.UUID,
     node_id: str,
     connector_type: str,
     connector_instance_id: str,
+    operation: str | None = None,
+    dispatch_action: str | None = None,
 ) -> dict[str, Any] | None:
     """Bind the connector onto the matching node. Returns an error dict, or None."""
+    if operation is not None and operation not in _BIND_OPERATIONS:
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": f"operation must be one of {list(_BIND_OPERATIONS)}, got {operation!r}",
+        }
+    if dispatch_action is not None and dispatch_action not in _BIND_DISPATCH_ACTIONS:
+        return {
+            "error": "validation_failed",
+            "field": "dispatch_action",
+            "detail": f"dispatch_action must be one of {list(_BIND_DISPATCH_ACTIONS)}, got {dispatch_action!r}",
+        }
     nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
     target = None
     for node in nodes:
@@ -3273,10 +3294,15 @@ def _apply_node_connector_binding(
     if target is None:
         return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
 
-    target["connector_binding"] = {
+    binding: dict[str, Any] = {
         "type": connector_type,
         "instance_id": connector_instance_id,
     }
+    if operation is not None:
+        binding["operation"] = operation
+    if dispatch_action is not None:
+        binding["dispatch_action"] = dispatch_action
+    target["connector_binding"] = binding
     pipeline.graph_nodes_json = nodes
     return None
 
@@ -3284,7 +3310,11 @@ def _apply_node_connector_binding(
 @mcp.tool(
     description="Bind a connector instance to a pipeline node. "
     "Updates the node's connector_binding in the pipeline graph. "
-    "The connector must already exist in the organisation."
+    "The connector must already exist in the organisation. "
+    "Optional operation ('query' | 'write' | 'dispatch') selects the binding "
+    "verb; optional dispatch_action ('trigger_run' | 'get_run_status' | "
+    "'get_run_logs' | 'list_runs') selects the CI-runner method for a dispatch "
+    "binding (FAR-1141)."
 )
 @_RETRY_DB
 async def bind_connector_to_node(
@@ -3292,6 +3322,8 @@ async def bind_connector_to_node(
     node_id: str,
     connector_type: str,
     connector_instance_id: str,
+    operation: str | None = None,
+    dispatch_action: str | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -3348,18 +3380,31 @@ async def bind_connector_to_node(
                     ),
                 }
 
-            bind_error = _apply_node_connector_binding(pipeline, nid, node_id, connector_type, connector_instance_id)
+            bind_error = _apply_node_connector_binding(
+                pipeline,
+                nid,
+                node_id,
+                connector_type,
+                connector_instance_id,
+                operation=operation,
+                dispatch_action=dispatch_action,
+            )
             if bind_error is not None:
                 return bind_error
             await s.flush()
 
-        return {
+        response: dict[str, Any] = {
             "pipeline_id": pipeline_id,
             "node_id": node_id,
             "connector_type": connector_type,
             "connector_instance_id": connector_instance_id,
             "status": "bound",
         }
+        if operation is not None:
+            response["operation"] = operation
+        if dispatch_action is not None:
+            response["dispatch_action"] = dispatch_action
+        return response
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:

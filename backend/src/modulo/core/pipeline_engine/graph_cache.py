@@ -539,7 +539,7 @@ def _make_node_fn(
     max_input_length: int | None = node_def.get("max_input_length")
     token_budget: int | None = node_def.get("token_budget")
 
-    if node_type not in ("agent", "manual", "connector", "sandbox_agent", "router", "hitl"):
+    if node_type not in ("agent", "manual", "connector", "dispatch", "sandbox_agent", "router", "hitl"):
         raise ValueError(f"Unknown node_type {node_type!r} for node {node_id!r}")
 
     connector_binding = node_def.get("connector_binding")

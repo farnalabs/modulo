@@ -62,6 +62,7 @@ SPLITTABLE_NODE_TYPES = frozenset(
         "sandbox_agent",
         "agent",
         "connector",
+        "dispatch",
         "manual",
         NODE_TYPE_GATE,
     }
@@ -500,7 +501,9 @@ def _split_by_known_type(envelope: dict[str, Any], resolved_type: str) -> tuple[
         return _split_sandbox_agent(envelope)
     if resolved_type == "agent":
         return _split_agent(envelope)
-    if resolved_type == "connector":
+    if resolved_type in ("connector", "dispatch"):
+        # FAR-1141: a dispatch node returns the SAME artifacts/output envelope
+        # a connector node does, so it shares the connector splitter.
         return _split_connector(envelope)
     if resolved_type == "manual":
         return _split_manual(envelope)
@@ -554,7 +557,7 @@ def split_node_output(
     2. Not a dict -- malformed: warn and return ``(None, {})``.
     3. Recovery marker (no ``artifacts`` and a ``recovered`` / ``skipped`` key).
     4. Known ``node_type`` (``sandbox_agent``, ``agent``, ``connector``,
-       ``manual``, ``gate``).
+       ``dispatch``, ``manual``, ``gate``).
     5. Gate envelope detected by shape (interrupted status / ``human_data`` /
        ``autonomy`` / ``result`` / ``condition_skipped`` / ``auto_approved``).
     6. Unknown: warn with ``run_id`` / ``node_id`` / ``reason`` and return the

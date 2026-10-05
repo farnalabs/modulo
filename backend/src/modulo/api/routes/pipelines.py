@@ -1037,6 +1037,17 @@ class GraphPosition(BaseModel):
 class ConnectorBinding(BaseModel):
     type: str = Field(min_length=1, max_length=100)
     instance_id: uuid.UUID
+    # FAR-1141: the connector-binding operation verb. Declared here so the API
+    # stops silently DROPPING it on save (extra="ignore" would create permanent
+    # plan drift — the engine would never see the dispatch operation).
+    operation: Literal["query", "write", "dispatch"] = "query"
+    # FAR-1141: for operation="dispatch", the CI-runner method to call.
+    dispatch_action: Literal[
+        "trigger_run",
+        "get_run_status",
+        "get_run_logs",
+        "list_runs",
+    ] = "trigger_run"
 
 
 class SchemaPin(BaseModel):
@@ -1092,7 +1103,7 @@ class CapabilityScope(BaseModel):
 
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -1345,6 +1356,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             "router": self._validate_router_node,
             "hitl": self._validate_hitl_node,
             "join": self._validate_join_node,
+            "dispatch": self._validate_dispatch_node,
         }
         node_validators[self.node_type]()
         self._validate_fan_out_cross_checks()
@@ -1528,6 +1540,21 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Join aggregate merge_by_key requires an explicit 'key'")
         if self.aggregate.kind == "map" and not self.aggregate.map_expression:
             raise ValueError("Join aggregate map requires a 'map_expression'")
+
+    def _validate_dispatch_node(self) -> None:
+        """A dispatch node routes a CI-runner dispatch operation (FAR-1141).
+
+        Requires a ``connector_binding`` (the dispatch target) and forbids an
+        ``agent_id`` (dispatch is not an agent-executed node). Sandbox-only /
+        stdout-retention / agent-only fields are rejected for EVERY non-sandbox
+        / non-agent type by the shared ``_validate_sandbox_only_fields`` /
+        ``_validate_stdout_retention`` / ``_validate_agent_only_fields``
+        checks, so a dispatch node cannot set them either.
+        """
+        if self.connector_binding is None:
+            raise ValueError("Dispatch nodes require a connector_binding")
+        if self.agent_id is not None:
+            raise ValueError("Dispatch nodes cannot reference an agent")
 
     def _validate_sandbox_env_vars(self) -> None:
         if not self.env_vars:

@@ -18,13 +18,19 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 
 from modulo.connectors.base import (
+    CIRun,
+    CIRunLog,
+    CIRunStatus,
+    ConnectorACL,
     ConnectorBase,
     ConnectorPayload,
+    ConnectorPermissionError,
     ConnectorQuery,
     ConnectorResult,
     ConnectorType,
     HealthResult,
 )
+from modulo.connectors.ci_runner.base import CIRunnerBase
 from modulo.core.connector_hub import ConnectorHub, _TracedConnector
 from modulo.core.secrets_backend import create_secrets_backend
 
@@ -421,3 +427,140 @@ async def test_hub_org_connector_rejected_for_team_scoped_invocation(tmp_path) -
             result = await connector.query(ConnectorQuery(resource="directory", filters={"path": str(tmp_path)}))
             assert isinstance(result, ConnectorResult)
             assert hub.get(ci.id, operation="read") is not None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141: traced + ACL-gated CI-runner dispatch methods
+# ---------------------------------------------------------------------------
+
+
+class _FakeCIRunner(CIRunnerBase):
+    """Minimal CI-runner connector: canned results + call recording."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def health_check(self) -> HealthResult:
+        return HealthResult(ok=True, detail="healthy")
+
+    async def trigger_run(
+        self,
+        pipeline_id: str,
+        branch: str = "",
+        variables: dict[str, str] | None = None,
+    ) -> CIRun:
+        self.calls.append(("trigger_run", {"pipeline_id": pipeline_id, "branch": branch, "variables": variables}))
+        return CIRun(id="run-1", pipeline_id=pipeline_id, status=CIRunStatus.QUEUED, branch=branch)
+
+    async def get_run_status(self, run_id: str) -> CIRun:
+        self.calls.append(("get_run_status", {"run_id": run_id}))
+        return CIRun(id=run_id, pipeline_id="pl-1", status=CIRunStatus.SUCCESS)
+
+    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+        self.calls.append(("get_run_logs", {"run_id": run_id, "cursor": cursor}))
+        return CIRunLog(run_id=run_id, lines=["line 1"])
+
+    async def list_runs(
+        self,
+        pipeline_id: str | None = None,
+        status: CIRunStatus | None = None,
+        limit: int = 20,
+    ) -> list[CIRun]:
+        self.calls.append(("list_runs", {"pipeline_id": pipeline_id, "status": status, "limit": limit}))
+        return [CIRun(id="run-1", pipeline_id=pipeline_id or "pl-1", status=CIRunStatus.SUCCESS)]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "kwargs", "expected_call"),
+    [
+        (
+            "trigger_run",
+            {"pipeline_id": "pl-7"},
+            ("trigger_run", {"pipeline_id": "pl-7", "branch": "", "variables": None}),
+        ),
+        (
+            "get_run_status",
+            {"run_id": "r-9"},
+            ("get_run_status", {"run_id": "r-9"}),
+        ),
+        (
+            "get_run_logs",
+            {"run_id": "r-9"},
+            ("get_run_logs", {"run_id": "r-9", "cursor": None}),
+        ),
+        (
+            "list_runs",
+            {"pipeline_id": "pl-7"},
+            ("list_runs", {"pipeline_id": "pl-7", "status": None, "limit": 20}),
+        ),
+    ],
+)
+async def test_dispatch_method_forwards_and_creates_span(
+    tracer,
+    exporter: InMemorySpanExporter,
+    method_name: str,
+    kwargs: dict[str, Any],
+    expected_call: tuple[str, dict[str, Any]],
+) -> None:
+    """FAR-1141: each CI dispatch method forwards to the inner connector AND is traced.
+
+    Before this change ``_TracedConnector.__getattr__`` forwarded these to the
+    inner connector UNTRACED and with no ACL check.
+    """
+    inner = _FakeCIRunner()
+    traced = _TracedConnector(inner, tracer=tracer)
+
+    await getattr(traced, method_name)(**kwargs)
+
+    # (a) forwarded to the inner connector, with the exact arguments
+    assert inner.calls == [expected_call]
+
+    # (b) one span whose connector.operation names the method
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == f"connector.{inner.connector_type}.{method_name}"
+    assert span.attributes is not None
+    assert span.attributes.get("connector.operation") == method_name
+    assert span.status.status_code == StatusCode.OK
+
+    # never branch variables or log bodies in span attributes
+    assert "connector.variables" not in span.attributes
+    assert "connector.lines" not in span.attributes
+
+
+@pytest.mark.parametrize(
+    ("allowed_operations", "method_name", "kwargs", "denied"),
+    [
+        # read-only ACL: trigger_run (a WRITE-class op) is BLOCKED, reads pass
+        (["read"], "trigger_run", {"pipeline_id": "pl-7"}, True),
+        (["read"], "get_run_status", {"run_id": "r-9"}, False),
+        (["read"], "list_runs", {"pipeline_id": "pl-7"}, False),
+        # write-only ACL: trigger_run PASSES, the reads are BLOCKED
+        (["write"], "trigger_run", {"pipeline_id": "pl-7"}, False),
+        (["write"], "list_runs", {"pipeline_id": "pl-7"}, True),
+        (["write"], "get_run_logs", {"run_id": "r-9"}, True),
+    ],
+)
+async def test_dispatch_methods_are_acl_gated(
+    tracer,
+    exporter: InMemorySpanExporter,
+    allowed_operations: list[str],
+    method_name: str,
+    kwargs: dict[str, Any],
+    denied: bool,
+) -> None:
+    """FAR-1141: the ``__getattr__`` ACL bypass is closed — every CI dispatch method is gated."""
+    inner = _FakeCIRunner()
+    acl = ConnectorACL("org", allowed_operations=allowed_operations)
+    traced = _TracedConnector(inner, tracer=tracer, acl=acl)
+
+    if denied:
+        with pytest.raises(ConnectorPermissionError):
+            await getattr(traced, method_name)(**kwargs)
+        # the ACL fires BEFORE the connector is touched and before any span
+        assert not inner.calls
+        assert not exporter.get_finished_spans()
+    else:
+        await getattr(traced, method_name)(**kwargs)
+        assert [name for name, _call in inner.calls] == [method_name]

@@ -459,7 +459,7 @@ def _check_composite_sub_nodes(
                 node_id=node_id,
             )
         node_type = sub.get("node_type", "agent")
-        if node_type not in ("agent", "manual", "composite", "sandbox_agent"):
+        if node_type not in ("agent", "manual", "composite", "sandbox_agent", "dispatch"):
             result.error(
                 "COMPOSITE_SUBGRAPH_INVALID_TYPE",
                 f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has "

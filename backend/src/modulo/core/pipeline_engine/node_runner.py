@@ -57,9 +57,12 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
+from dataclasses import asdict as _dc_asdict
 from dataclasses import dataclass
+from dataclasses import is_dataclass as _dc_is_dataclass
 from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
@@ -5829,16 +5832,129 @@ def _enforce_connector_scope(
     return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(scope_err)}]}
 
 
+#: FAR-1141: the CI-runner methods a ``dispatch`` connector operation may route
+#: to (the ``CIRunnerBase`` capability contract). An unknown selector RAISES —
+#: it must never fall through to ``query``.
+_DISPATCH_ACTIONS: frozenset[str] = frozenset(
+    {
+        "trigger_run",
+        "get_run_status",
+        "get_run_logs",
+        "list_runs",
+    },
+)
+
+
+def _dispatch_arg(
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    key: str,
+    default: Any = None,
+) -> Any:
+    """Resolve a dispatch argument from the binding input (FAR-1141).
+
+    ``data`` wins over ``filters`` (the binding's explicit payload slots first,
+    the run-input-merged filters second); an absent/None key yields *default*.
+    """
+    if data.get(key) is not None:
+        return data[key]
+    if filters.get(key) is not None:
+        return filters[key]
+    return default
+
+
+def _dispatch_result_to_state(value: Any) -> Any:
+    """Convert a CI dispatch result into plain, JSON-safe state values (FAR-1141).
+
+    ``dataclasses.asdict`` recurses ``CIRun`` / ``CIRunLog`` into dicts but
+    leaves the ``CIRunStatus`` StrEnum member in place (verified: asdict yields
+    the enum member, which is a str SUBCLASS); normalise enum members to plain
+    ``str`` so run state carries a plain string. Never raises.
+    """
+    if _dc_is_dataclass(value) and not isinstance(value, type):
+        return _dispatch_result_to_state(_dc_asdict(value))
+    if isinstance(value, list):
+        return [_dispatch_result_to_state(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _dispatch_result_to_state(item) for key, item in value.items()}
+    if isinstance(value, StrEnum):
+        return str(value)
+    return value
+
+
+async def _run_connector_dispatch(
+    connector: Any,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    dispatch_action: str,
+) -> Any:
+    """FAR-1141: route a ``dispatch`` operation to the named CI-runner method.
+
+    ``pipeline_id`` resolves from the binding input (``data`` then ``filters``)
+    and falls back to *resource*. An unknown ``dispatch_action`` raises a clear
+    ``ValueError`` — a dispatch never silently falls through to ``query``.
+    Results (``CIRun`` / ``CIRunLog`` / ``list[CIRun]``) are converted to plain
+    dicts for state.
+    """
+    from modulo.connectors.base import CIRunStatus
+
+    if dispatch_action == "trigger_run":
+        pipeline_id = str(_dispatch_arg(filters, data, "pipeline_id", resource))
+        branch = str(_dispatch_arg(filters, data, "branch", "") or "")
+        raw_variables = _dispatch_arg(filters, data, "variables")
+        variables = dict(raw_variables) if isinstance(raw_variables, dict) else None
+        result = await connector.trigger_run(pipeline_id=pipeline_id, branch=branch, variables=variables)
+    elif dispatch_action == "get_run_status":
+        run_id = _dispatch_arg(filters, data, "run_id")
+        if not run_id:
+            raise ValueError("dispatch get_run_status requires a 'run_id' input")
+        result = await connector.get_run_status(run_id=str(run_id))
+    elif dispatch_action == "get_run_logs":
+        run_id = _dispatch_arg(filters, data, "run_id")
+        if not run_id:
+            raise ValueError("dispatch get_run_logs requires a 'run_id' input")
+        raw_cursor = _dispatch_arg(filters, data, "cursor")
+        result = await connector.get_run_logs(run_id=str(run_id), cursor=str(raw_cursor) if raw_cursor else None)
+    elif dispatch_action == "list_runs":
+        raw_pipeline_id = _dispatch_arg(filters, data, "pipeline_id")
+        raw_status = _dispatch_arg(filters, data, "status")
+        status: CIRunStatus | None = None
+        if raw_status is not None and raw_status != "":
+            status = raw_status if isinstance(raw_status, CIRunStatus) else CIRunStatus(str(raw_status))
+        limit = int(_dispatch_arg(filters, data, "limit", 20))
+        result = await connector.list_runs(
+            pipeline_id=str(raw_pipeline_id) if raw_pipeline_id else None,
+            status=status,
+            limit=limit,
+        )
+    else:
+        raise ValueError(
+            f"Unknown dispatch_action {dispatch_action!r} — expected one of {sorted(_DISPATCH_ACTIONS)}",
+        )
+    return _dispatch_result_to_state(result)
+
+
 async def _run_connector_action(
     connector: Any,
     op: str,
     resource: str,
     filters: dict[str, Any],
     data: dict[str, Any],
+    *,
+    dispatch_action: str = "trigger_run",
 ) -> Any:
-    """Execute a connector ``write``/``query`` action and return its result."""
+    """Execute a connector ``write``/``query``/``dispatch`` action and return its result.
+
+    FAR-1141: ``op == "dispatch"`` routes to the CI-runner method named by
+    *dispatch_action* (guarded — an unknown selector raises ``ValueError``,
+    never a silent fall-through to ``query``). ``write``/``query`` behaviour is
+    unchanged.
+    """
     from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 
+    if op == "dispatch":
+        return await _run_connector_dispatch(connector, resource, filters, data, dispatch_action)
     if op == "write":
         payload = ConnectorPayload(resource=resource, data=data)
         return await connector.write(payload)
@@ -6063,13 +6179,24 @@ def make_connector_fn(
     session_factory: Callable[..., Any] | None = None,
 ) -> Any:
     """Return a decorated async node function that resolves a connector
-    from the ConnectorHub and executes a connector action (query/write).
+    from the ConnectorHub and executes a connector action (query/write/dispatch).
 
     The node_def must have a 'connector_binding' dict with:
       - instance_id: uuid of the ConnectorInstance
       - type: connector type (e.g. 'shell')
-      - operation: 'query' or 'write' (optional, default 'query')
+      - operation: 'query', 'write' or 'dispatch' (optional; defaults to
+        'query', or to 'dispatch' when node_type == 'dispatch')
+      - dispatch_action: for operation 'dispatch', the CI-runner method to
+        call (default 'trigger_run')
       - input: dict of input parameters (optional)
+
+    FAR-1141: ``operation == "dispatch"`` routes to the CI-runner method named
+    by ``dispatch_action`` (``trigger_run`` / ``get_run_status`` /
+    ``get_run_logs`` / ``list_runs``). An unknown ``dispatch_action`` raises
+    ``ValueError`` at construction — a misconfigured dispatch node never
+    compiles into a query. A dispatch is NOT a write for FAR-458 idempotency
+    purposes: it never enters the write gate / intent-marker / delivery-stamp
+    path below (only ``op == "write"`` does).
 
     ``session_factory`` (FAR-458) enables the connector-write UNKNOWN-recovery
     read-before-write dedupe: for a ``write`` operation the node loads the run's
@@ -6105,7 +6232,19 @@ def make_connector_fn(
     """
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
-    op: str = binding.get("operation", "query")
+    node_type: str = str(node_def.get("node_type", "agent"))
+    raw_op: Any = binding.get("operation")
+    # FAR-1141: a dispatch node whose binding carries no explicit ``operation``
+    # defaults to the dispatch verb; everything else keeps the legacy 'query'
+    # default.
+    op: str = str(raw_op) if raw_op else ("dispatch" if node_type == "dispatch" else "query")
+    dispatch_action: str = str(binding.get("dispatch_action") or "trigger_run")
+    if op == "dispatch" and dispatch_action not in _DISPATCH_ACTIONS:
+        # Fail loud at graph-build time — never a silent fall-through to query.
+        raise ValueError(
+            f"Unknown dispatch_action {dispatch_action!r} for node {node_id!r} — "
+            f"expected one of {sorted(_DISPATCH_ACTIONS)}",
+        )
     # FAR-418: node-level capability_scope. ``allowed_connectors`` narrows (never
     # widens) which connectors this node may resolve — deny-by-default within the
     # scope. Absent/empty (the UNRESTRICTED default) preserves the pre-scope
@@ -6153,7 +6292,9 @@ def make_connector_fn(
             return suppress_envelope
 
         try:
-            result = await _run_connector_action(connector, op, resource, filters, data)
+            result = await _run_connector_action(
+                connector, op, resource, filters, data, dispatch_action=dispatch_action
+            )
         except Exception as exc:
             return await _connector_action_failure(
                 session_factory,
