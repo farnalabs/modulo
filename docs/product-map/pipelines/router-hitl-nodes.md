@@ -64,6 +64,11 @@ registry (`feat-router`).
       constraint (migration `0150_add_router_no_match_status`), echoed in
       `frontend/src/constants/runStatuses.ts` and analyzable via the analytics
       status filter
+- [x] `rejected` (FAR-1487) joins the same closed run-status vocabulary as a
+      terminal, non-failure status (HITL reject with no reject route; migration
+      `0281_add_rejected_run_status` widens `ck_runs_status` and the
+      workspace-drift sweep partial index): classified `excluded`, never
+      advances a lifecycle journey, excluded from failure analytics
 - [x] Router rule targets are excluded from pipeline entry-point resolution
 - [x] `hitl` is an API-authorable node type; the HITL node's `hitl_config` is
       injected onto each outgoing edge and flows through the identical legacy

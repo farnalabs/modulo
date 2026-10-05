@@ -127,7 +127,8 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `email_delivered` / `no_work` / `no_delivery` / `needs_human` /
       `source_error` / `parse_error` / `operator_or_hitl_cancelled` /
       `hitl_timeout` / `budget_exceeded` / `compensation_failed` /
-      `router_no_match` / `classifier_error`), `delivered_pr_urls`, `computed_at`,
+      `router_no_match` / `hitl_rejected` / `hitl_superseded` /
+      `classifier_error`), `delivered_pr_urls`, `computed_at`,
       and the `work_intact` / `declared_success_nodes` terminalization-fact
       metadata. A classifier/persist failure writes a fail-closed `unclassified`
       marker (`crud/run.py` `_write_unclassified_classification`, SAVEPOINT-fenced
