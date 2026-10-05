@@ -959,7 +959,8 @@ def response_contains_report(period: str, request: Any) -> None:
 @then("the response contains one scheduled report")
 def response_contains_one_report(request: Any) -> None:
     body = request.node.response.json()
-    assert isinstance(body, list) and len(body) == 1, f"Expected 1 scheduled report, got {body!r}"
+    assert isinstance(body, list), f"Expected 1 scheduled report, got {body!r}"
+    assert len(body) == 1, f"Expected 1 scheduled report, got {body!r}"
     assert body[0].get("id") == str(_REPORT_ID)
 
 
@@ -1036,7 +1037,8 @@ def admin_dismiss_anomaly_by_id(anomaly_id: str, request: Any, ctx: dict[str, An
 @then("the response contains one fresh anomaly")
 def response_contains_one_anomaly(request: Any) -> None:
     body = request.node.response.json()
-    assert isinstance(body, list) and len(body) == 1, f"Expected 1 anomaly, got {body!r}"
+    assert isinstance(body, list), f"Expected 1 anomaly, got {body!r}"
+    assert len(body) == 1, f"Expected 1 anomaly, got {body!r}"
 
 
 @then("the anomaly carries a persisted id")
@@ -1185,5 +1187,6 @@ def response_contains_component_name(expected: str, request: Any) -> None:
 @then("the response contains the configured components")
 def response_contains_configured_components(request: Any) -> None:
     body = request.node.response.json()
-    assert isinstance(body, list) and len(body) == 1, f"Expected 1 configured component, got {body!r}"
+    assert isinstance(body, list), f"Expected 1 configured component, got {body!r}"
+    assert len(body) == 1, f"Expected 1 configured component, got {body!r}"
     assert body[0].get("name") == "llm_tokens"

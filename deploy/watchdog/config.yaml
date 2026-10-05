@@ -1,13 +1,19 @@
 # Modulo health watchdog - Gatus configuration.
 #
-# Consumed by the `watchdog` service in docker-compose.yml (mounted at
-# /config/config.yaml; also baked into the image so a bare `docker run` of the
-# derived image monitors Modulo rather than upstream's demo endpoints).
+# Consumed by the `watchdog` service in docker-compose.yml AND in
+# deploy/compose/docker-compose.prod.yml (mounted at /config/config.yaml; also
+# baked into the image so a bare `docker run` of the derived image monitors
+# Modulo rather than upstream's demo endpoints).
 #
 # Environment substitution: Gatus expands `${VAR}` BEFORE the file is parsed as
 # YAML, so the six variables below are the same ones the app uses for HITL
 # email alerts - one SMTP setup serves both. Unset variables expand to an empty
 # value, which is the supported "monitoring on, alerting off" default.
+# `${WATCHDOG_PROBE_URL}` (the endpoint target) works the same way, but Gatus
+# has NO default syntax: `${VAR:-default}` expands to an EMPTY value and the
+# container panics (verified against v5.37.0), so its default is baked as the
+# image's `WATCHDOG_PROBE_URL` ENV (see Dockerfile) and each compose file
+# overrides it for its own topology.
 #
 # Port is deliberately UNQUOTED. With SMTP_PORT unset it expands to an empty
 # scalar, YAML reads that as null, and Gatus rejects the provider with
@@ -33,7 +39,12 @@ alerting:
 
 endpoints:
   - name: Modulo backend readiness
-    url: http://backend:8000/healthz/ready
+    # Deployment-specific target: the root compose runs split services and
+    # probes backend:8000 directly; the production compose runs the all-in-one
+    # image, where the app is service `modulo` behind nginx on port 80 - its
+    # uvicorn listens on 127.0.0.1:8000, loopback-bound inside the container
+    # and unreachable from other containers on the compose network.
+    url: ${WATCHDOG_PROBE_URL}
     interval: 60s
     client:
       timeout: 10s
@@ -50,7 +61,7 @@ endpoints:
       - "[BODY].status == ok"
     alerts:
       - type: email
-        description: "Modulo backend is unhealthy (http://backend:8000/healthz/ready)"
+        description: "Modulo is unhealthy (${WATCHDOG_PROBE_URL})"
         failure-threshold: 3
         success-threshold: 2
         send-on-resolved: true

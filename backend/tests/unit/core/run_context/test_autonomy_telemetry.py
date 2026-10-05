@@ -84,7 +84,8 @@ async def test_emits_event_with_expected_payload(monkeypatch: pytest.MonkeyPatch
     assert captured["payload_json"]["actor"] == "system"
     summary = captured["payload_json"]["summary"]
     assert summary.startswith('Autonomy level "fully_autonomous" applied to run')
-    assert str(run_id)[:8] and str(run_id)[:8] in summary
+    assert str(run_id)[:8]
+    assert str(run_id)[:8] in summary
     assert "gate g1" in summary
     assert "skipped" in summary
 

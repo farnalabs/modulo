@@ -1174,7 +1174,8 @@ class TestParkExpiredHitlRuns:
         assert not [s for s in statements if "UPDATE hitl_claims" in s]
         # The status literals are bound from the shared constants (qa F15).
         park_params = [p for p in engine.params_seen if "parked_status" in p]
-        assert park_params and park_params[0]["parked_status"] == "hitl_parked"
+        assert park_params
+        assert park_params[0]["parked_status"] == "hitl_parked"
         assert park_params[0]["awaiting_status"] == "awaiting_human"
         # Loud structured event per parked run.
         assert any("hitl_park.parked" in r.message for r in caplog.records)
@@ -1204,7 +1205,8 @@ class TestParkExpiredHitlRuns:
         park_stmts = [s for s in statements if "UPDATE runs SET status" in s]
         assert park_stmts
         park_params = [p for p in engine.params_seen if "grace_seconds" in p]
-        assert park_params and park_params[0]["grace_seconds"] == 60
+        assert park_params
+        assert park_params[0]["grace_seconds"] == 60
 
     async def test_sweep_failure_raises_with_partial_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         parked_row = _parked_row()

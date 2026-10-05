@@ -43,7 +43,10 @@ def _covered(patterns: list[str], path: str) -> bool:
 
 
 def test_gate0_paths_file_exists_and_is_nonempty() -> None:
-    assert _PATHS_FILE is not None and _PATHS_FILE.is_file(), (
+    assert _PATHS_FILE is not None, (
+        f"{_PATHS_FILE} must exist: the Gate 0 workflow trigger filter is checked in, not inline"
+    )
+    assert _PATHS_FILE.is_file(), (
         f"{_PATHS_FILE} must exist: the Gate 0 workflow trigger filter is checked in, not inline"
     )
     assert _load_patterns(), "the Gate 0 paths filter must contain at least one always-run pattern"

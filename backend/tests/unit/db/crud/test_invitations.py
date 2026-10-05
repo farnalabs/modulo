@@ -70,7 +70,8 @@ class TestCreateInvitation:
         )
 
         assert isinstance(invitation, Invitation)
-        assert isinstance(plaintext, str) and len(plaintext) >= 32
+        assert isinstance(plaintext, str)
+        assert len(plaintext) >= 32
         # The persisted hash is the SHA-256 of the returned plaintext.
         from modulo.util.one_time_token import hash_token
 
