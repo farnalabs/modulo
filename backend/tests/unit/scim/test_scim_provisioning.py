@@ -6,14 +6,18 @@ from datetime import UTC, datetime
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
-from modulo.api.routes.scim import _parse_member_uuid
+from modulo.api.routes.scim import _MSG_NO_ACTIVE_ADMIN_EXISTS, _parse_member_uuid, get_scim_audit_principal
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
+from modulo.core.audit_coverage import audit_session
 from modulo.core.feature_flags import CommunityTier, DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -29,6 +33,38 @@ def scim_feature_enabled() -> Generator[None, None, None]:
     app.dependency_overrides[get_scim_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
     yield
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def stub_scim_audit() -> Generator[None, None, None]:
+    """FAR-1472: stub the two seams the fail-closed ``audited(...)`` dependency
+    needs — the fresh ``audit_session`` (a real engine; the unit tier has no
+    database) and the SCIM actor resolver, whose admin-caller query runs on the
+    route session these tests replace with a bare double. The dependency itself
+    (and its fail-closed policy) still runs. Covered end-to-end for the real
+    resolver by ``TestScimAuditPrincipal`` below."""
+
+    async def _audit_session() -> AsyncGenerator[AsyncMock, None]:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        yield session
+
+    async def _audit_principal() -> TenantPrincipal:
+        return TenantPrincipal(
+            username="scim",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+
+    app.dependency_overrides[audit_session] = _audit_session
+    app.dependency_overrides[get_scim_audit_principal] = _audit_principal
+    yield
+    app.dependency_overrides.pop(audit_session, None)
+    app.dependency_overrides.pop(get_scim_audit_principal, None)
 
 
 def _make_settings() -> Settings:
@@ -1294,3 +1330,49 @@ class TestLicenseGate:
         )
         app.dependency_overrides.clear()
         assert resp.status_code == 402
+
+
+# ── SCIM audit actor (FAR-1472) ──────────────────────────────────────
+
+
+class TestScimAuditPrincipal:
+    """``get_scim_audit_principal`` — the principal ``audited()`` writes with.
+
+    The route-level stubs in ``stub_scim_audit`` replace this resolver, so its
+    real behaviour (admin-caller lookup, refusal when there is no honest actor)
+    is pinned here directly.
+    """
+
+    @staticmethod
+    def _session_with_caller(caller: uuid.UUID | None) -> AsyncMock:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        result = MagicMock()
+        result.first.return_value = None if caller is None else (caller,)
+        session.execute = AsyncMock(return_value=result)
+        return session
+
+    async def test_resolves_the_org_admin_as_the_audit_actor(self) -> None:
+        session = self._session_with_caller(_USER_ID)
+        principal = await get_scim_audit_principal(
+            scim=ScimPrincipal(organisation_id=_ORG_ID),
+            session=session,
+        )
+        assert isinstance(principal, TenantPrincipal)
+        assert principal.account_id == _USER_ID
+        assert principal.organisation_id == _ORG_ID
+        assert principal.org_role == "admin"
+
+    async def test_refuses_the_mutation_when_no_active_admin_exists(self) -> None:
+        session = self._session_with_caller(None)
+        with pytest.raises(HTTPException) as excinfo:
+            await get_scim_audit_principal(
+                scim=ScimPrincipal(organisation_id=_ORG_ID),
+                session=session,
+            )
+        assert excinfo.value.status_code == 409
+        assert isinstance(excinfo.value.detail, dict)
+        assert excinfo.value.detail["detail"] == _MSG_NO_ACTIVE_ADMIN_EXISTS

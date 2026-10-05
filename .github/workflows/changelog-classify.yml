@@ -26,6 +26,8 @@ on:
 
 permissions:
   contents: read
+  # The live-label read hits GET /repos/{repo}/issues/{n}/labels, so the
+  # precise scope is `issues: read` (a PR is an issue for this endpoint).
   issues: read
 
 # NO workflow-level concurrency (deliberate; mirrors fast-lane-classify.yml).
@@ -79,18 +81,19 @@ jobs:
           # Prefer the CURRENT label set over the event snapshot (see the
           # header comment). A changelog label applied moments after the
           # triggering event may not be live yet, so re-check with a short
-          # bounded grace window before declaring the gate violated.
-          #
-          # A successful labels API call is authoritative even when it returns
-          # an empty set: that is how the gate notices a REMOVED changelog
-          # label. The event payload is the fallback only while every API call
-          # fails, so distinguish success from failure by exit status rather
-          # than treating an empty response as an empty label set.
+          # bounded grace window before declaring the gate violated. The event
+          # payload is the fallback whenever the API call fails.
           LABELS_JSON="$EVENT_LABELS_JSON"
           HAS_LABEL="false"
           for attempt in 1 2 3; do
-            if LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '[.[].name]' 2>/dev/null)"; then
-              LABELS_JSON="$LIVE_LABELS_JSON"
+            # --paginate: a changelog:* label beyond the first page (the
+            # labels endpoint returns 30 per page) must still be seen. gh
+            # applies --jq per page, so collect the names as newline-separated
+            # text and rebuild a single JSON array locally; --slurp is not
+            # available on this runner's gh. On API failure the event payload
+            # stays as the LABELS_JSON fallback.
+            if LIVE_LABELS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null)"; then
+              LABELS_JSON="$(printf '%s\n' "$LIVE_LABELS" | jq -Rsc 'split("\n") | map(select(length>0))')"
             fi
             # Exactly one of the four labels (any label starting with
             # "changelog:") satisfies the gate. Labels arrive as a JSON array

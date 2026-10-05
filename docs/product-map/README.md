@@ -1010,6 +1010,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-analytics` (`analytics/analytics.md`). `_ORPHANED_BDD_FEATURES` stays
 > empty.
 
+> **Closed this walk (2026-10-05):** tracked `feat-evals`'s FAR-967 chunk 10
+> policy-gate operator-control + pin-integrity surface —
+> `PATCH /api/v1/evals/{eval_id}/policy-gate/toggle` (admin-only, symmetric
+> `enabled_at`/`disabled_at` stamping, `policy_gate.toggled` audit, break-glass
+> deny), the run-start `policy_gate_pins_fingerprint` re-verification, and the
+> pin-governed evaluation universe (`_resolve_governed_gate`) — in the manifest
+> feature registry and `improve/evals.md`. Also normalised the
+> `EvalEditorView` policy-gate surface and three `PageHeader` titles from the
+> `data-test-id` typo to `data-testid`, registered the now-visible testids in
+> the manifest `elements:` inventory, and added a regression guard
+> (`test_no_data_test_id_typo_in_frontend`) so the typo can never hide a
+> shipped control from the element guard or Playwright's `getByTestId` again.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

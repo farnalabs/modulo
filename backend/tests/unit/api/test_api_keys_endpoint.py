@@ -15,6 +15,7 @@ from modulo.api.main import app
 from modulo.auth.api_key import _UNSET
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_coverage import audit_session
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -24,6 +25,25 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _KEY_ID = uuid.uuid4()
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session() -> Generator[None, None, None]:
+    """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
+    fresh ``audit_session`` (a real engine — no database in the unit tier), so
+    stub that seam; the dependency itself still runs."""
+
+    async def _override() -> AsyncGenerator[AsyncMock, None]:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        yield session
+
+    app.dependency_overrides[audit_session] = _override
+    yield
+    app.dependency_overrides.pop(audit_session, None)
 
 
 def _make_settings() -> Settings:
