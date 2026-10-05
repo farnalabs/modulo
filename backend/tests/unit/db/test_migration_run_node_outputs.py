@@ -78,7 +78,9 @@ def test_terminal_literal_equals_sorted_app_constant() -> None:
     """The inlined 9-state terminal list MUST equal sorted(TERMINAL_STATUSES)."""
     module = _load_migration()
     migration_literal = module._TERMINAL_RUN_STATUSES
-    assert migration_literal == tuple(sorted(TERMINAL_STATUSES))
+    # HISTORICAL literal: ``rejected`` (FAR-1487) joined TERMINAL_STATUSES after
+    # this backfill shipped and no pre-0281 row can carry it.
+    assert migration_literal == tuple(sorted(TERMINAL_STATUSES - {"rejected"}))
 
 
 def test_terminal_status_sql_is_built_from_the_status_tuple() -> None:
@@ -282,7 +284,7 @@ def test_sweep_index_migration_0193_chains_and_pins() -> None:
     # The twin discipline: the inlined literal equals sorted(TERMINAL_STATUSES)
     # and the predicate is assembled FROM the tuple (cannot drift by
     # construction).
-    assert tuple(sorted(TERMINAL_STATUSES)) == module._TERMINAL_RUN_STATUSES
+    assert tuple(sorted(TERMINAL_STATUSES - {"rejected"})) == module._TERMINAL_RUN_STATUSES
     expected_predicate = "status IN (" + ", ".join(f"'{s}'" for s in module._TERMINAL_RUN_STATUSES) + ")"
     assert expected_predicate == module._TERMINAL_PREDICATE_SQL
     for status in module._TERMINAL_RUN_STATUSES:

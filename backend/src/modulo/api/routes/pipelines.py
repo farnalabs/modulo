@@ -1210,7 +1210,8 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     )
     hitl_config: dict[str, Any] | None = Field(
         default=None,
-        description="HITL node config (mode, form_schema_ref, reject_target, claim_team_id, claim_expiry_min, "
+        description="HITL node config (mode, form_schema_ref, reject_target, on_reject, claim_team_id, "
+        "claim_expiry_min, "
         "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
         "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
     )
@@ -1576,7 +1577,18 @@ class HitlReviewConfig(BaseModel):
         description="Node ID routed to on HITL rejection for the FAR-210 single-node "
         "correction path. Accepted and persisted through the graph contract; the "
         "reject→correction dispatch seam is tracked as a follow-up (the graph "
-        "compiler currently kicks a rejection back to reject_target).",
+        "compiler currently kicks a rejection back to reject_target). FAR-1487: a "
+        "correction_target WINS over terminating - a gate with one never ends the run "
+        "on reject.",
+    )
+    on_reject: Literal["terminate", "proceed"] | None = Field(
+        default=None,
+        description="FAR-1487: what a rejection does when the gate has NO reject "
+        "destination (no reject_target / reject edge). Absent or 'terminate' (the "
+        "DEFAULT) ENDS the run with the terminal 'rejected' status. 'proceed' "
+        "explicitly continues down the approve path (the pre-FAR-1487 behaviour) - "
+        "continuing is never the silent fallback. A reject destination always wins "
+        "('route'), as does a correction_target.",
     )
     claim_expiry_minutes: int = Field(gt=0, le=1440)
     # FAR-609: every HITL gate defaults to human_only — a graph save that

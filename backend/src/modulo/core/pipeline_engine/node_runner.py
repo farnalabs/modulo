@@ -4775,19 +4775,26 @@ def _hitl_review_approve_reject_result(
     review_id: str,
     decision: Any,
     is_rejected: bool,
+    reject_disposition: str | None = None,
 ) -> dict[str, Any]:
-    """Build the gate result for an approve/reject resume decision."""
+    """Build the gate result for an approve/reject resume decision.
+
+    FAR-1487: a REJECTED artifact carries the gate's compile-time
+    ``reject_disposition`` (``route`` / ``terminate`` / ``proceed``) so the
+    executor finalize can tell a gate whose router ENDED the run (``terminate``)
+    from one that diverted or continued - it must only downgrade the former to
+    ``rejected``.
+    """
     result_status = "rejected" if is_rejected else "approved"
-    gate_result: dict[str, Any] = {
-        "artifacts": [
-            {
-                "node_id": review_id,
-                "status": "interrupted",
-                "result": result_status,
-                "human_data": decision,
-            }
-        ],
+    artifact: dict[str, Any] = {
+        "node_id": review_id,
+        "status": "interrupted",
+        "result": result_status,
+        "human_data": decision,
     }
+    if is_rejected and reject_disposition:
+        artifact["reject_disposition"] = reject_disposition
+    gate_result: dict[str, Any] = {"artifacts": [artifact]}
     # If the human provided modified output, write it into state so
     # downstream nodes receive the human's version instead of the
     # original agent output.
@@ -4856,7 +4863,9 @@ async def _hitl_review_resume_result(
     await _dispatch_reject_correction_best_effort(
         state, decision, review_id, hitl_review_config, session_factory, org_id
     )
-    ar_result = _hitl_review_approve_reject_result(review_id, decision, is_rejected)
+    ar_result = _hitl_review_approve_reject_result(
+        review_id, decision, is_rejected, hitl_review_config.get("reject_disposition")
+    )
     _inject_answer_state(review_id, decision, ar_result)
     return (True, ar_result)
 

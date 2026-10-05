@@ -143,6 +143,7 @@ class AnalyticsStatus(StrEnum):
     STALLED = "stalled"
     BUDGET_EXCEEDED = "budget_exceeded"
     ROUTER_NO_MATCH = "router_no_match"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True)

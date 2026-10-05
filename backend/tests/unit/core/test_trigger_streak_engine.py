@@ -313,7 +313,7 @@ class TestDeactivateSQL:
         sql = ts._NO_DELIVERY_DEACTIVATE_SQL
         _terminal = (
             "'budget_exceeded','cancelled','compensation_failed','complete','cost_ceiling_exceeded',"
-            "'eval_failed','failed','router_no_match','stalled'"
+            "'eval_failed','failed','rejected','router_no_match','stalled'"
         )
         assert f"r.status IN ({_terminal})" in sql
         assert f"r3.status IN ({_terminal})" in sql

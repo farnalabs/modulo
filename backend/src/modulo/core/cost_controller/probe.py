@@ -84,6 +84,7 @@ PROBE_TERMINAL_STATUSES = (
     "router_no_match",
     "cost_ceiling_exceeded",
     "compensation_failed",
+    "rejected",
 )
 
 # Per-org statement/query timeout (one stalled org cannot block the cadence).
@@ -97,7 +98,7 @@ _SAMPLE_QUERY_EXPLAIN_TEMPLATE = (
     "FROM runs "
     "WHERE organisation_id = :org_id "
     "AND status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'cost_ceiling_exceeded', 'router_no_match') "
+    "'budget_exceeded', 'cost_ceiling_exceeded', 'router_no_match', 'rejected') "
     "AND cost_breakdown IS NOT NULL "
     "ORDER BY started_at DESC "
     "LIMIT 50"

@@ -45,18 +45,28 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0280_runs_node_deadline_watchdog_fired_count"
+_CHAIN_HEAD_MIGRATION = "0281_add_rejected_run_status"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
-#: The sweep's WHERE clause as it must read in the index. The IN list is the
-#: ``TERMINAL_STATUSES`` vocabulary (asserted below); parity comparisons
-#: canonicalise order so frozenset iteration can never flake them.
-_PREDICATE = (
+#: The predicate AS 0278 CREATED THE INDEX (historical; FAR-1487's migration
+#: 0281 re-created the index with ``'rejected'`` added to the IN list).
+_PREDICATE_0278 = (
     "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
     "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
     "AND workspace_inputs_drift_detected IS NULL"
 )
+
+#: The sweep's WHERE clause as it must read in the index TODAY (after 0281).
+#: The IN list is the ``TERMINAL_STATUSES`` vocabulary (asserted below);
+#: parity comparisons canonicalise order so frozenset iteration can never
+#: flake them.
+_PREDICATE = (
+    "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
+    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
+    "AND workspace_inputs_drift_detected IS NULL"
+)
+_REJECTED_MIGRATION_PATH = _VERSIONS / "0281_add_rejected_run_status.py"
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +220,7 @@ class TestUpgrade:
         kwargs = calls[0][1]
         pg_where = kwargs.get("postgresql_where")
         assert pg_where is not None, "upgrade must declare postgresql_where"
-        assert _canonical(str(pg_where)) == _canonical(_PREDICATE), (
+        assert _canonical(str(pg_where)) == _canonical(_PREDICATE_0278), (
             f"migration postgresql_where drifted from the sweep predicate:\n{pg_where}"
         )
 
@@ -219,14 +229,17 @@ class TestUpgrade:
         kwargs = calls[0][1]
         sqlite_where = kwargs.get("sqlite_where")
         assert sqlite_where is not None, "upgrade must declare sqlite_where (create_all'd test schemas)"
-        assert _canonical(str(sqlite_where)) == _canonical(_PREDICATE), (
+        assert _canonical(str(sqlite_where)) == _canonical(_PREDICATE_0278), (
             f"migration sqlite_where drifted from the sweep predicate:\n{sqlite_where}"
         )
 
     def test_predicate_statuses_are_the_terminal_vocabulary(self) -> None:
         """A new TERMINAL_STATUSES member must be added to the index
         predicate in the same change — otherwise that status falls outside
-        the partial index and the sweep seq-scans for it."""
+        the partial index and the sweep seq-scans for it. 0278 created the
+        index for the vocabulary of its day; ``rejected`` (FAR-1487) was added
+        by the 0281 re-creation, so 0278's list + ``rejected`` == today's."""
+        assert _statuses(_PREDICATE_0278) | {"rejected"} == frozenset(TERMINAL_STATUSES)
         assert _statuses(_PREDICATE) == frozenset(TERMINAL_STATUSES)
 
     def test_predicate_carries_both_conjuncts(self) -> None:
@@ -286,8 +299,13 @@ class TestSweepPredicateParity:
         sweep's WHERE without widening the index (or vice versa) fails here."""
         sweep_where = _extract_where(_compile(await _sweep_select()))
 
-        calls = _migration_calls("upgrade")
-        index_where = str(calls[0][1]["postgresql_where"])
+        # The index as it stands TODAY is the one migration 0281 (re)created.
+        spec = importlib.util.spec_from_file_location("migration_0281_rejected", _REJECTED_MIGRATION_PATH)
+        assert spec is not None
+        assert spec.loader is not None
+        rejected_migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rejected_migration)
+        index_where = rejected_migration._DRIFT_PREDICATE_NEW
 
         assert _canonical(sweep_where) == _canonical(index_where), (
             "sweep predicate and index postgresql_where disagree — the index would be orphaned.\n"

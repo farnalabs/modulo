@@ -117,7 +117,7 @@ class TestChain:
         # 0279_table_autovacuum_tuning (FAR-1442), then
         # 0280_runs_node_deadline_watchdog_fired_count (FAR-1463),
         # now chain onto this migration, so the single head moved up eight.
-        assert heads == ["0280_runs_node_deadline_watchdog_fired_count"], f"expected a single head, got {heads}"
+        assert heads == ["0281_add_rejected_run_status"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

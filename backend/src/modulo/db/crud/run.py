@@ -173,6 +173,7 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
         "router_no_match",
         "cost_ceiling_exceeded",
         "compensation_failed",
+        "rejected",
     }
 )
 
@@ -3210,7 +3211,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "completed_at = CASE "
     "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
     "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') THEN now() "
+    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') THEN now() "
     "  ELSE completed_at END, "
     "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
     "error_code = CASE WHEN :clear_error_code THEN NULL "
@@ -3355,7 +3356,7 @@ _TRANSITION_SQL = text(
     "UPDATE runs SET status=CAST(:target AS text), "
     "completed_at = CASE WHEN CAST(:target AS text) IN "
     "('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', "
-    "'cost_ceiling_exceeded', 'compensation_failed') "
+    "'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
     "THEN now() ELSE completed_at END, "
     "error_code = COALESCE(CAST(:error_code AS text), error_code), "
     "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "

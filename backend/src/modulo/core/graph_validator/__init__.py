@@ -1447,6 +1447,7 @@ class GraphValidator:
         # FAR-860: response_contract validation (both edge-level
         # hitl_review_config and node-level hitl_config).
         self._check_hitl_review_response_contracts(graph_json, result)
+        self._check_hitl_on_reject(graph_json, result)
 
         self._check_topology(graph_json, result)
         if not result.is_valid:
@@ -2110,6 +2111,25 @@ class GraphValidator:
         """
         for config, source_label in GraphValidator._iter_hitl_review_configs(graph_json):
             GraphValidator._check_hitl_response_contract(config, source_label, result)
+
+    @staticmethod
+    def _check_hitl_on_reject(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Validate ``on_reject`` on all HITL gate configs (FAR-1487).
+
+        Node-level ``hitl_config`` bypasses Pydantic, so this is the only
+        save-time gate for it. ``on_reject`` is optional; when present it must
+        be ``"terminate"`` (the default) or ``"proceed"`` - a typo must fail
+        loudly rather than silently fall back to the default disposition.
+        """
+        for config, source_label in GraphValidator._iter_hitl_review_configs(graph_json):
+            if not isinstance(config, dict):
+                continue
+            on_reject = config.get("on_reject")
+            if on_reject is not None and on_reject not in ("terminate", "proceed"):
+                result.error(
+                    "HITL_ON_REJECT_INVALID",
+                    f"HITL review on {source_label}: on_reject must be 'terminate' or 'proceed', got {on_reject!r}",
+                )
 
     @staticmethod
     def _check_loop_edges(
