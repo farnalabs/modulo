@@ -1319,6 +1319,8 @@ export default {
       "triggered_by": "Triggered by",
       "heartbeat": "Heartbeat",
       "queued": "queued",
+      "queued_waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
+      "queued_starting_soon": "Queued — starting soon",
       "empty_state_description": "Try adjusting your filters or trigger a pipeline run.",
       "deleted_pipeline": "(deleted pipeline)",
       "run_count": "1 run | {count} runs",
