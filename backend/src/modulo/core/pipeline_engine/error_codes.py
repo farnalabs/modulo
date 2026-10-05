@@ -53,6 +53,13 @@ _CODE_HARNESS_DISPATCH_FAILED = "harness.dispatch_failed"
 _CODE_HARNESS_HEARTBEAT_STALE = "harness.heartbeat_stale"
 _CODE_NODE_TIMEOUT = "node.timeout"
 _CODE_NODE_RUNAWAY = "node.runaway"
+# FAR-1141: a ``dispatch`` node's ``await_completion`` window expired before the
+# customer's substrate reported a TERMINAL run status. Distinct from
+# ``node.timeout`` (the node's own deadline guard) because the node did exactly
+# what it was told — it waited, polled, and the EXTERNAL run never settled — and
+# from ``connector.*`` because no connector call failed: the substrate simply
+# stayed non-terminal for the whole window.
+_CODE_DISPATCH_WAIT_TIMEOUT = "dispatch.wait_timeout"
 _CODE_EVAL_BLOCKED = "eval.blocked"
 _CODE_CONTRACT_SCHEMA = "contract.schema"
 _CODE_SANDBOX_RATE_LIMITED = "sandbox.rate_limited"
@@ -474,6 +481,24 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Node was cancelled.",
     ),
+    # FAR-1141: the dispatch node's own wait guard expired. ``error_class`` is
+    # "node" (a node-level guard, like ``node.deadline_exceeded``) — NOT a new
+    # class, so the run-classifier's ``_SOURCE_ERROR_CLASSES`` still buckets it
+    # as a source/infra failure. ``retryable=False`` is the CONTRACT: the job was
+    # already fired on the customer's substrate, so an auto-retry would fire a
+    # SECOND external job (the executor's run-level ``retry_policy`` is the
+    # consumer that must never pick this up; the dispatch node is additionally
+    # persisted ``idempotent=false`` so every retry path is suppressed —
+    # api/routes/pipelines.py ``_validate_dispatch_node``).
+    _CODE_DISPATCH_WAIT_TIMEOUT: ErrorCodeSpec(
+        error_class="node",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Dispatched substrate run did not reach a terminal status within the node's "
+            "wait_timeout; never retried (a retry would fire a second external job)."
+        ),
+    ),
     # --- run-level codes -------------------------------------------------
     "run.superseded": ErrorCodeSpec(
         error_class="run",
@@ -703,6 +728,12 @@ LEGACY_ALIASES: dict[str, str] = {
     "runaway": _CODE_NODE_RUNAWAY,
     "runaway.tokens_exceeded": _CODE_NODE_RUNAWAY,
     "node_cancelled": "node.cancelled",
+    # FAR-1141: the executor's generic catch publishes the raw exception class
+    # name (``type(exc).__name__``) for a dispatch node whose ``await_completion``
+    # window expired — canonicalized to the registry's never-retryable
+    # ``dispatch.wait_timeout`` entry so it never resolves through the
+    # ``harness.unknown`` fallback and never presents as a retryable timeout.
+    "DispatchWaitTimeoutError": _CODE_DISPATCH_WAIT_TIMEOUT,
     # Run-level.
     "executor_superseded": "run.superseded",
     # FAR-1329: the age-bound wedge terminalizer writes ``no_progress`` — its

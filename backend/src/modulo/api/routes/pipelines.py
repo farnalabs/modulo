@@ -1316,6 +1316,28 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         "(each with dest/ref/url) checked out into the sandbox workspace. Only valid "
         "on sandbox_agent nodes. Validated for safe dest traversal, ref.kind, and URL scheme.",
     )
+    # FAR-1141 slice 2: dispatch wait semantics. Declared on the node (NOT folded
+    # into connector_binding) so the API does not silently DROP them on save — a
+    # dropped field would create permanent plan drift (the engine reads both from
+    # node_def). Valid ONLY on node_type="dispatch"; enforced by
+    # _validate_dispatch_only_fields below.
+    await_completion: StrictBool = Field(
+        default=False,
+        description="dispatch nodes only, dispatch_action='trigger_run': after firing the "
+        "job ONCE, poll get_run_status until the substrate reports a terminal status. "
+        "False (default) = fire-and-forget: the node completes as soon as the job ref "
+        "returns. Only meaningful with dispatch_action='trigger_run'.",
+    )
+    wait_timeout: float | None = Field(
+        default=None,
+        gt=0,
+        le=3600,
+        description="dispatch nodes only: seconds to wait for a terminal substrate status "
+        "when await_completion is true (> 0, <= 3600; default 300 when unset). Expiry "
+        "raises the terminal dispatch.wait_timeout error — never retried, because a "
+        "retry would fire a second job on the customer's substrate. Keep it below the "
+        "node's timeout_seconds so this error (not the node deadline) is what fires.",
+    )
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
@@ -1363,6 +1385,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         self._validate_sandbox_only_fields()
         self._validate_stdout_retention()
         self._validate_agent_only_fields()
+        self._validate_dispatch_only_fields()
         self._validate_output_schema_pin_consistency()
         return self
 
@@ -1404,6 +1427,28 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     def _validate_agent_only_fields(self) -> None:
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
+
+    def _validate_dispatch_only_fields(self) -> None:
+        """FAR-1141: ``await_completion`` / ``wait_timeout`` are dispatch-only fields.
+
+        A meaningful value on any other node type would be a declared-but-UNREAD
+        field — the engine reads both only for a dispatch node's dispatch
+        operation — so it is rejected rather than silently ignored (same posture
+        as ``_validate_sandbox_only_fields`` / ``_validate_stdout_retention``).
+
+        Checked by VALUE, not by presence: an absent field and a default-valued
+        one (``false`` / ``null``) are the same state at rest, and a payload that
+        round-trips every key (a form that echoes defaults for every node type)
+        must keep saving. ``await_completion``'s bool requirement is enforced by
+        its ``StrictBool`` field type — a lax-coerced ``"true"`` / ``1`` is
+        rejected at parse time instead of being silently armed.
+        """
+        if self.node_type == "dispatch":
+            return
+        if self.await_completion:
+            raise ValueError("Only dispatch nodes can set await_completion=True")
+        if self.wait_timeout is not None:
+            raise ValueError("Only dispatch nodes can set wait_timeout")
 
     def _validate_stdout_retention(self) -> None:
         """FAR-792: per-node stdout/stderr retention is a sandbox_agent-only surface.
@@ -1549,12 +1594,45 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         stdout-retention / agent-only fields are rejected for EVERY non-sandbox
         / non-agent type by the shared ``_validate_sandbox_only_fields`` /
         ``_validate_stdout_retention`` / ``_validate_agent_only_fields``
-        checks, so a dispatch node cannot set them either.
+        checks, so a dispatch node cannot set them either; the dispatch-only
+        wait fields are rejected on every other node type by
+        ``_validate_dispatch_only_fields``.
+
+        FAR-1141 slice 2:
+        * ``await_completion`` / ``wait_timeout`` are only read when the binding
+          actually routes the ``dispatch`` verb — declared on a dispatch node
+          whose binding queries instead would be a silent no-op, so it is
+          rejected here (the engine raises the same condition at graph build).
+        * A binding that can FIRE a job (``operation='dispatch'`` +
+          ``dispatch_action='trigger_run'``) is persisted
+          ``idempotent=false``. ``trigger_run`` creates a job on the customer's
+          own substrate, so re-running the graph would fire a SECOND job — the
+          executor's FAR-295 check suppresses BOTH retry paths (the run-level
+          ``retry_policy`` re-dispatch and the node-level transient retry) for
+          any graph containing a non-idempotent node. That is the structural
+          half of "a ``dispatch.wait_timeout`` failure is never retried into a
+          second external job"; the registry's ``retryable=False`` is the other.
+          An explicitly-passed ``idempotent=true`` is overridden (and logged) —
+          the value would be unsafe to persist, and a payload that round-trips
+          defaults must still save.
         """
         if self.connector_binding is None:
             raise ValueError("Dispatch nodes require a connector_binding")
         if self.agent_id is not None:
             raise ValueError("Dispatch nodes cannot reference an agent")
+        if self.connector_binding.operation != "dispatch" and (self.await_completion or self.wait_timeout is not None):
+            raise ValueError(
+                "await_completion / wait_timeout require connector_binding.operation='dispatch'",
+            )
+        if self.connector_binding.operation == "dispatch" and self.connector_binding.dispatch_action == "trigger_run":
+            if self.idempotent and "idempotent" in self.model_fields_set:
+                logger.warning(
+                    "dispatch_node.idempotent_forced_false",
+                    extra={"node_id": str(self.id)},
+                    # Firing a job on the customer's substrate is never safe to
+                    # re-run, so an explicit idempotent=true is overridden.
+                )
+            self.idempotent = False
 
     def _validate_sandbox_env_vars(self) -> None:
         if not self.env_vars:

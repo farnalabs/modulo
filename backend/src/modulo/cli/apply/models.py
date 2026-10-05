@@ -341,6 +341,14 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # real saved graph; value rules are enforced by the REAL API node model when the
     # executor normalises the resolved payload through it.
     workspace_inputs: list[dict[str, Any]] | None = None
+    # FAR-1141 slice 2: dispatch wait semantics (API PipelineGraphNode twin).
+    # Declared here so the CLI does NOT reject it loudly as an unknown field on a
+    # real saved graph. The range mirrors the API model (``wait_timeout`` > 0 and
+    # <= 3600 s) so a bad value fails at LOAD time, before anything is applied;
+    # the dispatch-only / bool rules are enforced by the REAL API node model when
+    # the payload is applied.
+    await_completion: bool = False
+    wait_timeout: float | None = Field(default=None, gt=0, le=3600)
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
