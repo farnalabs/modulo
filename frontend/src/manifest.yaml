@@ -3532,6 +3532,9 @@ elements:
         type: element
         dynamic_testid: false
     /runs:
+      - testid: runs-list-loading
+        type: element
+        dynamic_testid: false
       - testid: runs-list-aggregate-cost
         type: element
         dynamic_testid: false
