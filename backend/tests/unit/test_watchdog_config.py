@@ -190,6 +190,22 @@ def test_watchdog_prod_compose_wiring_matches_the_root_service():
     assert service["healthcheck"]["test"][0] == "CMD"
 
 
+def test_watchdog_prod_compose_healthcheck_keeps_the_root_start_period():
+    """The prod healthcheck probes every 5s, so it needs a start_period.
+
+    Without one, the probes fired while the dashboard is still starting count
+    against ``retries`` and a slow start shows a transient ``unhealthy``. The
+    root compose already sets ``start_period: 10s``; the prod service must not
+    drop it.
+    """
+    prod = yaml.safe_load(_PROD_COMPOSE_PATH.read_text(encoding="utf-8"))
+    root = yaml.safe_load(_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+    prod_healthcheck = prod["services"]["watchdog"]["healthcheck"]
+    root_healthcheck = root["services"]["watchdog"]["healthcheck"]
+    assert prod_healthcheck.get("start_period") == root_healthcheck["start_period"]
+
+
 def test_watchdog_prod_compose_port_is_loopback_only():
     compose = yaml.safe_load(_PROD_COMPOSE_PATH.read_text(encoding="utf-8"))
     ports = compose["services"]["watchdog"]["ports"]
