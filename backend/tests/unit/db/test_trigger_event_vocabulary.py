@@ -144,10 +144,11 @@ _MIGRATION_PATH = (
 # 0277_run_daily_facts_trigger_dispatch_phase chained onto 0276, and
 # 0278_runs_workspace_drift_sweep_index chained onto 0277, and
 # 0279_table_autovacuum_tuning chained onto 0278, and
-# 0280_runs_node_deadline_watchdog_fired_count chained onto 0279_table_autovacuum_tuning as the chain head.
+# 0280_runs_node_deadline_watchdog_fired_count chained onto 0279_table_autovacuum_tuning, and
+# 0281_runs_drop_unused_indexes chained onto 0280_runs_node_deadline_watchdog_fired_count as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0280_runs_node_deadline_watchdog_fired_count"
+_CHAIN_HEAD_MIGRATION_NAME = "0281_runs_drop_unused_indexes"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
