@@ -84,7 +84,7 @@ def _is_rls_set_config_query(stmt: Any) -> bool:
 def configure_rls_preamble(session: AsyncMock) -> AsyncMock:
     """Make the RLS preamble's sync reads sync ``MagicMock`` methods.
 
-    ``set_rls_org`` (``modulo/db/rls.py``) calls ``in_transaction()`` and
+    ``set_rls_org`` (``backend/src/modulo/db/rls.py``) calls ``in_transaction()`` and
     ``get_bind()`` synchronously. On a bare ``AsyncMock`` those attributes are
     async mocks whose calls return never-awaited coroutines, leaking
     ``PytestUnraisableException`` noise (FAR-739). The sqlite dialect routes
@@ -96,6 +96,33 @@ def configure_rls_preamble(session: AsyncMock) -> AsyncMock:
     bind.dialect.name = "sqlite"
     session.get_bind = MagicMock(return_value=bind)
     return session
+
+
+def make_empty_execute_result(*, scalar_value: int | None = None) -> MagicMock:
+    """Build a plain-``MagicMock`` DB result whose readers all report "no rows".
+
+    A plain ``MagicMock`` is required — never a child of the ``AsyncMock``
+    session: attribute children of an ``AsyncMock`` are themselves AsyncMocks
+    whose calls return never-awaited coroutines, the source of
+    ``PytestUnraisableException`` noise (FAR-739). Shared by the strict-mock
+    opt-in below and the pipeline-engine capacity mocks so the empty-result
+    shape cannot drift between the two call sites.
+
+    ``scalar``/``scalar_one`` return ``scalar_value`` (default ``None`` for a
+    missing row; the strict mock passes ``0`` for its documented no-cap
+    contract).
+    """
+    result = MagicMock()
+    result.scalar.return_value = scalar_value
+    result.scalar_one.return_value = scalar_value
+    result.scalar_one_or_none.return_value = None
+    result.first.return_value = None
+    result.fetchone.return_value = None
+    result.all.return_value = []
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    result.scalars.return_value = scalars_mock
+    return result
 
 
 def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
@@ -110,14 +137,7 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
     nested.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=nested)
     if allow_empty_execute:
-        result = MagicMock()
-        result.scalar.return_value = 0
-        result.scalar_one.return_value = 0
-        result.scalar_one_or_none.return_value = None
-        result.first.return_value = None
-        result.all.return_value = []
-        result.scalars.return_value.all.return_value = []
-        session.execute = AsyncMock(return_value=result)
+        session.execute = AsyncMock(return_value=make_empty_execute_result(scalar_value=0))
     else:
         execute = AsyncMock()
 
