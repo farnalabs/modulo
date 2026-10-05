@@ -11,7 +11,7 @@ are accepted under EITHER the field's environmental alias
 (case-insensitively) or the field's own name — ``MODULO_ENV`` and
 ``environment`` both set the environment field, and ``ALERT_CONTEXT`` and
 ``alert_context`` both set the context field. Before FAR-1500 only the alias
-worked for ``environment`` (a ``environment``-named key was silently dropped
+worked for ``environment`` (an ``environment``-named key was silently dropped
 by ``extra="ignore"``, because the name does not case-fold onto ``MODULO_ENV``);
 the suite passes both fields as their aliases here (``MODULO_ENV`` /
 ``ALERT_CONTEXT``), exactly as the rest of the suite passes ``ALERT_EMAIL_TO``.

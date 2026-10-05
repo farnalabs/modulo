@@ -246,9 +246,10 @@ def test_alert_context_accepts_the_env_alias_key() -> None:
 
 
 def test_alert_context_accepts_the_field_name_key() -> None:
-    """``alert_context`` previously worked by case-folding onto its own
-    ``ALERT_CONTEXT`` alias — now it works by name too, for the same reason
-    ``environment`` does, not by accident of spelling."""
+    """Regression pin: ``alert_context=`` stays accepted as a constructor key.
+    Pre-FAR-1500 this already worked by case-folding onto its own
+    ``ALERT_CONTEXT`` alias, so it does not demonstrate the fix — it pins that
+    the field name keeps working once ``populate_by_name`` is set."""
     assert _make(alert_context="ops note").alert_context == "ops note"
 
 

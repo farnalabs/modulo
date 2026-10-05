@@ -971,8 +971,18 @@ class Settings(BaseSettings):
     # well as its alias. Without it, a name-keyed kwarg for an aliased field is
     # silently dropped by ``extra="ignore"`` — ``Settings(environment="prod")``
     # kept the default while ``Settings(MODULO_ENV="prod")`` worked, a silent
-    # footgun for every caller that constructs Settings in Python. Aliases stay
-    # authoritative for env-var sources; this only widens the init-key space.
+    # footgun for every caller that constructs Settings in Python.
+    #
+    # What it actually changes: the alias wins when BOTH spellings are present
+    # (init kwargs and env vars alike); the field NAME is ALSO accepted as an
+    # init key AND as an env-var name, so when only the name is present the
+    # name supplies the value. For the 8 fields whose alias is not simply the
+    # upper-cased field name (``environment``, ``runner_machine_id``, the four
+    # ``max_*_usd`` cost knobs, ``product_analytics_endpoint_url``,
+    # ``product_analytics_instance_secret``) this is a real widening; the other
+    # aliased fields are unchanged because their alias already case-folds onto
+    # the name. Risk shape: an unprefixed ambient env var sharing one of those
+    # 8 names would now be read — the alias still wins if it is set too.
     model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore", "populate_by_name": True}
 
     @field_validator("secret_key")
