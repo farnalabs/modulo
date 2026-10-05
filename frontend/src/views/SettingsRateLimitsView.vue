@@ -1,6 +1,6 @@
 <template>
   <div data-theme="agent" class="page-wide">
-    <PageHeader :title="$t('views.SettingsRateLimitsView.rate_limits')" data-test-id="rate-limits-title" :subtitle="$t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage')" />
+    <PageHeader :title="$t('views.SettingsRateLimitsView.rate_limits')" data-testid="rate-limits-title" :subtitle="$t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage')" />
 
     <FeatureGate feature-name="rate_limits" required-tier="team" show-disabled>
 

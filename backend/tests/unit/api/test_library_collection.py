@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, InvalidRequestError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -550,6 +550,51 @@ class TestPublishCollectionErrorPaths:
             resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/publish")
         assert resp.status_code == 503
 
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (ProgrammingError("stmt", {}, RuntimeError("missing table")), 501),
+            (SQLAlchemyError("db down"), 503),
+            (InvalidRequestError("Autobegin is disabled on this Session"), 500),
+        ],
+        ids=["501", "503", "500"],
+    )
+    def test_publish_pin_lookup_db_error_maps_by_class_never_422(
+        self, client: TestClient, exc: Exception, expected: int
+    ) -> None:
+        """FAR-1483: a pin-lookup DB failure is mapped by its class, never to 422.
+
+        ``_lookup_pin_primitive`` used to swallow ``SQLAlchemyError`` and return
+        ``None``, so ANY pin-lookup DB failure became 422 "pin references unknown
+        primitive". Every leg is raised from the SAME ``session.execute`` pin-lookup
+        target - not patched at ``get_primitive`` - so the mapping is proven on the
+        route's own pin-lookup arm (FAR-1464 convention: ``_GET_501_503`` in
+        ``test_library_routes.py``); ``ProgrammingError`` (missing table) -> 501,
+        plain ``SQLAlchemyError`` -> 503, and an ``InvalidRequestError`` session-
+        contract violation is surfaced by the arm's leading
+        ``raise_session_contract_error`` guard as 500 (never a retry-inviting 503).
+        """
+        mock_prim = _make_collection_primitive(manifest_pins=[{"slug": "my-schema", "version": "1.0"}])
+        mock_session = client.mock_session  # type: ignore[attr-defined]
+        original_side_effect = mock_session.execute.side_effect
+
+        def _raise_on_pin_lookup(stmt: object, *args: object, **kwargs: object) -> object:
+            if "library_primitives" in str(stmt):
+                raise exc
+            assert original_side_effect is not None
+            return original_side_effect(stmt, *args, **kwargs)
+
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=mock_prim,
+        ):
+            mock_session.execute.side_effect = _raise_on_pin_lookup
+            resp = client.post(f"/api/v1/libraries/collections/{mock_prim.id}/publish")
+
+        assert resp.status_code == expected, f"pin lookup {type(exc).__name__} should map to {expected}"
+        assert "unknown primitive" not in resp.text
+
 
 # ---------------------------------------------------------------------------
 # Manifest pin validation (ADR 032)
@@ -617,6 +662,46 @@ class TestValidateManifestPins:
 
         errors = asyncio.run(run())
         assert not errors
+
+    def test_pin_lookup_db_failure_raises_instead_of_returning_none(self) -> None:
+        """FAR-1483: a DB failure must propagate, not masquerade as "not found".
+
+        Fail-before: ``_lookup_pin_primitive`` swallowed ``SQLAlchemyError``
+        and returned ``None`` - indistinguishable from a genuinely missing pin.
+        """
+        from modulo.api.routes.library import _lookup_pin_primitive
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
+
+        with pytest.raises(SQLAlchemyError):
+            asyncio.run(_lookup_pin_primitive(session, _ORG_ID, "my-schema", "1.0"))
+
+    def test_pin_lookup_not_found_still_returns_none(self) -> None:
+        """The converted helper keeps its legitimate not-found contract."""
+        from modulo.api.routes.library import _lookup_pin_primitive
+
+        session = MagicMock()
+        empty_result = MagicMock()
+        empty_result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=empty_result)
+
+        assert asyncio.run(_lookup_pin_primitive(session, _ORG_ID, "ghost", "1.0")) is None
+        session.execute.assert_awaited_once()
+
+    def test_validate_manifest_pins_propagates_db_failure(self) -> None:
+        """FAR-1483: validation must not turn an outage into "unknown primitive".
+
+        Fail-before: the swallowed ``None`` became the error message
+        ``pin references unknown primitive: my-schema@1.0`` (a 422).
+        """
+        from modulo.api.routes.library import _validate_manifest_pins
+
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
+
+        with pytest.raises(SQLAlchemyError):
+            asyncio.run(_validate_manifest_pins([{"slug": "my-schema", "version": "1.0"}], session, _ORG_ID))
 
 
 # ---------------------------------------------------------------------------

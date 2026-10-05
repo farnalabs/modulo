@@ -1744,6 +1744,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/notification-delivery:
+      - testid: admin-notification-log-title
+        type: element
+        dynamic_testid: false
       - testid: admin-notification-log-status
         type: select
         dynamic_testid: false
@@ -2639,6 +2642,54 @@ elements:
         type: button
         dynamic_testid: false
       - testid: eval-editor-cancel-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-heading
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-action-warn
+        type: input
+        dynamic_testid: false
+      - testid: policy-gate-action-block
+        type: input
+        dynamic_testid: false
+      - testid: policy-gate-toggle
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-toggle-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-confirm-toggle-disable
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-cancel-toggle-disable
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-confirm-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-error
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-retry
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-badge
+        type: element
+        dynamic_testid: false
+      - testid: dirty-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: dirty-confirm-proceed
+        type: button
+        dynamic_testid: false
+      - testid: dirty-confirm-stay
         type: button
         dynamic_testid: false
       - testid: feature-gate
@@ -4398,6 +4449,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/license:
+      - testid: license-title
+        type: element
+        dynamic_testid: false
       - testid: license-key-input
         type: textarea
         dynamic_testid: false
@@ -4605,6 +4659,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/rate-limits:
+      - testid: rate-limits-title
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -5398,6 +5455,8 @@ features:
             - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
+            # FAR-967 chunk 10: pin integrity + operator enable/disable control
+            - "[x] The policy-gate operator control and pin-set integrity surface (FAR-967 chunk 10): PATCH /api/v1/evals/{eval_id}/policy-gate/toggle (admin-only eval.definition.update, break-glass mint denied) flips enabled and atomically stamps enabled_at/disabled_at so the symmetric ck_policy_gates_enabled_timestamps CHECK always holds, emits a policy_gate.toggled audit event (best-effort) under the same transaction-scoped advisory lock as create/replace, and the /evals/editor policy-gate panel exposes it as a role=switch policy-gate-toggle with a disable-confirmation dialog; at run start the executor re-verifies the snapshot's policy_gate_pins_fingerprint (a tampered/drifted pin set terminalizes as a mechanism error) and pin membership governs the run's evaluation universe (a live action edit cannot re-score a pinned run) while an operator-disabled live gate is removed from evaluation even when pinned (backend/src/modulo/core/eval_engine/policy_gate.py fingerprint_policy_gate_pins, backend/src/modulo/core/pipeline_engine/executor.py _resolve_governed_gate, backend/src/modulo/db/models/policy_gate.py, backend/src/modulo/db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py, backend/src/modulo/api/routes/evals.py, frontend/src/__tests__/EvalEditorViewPolicyGate.spec.ts)"
         deferrals:
             - "Per-token eval breakdown comparison is the remaining deferred comparison sub-surface, tracked under feat-variants"
     feat-feedback:
@@ -5457,6 +5516,7 @@ features:
             - "[x] Library items can be copied into the org with the CopyToAdaptWizard"
             - "[x] Library collections authoring and publishing ship behind the library_collection feature flag: a collection is created as a draft, its manifest pins are updated while draft, and it is published — invalid/duplicate pins, an empty manifest and more than MAX_COLLECTION_PINS are rejected 422, a duplicate slug is 409, and every collection endpoint 404s when the flag is off (docs/product-map/library/library.md, backend/tests/unit/api/test_library_collection.py)"
             - "[x] Workflow bundle export writes a .modulo.zip / signed YAML bundle with org-private fields (owner_team_id, visibility, credentials/ciphertexts, env secrets) stripped, and workflow import runs a two-phase REST contract — /import/analyse resolves connector/schema(abstract_name)/model-backend references and detects pipeline-name conflicts with a disambiguation suffix, /import/confirm materialises the pipeline (200 imported); a tampered non-JSON bundle is rejected 400 without creating entities (backend/tests/bdd/features/workflows/import.feature, workflows/export.feature, steps/test_workflows.py)"
+            - "[x] Composite library-primitive content is masked on every read surface (FAR-1380): the shared LibraryPrimitiveResponse._mask_composite_graph_credentials validator masks credential-bearing node fields inside a composite primitive's content_json for the library list/get/create/patch/delete/restore/adapt responses, community contribute + contributions list + admin publish responses, the community install response and the fixture contributions list, and the MCP modulo://library/{type}/{slug} resource masks composite nodes before rendering; non-composite primitives pass through byte-identical. The FAR-1374 sentinel rule applies on write: POST /api/v1/libraries, PATCH /api/v1/libraries/{id} and POST /api/v1/libraries/community/contribute resolve a submitted mask echo against the stored sub-graph (resolve_and_reject_mask_sentinels) and refuse an unmappable sentinel with 422 COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL, and a masked-read -> patch round-trip preserves the stored secret (backend/tests/unit/api/test_library_primitive_masking.py, api/routes/library.py, api/mcp_server.py; control statement docs/deployment-security.md 2.6)"
         deferrals:
             - "Collections authoring is gated behind the default-off library_collection feature flag per org (FAR-760); collection install/uninstall + community trust gates are tracked under feat-library-collections"
     feat-library-collections:
@@ -5609,7 +5669,6 @@ features:
             - "[x] The read-mask sentinel never reaches storage or a run (FAR-1374): every composite-template write entry (POST /api/v1/composite-templates, PATCH, the editor PUT, and save-as-composite) resolves masked echoes against the stored graph FIRST, then refuses any surviving or unresolvable sentinel with 422 (COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL) naming the sub-node, field, and key; composite expansion fails closed with the same code for pre-fix or direct-DB-written sentinel rows so a mask literal can never land in a run snapshot or clobber a host-injected credential (core/composite_engine/expander.py MaskedCredentialExpansionError); graph-save validation surfaces the same condition, and the admin housekeeping sweep reports pre-existing degraded templates detection-only - repair is manual credential re-entry in the composite editor, never an automatic rewrite (core/housekeeping.py)"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
-            - "The library-primitive credential surface (composite/pipeline primitives installed from the Library) is excluded from the plaintext-at-rest + mask-on-read control statement pending FAR-1380"
     feat-plugins:
         description: Plugin registry
         status: partial
@@ -5684,10 +5743,10 @@ features:
             - "[x] The Runners page (route-per-tab under /admin/runners/profiles + /admin/runners/concurrency) renders a persistent status strip (60s auto-refetch, worst-of across machines, loading/unknown/unavailable states never render confident green, probe error surfaced with remediation copy pointing at docs/security/bundled-runner-operator-guide.md), the Profiles tab (health badges, per-row template-apply, sandbox-agent style test-connection events), and the Concurrency tab (the D3b org sandbox-concurrency cap with the ge=0 le=100 clamp, effective-cap display refetched after a successful save, preflight warnings); every legacy route (/environment-profiles, /environment-profiles/new, /environment-profiles/:id, /admin/sandbox-concurrency) redirects"
             - "[x] A hung socket-proxy cannot stall the probe: the aiodocker client carries a bounded timeout (total 10s, connect 5s), so the hang becomes a recorded unreachable with a real transition alert well under the 120s job timeout, and any Docker URL userinfo in engine error strings is scrubbed to ***@ before persisting or logging (credential-bearing MODULO_DOCKER_HOST)"
         deferrals:
-            - The node-editor sandbox-agent panel slices its runner-health display against this cache (D5 node-editor slice — follow-up: pipeline editor consume)
-            - Housekeeping is NOT exempt from the concurrency cap (dispatch gate unchanged); the Runners page surfaces the cap only (follow-up: housekeeping exemption decision)
-            - The strip does not surface the org-wide ACTIVE workspace count (probe cache carries engine state only; follow-up: extend the cache row)
-            - Compose-file e2e coverage of the probe is deferred (unit + integration crud tests pin the contract; follow-up: compose e2e)
+            - "The node-editor sandbox-agent panel slices its runner-health display against this cache (D5 node-editor slice — follow-up: pipeline editor consume)"
+            - "Housekeeping is NOT exempt from the concurrency cap (dispatch gate unchanged); the Runners page surfaces the cap only (follow-up: housekeeping exemption decision)"
+            - "The strip does not surface the org-wide ACTIVE workspace count (probe cache carries engine state only; follow-up: extend the cache row)"
+            - "Compose-file e2e coverage of the probe is deferred (unit + integration crud tests pin the contract; follow-up: compose e2e)"
     feat-schemas:
         description: Typed JSON schemas, schema editor, inference, parameter schemas, and schema enforcement
         status: covered
@@ -5859,7 +5918,6 @@ features:
             - "[x] The no-delivery streak engine covers cron triggers as well as ongoing (FAR-1387): the sweep walks cron triggers' terminal classifications with the SAME streak walk and GREATEST(last_delivery_at, streak_epoch) boundary, streak_status returns real values for a covered cron (no longer the unconfigured base), and a cron trip NOTIFIES and SURFACES (append-only cron_trigger.no_delivery_streak_alert record + sweep 'tripped' count) without auto-deactivating — deactivation is opt-in per cron via config_json no_delivery_auto_deactivate (default OFF), cron applies its own 48h minimum wall-clock window (MODULO_CRON_STREAK_MIN_WINDOW_HOURS override), and cron audit records use cron_trigger.* event types, never the ongoing_trigger.* stream (backend/src/modulo/core/trigger_streak.py, backend/tests/unit/core/test_trigger_streak_engine.py)"
             - "[x] The streak badge in SettingsTriggersView renders for every trigger type the engine covers — ongoing AND cron — via ONE mirrored constant (STREAK_COVERED_TRIGGER_TYPES, pointing at the backend STREAK_TRIGGER_TYPES in core/trigger_streak.py), and the 'Deactivated' badge + re-enable action are driven by streak_status.state === 'deactivated' (deactivated_reason), NEVER by the trigger type: a notify-only cron trip (state 'ok', deactivated_reason null) shows only 'No-delivery streak x/N' with role=status/aria-live, while 'Deactivated' wording appears only when the backend reports the deactivated state (frontend/src/views/SettingsTriggersView.vue, frontend/src/__tests__/SettingsTriggersView.spec.ts; FAR-1405)"
         deferrals:
-            - Slack app-mention triggers register as a trigger type and are endpoint-tested, but are an alpha/community surface without a BDD feature file
             - Route-level webhook validation failures (HMAC/timestamp) roll back with the request and do not persist a TriggerEvent for those typed errors in that path (documented pre-existing limitation)
     feat-variants:
         description: Variant comparison and AB test models

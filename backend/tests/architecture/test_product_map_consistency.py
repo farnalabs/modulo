@@ -86,6 +86,17 @@ _TESTID_LITERAL = re.compile(
     r"|:data-testid=\"`([a-zA-Z0-9_-]+)`\""
 )
 
+#: The repo's element-coverage guard above and Playwright's ``getByTestId``
+#: both key on the exact attribute ``data-testid`` (``_TESTID_LITERAL``
+#: deliberately matches only that spelling). A ``data-test-id`` typo renders a
+#: DIFFERENT attribute: the browser keeps it, this suite's literal scan skips
+#: it, and Playwright's ``getByTestId`` cannot find it — so the control ships
+#: but stays invisible to the product map and to the e2e suite. The 2026-10-05
+#: walk found the whole ``EvalEditorView`` policy-gate surface (operator
+#: toggle, confirmation dialogs, action radios, error/retry, dirty-confirm) plus
+#: three ``PageHeader`` titles written as ``data-test-id``.
+_DATA_TEST_ID_TYPO = re.compile(r"data-test-id\s*=")
+
 
 def _routes_text() -> str:
     text = ROUTER_PATH.read_text(encoding="utf-8")
@@ -302,6 +313,37 @@ def test_element_testids_exist_in_frontend():
     }
     assert not dangling, "elements reference data-testids that do not exist in the frontend:\n" + "\n".join(
         f"  {path} -> {testid}" for testid, path in sorted(dangling.items())
+    )
+
+
+def test_no_data_test_id_typo_in_frontend():
+    """No frontend source uses the ``data-test-id`` typo instead of ``data-testid``.
+
+    The element inventory (``_TESTID_LITERAL``), ``test_element_testids_exist_in_frontend``
+    and Playwright's ``getByTestId`` all key on the exact ``data-testid``
+    attribute. A ``data-test-id`` control renders a different attribute, so it
+    is silently invisible to the product map and to the e2e suite — the guard
+    that is supposed to catch an unregistered testid never sees it. Fail closed
+    on the typo so a shipped control cannot regress into the blind spot (the
+    2026-10-05 walk normalised the ``EvalEditorView`` policy-gate surface and
+    three ``PageHeader`` titles back to ``data-testid``).
+    """
+    src = REPO_ROOT / "frontend" / "src"
+    offenders: dict[str, list[int]] = {}
+    for path in src.rglob("*"):
+        if path.suffix not in {".vue", ".ts", ".js"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        lines = [index for index, line in enumerate(text.splitlines(), start=1) if _DATA_TEST_ID_TYPO.search(line)]
+        if lines:
+            offenders[path.relative_to(REPO_ROOT).as_posix()] = lines
+    assert not offenders, (
+        "frontend source uses the 'data-test-id' typo instead of 'data-testid' "
+        "(invisible to the product map element guard and Playwright getByTestId):\n"
+        + "\n".join(f"  {path}: lines {', '.join(map(str, lines))}" for path, lines in sorted(offenders.items()))
     )
 
 
