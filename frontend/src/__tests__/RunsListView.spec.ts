@@ -832,6 +832,22 @@ describe('RunsListView', () => {
     const badge = wrapper.find('[data-testid="runs-list-queued-run1"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('queued')
+    expect(badge.attributes('title')).toBe(t('views.RunsListView.queued_waiting_slot', { active: 3, limit: 5 }))
+    expect(badge.attributes('aria-label')).toBe(t('views.RunsListView.queued_waiting_slot', { active: 3, limit: 5 }))
+    wrapper.unmount()
+  })
+
+  it('explains a queued run with no concurrency limit as starting soon', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'pending', capacity: { active_runs: 0, concurrency_limit: null, waiting: true } },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const badge = wrapper.find('[data-testid="runs-list-queued-run1"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toBe(t('views.RunsListView.queued_starting_soon'))
+    expect(badge.attributes('aria-label')).toBe(t('views.RunsListView.queued_starting_soon'))
     wrapper.unmount()
   })
 
