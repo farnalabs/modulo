@@ -12,7 +12,7 @@ this directory is the implementation.
 |---|---|
 | `config.yaml` | The Gatus config: the endpoint, its conditions, and the email alerting block. Mounted read-only into the container at `/config/config.yaml`. |
 | `entrypoint.sh` | Prints one startup line — alerting on, or off and exactly which variables are missing — then `exec`s `/gatus`. |
-| `Dockerfile` | Re-hosts the pinned upstream `/gatus` binary on `alpine:3.20`. |
+| `Dockerfile` | Re-hosts the pinned upstream `/gatus` binary on `alpine:3.24`. |
 
 ## Why a derived image
 
@@ -33,7 +33,7 @@ there is no network dependency at build time beyond the two base images.
 
 Both bases are pinned (no `latest`/`stable`): `twinproduction/gatus:v5.37.0`
 (tag verified on the Docker Hub tags API, published 2026-09-24) and
-`alpine:3.20`.
+`alpine:3.24`.
 
 The image runs as an unprivileged `gatus` user: the binary is static, the
 dashboard binds the unprivileged port 8080, the config is read-only, and no
