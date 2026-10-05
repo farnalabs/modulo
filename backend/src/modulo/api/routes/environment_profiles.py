@@ -29,6 +29,7 @@ from modulo.core.runtime_provider import (
     build_hub,
 )
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.db.bundled_runner_template import TEMPLATE_CONFIG_JSON
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
     get_environment_profile,
@@ -560,7 +561,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         run_id=None,
         image_ref=profile.image_ref or "",
         capabilities=profile.capabilities_json or [],
-        timeout_seconds=cfg.get("timeout_seconds", 3600),
+        timeout_seconds=cfg.get("timeout_seconds", TEMPLATE_CONFIG_JSON["timeout_seconds"]),
         resource_limits=cfg,
         egress_policy=_spec_egress,
         persistence_policy=profile.persistence_policy,
