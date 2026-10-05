@@ -382,6 +382,11 @@
             </button>
           </div>
         </div>
+        <!-- FAR-1287: system-admin-only snapshot-lock diagnostics. Gated on the
+             JWT is_system_admin claim (useCurrentUser) so a non-admin never
+             renders it - and never issues the admin-only GET. In-flow under the
+             toolbar so it never covers the canvas. -->
+        <SnapshotLockCard v-if="isSystemAdmin" :pipeline-id="pipelineId" />
         <!-- FAR-688: legacy HITL gates whose descriptions predate the
              minimum (reads never hard-fail on them) — surface WHICH gates
              need descriptions so the user can find and fix them. -->
@@ -1401,6 +1406,7 @@ import { usePlanStore } from '../stores/planStore'
 import FormDialog from '../components/shared/FormDialog.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
+import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
@@ -1562,7 +1568,7 @@ const maxAutonomyInput = ref<string | null>(null)
 // FAR-1182: monthly spend circuit breaker. '' = disabled (null on the API).
 const circuitBreakerInput = ref<string | number>('')
 const resettingCircuitBreaker = ref(false)
-const { orgRole } = useCurrentUser()
+const { orgRole, isSystemAdmin } = useCurrentUser()
 // Mirrors the backend reset gate: POST /admin/costs/circuit-breaker/{id}/reset
 // requires the org-admin `cost.manage` permission (no plan gate).
 const canResetCircuitBreaker = computed(() => orgRole.value === 'admin')

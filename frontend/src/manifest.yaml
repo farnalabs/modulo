@@ -3427,6 +3427,24 @@ elements:
       - testid: snapshot-timeline-rollback
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-status
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-holders
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-refresh
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-release
+        type: button
+        dynamic_testid: false
     /pipelines/copy:
       - testid: copy-wizard-visibility-filter
         type: button
@@ -5595,6 +5613,7 @@ features:
             - "[x] The node editor exposes the explicit single_pr_per_run flag (FAR-1273) on sandbox_agent nodes: a labelled, help-texted toggle in the node panel whose value is saved with the graph (default false) and arms the run-scoped one-PR-per-run gh shim at dispatch - a bounded, best-effort, E2B-only defence-in-depth layer, not an absolute guarantee on its own (gh api PR creation, a gh copy outside the PATH, shell aliases/functions, a gh installed after the fact and non-E2B runners are not covered; the one-PR-per-run guarantee is that shim together with the post-run detection, FAR-1274); the field is sandbox-only (rejected by the API node model and by the graph validator on any other node type, and by the graph validator when the value is not a boolean on a sandbox node), it rides the typed IsolationPolicy to the provider, and a delivery_sentinel alone never arms the guard"
             - "[x] save-as-composite stores the selected nodes' credential env values in the composite template AS-IS (plaintext at rest, no write-side masking - parity with top-level pipeline graphs, which have never masked on write), while every composite-template read surface (list/get/create-response/patch/restore/editor GET+PUT) keeps masking them with the shipped FAR-1181 node masker (api/routes/pipelines.py save-as-composite, api/routes/composite_templates.py; tests routes/test_composite_authoring.py TestSaveAsCompositeCredentialStorage, api/test_composite_templates_api.py TestCompositeTemplateMasking; control statement docs/deployment-security.md 2.6)"
             - "[x] The read-mask sentinel never reaches storage or a run (FAR-1374): every composite-template write entry (POST /api/v1/composite-templates, PATCH, the editor PUT, and save-as-composite) resolves masked echoes against the stored graph FIRST, then refuses any surviving or unresolvable sentinel with 422 (COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL) naming the sub-node, field, and key; composite expansion fails closed with the same code for pre-fix or direct-DB-written sentinel rows so a mask literal can never land in a run snapshot or clobber a host-injected credential (core/composite_engine/expander.py MaskedCredentialExpansionError); graph-save validation surfaces the same condition, and the admin housekeeping sweep reports pre-existing degraded templates detection-only - repair is manual credential re-entry in the composite editor, never an automatic rewrite (core/housekeeping.py)"
+            - "[x] A system-admin-only Snapshot lock card renders on the pipeline editor route (/pipelines/:id/editor): it reads GET /api/v1/admin/pipelines/{pipeline_id}/snapshot-lock into a polite live region (loading / not-held / held-by-N plus each holder's pid, application_name, state, backend_start and query_start) and clears a wedged lock through a keyboard-usable FormDialog confirmation onto POST .../snapshot-lock/release, surfacing a typed 403 in an assertive region (SnapshotLockCard.vue, PipelineEditorView.spec.ts describe 'system-admin snapshot lock'; non-system-admins render nothing and the admin-only GET is never issued)"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
             - "The library-primitive credential surface (composite/pipeline primitives installed from the Library) is excluded from the plaintext-at-rest + mask-on-read control statement pending FAR-1380"
