@@ -123,6 +123,9 @@ function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, 
     if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mcpConfig, error: undefined })
     if (path === '/api/v1/api-keys') return Promise.resolve({ data: apiKeysData, error: undefined })
     if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: oauth, error: undefined })
+    if (path === '/api/v1/api-keys/grantable-permissions') {
+      return Promise.resolve({ data: { enabled: false, permissions: [] }, error: undefined })
+    }
     return Promise.resolve({ data: null, error: undefined })
   })
 }
@@ -1842,5 +1845,172 @@ describe('SettingsMcpView', () => {
     expect(vm.copyFailedField).toBe('key-value')
     vm.dismissKeyCreatedDialog()
     expect(vm.copyFailedField).toBeNull()
+  })
+
+  // ─── FAR-1477: optional API key grant-set at creation ─────────────────
+
+  const grantablePayload = {
+    enabled: true,
+    permissions: [
+      { name: 'run.list', min_role: 'runner' },
+      { name: 'run.cancel', min_role: 'runner' },
+    ],
+  }
+
+  function mockWithGrantable(grantable: unknown) {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
+      if (path === '/api/v1/api-keys') return Promise.resolve({ data: mockApiKeys, error: undefined })
+      if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: mockOAuthClients, error: undefined })
+      if (path === '/api/v1/api-keys/grantable-permissions') return Promise.resolve({ data: grantable, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+  }
+
+  async function openCreateDialogWith(grantable: unknown) {
+    mockWithGrantable(grantable)
+    postMock.mockResolvedValueOnce({
+      data: { id: 'k', name: 'New Key', key_value: 'mod_mk_new_secret_1234' },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsMcpView, { global: { stubs } })
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    return wrapper
+  }
+
+  it('hides the grant picker when the grants flag is off', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
+  })
+
+  it('omits grants from the create body by default (role bundle)', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(true)
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock.mock.calls[0][1].body).toEqual({ name: 'New Key', role: 'operator' })
+  })
+
+  it('sends the ticked permissions as grants when restricted', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    await wrapper.find('[data-testid="api-key-grants-restrict"]').setValue(true)
+    await wrapper.find('[data-testid="api-key-grant-run.list"]').setValue(true)
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock.mock.calls[0][1].body.grants).toEqual(['run.list'])
+  })
+
+  it('never sends an empty grants list: restricted with nothing ticked does not submit', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    await wrapper.find('[data-testid="api-key-grants-restrict"]').setValue(true)
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('resets stale grant state when reopening the dialog and ignores a stale response', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(true)
+
+    // Reopen with a fetch that never resolves: previous picker state must be gone.
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return new Promise(() => {})
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await nextTick()
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
+
+    // A slow first fetch must not overwrite a newer one.
+    let resolveSlow: (v: unknown) => void = () => {}
+    const slow = new Promise((r) => { resolveSlow = r })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return slow
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') {
+        return Promise.resolve({ data: { enabled: false, permissions: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    resolveSlow({ data: grantablePayload, error: undefined })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(false)
+  })
+
+  it('blocks key creation while the grantable-permissions fetch is loading', async () => {
+    const wrapper = await openCreateDialogWith(grantablePayload)
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return new Promise(() => {})
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-loading"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('blocks key creation and offers retry when the grantable-permissions fetch fails', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') {
+        return Promise.resolve({ data: undefined, error: { detail: 'boom' } })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+
+    // Retry succeeds: error clears, picker renders, creation allowed.
+    mockWithGrantable(grantablePayload)
+    await wrapper.find('[data-testid="settings-mcp-grants-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(true)
+  })
+
+  it('treats a missing body with no error as a load failure, not grants-disabled', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') {
+        return Promise.resolve({ data: undefined, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('treats a rejected grantable-permissions request as a load failure', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return Promise.reject(new Error('network down'))
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(true)
   })
 })

@@ -112,8 +112,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0278_runs_workspace_drift_sweep_index chains off 0277, and
 # 0279_table_autovacuum_tuning chains off 0278, and
 # 0280_runs_node_deadline_watchdog_fired_count chains off 0279_table_autovacuum_tuning, and
-# 0281_runs_drop_unused_indexes chains off 0280_runs_node_deadline_watchdog_fired_count as the chain head.
-_CHAIN_HEAD_MIGRATION = "0281_runs_drop_unused_indexes"
+# 0281_org_api_keys_grants chains off 0280_runs_node_deadline_watchdog_fired_count, and
+# 0282_env_profiles_kubernetes chains off 0281_org_api_keys_grants as the chain head.
+_CHAIN_HEAD_MIGRATION = "0282_env_profiles_kubernetes"
 
 
 def _source(name: str) -> str:

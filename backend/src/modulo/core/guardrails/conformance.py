@@ -276,8 +276,10 @@ async def build_live_manifest(
     if node_def is not None:
         from modulo.core.pipeline_engine.sandbox_mode import derive_sandbox_capabilities
 
-        # Resolve profile_network_policy from the loaded profile row (if any).
+        # Resolve profile_network_policy + provider_type from the loaded
+        # profile row (if any).
         _profile_network_policy: str | None = None
+        _profile_provider_type: str | None = None
         if environment_profile_id is not None:
             from modulo.db.models.environment_profile import EnvironmentProfile as EpModel
 
@@ -287,6 +289,17 @@ async def build_live_manifest(
                 ).scalar_one_or_none()
                 if _ep_row is not None:
                     _profile_network_policy = getattr(_ep_row, "network_policy", None)
+                    # FAR-1051: the provider the profile resolves to decides the
+                    # TIER the egress capability is certified under, so the
+                    # certificate matches what dispatch actually enforces for
+                    # this profile (previously the reference tier was hardcoded
+                    # to e2b regardless of the bound provider). Only a genuine
+                    # str is read — a row that does not carry one (including a
+                    # MagicMock test double, whose auto-attribute is not a str)
+                    # keeps the legacy reference tier.
+                    _row_provider_type = getattr(_ep_row, "provider_type", None)
+                    if isinstance(_row_provider_type, str):
+                        _profile_provider_type = _row_provider_type
             except Exception:
                 _log.debug(
                     "guardrail.conformance.profile_network_policy_read_failed",
@@ -296,7 +309,11 @@ async def build_live_manifest(
 
         _add_sandbox_surface(
             registered,
-            derive_sandbox_capabilities(node_def, profile_network_policy=_profile_network_policy),
+            derive_sandbox_capabilities(
+                node_def,
+                profile_network_policy=_profile_network_policy,
+                provider_type=_profile_provider_type,
+            ),
         )
 
     return registered

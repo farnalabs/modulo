@@ -44,12 +44,14 @@ class TestBuildHub:
         monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
         monkeypatch.delenv("MODULO_RUNNER_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
 
         hub = build_hub()
 
         assert isinstance(hub.get("local"), LocalRuntimeProvider)
         assert hub.get("e2b") is None
         assert hub.get("runner_docker") is None
+        assert hub.get("kubernetes") is None
 
     def test_default_local_concurrency_is_two(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
@@ -211,6 +213,7 @@ def test_create_default_hub_is_build_hub_alias() -> None:
         ("runner_docker", "MODULO_DOCKER_HOST"),
         ("docker", "MODULO_DOCKER_HOST"),
         ("local_docker", "MODULO_DOCKER_HOST"),
+        ("kubernetes", "MODULO_KUBERNETES_ENABLED"),
     ],
 )
 def test_documented_env_var_actually_registers_provider(
@@ -224,15 +227,14 @@ def test_documented_env_var_actually_registers_provider(
     the implemented build_hub gate must agree: a profile whose provider_type
     maps to ``env_var`` MUST resolve once only that var is set.
     """
-    for var in ("MODULO_E2B_API_KEY", "MODULO_DOCKER_HOST", "DOCKER_HOST"):
+    for var in ("MODULO_E2B_API_KEY", "MODULO_DOCKER_HOST", "DOCKER_HOST", "MODULO_KUBERNETES_ENABLED"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("MODULO_RUNNER_TEMPLATE_ID", raising=False)
     monkeypatch.setenv(env_var, "registration-signal")
 
     hub = build_hub()
-    provider = hub.get(
-        "e2b" if provider_type == "e2b" else "runner_docker",
-    )
+    registration_name = {"e2b": "e2b", "kubernetes": "kubernetes"}.get(provider_type, "runner_docker")
+    provider = hub.get(registration_name)
     assert provider is not None
 
     resolved = hub.resolve(type("P", (), {"provider_type": provider_type})())
