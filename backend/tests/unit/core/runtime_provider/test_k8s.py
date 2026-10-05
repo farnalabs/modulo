@@ -416,6 +416,85 @@ class TestCreateWorkspace:
         core.delete_namespaced_pod.assert_awaited_once()
         assert not provider._workspaces
 
+    def test_container_note_wins_over_pod_conditions(self) -> None:
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                container_statuses=[
+                    SimpleNamespace(
+                        state=SimpleNamespace(
+                            waiting=SimpleNamespace(reason="ImagePullBackOff", message="back-off"),
+                        ),
+                    )
+                ],
+                conditions=[
+                    SimpleNamespace(type="PodScheduled", status="False", reason="Unschedulable", message="no nodes"),
+                ],
+            )
+        )
+
+        assert KubernetesRuntimeProvider._pod_phase_and_note(pod) == ("pending", "ImagePullBackOff: back-off")
+
+    def test_condition_note_surfaces_when_no_container_status(self) -> None:
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                container_statuses=None,
+                conditions=[
+                    SimpleNamespace(type="Initialized", status="True", reason="", message=""),
+                    SimpleNamespace(type="PodScheduled", status=False, reason="Unschedulable", message="no nodes"),
+                ],
+            )
+        )
+
+        assert KubernetesRuntimeProvider._pod_phase_and_note(pod) == (
+            "pending",
+            "PodScheduled Unschedulable no nodes",
+        )
+
+    def test_all_true_conditions_yield_empty_note(self) -> None:
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                container_statuses=None,
+                conditions=[SimpleNamespace(type="Ready", status="True", reason="", message="")],
+            )
+        )
+
+        assert KubernetesRuntimeProvider._pod_phase_and_note(pod) == ("pending", "")
+
+    def test_empty_condition_fields_yield_empty_note(self) -> None:
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                container_statuses=None,
+                conditions=[SimpleNamespace(type="", status="False", reason="", message="")],
+            )
+        )
+
+        assert KubernetesRuntimeProvider._pod_phase_and_note(pod) == ("pending", "")
+
+    async def test_provision_timeout_surfaces_unschedulable_condition(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(k8s_mod, "_PROVISION_POLL_INTERVAL", 0.01)
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Pending",
+                container_statuses=None,
+                conditions=[
+                    SimpleNamespace(type="PodScheduled", status="False", reason="Unschedulable", message="no nodes"),
+                ],
+            ),
+            metadata=SimpleNamespace(labels={"modulo.provider": "kubernetes"}),
+        )
+        provider = _provider(core=core)
+
+        with pytest.raises(ProvisionTimeoutError, match="Unschedulable"):
+            await provider.create_workspace(_spec(timeout_seconds=1))
+
+        core.delete_namespaced_pod.assert_awaited_once()
+        assert not provider._workspaces
+
     async def test_api_rejection_is_typed(self) -> None:
         core = AsyncMock()
         core.create_namespaced_pod.side_effect = ApiException(status=422, reason="Unprocessable")

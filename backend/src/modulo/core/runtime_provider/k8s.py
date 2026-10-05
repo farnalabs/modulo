@@ -547,7 +547,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
 
     @staticmethod
     def _pod_phase_and_note(pod: Any) -> tuple[str, str]:
-        """Return ``(lowercase phase, diagnostic note)`` from a V1Pod status."""
+        """Return ``(lowercase phase, diagnostic note)`` from a V1Pod status.
+
+        Container waiting/terminated states are the most specific signal and
+        win when present. When neither is, the first pod condition that is not
+        ``True`` supplies the note, so pod-level stalls that never surface a
+        container status (e.g. ``PodScheduled=False`` during a long admission
+        delay) still reach the provision-timeout message.
+        """
         status = getattr(pod, "status", None)
         phase = str(getattr(status, "phase", "") or "").strip().lower()
         waiting_note = ""
@@ -566,7 +573,22 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 exit_code = getattr(terminated, "exit_code", None)
                 if reason or exit_code is not None:
                     terminated_note = f"{reason} (exit {exit_code})" if reason else f"exit {exit_code}"
-        return phase, waiting_note or terminated_note
+        condition_note = KubernetesRuntimeProvider._pod_condition_note(status)
+        return phase, waiting_note or terminated_note or condition_note
+
+    @staticmethod
+    def _pod_condition_note(status: Any) -> str:
+        """Return the first pod condition that is not ``True`` as a note."""
+        for condition in getattr(status, "conditions", None) or []:
+            if str(getattr(condition, "status", "") or "").strip().lower() == "true":
+                continue
+            parts = (
+                str(getattr(condition, "type", "") or ""),
+                str(getattr(condition, "reason", "") or ""),
+                str(getattr(condition, "message", "") or ""),
+            )
+            return " ".join(part for part in parts if part)
+        return ""
 
     async def _read_pod(self, pod_name: str) -> Any | None:
         """Read the workspace pod; ``None`` when it is gone (404)."""
