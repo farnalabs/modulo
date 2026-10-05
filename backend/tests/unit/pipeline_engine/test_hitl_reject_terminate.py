@@ -18,6 +18,7 @@ The DB-backed finalize + CHECK-constraint paths run in
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -362,6 +363,41 @@ async def test_finalize_fails_safe_when_claim_lookup_raises() -> None:
     executor = _executor_with_claims([], {_REVIEW_ID})
     executor._session_factory = MagicMock(side_effect=RuntimeError("db down"))  # type: ignore[assignment]
     assert (await _downgrade(executor))[0] == "complete"
+
+
+async def test_finalize_reraises_cancelled_error_from_claim_lookup() -> None:
+    """A cancellation during the claim lookup must propagate untouched - it is
+    the worker shutting down, not a lookup failure to fail-safe around."""
+    executor = _executor_with_claims([], {_REVIEW_ID})
+    executor._session_factory = MagicMock(side_effect=asyncio.CancelledError())  # type: ignore[assignment]
+    with pytest.raises(asyncio.CancelledError):
+        await _downgrade(executor)
+
+
+# ---------------------------------------------------------------------------
+# Synthetic HITL gate events latch the terminate-rejection in stream state
+# ---------------------------------------------------------------------------
+
+
+async def test_chain_end_latches_terminating_rejection_for_synthetic_gate() -> None:
+    """A gate node is synthetic (absent from ``node_ids``); its stamped
+    terminate-rejection artifact must still be latched so finalize can
+    downgrade the run."""
+    executor = executor_mod.PipelineExecutor(MagicMock())
+    state = executor_mod._StreamState()
+    ctx = SimpleNamespace(node_ids=set())
+    event = {"name": _REVIEW_ID, "data": {"output": _output("rejected")}}
+    await executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=event)
+    assert state.terminating_rejected_gates == {_REVIEW_ID}
+
+
+async def test_chain_end_ignores_non_terminating_synthetic_output() -> None:
+    executor = executor_mod.PipelineExecutor(MagicMock())
+    state = executor_mod._StreamState()
+    ctx = SimpleNamespace(node_ids=set())
+    event = {"name": _REVIEW_ID, "data": {"output": _output("approved")}}
+    await executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=event)
+    assert state.terminating_rejected_gates == set()
 
 
 # ---------------------------------------------------------------------------
