@@ -21,12 +21,29 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
+from tests.helpers.audit_session import install_audit_session_double
 from tests.unit.api.conftest import make_system_session_mock
 
 _VALID_32 = "a" * 32
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 ALT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the ``audited(...)`` fresh-session write to an in-memory double.
+
+    The BDD API steps drive the app with a mocked request session, but the
+    ``audited(...)`` route dependency opens its OWN session from the
+    process-shared engine. Left unpatched it dials the BDD SQLite ``test.db``
+    (which never ran the audit migrations), so every ``fail_closed=True``
+    destruction route 500s on ``no such table: audit_chain_heads``.
+
+    See ``tests.helpers.audit_session`` for the double and why integration
+    tests are deliberately left to exercise the genuine append.
+    """
+    install_audit_session_double(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
