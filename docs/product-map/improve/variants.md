@@ -59,6 +59,13 @@ by the `variant_batch_compare` feature flag.
 - [x] Variant groups are created and batch-fired from the inline builder on
       `/variants/compare` (`components/variants/VariantGroupBuilder.vue`), which
       honours the `pipeline_id` deep-link from a pipeline's "Run as variant" action
+- [x] A terminal `rejected` run (FAR-1487) aggregates exactly like `cancelled`
+      in the server-computed batch status: `_CANCELLED = {"cancelled",
+      "rejected"}` in `api/routes/variant_batches.py`, so a batch whose runs are
+      all rejected/cancelled reports `cancelled`, and one mixed with `complete`
+      reports `partial` (`test_variant_batches.py` `TestComputeBatchStatus`) —
+      a HITL rejection lowers a batch's completion ratio rather than raising a
+      batch-level `failed`
 
 ## Known Gaps
 
