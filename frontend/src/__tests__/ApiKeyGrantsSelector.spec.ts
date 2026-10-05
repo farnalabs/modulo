@@ -55,4 +55,12 @@ describe('ApiKeyGrantsSelector', () => {
     const wrapper = mountSelector({ restricted: true, selected: ['run.trigger'] })
     expect(wrapper.find('[data-testid="api-key-grants-empty-error"]').exists()).toBe(false)
   })
+
+  it('falls back to a title-cased prefix when no i18n group label exists', () => {
+    const wrapper = mountSelector({
+      restricted: true,
+      permissions: [{ name: 'secret.manage', min_role: 'operator' }],
+    })
+    expect(wrapper.text()).toContain('Secret')
+  })
 })

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -260,6 +261,17 @@ class TestResolveKeyGrants:
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("boom"))
         with patch.object(api_key_mod, "get_registry", return_value=registry):
             assert await api_key_mod.api_key_grants_enabled(uuid.uuid4()) is False
+
+    @pytest.mark.asyncio
+    async def test_flag_read_cancellation_propagates(self) -> None:
+        """A cancelled flag read must never be swallowed and reported as OFF."""
+        registry = MagicMock()
+        registry.resolve_flag = AsyncMock(side_effect=asyncio.CancelledError())
+        with (
+            patch.object(api_key_mod, "get_registry", return_value=registry),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await api_key_mod.api_key_grants_enabled(uuid.uuid4())
 
 
 class TestSerialize:

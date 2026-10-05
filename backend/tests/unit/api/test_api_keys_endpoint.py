@@ -760,6 +760,42 @@ def test_create_user_scoped_key_flag_read_failure_fails_closed(client: TestClien
     mint.assert_not_called()
 
 
+def test_create_grant_bearing_key_flag_on_mints_with_grants(client: TestClient) -> None:
+    """A grant-bearing create with the flag ON runs the grants mint cap and
+    passes the grants through to the create call."""
+    key = _make_key()
+    with (
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.api_keys._enforce_grants_mint_cap", new=AsyncMock()) as cap,
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_grant_key")) as mint,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "Restricted", "role": "operator", "grants": ["run.trigger"]},
+        )
+    assert resp.status_code == 201
+    cap.assert_awaited_once()
+    assert mint.await_args.kwargs["grants"] == ["run.trigger"]
+
+
+def test_create_grant_bearing_key_flag_off_rejected_422(client: TestClient) -> None:
+    """A grant-bearing create with the flag OFF is rejected 422 — never a silent
+    downgrade to a legacy full-role key (which would WIDEN access)."""
+    with (
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "Restricted", "role": "operator", "grants": ["run.trigger"]},
+        )
+    assert resp.status_code == 422
+    assert "not enabled" in resp.json()["detail"]
+    mint.assert_not_called()
+
+
 def test_create_api_key_rejects_unknown_scope(client: TestClient) -> None:
     resp = client.post(
         "/api/v1/api-keys",

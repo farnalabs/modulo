@@ -591,6 +591,26 @@ class TestAuthenticateApiKey:
         assert err is not None
         assert err.status_code == 503
 
+    @patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql"))
+    async def test_grants_unavailable_returns_503(self) -> None:
+        """FAR-1477: an unreadable grants flag fails CLOSED as 503 (retryable),
+        never as a 401 that would look like an invalid key."""
+        from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=_ORG_ID)
+        with (
+            patch.object(ms, "_get_session_factory", return_value=_mock_factory(session)),
+            patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
+            patch.object(ms, "validate_api_key", new=AsyncMock(return_value=_mock_api_key())),
+            patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="operator")),
+            patch.object(ms, "resolve_key_grants", new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError)),
+        ):
+            handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
+        assert handled is False
+        assert err is not None
+        assert err.status_code == 503
+
 
 class TestAuthenticateOauthJwt:
     def _principal(self, *, org_id: uuid.UUID | None = _ORG_ID, org_role: str | None = "admin") -> MagicMock:

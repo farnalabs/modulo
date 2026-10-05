@@ -2002,4 +2002,15 @@ describe('SettingsMcpView', () => {
     await flushPromises()
     expect(postMock).not.toHaveBeenCalled()
   })
+
+  it('treats a rejected grantable-permissions request as a load failure', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') return Promise.reject(new Error('network down'))
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(true)
+  })
 })
