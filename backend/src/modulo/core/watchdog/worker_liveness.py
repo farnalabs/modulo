@@ -349,6 +349,19 @@ def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
     return [address.strip() for address in alert_email_to.split(",") if address.strip()]
 
 
+def _alert_context_suffix(settings: Settings) -> str:
+    """The context block appended to EVERY alert body (email, generic webhook
+    and Teams alike): a leading blank line plus the shared environment /
+    ``ALERT_CONTEXT`` lines rendered by :mod:`modulo.core.alert_context`.
+
+    Single-sourced here (rather than composed per channel) so the three
+    renderings can never drift: ``alert_context_text`` always yields at least
+    the environment line, so every channel — not just email — names the
+    deployment environment (FAR-1495).
+    """
+    return "\n" + alert_context_text(settings)
+
+
 async def _send_email_alert(
     settings: Settings,
     conditions: list[str],
@@ -370,9 +383,9 @@ async def _send_email_alert(
 
     # FAR-1495: every alert email names the deployment environment and carries
     # the operator's ALERT_CONTEXT free text (shared renderer, one source of
-    # the format for both alert channels).
+    # the format for all alert channels).
     context_html = alert_context_html(settings)
-    context_text = "\n" + alert_context_text(settings)
+    context_text = _alert_context_suffix(settings)
 
     if recovery_state is not None:
         subject = "[Modulo Watchdog] Worker-liveness recovered"
@@ -442,8 +455,13 @@ async def _send_alerts(
     Each channel is wrapped in its own try/except so one channel's failure
     never prevents the others from delivering (mirrors the error-forwarder
     isolation lesson). Never raises out of the watchdog task.
+
+    Every channel — generic webhook and Teams just as much as email — carries
+    the shared environment / ``ALERT_CONTEXT`` suffix, so a webhook recipient
+    can tell staging from production and the channels cannot drift (FAR-1495).
     """
-    text = _recovery_text(recovery_state) if recovery_state is not None else _alert_text(conditions)
+    base_text = _recovery_text(recovery_state) if recovery_state is not None else _alert_text(conditions)
+    text = base_text + _alert_context_suffix(settings)
     if settings.alert_webhook_url:
         await _dispatch_channel(lambda: _post_generic_webhook(settings, text), "channel_generic_failed")
     if settings.alert_teams_webhook_url:
