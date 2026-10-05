@@ -979,7 +979,7 @@ class TestClientConfiguration:
 
 
 # ---------------------------------------------------------------------------
-# Migration 0279 structural parity (mirrors the 0178 migration test)
+# Migration 0281 structural parity (mirrors the 0178 migration test)
 # ---------------------------------------------------------------------------
 
 _VERSIONS = Path(__file__).resolve().parents[4] / "src" / "modulo" / "db" / "migrations" / "versions"
