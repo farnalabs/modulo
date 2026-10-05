@@ -337,7 +337,7 @@ async def reconcile_runner_workspaces(
     the other tier's reason is logged alongside it.
     """
     docker_skip = docker_endpoint_skip_reason()
-    kubernetes_skip = kubernetes_endpoint_skip_reason()
+    kubernetes_skip = await kubernetes_endpoint_skip_reason()
     if docker_skip is not None and kubernetes_skip is not None:
         if kubernetes_skip != docker_skip:
             _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
@@ -526,7 +526,7 @@ def docker_endpoint_skip_reason() -> str | None:
     )
 
 
-def kubernetes_endpoint_skip_reason() -> str | None:
+async def kubernetes_endpoint_skip_reason() -> str | None:
     """Why the KUBERNETES half of the sweep is NOT APPLICABLE here, or ``None``.
 
     FAR-1051: the sweep is applicable exactly when the deployment would
@@ -540,10 +540,13 @@ def kubernetes_endpoint_skip_reason() -> str | None:
 
     ``None`` means a provider IS registered — after which a configured-but-
     unreachable cluster still surfaces as a reported sweep failure (the
-    listing call raises), never a skip. The probe's ephemeral hub is not
-    closed: a freshly built provider holds no client connections until first
-    use (the Kubernetes client configuration is lazy), exactly like the
-    per-dispatch hub in ``node_runner._build_dispatch_provider``.
+    listing call raises), never a skip. The probe's ephemeral hub is disposed
+    via :meth:`RuntimeProviderHub.aclose` before returning: a freshly built
+    provider holds no client connections until first use (the Kubernetes
+    client configuration is lazy), so the close is the ADR 029 bookkeeping
+    pass — it releases any client a registration did open and never touches
+    the cluster (reviewer feedback on PR #1277: close the probe hub rather
+    than leak it).
     """
     from modulo.core.runtime_provider import build_hub
 
@@ -552,13 +555,16 @@ def kubernetes_endpoint_skip_reason() -> str | None:
     except Exception:
         _log.exception("runner.reconciler.kubernetes_probe_failed")
         return "the runtime-provider hub could not be built — see logs; the workspace-pod sweep cannot run"
-    if provider_hub.get("kubernetes") is None:
-        return (
-            "the Kubernetes runtime provider is not registered — set "
-            "MODULO_KUBERNETES_ENABLED to an enabling value (and install the "
-            "kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
-        )
-    return None
+    try:
+        if provider_hub.get("kubernetes") is None:
+            return (
+                "the Kubernetes runtime provider is not registered — set "
+                "MODULO_KUBERNETES_ENABLED to an enabling value (and install the "
+                "kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
+            )
+        return None
+    finally:
+        await provider_hub.aclose()
 
 
 async def _load_active_run_ids(

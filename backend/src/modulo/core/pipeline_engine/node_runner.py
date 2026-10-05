@@ -1569,6 +1569,13 @@ async def _build_profile_provider(provider_type: str) -> "RuntimeProvider":
 # a hung backend cannot stall the caller's own result.
 _SEAM_PROVIDER_CLOSE_TIMEOUT = 30.0
 
+# Bound for disposing the ROUTE's hub in the dispatch finally (FAR-1051). The
+# hub's registrations beyond the dispatch provider hold no client until used,
+# so this is the ADR 029 bookkeeping pass — bounded + best-effort. Kept
+# distinct from ``_OUTPUT_READ_TIMEOUT`` (a sandbox-output read bound) so the
+# two unrelated concerns cannot drift (reviewer feedback on PR #1277).
+_ROUTE_HUB_CLOSE_TIMEOUT = 30.0
+
 
 async def _close_seam_provider(provider: "RuntimeProvider | None") -> None:
     """Close a provider a seam built for its own single call (FAR-1051).
@@ -11120,7 +11127,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # the provider itself, which only tears down state it still
             # tracks). Bounded + best-effort, same contract as above.
             try:
-                await asyncio.wait_for(_route_hub.aclose(), timeout=_OUTPUT_READ_TIMEOUT)
+                await asyncio.wait_for(_route_hub.aclose(), timeout=_ROUTE_HUB_CLOSE_TIMEOUT)
             except asyncio.CancelledError:
                 raise
             except Exception:

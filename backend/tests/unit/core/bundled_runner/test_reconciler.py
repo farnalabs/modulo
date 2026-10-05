@@ -610,23 +610,23 @@ async def test_kubernetes_source_destroys_by_pod_name_and_closes_the_provider() 
     assert source._provider is None
 
 
-def test_kubernetes_skip_reason_names_the_registration_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_kubernetes_skip_reason_names_the_registration_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unregistered provider is an EXPLICIT skip, never a silent one: the
     reason names the env var that would register it."""
     monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
 
-    reason = runner_reconciler.kubernetes_endpoint_skip_reason()
+    reason = await runner_reconciler.kubernetes_endpoint_skip_reason()
 
     assert reason is not None
     assert "MODULO_KUBERNETES_ENABLED" in reason
 
 
-def test_kubernetes_skip_reason_none_when_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_kubernetes_skip_reason_none_when_registered(monkeypatch: pytest.MonkeyPatch) -> None:
     """The applicability check delegates to the registration matrix: with the
     opt-in flag set (and the SDK installed) the sweep's Kubernetes half runs."""
     monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
 
-    assert runner_reconciler.kubernetes_endpoint_skip_reason() is None
+    assert await runner_reconciler.kubernetes_endpoint_skip_reason() is None
 
 
 async def test_sweep_reclaims_orphans_through_the_kubernetes_source(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -634,7 +634,7 @@ async def test_sweep_reclaims_orphans_through_the_kubernetes_source(monkeypatch:
     destroyed under the same grace/active-run rules as a Docker container."""
     k8s_source = _fake_source([_container("gone-run", 9999.0, "pod-1")])
     monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
-    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", lambda: None)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: _fake_source([]))
     monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
 
@@ -657,7 +657,7 @@ async def test_sweep_skips_the_kubernetes_source_when_the_provider_is_unregister
     monkeypatch.setattr(
         runner_reconciler,
         "kubernetes_endpoint_skip_reason",
-        lambda: "the Kubernetes runtime provider is not registered",
+        AsyncMock(return_value="the Kubernetes runtime provider is not registered"),
     )
     docker_source = _fake_source([_container("gone-run", 9999.0, "c-9")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
@@ -797,14 +797,14 @@ async def test_workspace_source_protocol_stub_bodies_are_executable() -> None:
     assert await source.close() is None
 
 
-def test_kubernetes_skip_reason_reports_a_hub_build_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_kubernetes_skip_reason_reports_a_hub_build_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hub-build failure is an explicit, named skip reason — never a crash."""
     monkeypatch.setattr(
         "modulo.core.runtime_provider.build_hub",
         MagicMock(side_effect=RuntimeError("hub down")),
     )
 
-    reason = runner_reconciler.kubernetes_endpoint_skip_reason()
+    reason = await runner_reconciler.kubernetes_endpoint_skip_reason()
 
     assert reason is not None
     assert "hub could not be built" in reason
@@ -816,7 +816,7 @@ async def test_sweep_logs_distinct_kubernetes_skip_when_docker_also_skips(
     """When BOTH tiers are inapplicable, the historical Docker skip envelope is
     returned and the distinct Kubernetes reason is logged alongside it."""
     monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "docker-reason")
-    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", lambda: "k8s-reason")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-reason"))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -829,7 +829,7 @@ async def test_sweep_with_identical_skip_reasons_does_not_log_the_duplicate(
     """When both tiers report the SAME reason, the Kubernetes reason is not
     logged a second time (the Docker envelope already carries it)."""
     monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "same-reason")
-    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", lambda: "same-reason")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="same-reason"))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
@@ -846,7 +846,7 @@ async def test_sweep_runs_kubernetes_tier_while_logging_the_docker_skip(
     k8s_source = _fake_source([])
     monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
     monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "no docker endpoint")
-    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", lambda: None)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
     monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
 
     result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
