@@ -4,14 +4,23 @@
 app = 'app-modulo'
 
 # ===== Machine budget (stay within the org limit) =====
-# Standing footprint: 1 x app + 2 x worker (1 CPU, 2gb each; one is a stopped cold
+# Standing footprint: 1 x app + 2 x worker (2 CPU, 2gb each; one is a stopped cold
 # standby of the other) = 3 machines (verified live 2026-09-02 via `fly scale show`
 # / `fly machines list`). DECLARED app VM ([[vm]] below) is 4 shared CPU / 2gb, but
 # the LIVE prod app machine is still 2 shared CPU until a post-merge ops step:
 # [[vm]] changes do NOT resize existing machines on their own - they apply to NEW
 # machines only. Post-merge ops step: `flyctl machine update <machine-id> -a
 # app-modulo --vm-size shared-cpu-4x` (brief restart; find the app-group machine id
-# via `flyctl machines list -a app-modulo`). NOTE: prod runs ONE standing app
+# via `flyctl machines list -a app-modulo`). Same rule for the WORKER group,
+# which is declared at 2 shared CPU from FAR-1511 while the live worker machine
+# is still shared-cpu-1x - post-merge ops step: `flyctl machine update
+# <worker-machine-id> -a app-modulo --vm-size shared-cpu-2x` (brief restart of
+# the ONLY running worker machine, so do it in a quiet window; find the id with
+# `flyctl machines list -a app-modulo` and read the `process=worker` row that is
+# `started` - the stopped cold standby picks up the declared size whenever it
+# next starts). Rationale + the observations behind the bump:
+# docs/operations/far-1511-worker-event-loop-stalls.md.
+# NOTE: prod runs ONE standing app
 # machine (agreed 2026-09-02) - the August 2026 invoice (2x CPU line = 2.06
 # machine-months) proves it ran that way all month. If app-group HA is ever wanted
 # that is a manual `fly scale count app=2 -a app-modulo` (+1 app machine at the
@@ -196,10 +205,29 @@ primary_region = 'lhr'
   processes = ['worker']
   memory = '2gb'
   cpu_kind = 'shared'
-  cpus = 1
+  cpus = 2
+  # 2 shared CPU from FAR-1511 (was 1). This ONE machine runs the whole
+  # background fleet: the `runs` SAQ worker (SAQ_WORKER_CONCURRENCY=20), the
+  # `system` SAQ worker (every system cron, including dispatcher_reconcile /
+  # fire_due_triggers every 60s), and the 8082 liveness server - while the web
+  # machine gets 4 shared CPU (see the [[vm]] block above). Observed on the
+  # live shared-cpu-1x worker 2026-10-05: with pipeline runs executing, the
+  # worker logged ~10-13 `dispatch_phase.write_timeout ... timeout=2.0s
+  # (dropped)` per minute, 9x `asyncpg ConnectionDoesNotExistError: connection
+  # was closed in the middle of operation` + a `ConnectionResetError: [Errno
+  # 104]` during connect, four `health.readiness event-loop stall detected
+  # (FAR-1439)` readings, and dispatcher_reconcile blacking out for 95s
+  # (`stage=reconcile_org:<org>`) - while a 50-sample probe of the SAME
+  # Postgres from the 4-vCPU app machine held steady at 24-65ms with
+  # event_loop_lag 5-18ms over the same window, and with no runs executing
+  # every system cron held its exact 60s cadence. Full attribution note:
+  # docs/operations/far-1511-worker-event-loop-stalls.md. NOTE: [[vm]] applies
+  # to NEW machines only - see the machine-budget block above for the
+  # live-resize ops step.
   # 1024 MB swap: applied manually 2026-09-10 to both live worker machines
   # (flyctl machine update --swap-size 1024) after cgroup v1 near-miss
-  # (Committed_AS ~1.25GB > CommitLimit 0.96GB, no swap, ~755MB available at
-  # peak). [[vm]] settings apply to NEW machines only — live machines were
-  # updated via `flyctl machine update`.
+  # (Committed_As ~1.25GB > CommitLimit 0.96GB, no swap, ~755MB available at
+  # peak). The swap_size_mb setting also applies to NEW machines only - the
+  # live machines were updated via `flyctl machine update`, so a machine
+  # created from this file needs swap_size_mb declared here to get it.
   swap_size_mb = 1024
