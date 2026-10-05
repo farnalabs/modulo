@@ -180,12 +180,16 @@ this investigation's access. Note that they are not mutually exclusive: a
 process that is both starved of CPU and losing its connections produces exactly
 the observed mix.
 
-Separately, `dispatcher_reconcile` has no per-organisation bound: one
-unresponsive organisation consumes the whole 95-second inner deadline, so other
-organisations are not reconciled in that tick (the batch counters show it). The
-outer deadline already does the right thing (cancel at a safe boundary, persist
-a truthful failure heartbeat, return), so this is a cadence problem rather than
-a correctness one.
+Separately, `dispatcher_reconcile` already has a per-organisation **row** budget
+(FAR-1425 passes `row_budget=max_rows - rows_processed` into `_reconcile_org`,
+so an organisation's row select and per-row loop are capped) — but it has no
+per-organisation **time** bound. One unresponsive await inside a single
+organisation's pass therefore still consumes the whole 95-second inner
+deadline, so no other organisation is reconciled in that tick (the identical
+`stage=reconcile_org:<org>` and batch counters across seven timeout ticks show
+it). The outer deadline already does the right thing (cancel at a safe
+boundary, persist a truthful failure heartbeat, return), so this is a cadence
+problem rather than a correctness one.
 
 ## Change made
 
@@ -200,8 +204,12 @@ repository instead of living only on the machine.
 `[[vm]]` applies to new machines only, so the live worker machine keeps 1 CPU
 until the post-merge ops step recorded in the `fly.toml` machine-budget block
 (`flyctl machine update <worker-machine-id> -a app-modulo --vm-size
-shared-cpu-2x`). That step restarts the only running worker, so it needs a quiet
-window — it is an operational action, not part of this change.
+shared-cpu-2x`). That step restarts the only started worker, so it needs a quiet
+window — it is an operational action, not part of this change. The stopped cold
+standby is an existing machine too: starting it does not apply the declared
+size, so it stays on 1 CPU until it is updated the same way (safe while stopped)
+or recreated by a deploy. The app machine needed no such step — it was observed
+at 4 shared vCPU on 2026-10-05.
 
 ## Follow-ups
 
@@ -215,6 +223,9 @@ window — it is an operational action, not part of this change.
   cleaner structural fix for "system crons share a machine with the runs queue",
   but it adds a standing machine to a budget that the `fly.toml` machine block
   explicitly guards, so it is a cost decision rather than a code decision.
-- **Considered and not done:** bounding `dispatcher_reconcile` per organisation.
-  It would restore tick cadence while the underlying stall persists, but without
-  knowing whether the stall is CPU or connection loss it would treat a symptom.
+- **Considered and not done:** a per-organisation **time** bound inside
+  `dispatcher_reconcile` (the row budget from FAR-1425 already caps *how much*
+  work one organisation can do; what is missing is a cap on *how long* its pass
+  may take, so a single hung await cannot eat the 95-second deadline). It would
+  restore tick cadence while the underlying stall persists, but without knowing
+  whether the stall is CPU or connection loss it would treat a symptom.

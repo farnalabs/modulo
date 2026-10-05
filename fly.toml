@@ -4,22 +4,30 @@
 app = 'app-modulo'
 
 # ===== Machine budget (stay within the org limit) =====
-# Standing footprint: 1 x app + 2 x worker (2 CPU, 2gb each; one is a stopped cold
+# Standing footprint: 1 x app + 2 x worker (2gb each; one is a stopped cold
 # standby of the other) = 3 machines (verified live 2026-09-02 via `fly scale show`
-# / `fly machines list`). DECLARED app VM ([[vm]] below) is 4 shared CPU / 2gb, but
-# the LIVE prod app machine is still 2 shared CPU until a post-merge ops step:
+# / `fly machines list`). Sizes: the app machine is live AND declared at 4 shared
+# CPU; the WORKER group is declared at 2 shared CPU (FAR-1511) while its started
+# machine is still live at 1 shared CPU - see the worker ops step below.
 # [[vm]] changes do NOT resize existing machines on their own - they apply to NEW
-# machines only. Post-merge ops step: `flyctl machine update <machine-id> -a
-# app-modulo --vm-size shared-cpu-4x` (brief restart; find the app-group machine id
-# via `flyctl machines list -a app-modulo`). Same rule for the WORKER group,
-# which is declared at 2 shared CPU from FAR-1511 while the live worker machine
-# is still shared-cpu-1x - post-merge ops step: `flyctl machine update
-# <worker-machine-id> -a app-modulo --vm-size shared-cpu-2x` (brief restart of
-# the ONLY running worker machine, so do it in a quiet window; find the id with
-# `flyctl machines list -a app-modulo` and read the `process=worker` row that is
-# `started` - the stopped cold standby picks up the declared size whenever it
-# next starts). Rationale + the observations behind the bump:
-# docs/operations/far-1511-worker-event-loop-stalls.md.
+# machines only, so a declared size reaches a live machine only through a deploy
+# that recreates it, or through an explicit `flyctl machine update <machine-id> -a
+# app-modulo --vm-size <size>` (brief restart; find ids with `flyctl machines list
+# -a app-modulo`).
+#   APP: already done - the live prod app machine was OBSERVED at shared-cpu-4x by
+#   `flyctl machine status` on 2026-10-05, so no resize step is outstanding (this
+#   block previously instructed one; the "after the live resize" invoice note below
+#   refers to that completed resize).
+#   WORKER: outstanding - post-merge ops step: `flyctl machine update
+#   <worker-machine-id> -a app-modulo --vm-size shared-cpu-2x` (brief restart of the
+#   ONLY started worker machine, so do it in a quiet window; read the
+#   `process=worker` row that is `started`). The stopped cold standby is an
+#   EXISTING machine, so starting it later does NOT apply the declared 2 CPU - it
+#   keeps its recorded 1-CPU config until it too is updated (`flyctl machine update
+#   <standby-machine-id> ... --vm-size shared-cpu-2x`, safe while stopped) or is
+#   recreated by a deploy. Until then a worker failover lands on 1 CPU.
+#   Rationale + the observations behind the bump:
+#   docs/operations/far-1511-worker-event-loop-stalls.md.
 # NOTE: prod runs ONE standing app
 # machine (agreed 2026-09-02) - the August 2026 invoice (2x CPU line = 2.06
 # machine-months) proves it ran that way all month. If app-group HA is ever wanted
@@ -194,7 +202,7 @@ primary_region = 'lhr'
 # concurrent pipeline orchestration load (service check critical for 2+ hours).
 # 4 shared CPU gives event-loop headroom; memory unchanged (no memory-pressure
 # evidence). Applies to NEW machines only - see the machine-budget block above
-# for the live-machine resize command.
+# for which declared sizes have (and have not) already reached the live machines.
 [[vm]]
   processes = ['app']
   memory = '2gb'
