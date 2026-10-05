@@ -523,15 +523,26 @@ per-check override is set to a positive value.
 | `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor - a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
 | `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO` | No | `0.60` | Database-hygiene: worst-table dead-tuple ratio at/above which a table over the floor grades `degraded` (`0`–`1`) |
 
-A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations/
-db_hygiene) or `unavailable` (database) with a "timed out after Ns" detail message
-instead of blocking readiness indefinitely.
+A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations) or
+`unavailable` (database) with a "timed out after Ns" detail message instead of blocking
+readiness indefinitely.
+
+The database-hygiene probe is the exception to that wording (FAR-1510). When it does not
+complete within `MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS` it reports `degraded` with the
+detail "database-hygiene probe did not complete within Ns (likely an event-loop stall; see
+event_loop_lag) — hygiene not measured", and that result is ADVISORY: it stays visible in
+the readiness body but is excluded from the aggregate gate, so on its own it neither flips
+`/healthz/ready` to `degraded` nor fires the `health_readiness_alert` email. Nothing was
+measured, so there is no hygiene verdict to act on — the stall itself is what the advisory
+`event_loop_lag` check reports.
 
 The database-hygiene sub-check's two thresholds (`MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES`,
 `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO`) are grading settings, not timeouts: the check
 reports the worst table from `pg_stat_user_tables` plus this database's freeze age
 against `autovacuum_freeze_max_age`, and grades `degraded` (never `unavailable`, so it
-never 503s readiness on its own) when either threshold is breached.
+never 503s readiness on its own) when either threshold is breached. A completed reading
+that grades `degraded` DOES gate the aggregate — only a probe that never finished is
+advisory.
 
 ---
 

@@ -40,6 +40,12 @@ redirected to this infra-health surface via `feat-infra-health`.
       degrades (never `unavailable`, so never 503s readiness alone) on bloat at/above
       the configured ratio or on freeze age past 50% of the ceiling; thresholds via
       `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` / `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO`
+- [x] A database-hygiene probe that does NOT complete within its budget (timeout, or the
+      probe raising) reports `degraded` — "database-hygiene probe did not complete within
+      Ns (likely an event-loop stall; see event_loop_lag) — hygiene not measured" — but is
+      ADVISORY (FAR-1510): still listed in the body, never gating the aggregate and never
+      firing the readiness alert, because no hygiene reading was taken. Only a completed
+      reading graded over a threshold gates.
 - [x] SAQ worker liveness check — a stopped worker pool for 4+ consecutive probe ticks 503s readiness (Plan F7)
 - [x] System-cron liveness watchdog — fire_due_triggers missing 2x cadence 503s readiness (Plan F8)
 - [x] Stale-run recovery check — stalled/never-dispatched runs block readiness
@@ -47,7 +53,10 @@ redirected to this infra-health surface via `feat-infra-health`.
 - [x] Fleet worker / fleet system-cron aggregation (worker process-group health, ADR 021)
 - [x] Break-glass watchdog exposure is advisory and never contributes to readiness
 - [x] Per-check timeout limits, configurable via `modulo_health_*_timeout_seconds` settings
-- [x] Overall status: unavailable if any check is unavailable, degraded if any degraded
+- [x] Overall status: `unavailable` if any non-advisory gate is `unavailable`, `degraded`
+      if any non-advisory gate is `degraded` — advisory checks are listed in the body but
+      excluded from the aggregate (`break_glass`, `event_loop_lag`, and a database-hygiene
+      probe that did not complete, FAR-1510)
 - [x] 503 status code when overall unavailable
 - [x] Latency tracked per check
 - [x] Fly.io deployment wiring — `fly.toml` `[[http_service.checks]]` probes `/healthz/ready`
