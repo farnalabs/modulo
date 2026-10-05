@@ -104,6 +104,8 @@ async def test_e2b_profile_resolves_e2b_route() -> None:
     assert route.provider_type == "e2b"
     assert route.profile is not None
     assert route.provider is None
+    # The e2b route keeps the node's own template_id; no image override.
+    assert route.image_ref_override is None
 
 
 async def test_legacy_inert_local_provider_is_dispatch_unbound() -> None:
@@ -171,12 +173,29 @@ async def test_kubernetes_profile_resolves_hub_provider(monkeypatch: pytest.Monk
         assert route.profile is not None
         assert route.provider is not None
         assert route.hub is not None
+        # FAR-1051 review: the profile's declared image_ref rides the route so
+        # node_runner's sandbox spec uses the same image the bundled-runner
+        # mapper maps, instead of the node's E2B template_id.
+        assert route.image_ref_override == "modulo-runner:opencode@sha256:" + "a" * 64
         from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
 
         assert isinstance(route.provider, KubernetesRuntimeProvider)
     finally:
         if route.hub is not None:
             await route.hub.aclose()
+
+
+async def test_kubernetes_without_image_ref_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1051 review: a kubernetes profile with no image_ref would fall
+    through to the node's E2B ``template_id`` as the pod image and fail at
+    provision time (ImagePullBackOff). Route resolution fails LOUD instead,
+    naming the missing image_ref, before the hub is even built."""
+    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+
+    with pytest.raises(SandboxDispatchUnboundError, match="image_ref"):
+        await resolve_sandbox_dispatch_route(
+            _session_factory_returning(_profile("kubernetes", image_ref=None)), _ORG, _PROFILE_ID
+        )
 
 
 async def test_kubernetes_without_opt_in_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:

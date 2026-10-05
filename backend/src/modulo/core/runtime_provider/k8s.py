@@ -61,6 +61,13 @@ WorkspaceSpec mapping
   falls back to 120s when unset/zero. Direct callers are themselves
   wrapped by the dispatch provisioning watchdog.
 - ``egress_policy`` -> ``none`` refused (see security posture).
+- ``persistence_policy`` -> NOT honoured on this tier: every workspace pod
+  uses an ephemeral ``emptyDir`` and ``restart_policy=Never``, so
+  ``retained`` / ``cache`` do not survive the workspace and are never
+  presented as durable. Parity with the e2b tier (only ``runner_docker``
+  refuses non-ephemeral at route resolution via
+  ``validate_persistence_for_provider``); this note exists so an operator
+  binding a kubernetes profile is not surprised by the ephemeral reality.
 
 Deliberately deferred (FAR-1051's "not frozen" list): pod-lifetime deadline
 scoping (no ``active_deadline_seconds`` — the default 3600s spec timeout
@@ -188,7 +195,7 @@ def _resolve_exit_code(payload: str | None) -> tuple[int | None, str | None]:
         return None, "exec stream ended without an exit-status message"
     try:
         return WsApiClient.parse_error_data(payload), None
-    except (ValueError, TypeError, KeyError):
+    except Exception:
         return None, f"unparseable exec exit status: {payload[:_STREAM_ERROR_TRUNC]}"
 
 
@@ -987,7 +994,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 WorkspacePodRef(
                     ref=ref,
                     labels=dict(labels),
-                    created_age_s=(now - created) if created else 0.0,
+                    created_age_s=max(0.0, now - created) if created else 0.0,
                 )
             )
         return entries
@@ -1064,18 +1071,18 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             per FAR-1315 (``None`` when the guard was not armed);
           - ``command_timeout`` bounds every step.
 
-        Control this tier CANNOT enforce: the selected-mode egress allowlist
-        and an egress ``none`` claim. Bounded egress on Kubernetes is the
+        Control this tier CANNOT enforce: any ``selected``-mode egress claim
+        (with or without an allowlist) and an egress ``none`` claim. Bounded egress on Kubernetes is the
         CUSTOMER's NetworkPolicy (opt-in; needs an enforcing CNI) — there is
         deliberately no in-pod egress mechanism here, so those requests raise
         the typed :class:`ProviderCapabilityUnsupportedError` naming the
         remediation. Never a silent downgrade.
         """
         egress = (policy.egress_policy or "").strip().lower()
-        if egress == "none" or (egress == "selected" and policy.egress_allowlist):
+        if egress in ("none", "selected"):
             raise ProviderCapabilityUnsupportedError(
                 "The Kubernetes tier cannot enforce "
-                + ("an egress 'none' claim" if egress == "none" else "a selected-mode egress allowlist")
+                + ("an egress 'none' claim" if egress == "none" else "a selected-mode egress claim")
                 + " inside the workspace pod: bounded egress on this tier is the customer's "
                 "NetworkPolicy on the workspace namespace (opt-in, requires a CNI that enforces "
                 "NetworkPolicy; FAR-1051). Configure it there and use a policy this tier can "

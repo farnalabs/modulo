@@ -95,6 +95,7 @@ class _FakeRoute:
     profile: Any = None
     provider: Any = None
     hub: Any = None
+    image_ref_override: str | None = None
 
 
 def _e2b_route(profile: Any | None = None) -> _FakeRoute:

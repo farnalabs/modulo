@@ -1,7 +1,7 @@
 """Unit tests for RuntimeProviderHub."""
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -358,6 +358,30 @@ class TestInitialise:
         assert isinstance(provider, KubernetesRuntimeProvider)
         assert provider.provider_id == "kubernetes"
 
+    async def test_registers_kubernetes_with_config_values(self) -> None:
+        """FAR-1051 review: ``initialise`` honours the kubernetes provider's
+        per-provider config keys (namespace / default_image / kubeconfig /
+        provision_timeout_s), matching the docker and e2b arms instead of
+        silently ignoring provider_config contents."""
+        hub = RuntimeProviderHub()
+        await hub.initialise(
+            {
+                "pod-runtime": {
+                    "type": "kubernetes",
+                    "namespace": "ws-ns",
+                    "default_image": "ghcr.io/acme/agent:1",
+                    "kubeconfig": "/etc/kube/config",
+                    "provision_timeout_s": 321,
+                }
+            }
+        )
+        provider = hub.get("pod-runtime")
+        assert isinstance(provider, KubernetesRuntimeProvider)
+        assert provider._namespace == "ws-ns"
+        assert provider._default_image == "ghcr.io/acme/agent:1"
+        assert provider._kubeconfig == "/etc/kube/config"
+        assert provider._provision_timeout_s == 321
+
     async def test_registers_kubernetes_alias_type(self) -> None:
         """The ``k8s`` alias registers too — a name that is in the vocabulary
         must never warn-and-skip (the pre-FAR-1051 behaviour)."""
@@ -377,6 +401,27 @@ class TestInitialise:
 
         assert "already registered, skipping" in caplog.text
         assert hub.get("pod-runtime") is None
+
+    async def test_kubernetes_missing_sdk_skips_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A missing kubernetes-asyncio SDK is warn-and-skip, never a boot crash.
+
+        The factory ``initialise`` path mirrors ``build_hub``: importing the
+        concrete provider module raises ``ImportError``, so the provider is
+        not registered and the warning names the missing dependency.
+        """
+        hub = RuntimeProviderHub()
+        real_import = cast(Any, __import__)
+
+        def _fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "modulo.core.runtime_provider.k8s":
+                raise ImportError("kubernetes-asyncio not installed")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=_fake_import):
+            await hub.initialise({"pod-runtime": {"type": "kubernetes"}})
+
+        assert hub.get("pod-runtime") is None
+        assert "not installed" in caplog.text
 
 
 # ---------------------------------------------------------------------------

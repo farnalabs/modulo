@@ -21,8 +21,9 @@ tests substitute the provider seam directly.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -436,3 +437,41 @@ async def test_legacy_e2b_arm_keeps_its_unclosed_per_call_provider(
     await _write_file_via_provider("sbx-1", "/home/user/prompt.md", "hi")
 
     assert provider.close_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Collection arms (Branch Fixer coverage): seam disposal + collector errors
+# ---------------------------------------------------------------------------
+
+
+async def test_close_seam_provider_none_is_a_noop() -> None:
+    assert await nr._close_seam_provider(None) is None
+
+
+async def test_close_seam_provider_swallows_failures_and_propagates_cancellation() -> None:
+    """A best-effort close failure is logged, never raised; cancellation (which
+    is already unwinding) propagates."""
+
+    class _FailingClose:
+        async def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    await nr._close_seam_provider(cast(Any, _FailingClose()))
+
+    class _CancellingClose:
+        async def close(self) -> None:
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await nr._close_seam_provider(cast(Any, _CancellingClose()))
+
+
+async def test_log_tail_cancellation_from_a_borrowed_provider_propagates() -> None:
+    """``CancelledError`` from a borrowed provider is never swallowed into an
+    empty tail — it re-raises (the probe's fail-open contract is only for
+    real failures)."""
+    provider = _RecordingProvider()
+    provider.read_log_tail = AsyncMock(side_effect=asyncio.CancelledError)  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        await _read_log_tail_via_provider("modulo-ws-1", provider_type="kubernetes", borrowed_provider=provider)

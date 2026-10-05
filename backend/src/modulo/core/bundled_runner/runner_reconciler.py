@@ -233,18 +233,13 @@ class _KubernetesWorkspaceSource:
     async def destroy_by_container_id(self, container_id: str) -> None:
         # destroy_workspace_by_ref is idempotent and label-guarded (a foreign
         # or already-gone pod is a logged no-op), so the sweep's decision is
-        # the only gate that matters here.
-        #
-        # Deliberate asymmetry with the Docker source: ``container.delete``
-        # RAISES on an unconfirmed delete, so the sweep never counts a
-        # destroyed container it did not actually remove. Here an unconfirmed
-        # destroy (``False``) is swallowed and ``_reconcile_single_container``
-        # still increments ``orphans_destroyed``. That is acceptable because
-        # the failure is logged by the provider, the pod is re-listed on the
-        # next sweep and retried, and a false ``orphans_destroyed`` count is
-        # an observability blemish, not a safety gap (the label guard already
-        # prevents touching a foreign pod).
-        await self._get_provider().destroy_workspace_by_ref(container_id)
+        # the only gate that matters here. An UNCONFIRMED destroy (``False``)
+        # is NOT swallowed: it raises so the sweep aborts with partial counts
+        # and SAQ's retry + /healthz attribution engage — parity with the
+        # Docker source, whose delete raises on failure.
+        destroyed = await self._get_provider().destroy_workspace_by_ref(container_id)
+        if not destroyed:
+            raise RuntimeError(f"Kubernetes workspace pod {container_id!r} could not be confirmed destroyed")
 
     async def close(self) -> None:
         if self._provider is not None:
@@ -347,7 +342,7 @@ async def reconcile_runner_workspaces(
     the other tier's reason is logged alongside it.
     """
     docker_skip = docker_endpoint_skip_reason()
-    kubernetes_skip = kubernetes_endpoint_skip_reason()
+    kubernetes_skip = await kubernetes_endpoint_skip_reason()
     if docker_skip is not None and kubernetes_skip is not None:
         if kubernetes_skip != docker_skip:
             _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
@@ -399,19 +394,44 @@ async def reconcile_runner_workspaces(
 
         for source_name, container in listed:
             scanned += 1
-            if await _reconcile_single_container(
-                async_engine,
-                source_by_name[source_name],
-                container,
-                active_run_ids=active_run_ids,
-                log_only=log_only,
-                grace_seconds=grace_seconds,
-                max_lifetime_seconds=max_lifetime_seconds,
-            ):
+            try:
+                destroyed = await _reconcile_single_container(
+                    async_engine,
+                    source_by_name[source_name],
+                    container,
+                    active_run_ids=active_run_ids,
+                    log_only=log_only,
+                    grace_seconds=grace_seconds,
+                    max_lifetime_seconds=max_lifetime_seconds,
+                )
+            except Exception as exc:
+                # A destroy failure aborts the sweep on EVERY tier (Docker's
+                # delete raises too) and is surfaced as ReconcilerSweepError
+                # with the partial counts, so SAQ's retries and /healthz
+                # attribution engage rather than the failure vanishing into a
+                # log line while the sweep reports the orphan as destroyed.
+                _log.exception(
+                    "runner.reconciler.sweep_aborted stage=destroy source=%s container=%s",
+                    source_name,
+                    container.id,
+                )
+                raise ReconcilerSweepError(
+                    f"Bundled Runner orphan sweeper aborted destroying {source_name} workspace {container.id}: {exc}",
+                    scanned=scanned,
+                    destroyed=orphans_destroyed,
+                ) from exc
+            if destroyed:
                 orphans_destroyed += 1
     finally:
-        for _, source in sources:
-            await source.close()
+        # FAR-1051 review: close EACH source independently. A raise from one
+        # tier's close() must not skip the other tier's close, nor replace an
+        # in-flight sweep exception with the close error. Best-effort teardown
+        # fails open WITH a log (never silently).
+        for source_name, source in sources:
+            try:
+                await source.close()
+            except Exception:
+                _log.exception("runner.reconciler.source_close_failed source=%s", source_name)
     _log.info(
         "runner.reconciler.sweep_completed scanned=%d orphans_destroyed=%d log_only=%s",
         scanned,
@@ -536,7 +556,7 @@ def docker_endpoint_skip_reason() -> str | None:
     )
 
 
-def kubernetes_endpoint_skip_reason() -> str | None:
+async def kubernetes_endpoint_skip_reason() -> str | None:
     """Why the KUBERNETES half of the sweep is NOT APPLICABLE here, or ``None``.
 
     FAR-1051: the sweep is applicable exactly when the deployment would
@@ -550,10 +570,13 @@ def kubernetes_endpoint_skip_reason() -> str | None:
 
     ``None`` means a provider IS registered — after which a configured-but-
     unreachable cluster still surfaces as a reported sweep failure (the
-    listing call raises), never a skip. The probe's ephemeral hub is not
-    closed: a freshly built provider holds no client connections until first
-    use (the Kubernetes client configuration is lazy), exactly like the
-    per-dispatch hub in ``node_runner._build_dispatch_provider``.
+    listing call raises), never a skip. The probe's ephemeral hub is disposed
+    via :meth:`RuntimeProviderHub.aclose` before returning: a freshly built
+    provider holds no client connections until first use (the Kubernetes
+    client configuration is lazy), so the close is the ADR 029 bookkeeping
+    pass — it releases any client a registration did open and never touches
+    the cluster (reviewer feedback on PR #1277: close the probe hub rather
+    than leak it).
     """
     from modulo.core.runtime_provider import build_hub
 
@@ -562,13 +585,16 @@ def kubernetes_endpoint_skip_reason() -> str | None:
     except Exception:
         _log.exception("runner.reconciler.kubernetes_probe_failed")
         return "the runtime-provider hub could not be built — see logs; the workspace-pod sweep cannot run"
-    if provider_hub.get("kubernetes") is None:
-        return (
-            "the Kubernetes runtime provider is not registered — set "
-            "MODULO_KUBERNETES_ENABLED to an enabling value (and install the "
-            "kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
-        )
-    return None
+    try:
+        if provider_hub.get("kubernetes") is None:
+            return (
+                "the Kubernetes runtime provider is not registered — set "
+                "MODULO_KUBERNETES_ENABLED to an enabling value (and install the "
+                "kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
+            )
+        return None
+    finally:
+        await provider_hub.aclose()
 
 
 async def _load_active_run_ids(
