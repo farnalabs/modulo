@@ -433,7 +433,8 @@ def _then_envelope(request: Any, count: str) -> None:
     body = _body(request)
     for field in ("group_by", "dimension", "date_from", "date_to", "facts_freshness_hours", "facts_stale", "buckets"):
         assert field in body, f"analytics response missing '{field}': {sorted(body)}"
-    assert isinstance(body["buckets"], list) and len(body["buckets"]) == int(count)
+    assert isinstance(body["buckets"], list)
+    assert len(body["buckets"]) == int(count)
 
 
 @then(parsers.parse("the bucket for {day} counts {count:d} runs"))

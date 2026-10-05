@@ -447,7 +447,8 @@ def test_resolve_backoff_schedule_canonicalizes_types() -> None:
         {"backoff_schedule": {"delay_seconds": 300.0, "multiplier": 2}}
     )
     assert delay == 300.0
-    assert isinstance(mult, float) and mult == 2.0
+    assert isinstance(mult, float)
+    assert mult == 2.0
 
 
 def test_resolve_backoff_schedule_fail_open_matrix() -> None:

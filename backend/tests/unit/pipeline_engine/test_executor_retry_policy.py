@@ -1610,7 +1610,8 @@ async def test_run_start_malformed_schedule_warns_and_run_proceeds():
     from modulo.core.pipeline_engine import GraphValidationError
 
     assert not isinstance(exc, GraphValidationError)
-    assert kind == "raised" and isinstance(exc, RunRetryPolicyError)
+    assert kind == "raised"
+    assert isinstance(exc, RunRetryPolicyError)
     mock_finalize.assert_not_awaited()
     malformed = [r for r in records if r.getMessage() == "pipeline.retry_policy_schedule_malformed"]
     assert malformed, records
