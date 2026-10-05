@@ -397,7 +397,7 @@ async def test_chain_end_ignores_non_terminating_synthetic_output() -> None:
     ctx = SimpleNamespace(node_ids=set())
     event = {"name": _REVIEW_ID, "data": {"output": _output("approved")}}
     await executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=event)
-    assert state.terminating_rejected_gates == set()
+    assert not state.terminating_rejected_gates
 
 
 # ---------------------------------------------------------------------------
