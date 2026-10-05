@@ -563,13 +563,15 @@ class TestRoundTrip(AuthContext):
 
 
 class TestApiKeySessionContract(AuthContext):
-    """FAR-1482: the session-contract guard on the hand-rolled API-key arms.
+    """FAR-1482 + FAR-1502: the session-contract guard on the hand-rolled API-key arms.
 
     Both branches of each guard's ``if`` are pinned: an ``InvalidRequestError``
-    is a programming error (``internal_error`` + the shared ``MSG_SESSION_CONTRACT``
-    text), while a generic ``SQLAlchemyError`` keeps the old transient reply. A
-    test that only pins one branch would leave the other — and the ``if`` line
-    itself — uncovered.
+    is a programming error (``session_contract_error`` + the shared
+    ``MSG_SESSION_CONTRACT`` text — a specific branchable code, never the
+    generic ``internal_error`` per FAR-1502), while a generic ``SQLAlchemyError``
+    keeps the old transient reply (now rendered with the aligned
+    ``database_unavailable`` code). A test that only pins one branch would
+    leave the other — and the ``if`` line itself — uncovered.
     """
 
     def setup_method(self) -> None:
@@ -578,7 +580,7 @@ class TestApiKeySessionContract(AuthContext):
 
         _ctx_role.set("admin")
 
-    async def test_create_api_key_session_contract_error_is_internal(self) -> None:
+    async def test_create_api_key_session_contract_error_is_specific(self) -> None:
         from modulo.api.mcp_server import create_api_key
 
         mock_crud = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
@@ -586,7 +588,7 @@ class TestApiKeySessionContract(AuthContext):
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
             with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
                 result = await create_api_key(name="CI")
-        assert result["error"] == "internal_error", result
+        assert result["error"] == "session_contract_error", result
         assert result["detail"] == MSG_SESSION_CONTRACT, result
 
     async def test_create_api_key_transient_stays_database_unavailable(self) -> None:
@@ -597,10 +599,10 @@ class TestApiKeySessionContract(AuthContext):
             mock_session.return_value = make_session_context(_make_create_session(_make_key()))
             with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
                 result = await create_api_key(name="CI")
-        assert result["error"] == "internal_error", result
+        assert result["error"] == "database_unavailable", result
         assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result
 
-    async def test_revoke_api_key_session_contract_error_is_internal(self) -> None:
+    async def test_revoke_api_key_session_contract_error_is_specific(self) -> None:
         from modulo.api.mcp_server import revoke_api_key
 
         mock_revoke = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
@@ -611,7 +613,7 @@ class TestApiKeySessionContract(AuthContext):
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
             result = await revoke_api_key(str(_KEY_ID))
-        assert result["error"] == "internal_error", result
+        assert result["error"] == "session_contract_error", result
         assert result["detail"] == MSG_SESSION_CONTRACT, result
 
     async def test_revoke_api_key_transient_stays_database_unavailable(self) -> None:
@@ -625,5 +627,5 @@ class TestApiKeySessionContract(AuthContext):
         ):
             mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
             result = await revoke_api_key(str(_KEY_ID))
-        assert result["error"] == "internal_error", result
+        assert result["error"] == "database_unavailable", result
         assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result

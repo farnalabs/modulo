@@ -149,7 +149,7 @@ class TestListAgents(AuthContext):
         mock_list.side_effect = RuntimeError("boom")
         mock_session.return_value = make_session_context(AsyncMock())
         result = await list_agents()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 class TestGetAgent(AuthContext):
@@ -444,7 +444,7 @@ class TestListConnectorTypes(AuthContext):
     async def test_generic_error_returns_tool_error(self, mock_validate: AsyncMock) -> None:
         with patch.dict("sys.modules", {"modulo.connectors.base": None}):
             result = await list_connector_types()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +526,7 @@ class TestListModelBackends(AuthContext):
         mock_list.side_effect = RuntimeError("boom")
         mock_session.return_value = make_session_context(AsyncMock())
         result = await list_model_backends()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 class TestGetModelBackend(AuthContext):
@@ -765,7 +765,7 @@ class TestListParameterSchemas(AuthContext):
         mock_list.side_effect = RuntimeError("boom")
         mock_session.return_value = make_session_context(AsyncMock())
         result = await list_parameter_schemas()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------

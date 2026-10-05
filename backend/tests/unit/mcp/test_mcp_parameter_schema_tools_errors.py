@@ -43,8 +43,8 @@ def _session():
 
 
 def _assert_session_contract(result: dict) -> None:
-    """FAR-1482: an InvalidRequestError surfaces as the shared 500 payload, not an outage."""
-    assert result["error"] == "internal_error", result
+    """FAR-1482 + FAR-1502: specific ``session_contract_error`` payload, not an outage."""
+    assert result["error"] == "session_contract_error", result
     assert result["detail"] == MSG_SESSION_CONTRACT, result
 
 
@@ -79,7 +79,7 @@ class TestCreateParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.create_schema")
-    async def test_session_contract_error_returns_internal_error(self, mock_create, mock_session, mock_validate):
+    async def test_session_contract_error_returns_specific_code(self, mock_create, mock_session, mock_validate):
         mock_create.side_effect = InvalidRequestError("Autobegin is disabled on this Session")
         mock_session.return_value = _session()
         result = await create_parameter_schema(name="test")
@@ -108,7 +108,7 @@ class TestGetParameterSchemaErrors(AuthContext):
         mock_get.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await get_parameter_schema(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ class TestUpdateParameterSchemaErrors(AuthContext):
         mock_update.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await update_parameter_schema(schema_id=str(uuid.uuid4()), version=1)
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -158,7 +158,7 @@ class TestUpdateParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.update_schema")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
+    async def test_session_contract_error_returns_specific_code(
         self, mock_get, mock_update, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -207,7 +207,7 @@ class TestDeleteParameterSchemaErrors(AuthContext):
         mock_delete.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await delete_parameter_schema(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -226,7 +226,7 @@ class TestDeleteParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.soft_delete_schema")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
+    async def test_session_contract_error_returns_specific_code(
         self, mock_get, mock_delete, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -264,7 +264,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
         mock_restore.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -283,7 +283,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.restore_schema")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
+    async def test_session_contract_error_returns_specific_code(
         self, mock_get, mock_restore, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -330,7 +330,7 @@ class TestGetParameterSchemaReferencesErrors(AuthContext):
         mock_refs.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await get_parameter_schema_references(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +355,7 @@ class TestValidateParameterSchemaErrors(AuthContext):
         mock_get.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await validate_parameter_schema(schema_id=str(uuid.uuid4()), values={"region": "x"})
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +384,7 @@ class TestListParameterSetsErrors(AuthContext):
         mock_list.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await list_parameter_sets(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +415,7 @@ class TestCreateParameterSetErrors(AuthContext):
         mock_create.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await create_parameter_set(schema_id=str(uuid.uuid4()), name="prod")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -434,7 +434,7 @@ class TestCreateParameterSetErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_set.create_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
+    async def test_session_contract_error_returns_specific_code(
         self, mock_get, mock_create, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -466,7 +466,7 @@ class TestGetParameterSetErrors(AuthContext):
         mock_get.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await get_parameter_set(schema_id=str(uuid.uuid4()), set_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +505,7 @@ class TestUpdateParameterSetErrors(AuthContext):
         mock_update.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await update_parameter_set(schema_id=str(sid), set_id=str(uuid.uuid4()), version=1)
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -528,7 +528,7 @@ class TestUpdateParameterSetErrors(AuthContext):
     @patch("modulo.db.crud.parameter_set.update_set")
     @patch("modulo.db.crud.parameter_set.get_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
+    async def test_session_contract_error_returns_specific_code(
         self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate
     ):
         sid = uuid.uuid4()
@@ -592,7 +592,7 @@ class TestDeleteParameterSetErrors(AuthContext):
         mock_delete.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await delete_parameter_set(schema_id=str(sid), set_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -615,7 +615,7 @@ class TestDeleteParameterSetErrors(AuthContext):
     @patch("modulo.db.crud.parameter_set.soft_delete_set")
     @patch("modulo.db.crud.parameter_set.get_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
+    async def test_session_contract_error_returns_specific_code(
         self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate
     ):
         sid = uuid.uuid4()
@@ -679,7 +679,7 @@ class TestRestoreParameterSetErrors(AuthContext):
         mock_restore.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await restore_parameter_set(schema_id=str(sid), set_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -702,7 +702,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("modulo.db.crud.parameter_set.restore_set")
     @patch("modulo.db.crud.parameter_set.get_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
+    async def test_session_contract_error_returns_specific_code(
         self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
     ):
         sid = uuid.uuid4()

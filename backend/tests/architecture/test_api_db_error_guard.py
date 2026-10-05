@@ -166,9 +166,11 @@ def _logs_db_transient(node: ast.Call) -> bool:
 def _returns_mcp_db_unavailable(node: ast.Return) -> bool:
     """``return {"error": "database_unavailable", ...}`` (FAR-1482).
 
-    Also matches ``return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)``, whose
-    code is already ``internal_error`` but whose DETAIL still claims a database
-    outage — the same misreport in a different wrapper.
+    Also matches ``return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, ...)``:
+    the wrapper's DETAIL claims a database outage whatever code it carries
+    (``internal_error`` before FAR-1502, ``database_unavailable`` after), so
+    the same misreport — a session-contract violation answered as an outage —
+    applies and the arm must lead with the guard either way.
     """
     value = node.value
     if isinstance(value, ast.Call) and _name_of(value.func) == "_tool_error":

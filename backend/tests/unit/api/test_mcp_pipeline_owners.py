@@ -163,7 +163,7 @@ class TestSetPipelineOwners(_AuthContext):
             )
         assert result["error"] == "migration_required"
 
-    async def test_unexpected_error_maps_to_internal_error(self) -> None:
+    async def test_unexpected_error_maps_to_server_error(self) -> None:
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))),
@@ -171,7 +171,7 @@ class TestSetPipelineOwners(_AuthContext):
             result = await ms.set_pipeline_owners(
                 pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
             )
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 class TestCreatePipelineOwnerParams(_AuthContext):
@@ -238,10 +238,10 @@ class TestCreatePipelineOwnerParams(_AuthContext):
             result = await ms.create_pipeline(name="p")
         assert result["error"] == "migration_required"
 
-    async def test_unexpected_error_maps_to_internal_error(self) -> None:
+    async def test_unexpected_error_maps_to_server_error(self) -> None:
         with patch("modulo.db.crud.pipeline.create_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))):
             result = await ms.create_pipeline(name="p")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 class TestListPipelinesOwnerFields(_AuthContext):

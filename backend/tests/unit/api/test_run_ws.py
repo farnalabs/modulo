@@ -364,7 +364,7 @@ async def test_ws_programming_error_sends_migration_msg():
 
 
 @pytest.mark.asyncio
-async def test_ws_sqlalchemy_error_sends_db_unavailable():
+async def test_ws_sqlalchemy_error_sends_database_unavailable():
     from sqlalchemy.exc import SQLAlchemyError
 
     ws = _FakeWebSocket()
@@ -388,11 +388,11 @@ async def test_ws_sqlalchemy_error_sends_db_unavailable():
     ):
         await run_websocket(ws, uuid.uuid4(), token="tok")
     assert ws.close_code == 1011
-    assert ws.sent[0]["error"] == "db_unavailable"
+    assert ws.sent[0]["error"] == "database_unavailable"
 
 
 @pytest.mark.asyncio
-async def test_ws_generic_exception_sends_internal_error():
+async def test_ws_generic_exception_sends_server_error():
     ws = _FakeWebSocket()
     payload = {
         "sub": "u",
@@ -414,7 +414,7 @@ async def test_ws_generic_exception_sends_internal_error():
     ):
         await run_websocket(ws, uuid.uuid4(), token="tok")
     assert ws.close_code == 1011
-    assert ws.sent[0]["error"] == "internal_error"
+    assert ws.sent[0]["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------

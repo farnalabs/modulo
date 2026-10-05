@@ -1,17 +1,20 @@
-"""FAR-1482: an ``InvalidRequestError`` on an MCP tool path is an internal error.
+"""FAR-1482 + FAR-1502: an ``InvalidRequestError`` on an MCP tool path is a
+session-contract error, named by a SPECIFIC branchable code.
 
 REST classifies a client-side session-contract violation with the shared
 ``raise_session_contract_error`` guard (FAR-1464) and answers ``500
 MSG_SESSION_CONTRACT``. MCP tool results carry no status code — the payload IS
 the response — so the same verdict has to arrive as this surface's
-``internal_error`` payload. One classifier, two renderings.
+``session_contract_error`` payload (the FAR-1482 rendering initially used the
+generic ``internal_error``; FAR-1502 gives it the specific code a consuming
+agent can branch on). One classifier, two renderings.
 
-Every ``internal_error`` assertion in this file FAILED before the fix: a
-session-contract violation was reported to the MCP caller as ``database_unavailable``
-/ ``Database temporarily unavailable`` — a retry-inviting outage reply for a
-non-retryable server bug. The transient controls assert the other half of Done
-means #2: a genuine ``SQLAlchemyError`` / ``PendingRollbackError`` must keep its
-old behaviour.
+Every ``session_contract_error`` assertion in this file FAILED before the
+FAR-1482 fix: a session-contract violation was reported to the MCP caller as
+``database_unavailable`` / ``Database temporarily unavailable`` — a
+retry-inviting outage reply for a non-retryable server bug. The transient
+controls assert the other half of Done means #2: a genuine ``SQLAlchemyError`` /
+``PendingRollbackError`` must keep its old behaviour.
 
 Unit tier: no DB, no Docker — auth, the session factory and the CRUD layer are
 all mocked (``tests/unit/mcp/`` has no settings-providing conftest, so the real
@@ -68,15 +71,16 @@ def _tool_env(**crud: Any):
         yield
 
 
-def _assert_internal_session_contract(result: dict[str, Any]) -> None:
-    """The programming-error payload: ``internal_error`` + the SHARED REST message.
+def _assert_session_contract(result: dict[str, Any]) -> None:
+    """The programming-error payload: ``session_contract_error`` + the SHARED REST message.
 
     Equality with ``MSG_SESSION_CONTRACT`` is what rules out the old reply
     (``database_unavailable`` / ``Database temporarily unavailable``) — a
     retry-inviting outage text for a bug that will fail identically until the
-    code is fixed.
+    code is fixed — while the specific code (not the generic ``internal_error``,
+    FAR-1502) is what lets the consuming agent branch on this failure mode.
     """
-    assert result["error"] == "internal_error", result
+    assert result["error"] == "session_contract_error", result
     assert result["detail"] == MSG_SESSION_CONTRACT, result
 
 
@@ -86,21 +90,21 @@ class TestToolDbShellSessionContract:
     A bare decorator over a local handler — no auth/contextvars involved.
     """
 
-    async def test_invalid_request_error_is_internal_error(self) -> None:
+    async def test_invalid_request_error_is_session_contract_error(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
             raise InvalidRequestError(_SESSION_CONTRACT_MSG)
 
         result = await handler()
-        _assert_internal_session_contract(result)
+        _assert_session_contract(result)
 
-    async def test_missing_greenlet_is_internal_error(self) -> None:
+    async def test_missing_greenlet_is_session_contract_error(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
             raise MissingGreenlet
 
         result = await handler()
-        _assert_internal_session_contract(result)
+        _assert_session_contract(result)
 
     async def test_invalid_request_error_beats_generic_fallback(self) -> None:
         """``db_errors_to_fallback`` must not swallow the shared classification."""
@@ -115,7 +119,7 @@ class TestToolDbShellSessionContract:
             raise InvalidRequestError(_SESSION_CONTRACT_MSG)
 
         result = await handler()
-        _assert_internal_session_contract(result)
+        _assert_session_contract(result)
         assert "Failed to get trigger" not in result["detail"], result
 
     async def test_transient_sqlalchemy_error_stays_database_unavailable(self) -> None:
@@ -140,10 +144,10 @@ class TestToolDbShellSessionContract:
 class TestToolPayloadSessionContract(_McpContext):
     """Hand-rolled per-tool ``except SQLAlchemyError`` ladders."""
 
-    async def test_create_schema_reports_internal_error(self) -> None:
+    async def test_create_schema_reports_session_contract_error(self) -> None:
         with _tool_env(db_create_schema=InvalidRequestError(_SESSION_CONTRACT_MSG)):
             result = await create_schema(name="s")
-        _assert_internal_session_contract(result)
+        _assert_session_contract(result)
 
     async def test_create_schema_transient_stays_database_unavailable(self) -> None:
         with _tool_env(db_create_schema=SQLAlchemyError("down")):
@@ -155,16 +159,16 @@ class TestToolPayloadSessionContract(_McpContext):
             result = await create_schema(name="s")
         assert result["error"] == "database_unavailable", result
 
-    async def test_list_api_keys_reports_internal_error(self) -> None:
+    async def test_list_api_keys_reports_session_contract_error(self) -> None:
         """Covers the ``_tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)`` arm shape."""
         with _tool_env(auth_list_api_keys=InvalidRequestError(_SESSION_CONTRACT_MSG)):
             result = await list_api_keys()
-        _assert_internal_session_contract(result)
+        _assert_session_contract(result)
 
     async def test_list_api_keys_transient_keeps_old_detail(self) -> None:
         with _tool_env(auth_list_api_keys=SQLAlchemyError("down")):
             result = await list_api_keys()
-        assert result["error"] == "internal_error", result
+        assert result["error"] == "database_unavailable", result
         assert result["detail"] == ms._MSG_DB_TEMPORARILY_UNAVAILABLE, result
 
     async def test_shared_classifier_writes_its_own_log_record(self, caplog: pytest.LogCaptureFixture) -> None:

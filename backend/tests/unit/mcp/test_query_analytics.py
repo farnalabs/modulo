@@ -445,7 +445,7 @@ class TestQueryAnalytics(_AuthContext):
         assert result["error"] == "migration_required"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_unexpected_error_maps_to_internal_error(
+    async def test_unexpected_error_maps_to_server_error(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
@@ -457,4 +457,4 @@ class TestQueryAnalytics(_AuthContext):
             for p in patches:
                 stack.enter_context(p)
             result = await query_analytics()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"

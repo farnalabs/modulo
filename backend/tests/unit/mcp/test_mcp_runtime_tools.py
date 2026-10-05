@@ -1889,7 +1889,7 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
-    async def test_internal_error(
+    async def test_server_error(
         self,
         mock_session: AsyncMock,
         mock_manager_cls: MagicMock,
@@ -1910,7 +1910,7 @@ class TestReviewHitl(_AuthContext):
 
         result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok")
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
