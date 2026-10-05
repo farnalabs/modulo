@@ -31,7 +31,7 @@ ALT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Route the ``audited(...)`` fresh-session write to an in-memory double.
 
     The BDD API steps drive the app with a mocked request session, but the
@@ -42,8 +42,16 @@ def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
 
     See ``tests.helpers.audit_session`` for the double and why integration
     tests are deliberately left to exercise the genuine append.
+
+    Installs the double through a scoped ``monkeypatch.context()`` and yields
+    from inside it, so the unpatch of ``_shared_session_factory`` runs as this
+    fixture's teardown - after the test body - rather than during ordinary
+    finalization while in-flight ``fail_closed=True`` destroy routes are still
+    finalizing.
     """
-    install_audit_session_double(monkeypatch)
+    with monkeypatch.context() as scoped:
+        install_audit_session_double(scoped)
+        yield
 
 
 # ---------------------------------------------------------------------------

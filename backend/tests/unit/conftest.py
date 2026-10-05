@@ -1,5 +1,6 @@
 """Global fixtures for all unit tests."""
 
+from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -9,13 +10,21 @@ from tests.unit._e2b_sandbox_bridge import install_bridge
 
 
 @pytest.fixture(autouse=True)
-def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Route the ``audited(...)`` fresh-session write to an in-memory double.
 
     See ``tests.helpers.audit_session`` for why the double exists and why
     integration tests are deliberately left to exercise the genuine append.
+
+    Installs the double through a scoped ``monkeypatch.context()`` and yields
+    from inside it, so the unpatch of ``_shared_session_factory`` runs as this
+    fixture's teardown - after the test body - rather than during ordinary
+    finalization while in-flight ``fail_closed=True`` destroy routes are still
+    finalizing.
     """
-    install_audit_session_double(monkeypatch)
+    with monkeypatch.context() as scoped:
+        install_audit_session_double(scoped)
+        yield
 
 
 @pytest.fixture(autouse=True)
