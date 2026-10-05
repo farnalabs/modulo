@@ -245,9 +245,15 @@ def test_workspace_spec_carries_structured_labels_and_network() -> None:
 
 
 def test_workspace_spec_timeout_default_matches_template_constant() -> None:
-    """FAR-1494: the dispatch workspace-spec timeout DEFAULT must equal the
-    shipped template's ``timeout_seconds`` — if either the constant or this
-    dispatch default site drifts, this test fails. (The sandbox-test route
+    """FAR-1494: the dispatch workspace-spec timeout DEFAULT is sourced from
+    the shared template constant. This is the coupling guard for the dispatch
+    site (``_workspace_spec_for_dispatch``): a profile whose ``config_json``
+    omits ``timeout_seconds`` must fall back to
+    ``TEMPLATE_CONFIG_JSON["timeout_seconds"]``. This catches divergence
+    between this site and the constant (e.g. a re-hardcoded literal); a pure
+    constant-value drift is not detected here (the site and the assertion move
+    together) and is covered by the constant-pinning tests in
+    ``tests/unit/core/bundled_runner/test_profile.py``. (The sandbox-test route
     default is guarded separately by
     test_build_workspace_spec_timeout_default_matches_template_constant.)"""
     profile = _profile(

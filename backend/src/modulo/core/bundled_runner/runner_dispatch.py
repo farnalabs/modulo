@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 import jinja2
 
 from modulo.core.bundled_runner.profile import (
+    TEMPLATE_CONFIG_JSON,
     is_placeholder_bundled_runner_image_ref,
 )
 from modulo.core.runtime_provider import (
@@ -295,7 +296,7 @@ def _workspace_spec_for_dispatch(
         run_id=run_uuid,
         image_ref=getattr(profile, "image_ref", None) or "",
         capabilities=getattr(profile, "capabilities_json", None) or [],
-        timeout_seconds=int(cfg.get("timeout_seconds", 3600)),
+        timeout_seconds=int(cfg.get("timeout_seconds", TEMPLATE_CONFIG_JSON["timeout_seconds"])),
         resource_limits={"memory_mb": int(cfg.get("memory_mb", 1024))},
         egress_policy=spec_egress,
         persistence_policy=getattr(profile, "persistence_policy", "ephemeral"),

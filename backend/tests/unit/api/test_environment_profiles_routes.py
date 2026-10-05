@@ -682,7 +682,7 @@ def test_build_workspace_spec_timeout_default_matches_template_constant() -> Non
     ``TEMPLATE_CONFIG_JSON["timeout_seconds"]``. This catches divergence
     between this site and the constant; a pure constant-value drift is not
     detected here (the site and the assertion move together) and is covered by
-    the dispatch coupling test and the constant-pinning tests in
+    the constant-pinning tests in
     ``tests/unit/core/bundled_runner/test_profile.py``.
     """
     from modulo.api.routes.environment_profiles import _build_workspace_spec
