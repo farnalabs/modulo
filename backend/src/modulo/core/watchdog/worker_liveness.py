@@ -39,7 +39,10 @@ Design:
   Teams webhook (``alert_teams_webhook_url``, MessageCard), and/or email
   (``alert_email_to`` + SMTP settings). Each channel is isolated: one
   channel's failure never blocks the others. Default-off — nothing is sent
-  until at least one channel is configured.
+  until at least one channel is configured. Every text rendering (email text
+  part, generic webhook, Teams) comes from ``_alert_text``/``_recovery_text``
+  and therefore carries the deployment environment plus the operator's
+  ``ALERT_CONTEXT`` exactly once (FAR-1499).
 - Fail-open on Redis read errors: cannot confirm death => never alert, just
   log and continue. The watchdog never crashes the web process.
 """
@@ -260,17 +263,30 @@ def _channel_configured(settings: Settings) -> bool:
     )
 
 
-def _alert_text(conditions: list[str]) -> str:
-    """Shared human-readable alert text (title + condition bullets + detection stamp)."""
+def _alert_text(settings: Settings, conditions: list[str]) -> str:
+    """The ONE plain-text alert rendering (FAR-1499).
+
+    Title + condition bullets + detection stamp + the alert context
+    (``Environment: <MODULO_ENV>`` and any ``ALERT_CONTEXT`` lines, rendered
+    by the shared ``core.alert_context`` helpers). This single string feeds
+    the email TEXT part, the generic webhook and the Microsoft Teams webhook
+    — every text channel therefore carries the context exactly once and the
+    three renderings can never drift apart.
+    """
     return (
         "\U0001f6a8 *Modulo watchdog: worker-liveness alert*\n"
         + "\n".join(f"\u2022 {condition}" for condition in conditions)
-        + f"\nDetected at {datetime.now(UTC).isoformat()} on {_hostname()}"
+        + f"\nDetected at {datetime.now(UTC).isoformat()} on {_hostname()}\n"
+        + alert_context_text(settings)
     )
 
 
-def _recovery_text(state: dict[str, Any]) -> str:
-    """Human-readable recovery text from the cleared incident state."""
+def _recovery_text(settings: Settings, state: dict[str, Any]) -> str:
+    """The ONE plain-text recovery rendering — the recovery twin of
+    :func:`_alert_text`, carrying the same alert context exactly once.
+
+    Built from the cleared incident state (prior conditions + duration).
+    """
     prior_conditions = state.get("conditions") or []
     started_at = state.get("started_at")
     duration = f" for {(time.time() - float(started_at)):.0f}s" if started_at else ""
@@ -280,7 +296,8 @@ def _recovery_text(state: dict[str, Any]) -> str:
         + duration
         + ":\n"
         + "\n".join(f"\u2022 {condition}" for condition in prior_conditions)
-        + f"\nResolved at {datetime.now(UTC).isoformat()} on {_hostname()}"
+        + f"\nResolved at {datetime.now(UTC).isoformat()} on {_hostname()}\n"
+        + alert_context_text(settings)
     )
 
 
@@ -380,11 +397,13 @@ async def _send_email_alert(
         _log.warning("watchdog.email_no_smtp_host")
         return
 
-    # FAR-1495: every alert email names the deployment environment and carries
+    # FAR-1495/1499: every alert names the deployment environment and carries
     # the operator's ALERT_CONTEXT free text (shared renderer, one source of
-    # the format for both alert channels).
+    # the format). The TEXT part gets it from _alert_text/_recovery_text —
+    # the single text renderer shared with the webhook channels — so it is
+    # deliberately NOT appended again here: doing so would put the context in
+    # the email twice. Only the HTML part still needs its own rendering.
     context_html = alert_context_html(settings)
-    context_text = "\n" + alert_context_text(settings)
 
     if recovery_state is not None:
         subject = "[Modulo Watchdog] Worker-liveness recovered"
@@ -397,7 +416,7 @@ async def _send_email_alert(
             f"<p>Resolved at {html.escape(datetime.now(UTC).isoformat())} "
             f"on {html.escape(_hostname())}</p>" + context_html + "</body></html>"
         )
-        body_text = _recovery_text(recovery_state) + context_text
+        body_text = _recovery_text(settings, recovery_state)
     else:
         subject = "[Modulo Watchdog] Worker-liveness alert"
         body_html = (
@@ -408,7 +427,7 @@ async def _send_email_alert(
             f"<p>Detected at {html.escape(datetime.now(UTC).isoformat())} "
             f"on {html.escape(_hostname())}</p>" + context_html + "</body></html>"
         )
-        body_text = _alert_text(conditions) + context_text
+        body_text = _alert_text(settings, conditions)
     try:
         await asyncio.to_thread(
             send_email,
@@ -455,7 +474,7 @@ async def _send_alerts(
     never prevents the others from delivering (mirrors the error-forwarder
     isolation lesson). Never raises out of the watchdog task.
     """
-    text = _recovery_text(recovery_state) if recovery_state is not None else _alert_text(conditions)
+    text = _recovery_text(settings, recovery_state) if recovery_state is not None else _alert_text(settings, conditions)
     if settings.alert_webhook_url:
         await _dispatch_channel(lambda: _post_generic_webhook(settings, text), "channel_generic_failed")
     if settings.alert_teams_webhook_url:
