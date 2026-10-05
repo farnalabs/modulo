@@ -25,7 +25,9 @@ export default {
       "rejecting": "Rejecting...",
       "approved_banner": "Gate was approved. The pipeline has resumed.",
       "rejected_banner": "Gate was rejected. The run was routed to {target}.",
-      "rejected_banner_no_route": "Gate was rejected. The run continues along the normal path.",
+      "rejected_banner_no_route": "Gate was rejected. The rejection was recorded.",
+      "rejected_banner_terminate": "Gate was rejected. The run ended with status Rejected.",
+      "rejected_banner_proceed": "Gate was rejected. The run continues along the normal path (this gate is set to proceed on reject).",
       "claim_token_label": "Claim Token",
       "claimed_by_you": "You",
       "claim_failed": "Claim failed:",
@@ -38,7 +40,9 @@ export default {
       "gate_claimed_you_can_now_approve_or_reject": "Gate claimed. You can now approve or reject.",
       "gate_approved_pipeline_resuming": "Gate approved. Pipeline resuming.",
       "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to {target}.",
-      "gate_rejected_no_reject_route": "Gate rejected. The run continues along the normal path.",
+      "gate_rejected_no_reject_route": "Gate rejected. The rejection was recorded.",
+      "gate_rejected_run_ended": "Gate rejected. The run has ended with status Rejected.",
+      "gate_rejected_proceeding": "Gate rejected. The run continues along the normal path (on_reject: proceed).",
       "rejected_by_reviewer": "Rejected by reviewer",
       "edit_subject": "Edit subject",
       "save_and_approve": "Save & approve",
@@ -1343,6 +1347,8 @@ export default {
       "status_cost_ceiling_exceeded": "Cost Ceiling Exceeded",
       "status_router_no_match": "Router No Match",
       "status_compensation_failed": "Compensation Failed",
+      "status_rejected": "Rejected",
+      "status_superseded": "Superseded by a newer version",
       "trigger_manual": "Manual",
       "trigger_webhook": "Webhook",
       "trigger_cron": "Cron",
@@ -3548,7 +3554,9 @@ export default {
       "hide_details": "Hide details",
       "subject": "What you are deciding",
       "consequence_approve": "Approve → continues to {target}",
-      "consequence_reject": "Reject → routes to {target}"
+      "consequence_reject": "Reject → routes to {target}",
+      "consequence_reject_terminate": "Reject → ends the run (status Rejected)",
+      "consequence_reject_proceed": "Reject → the run continues anyway (set to proceed on reject)"
     },
     "Sparkline": {
       "no_data": "No data",
@@ -4346,7 +4354,9 @@ export default {
     "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." },
     "hitl": {
       "review_expired": "The run sat unanswered at a human review gate past the review window and was cancelled.",
-      "review_missing": "The run was waiting for a human review, but its review gate was never created, so the run was cancelled automatically."
+      "review_missing": "The run was waiting for a human review, but its review gate was never created, so the run was cancelled automatically.",
+      "rejected": "A reviewer rejected the run at a human review gate that has no reject route, so the run ended.",
+      "superseded": "A newer version of the work item replaced this run's waiting review, so the run ended. No reviewer rejected it."
     }
   },
   "statusDescriptions": {
@@ -4359,6 +4369,8 @@ export default {
     "router_no_match": "A router node had no matching rule and no default.",
     "cost_ceiling_exceeded": "The organisation-wide spend ceiling was exceeded.",
     "compensation_failed": "A watched node and its compensation path both failed.",
+    "rejected": "A reviewer rejected the run at a human review gate with no reject route, so the run ended.",
+    "superseded": "A newer version of the work item replaced this run's waiting review, so the run ended. No reviewer rejected it.",
     "pending": "The run is queued and waiting to start.",
     "running": "The run is currently executing.",
     "awaiting_human": "The run is waiting for a human decision at a HITL gate.",

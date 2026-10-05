@@ -393,11 +393,14 @@ const pipelineName = computed(() => props.gate.pipeline_name || '')
  * route (config `reject_target` or a reject-typed edge), absent otherwise.
  * Same source and shape the reviewer briefing renders (HitlBriefing), so the
  * reject copy can never claim a route that does not exist: with no reject
- * route a rejection simply resumes the run along its normal path.
+ * route a rejection ENDS the run (FAR-1487) unless the gate opts into
+ * `on_reject: proceed`.
  */
 interface RejectConsequence {
   node_id: string
   label: string | null
+  /** FAR-1487: `route` | `terminate` | `proceed`; null on briefings captured before FAR-1487. */
+  disposition: 'route' | 'terminate' | 'proceed' | null
 }
 
 const rejectConsequence = computed<RejectConsequence | null>(() => {
@@ -409,9 +412,12 @@ const rejectConsequence = computed<RejectConsequence | null>(() => {
   if (!reject || typeof reject !== 'object' || Array.isArray(reject)) return null
   const entry = reject as Record<string, unknown>
   const nodeId = typeof entry.node_id === 'string' ? entry.node_id.trim() : ''
-  if (!nodeId) return null
   const label = typeof entry.label === 'string' && entry.label.trim() ? entry.label : null
-  return { node_id: nodeId, label }
+  const raw = entry.disposition
+  const disposition = raw === 'route' || raw === 'terminate' || raw === 'proceed' ? raw : null
+  if (nodeId) return { node_id: nodeId, label, disposition: 'route' }
+  if (!disposition || disposition === 'route') return null
+  return { node_id: '', label, disposition }
 })
 
 /** Target name for the routed copy: the snapshot label, else the node id. */
@@ -426,6 +432,10 @@ function rejectTargetName(consequence: RejectConsequence): string {
 const rejectedBannerText = computed(() => {
   const consequence = rejectConsequence.value
   if (!consequence) return t('hitl.gate.rejected_banner_no_route')
+  // FAR-1487: with no reject route the run now ENDS (`terminate`, the default)
+  // unless the gate explicitly opts into `proceed`.
+  if (consequence.disposition === 'terminate') return t('hitl.gate.rejected_banner_terminate')
+  if (consequence.disposition === 'proceed') return t('hitl.gate.rejected_banner_proceed')
   return t('hitl.gate.rejected_banner', { target: rejectTargetName(consequence) })
 })
 
@@ -670,12 +680,18 @@ async function decideGate(decision: 'approve' | 'reject') {
       // when the gate actually HAS a reject route; without one the rejection
       // records the decision and the run continues along its normal path.
       const consequence = rejectConsequence.value
-      const successText =
-        decision === 'approve'
-          ? t('hitl.gate.gate_approved_pipeline_resuming')
-          : consequence
-            ? t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
-            : t('hitl.gate.gate_rejected_no_reject_route')
+      let successText: string
+      if (decision === 'approve') {
+        successText = t('hitl.gate.gate_approved_pipeline_resuming')
+      } else if (consequence?.disposition === 'terminate') {
+        successText = t('hitl.gate.gate_rejected_run_ended')
+      } else if (consequence?.disposition === 'proceed') {
+        successText = t('hitl.gate.gate_rejected_proceeding')
+      } else if (consequence) {
+        successText = t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
+      } else {
+        successText = t('hitl.gate.gate_rejected_no_reject_route')
+      }
       const payload: HitlMessage = { type: 'success', text: successText }
       showMessage(payload)
       emit('decided', payload)

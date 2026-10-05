@@ -16,6 +16,7 @@
               { value: RUN_STATUS.CANCELLED, label: $t('views.RunsListView.status_cancelled') },
               { value: RUN_STATUS.EVAL_FAILED, label: $t('views.RunsListView.status_eval_failed') },
               { value: RUN_STATUS.STALLED, label: $t('views.RunsListView.status_stalled') },
+              { value: RUN_STATUS.REJECTED, label: $t('views.RunsListView.status_rejected') },
             ]},
             { key: 'trigger_type', label: $t('views.RunsListView.trigger_type_filter'), options: [
               { value: TRIGGER_TYPE.MANUAL, label: $t('views.RunsListView.trigger_manual') },
@@ -80,10 +81,10 @@
               <span
                 :class="runStatusBadgeClass(value as string)"
                 class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize"
-                :title="runStatusDescription(value as string, t)"
-                :aria-label="runStatusDescription(value as string, t)"
+                :title="runStatusDescription(value as string, t, (row as RunListItem).error_code)"
+                :aria-label="runStatusDescription(value as string, t, (row as RunListItem).error_code)"
               >
-                {{ value }}
+                {{ isSupersededRun(value as string, (row as RunListItem).error_code) ? $t('views.RunsListView.status_superseded') : value }}
               </span>
               <span
                 v-if="(row as RunListItem).capacity?.waiting"
@@ -242,7 +243,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, isSupersededRun } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'

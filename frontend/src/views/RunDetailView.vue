@@ -13,7 +13,7 @@
         <div>
           <div class="flex items-center gap-3">
             <PageHeader :title="$t('views.RunDetailView.run_detail')" />
-            <span :class="statusBadgeClass" class="capitalize" :title="runStatusDescription(run.status, t)" :aria-label="runStatusDescription(run.status, t)">{{ runStatusLabel(run.status) }}</span>
+            <span :class="statusBadgeClass" :title="runStatusDescription(run.status, t, run.error_code)" :aria-label="runStatusDescription(run.status, t, run.error_code)" :data-testid="isSupersededRun(run.status, run.error_code) ? 'run-detail-status-superseded' : undefined"><span :class="isSupersededRun(run.status, run.error_code) ? '' : 'capitalize'">{{ isSupersededRun(run.status, run.error_code) ? $t('views.RunsListView.status_superseded') : runStatusLabel(run.status) }}</span></span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
             {{ $t('views.RunDetailView.pipeline_label') }} <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
@@ -878,7 +878,7 @@ import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isHitlActionableStatus, isTerminalStatus } from '../constants/runStatuses'
-import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel } from '../utils/runUtils'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel, isSupersededRun } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
@@ -1560,6 +1560,7 @@ function statusBadgeClassFor(status: string | undefined): string {
     stalled: 'badge badge-status-destructive',
     cancelled: 'badge badge-status-warning',
     pending: 'badge badge-status-muted',
+    rejected: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
     hitl_parked: 'badge badge-status-pending',
   }

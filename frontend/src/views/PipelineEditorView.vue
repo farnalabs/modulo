@@ -2403,6 +2403,12 @@ function buildHitlReviewConfig(): any {
     human_only: edgeForm.human_only || false,
     required_team_id: selectedEdgeData.value?.hitl_review_config?.required_team_id || null,
   }
+  // FAR-1487: carry over the reject-disposition fields this form has no control
+  // for - dropping them on a save would silently flip an explicit
+  // `on_reject: proceed` (or a correction_target) back to the terminate default.
+  const existingGate = selectedEdgeData.value?.hitl_review_config
+  if (existingGate?.on_reject) config.on_reject = existingGate.on_reject
+  if (existingGate?.correction_target) config.correction_target = existingGate.correction_target
   if (edgeForm.condition_type === 'jmespath' && edgeForm.condition) {
     config.condition = edgeForm.condition
   }

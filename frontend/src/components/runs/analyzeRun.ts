@@ -20,7 +20,9 @@ export interface AnalyzeRunInfo {
 /**
  * Terminal run outcomes that represent a FAILURE worth analysing: every
  * terminal status except `complete` (the run succeeded) and `cancelled`
- * (a user stopped it deliberately — there is no failure to root-cause).
+ * (a user stopped it deliberately — there is no failure to root-cause) and
+ * `rejected` (FAR-1487: a reviewer's HITL rejection ended the run — a decision,
+ * not a failure, so there is nothing to root-cause either).
  *
  * Kept in sync with TERMINAL_STATUSES in constants/runStatuses.ts; a future
  * terminal failure status must be added here to get the Analyze action.

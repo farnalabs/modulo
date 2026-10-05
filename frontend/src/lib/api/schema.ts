@@ -3169,7 +3169,9 @@ export interface paths {
          *
          *     The reject route is the gate's reject_target config or a reject-typed
          *     edge, when one exists. With no reject route configured on the gate, the
-         *     run continues along the normal path.
+         *     run ENDS with the terminal ``rejected`` status (FAR-1487) - unless the
+         *     gate sets ``on_reject: proceed`` (or declares a ``correction_target``),
+         *     which continues the run along the normal path.
          */
         post: operations["reject_review_api_v1_runs__run_id__hitl__review_id__reject_post"];
         delete?: never;
@@ -10314,7 +10316,7 @@ export interface components {
          * AnalyticsStatus
          * @enum {string}
          */
-        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "hitl_parked" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled" | "budget_exceeded" | "router_no_match";
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "hitl_parked" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled" | "budget_exceeded" | "router_no_match" | "rejected";
         /**
          * AnalyticsTriggerType
          * @enum {string}
@@ -13389,9 +13391,14 @@ export interface components {
             reject_target?: string | null;
             /**
              * Correction Target
-             * @description Node ID routed to on HITL rejection for the FAR-210 single-node correction path. Accepted and persisted through the graph contract; the reject→correction dispatch seam is tracked as a follow-up (the graph compiler currently kicks a rejection back to reject_target).
+             * @description Node ID routed to on HITL rejection for the FAR-210 single-node correction path. Accepted and persisted through the graph contract; the reject→correction dispatch seam is tracked as a follow-up (the graph compiler currently kicks a rejection back to reject_target). FAR-1487: a correction_target WINS over terminating - a gate with one never ends the run on reject.
              */
             correction_target?: string | null;
+            /**
+             * On Reject
+             * @description FAR-1487: what a rejection does when the gate has NO reject destination (no reject_target / reject edge). Absent or 'terminate' (the DEFAULT) ENDS the run with the terminal 'rejected' status. 'proceed' explicitly continues down the approve path (the pre-FAR-1487 behaviour) - continuing is never the silent fallback. A reject destination always wins ('route'), as does a correction_target.
+             */
+            on_reject?: ("terminate" | "proceed") | null;
             /** Claim Expiry Minutes */
             claim_expiry_minutes: number;
             /**
@@ -15725,7 +15732,7 @@ export interface components {
             } | null;
             /**
              * Hitl Config
-             * @description HITL node config (mode, form_schema_ref, reject_target, claim_team_id, claim_expiry_min, human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.
+             * @description HITL node config (mode, form_schema_ref, reject_target, on_reject, claim_team_id, claim_expiry_min, human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.
              */
             hitl_config?: {
                 [key: string]: unknown;

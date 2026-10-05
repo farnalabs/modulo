@@ -68,9 +68,25 @@ interface ConsequenceTarget {
   label: string | null
 }
 
+/**
+ * FAR-1487: what a rejection does — `route` (a reject destination exists),
+ * `terminate` (the default: the run ENDS `rejected`) or `proceed` (explicit
+ * `on_reject: proceed` / a correction target: the run continues down the
+ * approve path). Absent on briefings captured before FAR-1487.
+ */
+type RejectDisposition = 'route' | 'terminate' | 'proceed'
+
+interface RejectConsequenceEntry extends ConsequenceTarget {
+  disposition: RejectDisposition | null
+}
+
 interface Consequences {
   approve?: ConsequenceTarget
-  reject?: ConsequenceTarget
+  reject?: RejectConsequenceEntry
+}
+
+function asDisposition(value: unknown): RejectDisposition | null {
+  return value === 'route' || value === 'terminate' || value === 'proceed' ? value : null
 }
 
 const consequences = computed<Consequences | null>(() => {
@@ -84,7 +100,11 @@ const consequences = computed<Consequences | null>(() => {
   }
   if (entry.reject && typeof entry.reject === 'object' && !Array.isArray(entry.reject)) {
     const r = entry.reject as Record<string, unknown>
-    result.reject = { node_id: asString(r.node_id) ?? '', label: asString(r.label) }
+    result.reject = {
+      node_id: asString(r.node_id) ?? '',
+      label: asString(r.label),
+      disposition: asDisposition(r.disposition),
+    }
   }
   return result.approve || result.reject ? result : null
 })
@@ -99,7 +119,14 @@ const consequenceSummary = computed(() => {
   }
   if (c.reject) {
     const name = c.reject.label || c.reject.node_id
-    parts.push(t('components.HitlBriefing.consequence_reject', { target: name }))
+    const disposition = c.reject.disposition ?? (name ? 'route' : null)
+    if (disposition === 'route') {
+      parts.push(t('components.HitlBriefing.consequence_reject', { target: name }))
+    } else if (disposition === 'terminate') {
+      parts.push(t('components.HitlBriefing.consequence_reject_terminate'))
+    } else if (disposition === 'proceed') {
+      parts.push(t('components.HitlBriefing.consequence_reject_proceed'))
+    }
   }
   return parts.length > 0 ? parts.join('; ') : null
 })
