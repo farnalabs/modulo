@@ -26,7 +26,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  issues: read
 
 # NO workflow-level concurrency (deliberate; mirrors fast-lane-classify.yml).
 # Opening a PR fires `opened`, and the auto-applied `agent-generated` label
@@ -79,13 +79,17 @@ jobs:
           # Prefer the CURRENT label set over the event snapshot (see the
           # header comment). A changelog label applied moments after the
           # triggering event may not be live yet, so re-check with a short
-          # bounded grace window before declaring the gate violated. The event
-          # payload is the fallback whenever the API call fails.
+          # bounded grace window before declaring the gate violated.
+          #
+          # A successful labels API call is authoritative even when it returns
+          # an empty set: that is how the gate notices a REMOVED changelog
+          # label. The event payload is the fallback only while every API call
+          # fails, so distinguish success from failure by exit status rather
+          # than treating an empty response as an empty label set.
           LABELS_JSON="$EVENT_LABELS_JSON"
           HAS_LABEL="false"
           for attempt in 1 2 3; do
-            LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '[.[].name]' 2>/dev/null || true)"
-            if [ -n "$LIVE_LABELS_JSON" ]; then
+            if LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '[.[].name]' 2>/dev/null)"; then
               LABELS_JSON="$LIVE_LABELS_JSON"
             fi
             # Exactly one of the four labels (any label starting with
