@@ -142,6 +142,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      # Match the root compose's grace window: the 5s interval makes the
+      # probes during container start count against `retries`, so a slow
+      # dashboard start would otherwise flap `unhealthy`.
+      start_period: 10s
 
 volumes:
   postgres_data:
