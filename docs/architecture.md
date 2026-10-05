@@ -127,7 +127,7 @@ Features:
 
 Interrupt payloads carry the same identity: the gate node interrupts with its `review_id`, a manual node with `review_id: <node_id>`, a conformance block with the block's guardrail gate id. The executor keys the pending `hitl_claims` row on that `review_id` verbatim. The dispatcher reconcile resumes an `awaiting_human`/`claimed` run ONLY per this scoping matrix: claimed-undecided, skip (under the `uq_hitl_claims_run_gate` `UNIQUE (run_id, review_id)` constraint a claimed-undecided row and a committed decision for the same gate cannot coexist; crash recovery for claimed runs routes through the no-undecided-rows branch once the decision commits); unclaimed undecided row, conservative skip; no undecided rows, crash-recovery resume when the decision's stamp routes it to a consumer that accepts it. `hitl_review_*`/guardrail identities accept only the verdict actions; MANUAL-node identities also accept a committed `manual_output` with its `output` (legacy pre-stamping rows are stranded by design, at most the 2026-09-02 incident cohort; ops remedy is a manual DB stamp or ticket, no backfill migration). Recover-node refuses HITL gate targets (422), gate decisions must go through approve/reject; user node ids squatting the reserved `hitl_review_` prefix are rejected at graph-validation time.
 
-**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery terminalises it through the normal reject path, while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
+**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery routes it through the gate's reject route when one is configured — or, with no reject route, continues it along the normal path, while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
 
 ### Connector Hub (`modulo/connectors/`)
 
@@ -333,7 +333,7 @@ The reference-integrity guard test (`tests/architecture/test_feature_flag_refere
    g. If eval fails with `block` behaviour, run enters `failed` state
    h. If the outgoing edge has a HITL gate, `interrupt()` pauses the run
 
-5. **HITL** – A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node (or produces a FeedbackRecord).
+5. **HITL** – A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node when a reject route is configured (`reject_target` or a reject edge) or produces a FeedbackRecord, and with no reject route it continues the run along the normal path.
 
 6. **Complete** – After the terminal node, the run transitions to `complete` or `failed`. OTel spans, audit events, and run metrics are persisted. Notifications are dispatched.
 
@@ -393,8 +393,11 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   (a claim takes a fresh TTL), and the moment a decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
   re-enters normal admission: approve resumes from the checkpoint through the
-  normal resume path, reject terminalises via the reject path. Each park is
-  logged loudly (`hitl_park.parked`).
+  normal resume path; reject routes to the gate's `reject_target`/reject edge
+  when one is configured, and when the gate declares no reject route the run
+  continues along the normal edge (the default will change so a rejection
+  terminates the run, FAR-1487, Backlog). Each park is logged loudly
+  (`hitl_park.parked`).
 - **Queue coalescing (latest-wins):** for webhook deliveries with a stable
   work-item key (GitHub: `repository.full_name` + `pull_request.number`, or
   `issue.number`; anything else, no key, no coalescing), a new delivery folds

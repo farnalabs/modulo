@@ -1313,12 +1313,25 @@ async def liveness() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/healthz/ready")
-@handle_db_errors("health.readiness")
-async def readiness(response: Response) -> ReadinessResponse:
-    # FAR-1439: sample the loop for the duration of the probe.  Stopped with
-    # a plain await — never a cancel — so a tick that became due DURING a
-    # stall still runs and records it before the handler reads the state.
+async def evaluate_readiness() -> ReadinessResponse:
+    """Evaluate the full readiness picture — the ONE implementation of the checks.
+
+    Shared by two callers (FAR-1446):
+    * the ``/healthz/ready`` HTTP route (wrapped by ``handle_db_errors``, which
+      adds the 503 status code from this result's ``status``);
+    * the ``health_readiness_alert`` system cron
+      (``modulo.core.health_alerts``), which emails the operator when this
+      evaluation transitions into a degraded/unavailable state.
+
+    The cron imports this lazily (a ``core`` module must not import ``api`` at
+    module-import time — ``api.routes.health`` imports ``core.cron_helpers``).
+    Never reimplement these sub-checks elsewhere: the alert must describe
+    exactly what readiness reports.
+
+    FAR-1439: sample the loop for the duration of the probe.  Stopped with
+    a plain await — never a cancel — so a tick that became due DURING a
+    stall still runs and records it before the handler reads the state.
+    """
     lag_state: dict[str, float] = {"worst_ms": 0.0}
     lag_stop = asyncio.Event()
     lag_task = asyncio.create_task(_track_event_loop_lag(lag_state, lag_stop))
@@ -1466,7 +1479,6 @@ async def readiness(response: Response) -> ReadinessResponse:
             route="health.readiness",
             detail=f"unavailable={unavailable_checks} degraded={degraded_checks}",
         )
-        response.status_code = 503
     elif "degraded" in statuses:
         overall = "degraded"
     else:
@@ -1480,3 +1492,19 @@ async def readiness(response: Response) -> ReadinessResponse:
         uptime_seconds=uptime_seconds,
         checks=checks,
     )
+
+
+@router.get("/healthz/ready")
+@handle_db_errors("health.readiness")
+async def readiness(response: Response) -> ReadinessResponse:
+    # Thin HTTP wrapper over evaluate_readiness (FAR-1446): the degradation
+    # semantics live in the shared implementation (also called by the
+    # health_readiness_alert system cron); this wrapper only maps the
+    # aggregate status onto the HTTP status code the Fly service check and
+    # every deploy gate key on. Deliberately NO docstring — FastAPI would
+    # publish it as the OpenAPI operation description and stale
+    # frontend/src/lib/api/schema.ts.
+    result = await evaluate_readiness()
+    if result.status == "unavailable":
+        response.status_code = 503
+    return result

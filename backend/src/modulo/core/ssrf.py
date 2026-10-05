@@ -644,7 +644,7 @@ _SockAddr = tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]
 _AddrInfoEntry = tuple[socket.AddressFamily, socket.SocketKind, int, str, _SockAddr]
 
 
-def _getaddrinfo_sync(host: str) -> list[_AddrInfoEntry]:
+def _getaddrinfo_sync(host: str) -> Sequence[_AddrInfoEntry]:
     return socket.getaddrinfo(host, 0, socket.AF_UNSPEC, socket.SOCK_STREAM)
 
 

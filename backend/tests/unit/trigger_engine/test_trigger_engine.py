@@ -2142,11 +2142,13 @@ async def test_schedule_polling_trigger_default_interval() -> None:
     session = AsyncMock()
     session.flush = AsyncMock()
 
+    before = datetime.datetime.now(datetime.UTC)
     await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
+    after = datetime.datetime.now(datetime.UTC)
 
     assert trigger.next_fire_at is not None
-    delta = (trigger.next_fire_at - datetime.datetime.now(datetime.UTC)).total_seconds()
-    assert 55 <= delta <= 65
+    assert trigger.next_fire_at - before >= datetime.timedelta(seconds=55)
+    assert trigger.next_fire_at - after <= datetime.timedelta(seconds=60)
     session.flush.assert_awaited_once()
 
 
@@ -2155,10 +2157,13 @@ async def test_schedule_polling_trigger_custom_interval() -> None:
     session = AsyncMock()
     session.flush = AsyncMock()
 
+    before = datetime.datetime.now(datetime.UTC)
     await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
+    after = datetime.datetime.now(datetime.UTC)
 
-    delta = (trigger.next_fire_at - datetime.datetime.now(datetime.UTC)).total_seconds()
-    assert 115 <= delta <= 125
+    assert trigger.next_fire_at is not None
+    assert trigger.next_fire_at - before >= datetime.timedelta(seconds=115)
+    assert trigger.next_fire_at - after <= datetime.timedelta(seconds=120)
 
 
 @pytest.mark.parametrize("bad_interval", [0, -5, "10"])
