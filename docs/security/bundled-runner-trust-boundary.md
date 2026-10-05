@@ -116,10 +116,13 @@ A guard test (`test_compose_loopback_ports`) verifies this on every CI
 run and fails if any default compose file publishes a port on a non-loopback
 address.
 
-The sole exception is `deploy/compose/docker-compose.prod.yml`'s
+The only whole-file exception is `deploy/compose/docker-compose.prod.yml`'s
 `${PORT:-80}:80` binding on the `modulo` service — the production app
-must be reachable from outside.  That file is excluded from the guard;
-its port policy is documented here, not in the test.
+must be reachable from outside.  That file is excluded from the
+whole-file guard, but it is still checked service-scoped: every service
+in it other than `modulo` (currently the watchdog dashboard) must bind
+loopback, so a future non-app service cannot silently publish on all
+interfaces.  See `test_service_scoped_compose_ports_are_loopback_only`.
 
 ## Docker endpoint filtering (the socket proxy)
 

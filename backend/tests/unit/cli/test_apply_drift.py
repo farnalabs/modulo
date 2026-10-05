@@ -271,7 +271,8 @@ class TestNonPipelineDriftDetail:
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False, drift=True)
-        assert schemas.called and backends.called
+        assert schemas.called
+        assert backends.called
         updated = [e["name"] for e in report["updated"] if e["kind"] == "model_backend"]
         assert updated == ["openai"]
         detail = report["drift_detail"]

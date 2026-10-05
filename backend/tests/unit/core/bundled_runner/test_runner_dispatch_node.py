@@ -749,7 +749,8 @@ async def test_consume_stream_success(patch_node_runner) -> None:
     collected, timed_out, stalled = await _consume_stream(proc, node_id="n", sandbox_timeout=10, stall_timeout=5)
     assert ("stdout", "a") in collected
     assert ("stderr", "b") in collected
-    assert not timed_out and not stalled
+    assert not timed_out
+    assert not stalled
 
 
 async def test_consume_stream_timeout_kills(patch_node_runner) -> None:
@@ -781,7 +782,8 @@ async def test_consume_stream_stall_kills(patch_node_runner) -> None:
 async def test_consume_stream_error_propagates(patch_node_runner) -> None:
     proc = _FakeExecProcess([], exit_code=None, error="engine drop")
     _, timed_out, stalled = await _consume_stream(proc, node_id="n", sandbox_timeout=30, stall_timeout=30)
-    assert not timed_out and not stalled
+    assert not timed_out
+    assert not stalled
 
 
 def test_resolve_stall_timeout_default(patch_node_runner) -> None:

@@ -7,6 +7,9 @@ code:
   - backend/src/modulo/api/routes/run_ws.py
   - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/core/pipeline_engine/classify.py
+  - backend/src/modulo/core/pipeline_execution.py
+  - backend/src/modulo/db/models/run.py
+  - backend/src/modulo/db/migrations/versions/0280_runs_node_deadline_watchdog_fired_count.py
   - backend/src/modulo/core/line_diff.py
   - backend/src/modulo/core/cost_controller
 unit-tests:
@@ -16,6 +19,8 @@ unit-tests:
   - backend/tests/unit/api/test_run_api_key_auth.py
   - backend/tests/unit/api/test_runs_team_scope.py
   - backend/tests/unit/pipeline_engine/test_run_classification.py
+  - backend/tests/unit/core/test_watchdog_firing_record_writer.py
+  - backend/tests/unit/core/test_pipeline_execution_watchdog_retry.py
   - backend/tests/unit/core/cost_controller/test_run_warnings.py
   - backend/tests/unit/core/cost_controller/test_cost_aggregate.py
 bdd:
@@ -160,6 +165,22 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       a 500) and `gate_fired` (True when the idempotency gate suppressed a delivery
       retry, the classification reason is `email_delivered`, or a raw-output marker
       carries `delivery_done`) (`test_runs_endpoint.py`)
+- [x] Node-deadline watchdog firings are recorded distinctly from terminal
+      failures (FAR-1463): `pipeline_execution._fail_overdue_node` durably
+      increments `runs.node_deadline_watchdog_fired_count` on its OWN
+      connection BEFORE the shared retry consult, so BOTH outcomes count — the
+      re-dispatch (which otherwise leaves ZERO analytics fingerprint, because
+      the fenced pending-reset nulls `error_code`) and the terminal fail. The
+      marker deliberately survives the re-dispatch (neither the atomic claim
+      nor the pending-reset names the column), so a run that never dispatched a
+      node reads 0 while `error_code` separates a genuine terminal failure from
+      a firing. Internal/analytics-only — never projected onto `RunResponse` or
+      the MCP run payloads; migration 0280 adds the column NOT NULL DEFAULT 0
+      and it is copied onto `run_daily_facts` at finalize so the analytics read
+      path never joins `runs` (ADR 020) and the marker outlives the run purge
+      (`core/pipeline_execution.py`, `db/models/run.py`,
+      `test_watchdog_firing_record_writer.py`,
+      `test_pipeline_execution_watchdog_retry.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._
@@ -174,6 +195,17 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-05: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1463 sub-surface: the node-deadline watchdog now durably records each
+  firing on `runs.node_deadline_watchdog_fired_count` (and copies it onto
+  `run_daily_facts`), so a firing is observable in analytics even when the kill
+  re-dispatches and nulls `error_code`, and the count is distinct from a genuine
+  terminal failure. Added the checked behaviour line plus the
+  `core/pipeline_execution.py` / `db/models/run.py` / migration-0280 code
+  citations and the `test_watchdog_firing_record_writer.py` /
+  `test_pipeline_execution_watchdog_retry.py` unit citations. The analytics
+  read surface (bucket metric + export field) is cited under `feat-analytics`.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-04: **FAR-1308 three-state missing-cost truth** – a positive
   self-reported cost below the countable floor was being labelled
   `agent_not_reported` ("the agent did not report"), which is false: the

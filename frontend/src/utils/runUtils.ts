@@ -192,3 +192,28 @@ export function errorCodeDescription(code: string | null | undefined, t: (key: s
   const translated = t(key)
   return translated === key ? errorCodeLabel(code, t) : translated
 }
+
+export interface RunCapacity {
+  active_runs: number
+  concurrency_limit: number | null
+  waiting: boolean
+}
+
+/**
+ * Why a queued run is waiting, shared by the runs list badge and the run
+ * detail queue banner so the wording and the capacity branch logic cannot
+ * drift between the two surfaces. A waiting run below a known concurrency
+ * limit reports its slot usage; otherwise it reports "starting soon".
+ */
+export function queuedCapacityReason(
+  capacity: RunCapacity | null | undefined,
+  t: (key: string, named?: Record<string, unknown>) => string,
+): string {
+  if (capacity?.waiting && capacity.concurrency_limit != null) {
+    return t('common.queue.waiting_slot', {
+      active: capacity.active_runs,
+      limit: capacity.concurrency_limit,
+    })
+  }
+  return t('common.queue.starting_soon')
+}

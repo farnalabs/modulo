@@ -1719,8 +1719,6 @@ export default {
       "cost_so_far": "Cost so far",
       "tokens": "tokens",
       "hitl_review": "HITL Gate",
-      "queued_waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
-      "queued_starting_soon": "Queued — starting soon",
       "work_items": "Work items",
       "work_item_kind_github": "GitHub",
       "work_item_kind_github_pr": "PR",
@@ -4180,6 +4178,10 @@ export default {
       "minutes_seconds_ago": "{m}m {s}s ago",
       "hours_minutes_ago": "{h}h {m}m ago",
       "days_hours_ago": "{d}d {h}h ago"
+    },
+    "queue": {
+      "waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
+      "starting_soon": "Queued — starting soon"
     }
   },
   "nav": {

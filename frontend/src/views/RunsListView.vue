@@ -36,7 +36,19 @@
       </template>
     </PageHeader>
 
-    <LoadingSpinner v-if="loading" />
+    <!-- STATE-3 (ux-conformance): the column layout is known before the first
+         row arrives, so the loading placeholder is a determinate table
+         skeleton (shared TableSkeleton) instead of an indeterminate spinner.
+         The column count is derived from runColumns — the same array DataTable
+         renders its real <th> row from — so the placeholder can never desync
+         from the real table. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="runColumns.length"
+      :rows="5"
+      :aria-label="$t('common.loading')"
+      data-testid="runs-list-loading"
+    />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadRuns" />
 
@@ -51,19 +63,7 @@
 
       <div v-else class="table-wrapper">
         <DataTable
-          :columns="[
-            { key: 'pipeline_name', label: $t('views.RunsListView.pipeline'), sortable: true },
-            { key: 'status', label: $t('views.RunsListView.status'), sortable: true },
-            { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
-            { key: 'heartbeat', label: $t('views.RunsListView.heartbeat'), sortable: false },
-            { key: 'run_number', label: '#', numeric: true, sortable: true },
-            { key: 'started_at', label: $t('views.RunsListView.start'), sortable: true },
-            { key: 'completed_at', label: $t('views.RunsListView.end'), sortable: true },
-            { key: 'duration', label: $t('views.RunsListView.duration') },
-            { key: 'total_cost_usd', label: $t('views.RunsListView.cost'), numeric: true, sortable: true },
-            { key: 'warnings', label: $t('views.RunsListView.warnings'), sortable: false },
-            { key: 'actions', label: '', sortable: false },
-          ]"
+          :columns="runColumns"
           :rows="runs"
           :row-clickable="false"
         >
@@ -86,9 +86,15 @@
               >
                 {{ isSupersededRun(value as string, (row as RunListItem).error_code) ? $t('views.RunsListView.status_superseded') : value }}
               </span>
+              <!-- STATE-5 (ux-conformance): a capacity-blocked run must say *why*
+                   it is waiting, not just "queued". The cell keeps the short
+                   label for scannability; the full reason is the accessible
+                   name / hover text, matching the RunDetailView banner. -->
               <span
                 v-if="(row as RunListItem).capacity?.waiting"
                 :data-testid="`runs-list-queued-${row.run_id}`"
+                :title="queuedCapacityReason((row as RunListItem).capacity, t)"
+                :aria-label="queuedCapacityReason((row as RunListItem).capacity, t)"
                 class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning capitalize"
               >{{ $t('views.RunsListView.queued') }}</span>
               <RunErrorTag
@@ -238,12 +244,12 @@ import { useRoute, useRouter, type LocationQuery } from 'vue-router'
 import { fetchRuns, requestRunCancellation, requestRunRerun, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
-import { DataTable } from '../components/ui/data-table'
+import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, isSupersededRun } from '../utils/runUtils'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, isSupersededRun, queuedCapacityReason } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
@@ -254,6 +260,23 @@ const route = useRoute()
 const router = useRouter()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 const { t } = useI18n()
+
+// Single source of truth for the table layout: DataTable renders its real
+// header from this array and the STATE-3 loading skeleton takes its column
+// count from the same array, so the two can never silently desync.
+const runColumns = computed<Column[]>(() => [
+  { key: 'pipeline_name', label: t('views.RunsListView.pipeline'), sortable: true },
+  { key: 'status', label: t('views.RunsListView.status'), sortable: true },
+  { key: 'trigger_type', label: t('views.RunsListView.trigger'), sortable: true },
+  { key: 'heartbeat', label: t('views.RunsListView.heartbeat'), sortable: false },
+  { key: 'run_number', label: '#', numeric: true, sortable: true },
+  { key: 'started_at', label: t('views.RunsListView.start'), sortable: true },
+  { key: 'completed_at', label: t('views.RunsListView.end'), sortable: true },
+  { key: 'duration', label: t('views.RunsListView.duration') },
+  { key: 'total_cost_usd', label: t('views.RunsListView.cost'), numeric: true, sortable: true },
+  { key: 'warnings', label: t('views.RunsListView.warnings'), sortable: false },
+  { key: 'actions', label: '', sortable: false },
+])
 
 const confirmingIds = ref(new Set<string>())
 const cancellingIds = ref(new Set<string>())
