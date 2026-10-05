@@ -498,6 +498,11 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "pipeline_name": pipeline_name,
         "status": run.status,
         "trigger_type": run.trigger_type,
+        # FAR-1141 / ADR-042: run-level execution origin — 'dispatched' when
+        # the run's graph contains at least one dispatch node, NULL for
+        # executed-by-Modulo / pre-column runs. _optional_str degrades a
+        # MagicMock run stand-in (unset attribute) to None, like cancel_reason.
+        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
         "run_number": run.run_number,
         # FAR-490: snapshot the run executes (None only for legacy/pre-FK rows)
         # so run→snapshot verification is one GET, not pagination archaeology.
@@ -805,6 +810,14 @@ class RunResponse(BaseModel):
     # The trigger response surfaces `trigger_id`/`heartbeat_at` from the
     # created run row (getattr fallbacks in `_build_run_response`).
     trigger_type: str | None = None
+    # FAR-1141 / ADR-042: run-level execution origin — ``'dispatched'`` when
+    # the run's frozen snapshot graph contains at least one ``dispatch`` node
+    # (part of the work executed outside Modulo), ``None`` for runs Modulo
+    # executed itself and for runs recorded before this shipped. This is the
+    # claim-ready surface: without it a dispatched run reads identically to a
+    # Modulo-executed one. Additive/nullable — existing consumers are
+    # unaffected.
+    execution_origin: str | None = None
     trigger_actor: str | None = None
     trigger_id: uuid.UUID | None = None
     heartbeat_at: datetime | None = None
@@ -1007,6 +1020,9 @@ def _build_run_response(
         guardrail_summary=_guardrail_summary_from_run(run),
         trigger_actor=ctx.trigger_actor,
         trigger_type=getattr(run, "trigger_type", None),
+        # FAR-1141: _optional_str degrades an unset MagicMock attribute (unit
+        # test stand-ins) to None, the same defensive rule cancel_reason uses.
+        execution_origin=_optional_str(getattr(run, "execution_origin", None)),
         trigger_id=ctx.trigger_id if ctx.trigger_id is not None else getattr(run, "trigger_id", None),
         heartbeat_at=ctx.heartbeat_at if ctx.heartbeat_at is not None else getattr(run, "heartbeat_at", None),
         work_item_refs=ctx.work_item_refs,

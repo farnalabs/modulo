@@ -60,6 +60,7 @@ from modulo.db.models.run import (
     CANCEL_REASON_USER_REQUESTED,
     CANCEL_REASON_VALUES,
     CANCELLED_BY_SYSTEM,
+    EXECUTION_ORIGIN_DISPATCHED,
     HITL_PARKED_STATUS,
     PIPELINE_CAPACITY_STATUSES,
     TERMINAL_STATUSES,
@@ -1760,6 +1761,29 @@ async def _compensate_blocked_run_best_effort(
         _log.exception("guardrails.compensation.error run=%s", run_id)
 
 
+def graph_contains_dispatch(graph_json: Any) -> bool:
+    """Whether a snapshot graph contains at least one ``dispatch`` node (FAR-1141).
+
+    The predicate behind ``runs.execution_origin = 'dispatched'``: a True here
+    means part of this run's work is executed OUTSIDE Modulo, so every
+    claim-ready read surface must be able to tell it apart from a run Modulo
+    executed itself (ADR-042).
+
+    Pure and unit-testable. Fail-safe: ``None``, a non-dict, or a missing /
+    non-list ``nodes`` returns ``False`` — an unreadable graph is never
+    claimed as dispatched. Only the top-level ``nodes`` list is scanned,
+    exactly like :func:`_graph_contains_sandbox_agent`: snapshots are expanded
+    at creation (``create_snapshot_from_live_graph``), so a dispatch node of a
+    composite template appears directly in the snapshot's top-level ``nodes``.
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    nodes = graph_json.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    return any(isinstance(node, dict) and node.get("node_type") == "dispatch" for node in nodes)
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -1905,12 +1929,34 @@ async def create_run(
 
     owner_team_id = await _resolve_owner_team_id(session, owner_team_id, pipeline_id)
 
+    # FAR-1141 / ADR-042: run-level execution origin. The run executes its
+    # FROZEN snapshot (``snapshot_id``), never the live pipeline, so the
+    # classification reads THAT snapshot's graph — the same source every other
+    # run-scoped graph read uses (see ``_run_declares_single_pr_per_run``).
+    # Nothing else on this path already carries the node list (the guardrail /
+    # policy-gate reads above select PIN columns only), so this is one extra
+    # indexed PK SELECT per created run, not a second read of a value we
+    # already had.
+    #
+    # An absent snapshot row or an unreadable graph degrades to NULL
+    # ("origin not recorded") — an unproven origin must never be claimed as
+    # ``dispatched``. In production the row cannot be absent: ``snapshot_id``
+    # is NOT NULL with a RESTRICT FK. A DB error on the read is NOT swallowed
+    # (no silent failure path): it fails run creation loudly instead of
+    # persisting a run whose externally-executed work would read as
+    # Modulo-executed.
+    snapshot_graph = (
+        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+    ).scalar_one_or_none()
+    execution_origin = EXECUTION_ORIGIN_DISPATCHED if graph_contains_dispatch(snapshot_graph) else None
+
     run = Run(
         id=run_id,
         organisation_id=org_id,
         pipeline_id=pipeline_id,
         snapshot_id=snapshot_id,
         trigger_type=trigger_type,
+        execution_origin=execution_origin,
         input_hash=_input_hash(stored_payload),
         input_payload=stored_payload,
         account_id=account_id,

@@ -104,6 +104,29 @@ CANCEL_REASON_VALUES: frozenset[str] = frozenset(
 # other value is the acting account id rendered as text.
 CANCELLED_BY_SYSTEM: Final[str] = "system"
 
+# ---------------------------------------------------------------------------
+# FAR-1141 / ADR-042 — WHERE the run's work was executed. The CLOSED
+# vocabulary behind ``runs.execution_origin`` (migration 0281), single-sourced
+# here so the write site (``crud.run.create_run``), the readers (runs API,
+# ``run_daily_facts`` copy) and any future consumer share ONE spelling.
+#
+#   * EXECUTION_ORIGIN_DISPATCHED — the run's frozen snapshot graph contains
+#     at least one ``dispatch`` node, i.e. part of the work is executed
+#     OUTSIDE Modulo and merely witnessed/triggered by it.
+#   * ``NULL`` — executed by Modulo, OR the run predates this column (legacy).
+#     Existing rows are deliberately never backfilled (ADR 042: existing runs
+#     keep their current provenance unchanged).
+#
+# No DB CHECK constraint backs this yet (see migration 0281): with exactly one
+# member and every write site importing the constant, a constraint would cost
+# a full-table validation scan on ``runs`` for no additional safety. Adding a
+# value means adding it here AND widening any future constraint in the same
+# change.
+# ---------------------------------------------------------------------------
+EXECUTION_ORIGIN_DISPATCHED: Final[str] = "dispatched"
+EXECUTION_ORIGIN_VALUES: frozenset[str] = frozenset({EXECUTION_ORIGIN_DISPATCHED})
+
+
 # The canonical status literal (FAR-604 qa F15): every write site that names the
 # parked status binds/compares against this constant so a rename or a typo can
 # never desynchronise the park sweep, the un-park transitions, and the guard.
@@ -292,6 +315,18 @@ class Run(OrgScoped):
         Uuid(), ForeignKey("triggers.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # FAR-1141 / ADR-042: the run-level execution origin — ONE of
+    # EXECUTION_ORIGIN_VALUES, or NULL for "executed by Modulo / recorded
+    # before this shipped". Stamped once by ``crud.run.create_run`` from the
+    # run's frozen snapshot graph (never the live pipeline) and never
+    # rewritten afterwards, so it survives re-claims and re-dispatches the
+    # same way ``node_deadline_watchdog_fired_count`` does (neither the atomic
+    # claim SQL nor the fenced pending-reset names this column).
+    # Nullable + no server default (migration 0281): additive, no table
+    # rewrite, existing rows untouched. API-projected on the runs list item
+    # and the run detail response — it is the claim-ready surface ADR-042
+    # requires to distinguish the two origins.
+    execution_origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True

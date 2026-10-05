@@ -263,6 +263,8 @@ class TestRecordRunFacts:
                 "dispatch_phase_entered_at",
                 # FAR-1463 node-deadline watchdog firings.
                 "node_deadline_watchdog_fired_count",
+                # FAR-1141 run-level execution origin.
+                "execution_origin",
             )
 
             def __init__(self, model) -> None:
@@ -334,6 +336,48 @@ class TestRecordRunFacts:
         assert {"dispatched_at", "started_at", "completed_at", "total_queue_wait_ms"} <= update_keys
         # FAR-332 — batch_id dimension is part of the fact write + update path.
         assert "batch_id" in update_keys
+
+    async def test_execution_origin_copied_onto_fact(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1141 / ADR-042: the run's execution origin lands in the fact
+        values AND in the ON CONFLICT update set, so the analytics read path
+        (which never joins ``runs``) sees it and a re-finalization corrects a
+        stale value in place."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run(execution_origin="dispatched")
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["execution_origin"] == "dispatched"
+        assert "execution_origin" in set(captured["set_"])
+
+    async def test_execution_origin_null_for_executed_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A Modulo-executed (or pre-column) run records NULL rather than
+        omitting the key — the column is part of every fact write."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run()
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["execution_origin"] is None
+        assert "execution_origin" in set(captured["set_"])
 
     async def test_writes_batch_id_dimension(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The run's batch_id is carried into the fact so batches are filterable."""

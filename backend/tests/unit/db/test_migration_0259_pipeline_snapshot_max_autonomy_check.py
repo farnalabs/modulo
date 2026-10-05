@@ -28,7 +28,9 @@ Lenses:
   0278_runs_workspace_drift_sweep_index chains onto 0277, and
    0279_table_autovacuum_tuning chains onto 0278, and
    0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning, and
-   0282_env_profiles_kubernetes chains onto 0280_runs_node_deadline_watchdog_fired_count as the
+   0281_org_api_keys_grants chains onto 0280_runs_node_deadline_watchdog_fired_count, and
+   0282_env_profiles_kubernetes chains onto 0281_org_api_keys_grants, and
+   0283_runs_execution_origin chains onto 0282_env_profiles_kubernetes as the
    single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -54,7 +56,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0282_env_profiles_kubernetes"
+_HEAD_MIGRATION = "0283_runs_execution_origin"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)
