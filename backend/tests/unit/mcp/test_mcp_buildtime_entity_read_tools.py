@@ -237,6 +237,21 @@ class TestGetAgent(AuthContext):
         assert result["parameter_schema_id"] == str(agent.parameter_schema_id)
         assert result["connector_type_refs"] == [{"connector_type": "github"}]
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.get_agent")
+    async def test_generic_error_returns_server_error(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
+        mock_get.side_effect = RuntimeError("boom")
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_agent(agent_id=str(uuid.uuid4()))
+        assert result["error"] == "server_error"
+
 
 # ---------------------------------------------------------------------------
 # list_connectors / get_connector / list_connector_types
@@ -325,6 +340,21 @@ class TestListConnectors(AuthContext):
         result = await list_connectors()
         assert result["error"] == "migration_required"
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.connector_instance.list_connector_instances")
+    async def test_generic_error_returns_server_error(
+        self,
+        mock_list: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
+        mock_list.side_effect = RuntimeError("boom")
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await list_connectors()
+        assert result["error"] == "server_error"
+
 
 class TestGetConnector(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -401,6 +431,21 @@ class TestGetConnector(AuthContext):
         assert result["last_skip_error"] == "rate limited"
         assert "credentials_ciphertext" not in result
         assert "xoxb-secret" not in str(result)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.connector_instance.get_connector_instance")
+    async def test_generic_error_returns_server_error(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
+        mock_get.side_effect = RuntimeError("boom")
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_connector(connector_id=str(uuid.uuid4()))
+        assert result["error"] == "server_error"
 
 
 class TestListConnectorTypes(AuthContext):
@@ -606,6 +651,21 @@ class TestGetModelBackend(AuthContext):
         assert result["cost_tracking"] == "enabled"
         assert "credentials_ciphertext" not in result
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.model_backend.get_model_backend")
+    async def test_generic_error_returns_server_error(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
+        mock_get.side_effect = RuntimeError("boom")
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_model_backend(model_backend_id=str(uuid.uuid4()))
+        assert result["error"] == "server_error"
+
 
 # ---------------------------------------------------------------------------
 # list_environment_profiles
@@ -692,6 +752,21 @@ class TestListEnvironmentProfiles(AuthContext):
         mock_session.return_value = make_session_context(AsyncMock())
         result = await list_environment_profiles()
         assert result["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.environment_profile.list_environment_profiles")
+    async def test_generic_error_returns_server_error(
+        self,
+        mock_list: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
+        mock_list.side_effect = RuntimeError("boom")
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await list_environment_profiles()
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------

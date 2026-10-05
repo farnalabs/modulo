@@ -392,6 +392,39 @@ async def test_ws_sqlalchemy_error_sends_database_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_ws_session_contract_error_sends_specific_frame():
+    """FAR-1502: a session-contract violation gets ``session_contract_error`` +
+    the shared REST message — never a retry-inviting outage frame."""
+    from sqlalchemy.exc import InvalidRequestError
+
+    from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
+
+    ws = _FakeWebSocket()
+    payload = {
+        "sub": "u",
+        "org_id": str(uuid.uuid4()),
+        "account_id": str(uuid.uuid4()),
+        "org_role": "admin",
+    }
+    with (
+        patch(
+            "modulo.api.routes.run_ws._consume_run_ws_token",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ),
+        patch(
+            "modulo.api.routes.run_ws._load_run_with_rls",
+            new_callable=AsyncMock,
+            side_effect=InvalidRequestError("Autobegin is disabled on this Session"),
+        ),
+    ):
+        await run_websocket(ws, uuid.uuid4(), token="tok")
+    assert ws.close_code == 1011
+    assert ws.sent[0]["error"] == "session_contract_error"
+    assert ws.sent[0]["detail"] == MSG_SESSION_CONTRACT
+
+
+@pytest.mark.asyncio
 async def test_ws_generic_exception_sends_server_error():
     ws = _FakeWebSocket()
     payload = {
