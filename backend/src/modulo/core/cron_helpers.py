@@ -58,6 +58,7 @@ from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 from modulo.core.trigger_streak import (
     enforce_no_delivery_streaks,
 )
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.models.run import (
     ACTIVE_RUN_STATUSES,
     AWAITING_HUMAN_STATUS,
@@ -82,7 +83,9 @@ _log = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-SYSTEM_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+# System / no-tenant sentinel org (SYSTEM_ORG_ID) is imported from
+# modulo.db.models.organisation at module top — the single canonical
+# definition. Do NOT re-type the nil-UUID literal here (FAR-1505).
 
 # Per-item fire job knobs (plan F5): timeout=300, retries=2 (ONE retry),
 # heartbeat=30, ttl=300. Reports share the runs queue as bounded jobs.

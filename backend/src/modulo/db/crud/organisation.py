@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import apply_updates
 from modulo.db.models.organisation import (
     MODULO_REGISTRY_ORG_ID,
-    ORPHAN_ORG_ID,
+    SYSTEM_ORG_ID,
     Organisation,
 )
 from modulo.db.seed import seed_system_schemas
@@ -18,7 +18,7 @@ from modulo.db.seed import seed_system_schemas
 _log = logging.getLogger(__name__)
 
 # Sentinel org IDs that must never resolve a login page.
-_SENTINEL_ORG_IDS: frozenset[uuid.UUID] = frozenset({ORPHAN_ORG_ID, MODULO_REGISTRY_ORG_ID})
+_SENTINEL_ORG_IDS: frozenset[uuid.UUID] = frozenset({SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID})
 
 
 async def get_organisation(
@@ -152,7 +152,7 @@ async def update_organisation(
 # An org counts for login when ALL of:
 #   - status == 'active'
 #   - deleted_at IS NULL
-#   - id is not a sentinel (ORPHAN_ORG_ID, MODULO_REGISTRY_ORG_ID)
+#   - id is not a sentinel (SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID)
 
 
 def is_login_active_org(org: Organisation) -> bool:
