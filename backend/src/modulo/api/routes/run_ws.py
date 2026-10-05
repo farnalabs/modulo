@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine
+from modulo.api.mcp_server import _tool_session_contract_error
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
 from modulo.core.logging_config import org_id_var
@@ -191,14 +192,26 @@ async def run_websocket(
         await ws.send_json({"error": "migration_required", "detail": "Run database migrations to enable this feature."})
         await ws.close(code=1011)
         return
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        # FAR-1502: reuse the ONE shared session-contract classifier (payload
+        # form, as the MCP surface does) so a programming bug gets the
+        # specific ``session_contract_error`` frame instead of a
+        # retry-inviting outage frame. Transient errors keep the aligned
+        # ``database_unavailable`` vocabulary — the same code the REST/MCP
+        # surfaces use for this frame (was ``db_unavailable``).
+        if (contract_error := _tool_session_contract_error(exc, "run_ws.run_websocket")) is not None:
+            await ws.send_json(contract_error)
+            await ws.close(code=1011)
+            return
         _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
-        await ws.send_json({"error": "db_unavailable", "detail": "Database temporarily unavailable."})
+        await ws.send_json({"error": "database_unavailable", "detail": "Database temporarily unavailable."})
         await ws.close(code=1011)
         return
     except Exception:
         _log.exception("run_ws.db_check_failed")
-        await ws.send_json({"error": "internal_error", "detail": MSG_UNEXPECTED_ERROR})
+        # FAR-1502: ``server_error`` is the reserved catch-all across
+        # surfaces; the generic ``internal_error`` is disallowed.
+        await ws.send_json({"error": "server_error", "detail": MSG_UNEXPECTED_ERROR})
         await ws.close(code=1011)
         return
 
