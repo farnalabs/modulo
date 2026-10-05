@@ -2,6 +2,21 @@
 
 Complete reference for all environment variables supported by Modulo. Variables are grouped by function.
 
+**Accepted aliases.** Each variable is documented below under its preferred spelling. `Settings` also accepts a field's own name, upper-cased, as an env-var name; for almost every variable that is the same spelling already shown below, so the distinction matters for exactly eight — the ones whose documented alias carries a `MODULO_` prefix the field name does not:
+
+| Documented (preferred) | Also accepted |
+|-------------------------|---------------|
+| `MODULO_ENV` | `ENVIRONMENT` |
+| `MODULO_RUNNER_MACHINE_ID` | `RUNNER_MACHINE_ID` |
+| `MODULO_MAX_RATE_USD` | `MAX_RATE_USD` |
+| `MODULO_MAX_SELF_REPORTED_USD` | `MAX_SELF_REPORTED_USD` |
+| `MODULO_MAX_REPORTABLE_USD_MIN` | `MAX_REPORTABLE_USD_MIN` |
+| `MODULO_MAX_REPORTABLE_BAND_USD` | `MAX_REPORTABLE_BAND_USD` |
+| `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` | `PRODUCT_ANALYTICS_ENDPOINT_URL` |
+| `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` | `PRODUCT_ANALYTICS_INSTANCE_SECRET` |
+
+The right-hand names are accepted aliases, not the recommended spelling — prefer the documented form in new configurations. When both spellings are set, the documented alias wins.
+
 ---
 
 ## Required
@@ -378,7 +393,15 @@ The same SMTP setup also sends the **error-tracking** alert emails, which identi
 |----------|----------|---------|-------------|
 | `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown on error-tracking alert emails as `Environment: <value>`; an empty value renders as `N/A`. The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
 
-The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails below do not carry an environment line.
+### Alert context block
+
+Every alert **and** recovery notification — the readiness emails below and every channel of the [worker-liveness watchdog](#worker-liveness-watchdog) — ends with the same context block: an `Environment: <value>` line from `MODULO_ENV` (above; an empty value renders as `unknown`), then each line of `ALERT_CONTEXT`. All of them are rendered from one shared helper (`backend/src/modulo/core/alert_context.py`), so the channels cannot drift apart.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ALERT_CONTEXT` | No | – | Operator free text appended after the environment line — runbook links, escalation notes, ticket pointers. One item per line: surrounding whitespace is stripped, blank lines are dropped, each line is truncated to 300 characters, and the block is capped at 20 lines total *including* the environment line, which always survives the cap. Unset by default, which leaves the environment line as the only context. |
+
+The block rides on every notification channel: the readiness alert/recovery emails, and — for the watchdog — the alert/recovery **email**, the generic Slack-compatible **webhook** (`ALERT_WEBHOOK_URL`, `{"text": ...}`) and the Microsoft Teams **webhook** (`ALERT_TEAMS_WEBHOOK_URL`). Only the emails render it as HTML (an HTML-escaped list); the webhook payloads carry the same lines as plain text. The alert/recovery stdout stamps that `fly logs` shows carry the environment line only, never `ALERT_CONTEXT`.
 
 ### Readiness health alerts
 
@@ -406,6 +429,8 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 | `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
 | `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
 | `ALERT_EMAIL_TO` | No | – | Comma-separated email recipients for watchdog alerts and readiness-degradation alerts (see [Readiness health alerts](#readiness-health-alerts)) |
+
+Every alert and recovery notification the watchdog sends — email, generic webhook, and Teams alike — carries the shared [alert context block](#alert-context-block) (`MODULO_ENV` environment line plus optional `ALERT_CONTEXT` free text), rendered from the same helper on all three channels.
 
 ---
 
