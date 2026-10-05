@@ -930,7 +930,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 WorkspacePodRef(
                     ref=ref,
                     labels=dict(labels),
-                    created_age_s=(now - created) if created else 0.0,
+                    created_age_s=max(0.0, now - created) if created else 0.0,
                 )
             )
         return entries

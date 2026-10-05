@@ -699,6 +699,30 @@ class TestListWorkspacePods:
         assert age >= 25.0
         assert age <= 60.0
 
+    async def test_future_creation_marker_clamps_age_to_zero(self) -> None:
+        """Node/process clock skew can make ``modulo.created_at`` outrun ``now``;
+        the promised non-negative age is clamped to ``0.0`` so the sweep's
+        ``age <= 0`` fail-safe (never a destroy candidate) still holds."""
+        core = AsyncMock()
+        identity = KubernetesRuntimeProvider._deployment_identity()
+        future = int(time.time()) + 3600
+        ours = _listed_pod(
+            "modulo-ws-skewed",
+            labels={
+                "modulo.provider": "kubernetes",
+                "modulo.created_at": str(future),
+                "modulo.run.id": "run-1",
+            },
+            annotations={k8s_mod._MACHINE_ANNOTATION: identity},
+        )
+        core.list_namespaced_pod.return_value = SimpleNamespace(items=[ours])
+        provider = _provider(core=core)
+
+        entries = await provider.list_workspace_pods()
+
+        assert [entry.ref for entry in entries] == ["modulo-ws-skewed"]
+        assert entries[0].created_age_s == 0.0
+
     async def test_excludes_foreign_and_identity_less_pods(self) -> None:
         """Client-side deployment-identity match: a same-label pod of ANOTHER
         Modulo deployment (and a pod with no identity annotation at all) is

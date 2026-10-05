@@ -77,7 +77,7 @@ class SandboxDispatchTimeoutValidationError(ValueError):
 class RunnerDispatchRoute:
     """The resolved dispatch route for a sandbox_agent node."""
 
-    provider_type: str  # "runner_docker" | "e2b" | "none"
+    provider_type: str  # "runner_docker" | "e2b" | "kubernetes" | "none"
     profile: Any = None
     provider: Any = None
     hub: RuntimeProviderHub | None = None

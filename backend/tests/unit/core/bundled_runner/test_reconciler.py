@@ -610,6 +610,51 @@ async def test_kubernetes_source_destroys_by_pod_name_and_closes_the_provider() 
     assert source._provider is None
 
 
+async def test_kubernetes_source_raises_when_the_destroy_is_unconfirmed() -> None:
+    """A pod delete the provider cannot confirm (``destroy_workspace_by_ref``
+    returns ``False``) is NOT swallowed: the source raises so the sweep aborts
+    with partial counts and SAQ retries — parity with the Docker source, whose
+    delete raises on failure."""
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    provider = MagicMock()
+    provider.destroy_workspace_by_ref = AsyncMock(return_value=False)
+    source._provider = provider
+
+    with pytest.raises(RuntimeError, match="could not be confirmed destroyed"):
+        await source.destroy_by_container_id("modulo-ws-aaa")
+
+
+async def test_sweep_wraps_a_destroy_failure_with_partial_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A destroy failure aborts the sweep as ``ReconcilerSweepError`` carrying
+    the partial counts (so SAQ retries and /healthz sees it) and the failed
+    workspace is NEVER counted as destroyed — on every tier, Docker included.
+    The orphan after the failure is left for the next sweep."""
+    source = _fake_source(
+        [
+            _container("gone-1", 9999.0, "c-1"),
+            _container("gone-2", 9999.0, "c-2"),
+            _container("gone-3", 9999.0, "c-3"),
+        ]
+    )
+
+    async def _destroy(cid: str) -> None:
+        if cid == "c-2":
+            raise RuntimeError("docker rm failed")
+
+    source.destroy_by_container_id = AsyncMock(side_effect=_destroy)
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+
+    with pytest.raises(ReconcilerSweepError) as exc_info:
+        await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert exc_info.value.scanned == 2
+    assert exc_info.value.destroyed == 1
+    assert "destroying docker workspace c-2" in str(exc_info.value)
+
+
 async def test_kubernetes_skip_reason_names_the_registration_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unregistered provider is an EXPLICIT skip, never a silent one: the
     reason names the env var that would register it."""

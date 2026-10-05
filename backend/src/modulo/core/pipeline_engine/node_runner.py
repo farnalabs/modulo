@@ -9230,6 +9230,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             run_id=_parse_uuid_opt(run_id),
             # T2 parity with the legacy create kwargs: same template, same
             # strictly-greater-than-command lifetime (FAR-487/FAR-489).
+            # NOTE (FAR-1051): on a kubernetes route this E2B-template value is
+            # used directly as the pod's container image, so the
+            # kubernetes-bound profile's own image_ref is NOT consulted here —
+            # unlike the bundled-runner mapper (runner_dispatch.py), which maps
+            # profile.image_ref. A node without an image-shaped template_id
+            # therefore fails loudly at provision time (ImagePullBackOff ->
+            # ProvisionTimeoutError).
             image_ref=template_id,
             timeout_seconds=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
             resource_limits=dict(resource_limits or {}),

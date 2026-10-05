@@ -233,8 +233,13 @@ class _KubernetesWorkspaceSource:
     async def destroy_by_container_id(self, container_id: str) -> None:
         # destroy_workspace_by_ref is idempotent and label-guarded (a foreign
         # or already-gone pod is a logged no-op), so the sweep's decision is
-        # the only gate that matters here.
-        await self._get_provider().destroy_workspace_by_ref(container_id)
+        # the only gate that matters here. An UNCONFIRMED destroy (``False``)
+        # is NOT swallowed: it raises so the sweep aborts with partial counts
+        # and SAQ's retry + /healthz attribution engage — parity with the
+        # Docker source, whose delete raises on failure.
+        destroyed = await self._get_provider().destroy_workspace_by_ref(container_id)
+        if not destroyed:
+            raise RuntimeError(f"Kubernetes workspace pod {container_id!r} could not be confirmed destroyed")
 
     async def close(self) -> None:
         if self._provider is not None:
@@ -389,15 +394,33 @@ async def reconcile_runner_workspaces(
 
         for source_name, container in listed:
             scanned += 1
-            if await _reconcile_single_container(
-                async_engine,
-                source_by_name[source_name],
-                container,
-                active_run_ids=active_run_ids,
-                log_only=log_only,
-                grace_seconds=grace_seconds,
-                max_lifetime_seconds=max_lifetime_seconds,
-            ):
+            try:
+                destroyed = await _reconcile_single_container(
+                    async_engine,
+                    source_by_name[source_name],
+                    container,
+                    active_run_ids=active_run_ids,
+                    log_only=log_only,
+                    grace_seconds=grace_seconds,
+                    max_lifetime_seconds=max_lifetime_seconds,
+                )
+            except Exception as exc:
+                # A destroy failure aborts the sweep on EVERY tier (Docker's
+                # delete raises too) and is surfaced as ReconcilerSweepError
+                # with the partial counts, so SAQ's retries and /healthz
+                # attribution engage rather than the failure vanishing into a
+                # log line while the sweep reports the orphan as destroyed.
+                _log.exception(
+                    "runner.reconciler.sweep_aborted stage=destroy source=%s container=%s",
+                    source_name,
+                    container.id,
+                )
+                raise ReconcilerSweepError(
+                    f"Bundled Runner orphan sweeper aborted destroying {source_name} workspace {container.id}: {exc}",
+                    scanned=scanned,
+                    destroyed=orphans_destroyed,
+                ) from exc
+            if destroyed:
                 orphans_destroyed += 1
     finally:
         for _, source in sources:
