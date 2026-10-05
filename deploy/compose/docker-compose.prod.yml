@@ -80,9 +80,12 @@ services:
       - "127.0.0.1:8083:8080"
     healthcheck:
       test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      # start_period matches the root compose's watchdog so a slow dashboard
+      # boot is not flapped unhealthy before the first probe succeeds.
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
 volumes:
   postgres_data:
