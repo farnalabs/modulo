@@ -1439,7 +1439,10 @@ def _posted_texts_by_url(client: AsyncMock) -> dict[str, str]:
 
 class TestAlertContextOnWebhookChannels:
     async def test_alert_payloads_carry_environment_and_context_exactly_once(self) -> None:
-        settings = _webhook_context_settings()
+        # email=False: these tests assert only the webhook/Teams payloads, and
+        # leaving the email channel armed would dispatch the REAL send_email on
+        # a thread (DNS-retry sleeps, up to ~92s on a slow runner).
+        settings = _webhook_context_settings(email=False)
         client = AsyncMock()
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
@@ -1462,7 +1465,9 @@ class TestAlertContextOnWebhookChannels:
             assert payload_text.index("Detected at") < payload_text.index("Environment: staging")
 
     async def test_recovery_payloads_carry_environment_and_context_exactly_once(self) -> None:
-        settings = _webhook_context_settings()
+        # email=False for the same reason as the alert test above: only the
+        # webhook/Teams channels are under test here.
+        settings = _webhook_context_settings(email=False)
         client = AsyncMock()
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
