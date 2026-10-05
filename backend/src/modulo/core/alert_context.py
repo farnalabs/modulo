@@ -27,6 +27,17 @@ MAX_CONTEXT_LINES = 20
 MAX_CONTEXT_LINE_CHARS = 300
 
 
+def alert_environment_line(settings: Settings) -> str:
+    """The ``Environment: <env>`` line — the ONE definition of its format.
+
+    Used as the first entry of :func:`alert_context_lines` (the email body)
+    and by both alert modules' stdout stamps, so the line can never drift
+    between the three renderings. Capped at ``MAX_CONTEXT_LINE_CHARS``: a
+    pathological ``MODULO_ENV`` cannot bloat an alert or a log line.
+    """
+    return f"Environment: {settings.environment or 'unknown'}"[:MAX_CONTEXT_LINE_CHARS]
+
+
 def alert_context_lines(settings: Settings) -> list[str]:
     """The alert context as lines: ``Environment: <env>`` first, then each
     non-blank ``ALERT_CONTEXT`` line.
@@ -37,7 +48,7 @@ def alert_context_lines(settings: Settings) -> list[str]:
     cap). With no ``ALERT_CONTEXT`` configured the result is the environment
     line alone.
     """
-    lines = [f"Environment: {settings.environment}"]
+    lines = [alert_environment_line(settings)]
     if not settings.alert_context:
         return lines
     for raw_line in settings.alert_context.splitlines():

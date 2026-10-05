@@ -7,9 +7,13 @@ alert channels import.
 
 Note on how the fields are passed: ``Settings`` is a ``case_sensitive=False``
 ``BaseSettings``, so constructor keys are matched against each field's
-ENVIRONMENT ALIAS case-insensitively — the field *names* ``environment`` /
-``alert_context`` only work when spelled as their aliases (``MODULO_ENV`` /
-``ALERT_CONTEXT``), exactly as the rest of this suite passes ``ALERT_EMAIL_TO``.
+ENVIRONMENT ALIAS case-insensitively. ``alert_context`` also works under its
+field name (it case-folds onto the ``ALERT_CONTEXT`` alias), but
+``environment`` does NOT: the ``MODULO_ENV`` spelling is required, because a
+``environment``-named key is silently dropped by ``extra="ignore"``. This
+suite therefore passes both as their aliases (``MODULO_ENV`` /
+``ALERT_CONTEXT``), exactly as the rest of the suite passes ``ALERT_EMAIL_TO``.
+
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from modulo.core.alert_context import (
     alert_context_html,
     alert_context_lines,
     alert_context_text,
+    alert_environment_line,
 )
 from modulo.settings import Settings
 
@@ -45,6 +50,21 @@ def test_environment_line_is_always_present_and_first() -> None:
     settings = _make_settings(MODULO_ENV="production")
     assert alert_context_lines(settings) == ["Environment: production"]
     assert alert_context_text(settings) == "Environment: production"
+
+
+def test_environment_line_capped_at_max_line_chars() -> None:
+    """A pathological MODULO_ENV must not bloat an alert body or a stdout
+    stamp: the single-sourced environment line is truncated, not dropped."""
+    settings = _make_settings(MODULO_ENV="x" * 1000)
+    line = alert_environment_line(settings)
+    assert len(line) == MAX_CONTEXT_LINE_CHARS
+    # The SAME capped line is what the email body renders first.
+    assert alert_context_lines(settings)[0] == line
+
+
+def test_empty_environment_falls_back_to_unknown() -> None:
+    settings = _make_settings(MODULO_ENV="")
+    assert alert_environment_line(settings) == "Environment: unknown"
 
 
 def test_multi_line_context_rendered_in_order() -> None:

@@ -66,7 +66,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
-from modulo.core.alert_context import alert_context_html, alert_context_text
+from modulo.core.alert_context import alert_context_html, alert_context_text, alert_environment_line
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
@@ -337,10 +337,21 @@ def _recovery_text(
     )
 
 
-def _context_oneline(settings: Settings) -> str:
-    """The context flattened onto one line for the stdout alert stamp
-    (``fly logs`` renders JSON logs unreliably — same lesson as the watchdog)."""
-    return alert_context_text(settings).replace("\n", "; ")
+def _stamp(message: str) -> None:
+    """Best-effort stdout stamp for an alert event (``fly logs`` renders JSON
+    logs unreliably — same lesson as the watchdog).
+
+    STRICTLY best-effort: this runs after the alert email was delivered but
+    before the dedup state is committed, so a ``print`` failure
+    (``UnicodeEncodeError`` on a non-UTF-8 stdout, ``BrokenPipeError``, ...)
+    must never propagate — a raise here would skip ``redis.set`` and the next
+    confirmed tick would re-send a DUPLICATE alert. Best-effort fails open,
+    with a log.
+    """
+    try:
+        print(message, flush=True)  # noqa: T201
+    except Exception:
+        _log.warning("health_alerts.stamp_print_failed", exc_info=True)
 
 
 async def _notify_alert(
@@ -373,12 +384,11 @@ async def _notify_alert(
     state.notified = "unhealthy"
     state.conditions = list(conditions)
     state.since = now
-    # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
-    # event needs stdout visibility (same lesson as the watchdog).
-    print(  # noqa: T201
-        f"[health-alert] ALERT readiness={status}: {'; '.join(conditions)} | {_context_oneline(settings)}",
-        flush=True,
-    )
+    # Stamp carries only the conditions + the environment line: ALERT_CONTEXT
+    # is repr=False precisely to keep it out of logs, so it never goes to
+    # stdout. The stamp is best-effort (see _stamp) — it cannot skip the
+    # state commit below.
+    _stamp(f"[health-alert] ALERT readiness={status}: {'; '.join(conditions)} | {alert_environment_line(settings)}")
     return "alert"
 
 
@@ -409,9 +419,12 @@ async def _notify_recovery(
     state.notified = "healthy"
     state.conditions = []
     state.since = None
-    print(  # noqa: T201
-        f"[health-alert] RECOVERY readiness=ok: {'; '.join(prior_conditions)} | {_context_oneline(settings)}",
-        flush=True,
+    # Best-effort stamp (see _stamp): the state above is already mutated in
+    # memory and committed by the caller after this returns — a print failure
+    # must not abort the commit.
+    _stamp(
+        f"[health-alert] RECOVERY readiness=ok: {'; '.join(prior_conditions) or 'conditions cleared'}"
+        f" | {alert_environment_line(settings)}"
     )
     return "recovery"
 

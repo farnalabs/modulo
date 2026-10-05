@@ -869,8 +869,9 @@ class Settings(BaseSettings):
     alert_email_to: str | None = Field(default=None, alias="ALERT_EMAIL_TO", repr=False)
     # Deployment environment name — carried on every operator alert email so a
     # recipient can tell staging from production at a glance (FAR-1495).
-    # Centralises the pre-existing scattered ``os.environ.get("MODULO_ENV",
-    # "development")`` convention; those call sites are deliberately untouched.
+    # This field MIRRORS the pre-existing scattered ``os.environ.get("MODULO_ENV",
+    # "development")`` convention for the alert path; the pre-existing call
+    # sites are deliberately not migrated in this change.
     environment: str = Field("development", alias="MODULO_ENV")
     # Operator-supplied free text appended verbatim to every alert email body
     # (FAR-1495) — runbook links, escalation notes, ticket pointers. One item

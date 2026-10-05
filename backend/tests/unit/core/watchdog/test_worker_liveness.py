@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1301,3 +1301,103 @@ class TestAlertContextOnEmails:
             assert "runbook: https://example.com/runbook" in part
         assert text_body.index("Resolved at") < text_body.index("Environment: staging")
         assert html_body.index("Resolved at") < html_body.index("Environment: staging")
+
+
+# ---------------------------------------------------------------------------
+# FAR-1495 follow-up: the stdout stamp is STRICTLY best-effort (a print failure
+# must never block the alert/recovery fan-out that follows it) and it carries
+# the conditions plus the environment line ONLY - never the operator's
+# ALERT_CONTEXT free text, which is repr=False precisely to keep it out of logs.
+# ---------------------------------------------------------------------------
+
+
+def _failing_stamp_print(prefix: str) -> Callable[..., None]:
+    """A ``print`` replacement that fails ONLY for the alert stamp.
+
+    A blanket ``patch("builtins.print", side_effect=...)`` would also break
+    pytest's logging formatter (it calls ``print`` while rendering an
+    ``exc_info`` traceback), which masks the behaviour under test - so only
+    the stamp's own message raises and everything else prints normally.
+    """
+    real_print = print
+
+    def _print(*args: Any, **kwargs: Any) -> None:
+        message = args[0] if args else ""
+        if isinstance(message, str) and message.startswith(prefix):
+            raise BrokenPipeError("stdout gone")
+        real_print(*args, **kwargs)
+
+    return _print
+
+
+class TestStdoutStamp:
+    async def test_stamp_names_environment_but_never_arbitrary_context(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Both edges print the environment line and never the free text."""
+        settings = _alert_context_settings()
+        fake = _FakeWatchdogRedis()
+        dead_since = time.time() - 200
+
+        send = AsyncMock()
+        with patch.object(wl, "_send_alerts", send):
+            await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
+        assert send.await_count == 1
+
+        alert_stamp = capsys.readouterr().out
+        assert "[watchdog] ALERT worker-liveness:" in alert_stamp
+        assert "Environment: staging" in alert_stamp
+        assert "runbook: https://example.com/runbook" not in alert_stamp
+
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat()
+        send = AsyncMock()
+        with patch.object(wl, "_send_alerts", send):
+            await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
+        assert send.await_count == 1
+
+        recovery_stamp = capsys.readouterr().out
+        assert "[watchdog] RECOVERY worker-liveness:" in recovery_stamp
+        assert "Environment: staging" in recovery_stamp
+        assert "runbook: https://example.com/runbook" not in recovery_stamp
+
+    async def test_print_failure_still_fans_out_alert_and_recovery(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The incident key is claimed (SET NX) / cleared (GETDEL) BEFORE the
+        stamp prints - so a print failure must be swallowed (with a log) and
+        the fan-out must still happen, on both edges."""
+        settings = _alert_context_settings()
+        fake = _FakeWatchdogRedis()
+        dead_since = time.time() - 200
+
+        send = AsyncMock()
+        with (
+            patch.object(wl, "_send_alerts", send),
+            patch("builtins.print", new=_failing_stamp_print("[watchdog]")),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
+
+        assert send.await_count == 1
+        assert wl._ALERT_STATE_KEY in fake._data  # the claim survived the failed stamp
+        assert "watchdog.stamp_print_failed" in caplog.text
+
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat()
+        send = AsyncMock()
+        caplog.clear()
+        with (
+            patch.object(wl, "_send_alerts", send),
+            patch("builtins.print", new=_failing_stamp_print("[watchdog]")),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
+
+        assert send.await_count == 1
+        assert wl._ALERT_STATE_KEY not in fake._data  # the GETDEL survived the failed stamp
+        assert "watchdog.stamp_print_failed" in caplog.text

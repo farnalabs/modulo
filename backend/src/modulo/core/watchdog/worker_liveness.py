@@ -60,7 +60,7 @@ from typing import Any
 import httpx
 import redis.asyncio as aioredis
 
-from modulo.core.alert_context import alert_context_html, alert_context_text
+from modulo.core.alert_context import alert_context_html, alert_context_text, alert_environment_line
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
@@ -344,11 +344,21 @@ def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
     return [address.strip() for address in alert_email_to.split(",") if address.strip()]
 
 
-def _context_oneline(settings: Settings) -> str:
-    """The alert context flattened onto one line for the stdout stamp
-    (``fly logs`` renders JSON logs unreliably — same lesson as the alert
-    prints above)."""
-    return alert_context_text(settings).replace("\n", "; ")
+def _stamp(message: str) -> None:
+    """Best-effort stdout stamp for an alert event (``fly logs`` renders JSON
+    logs unreliably — same lesson as the alert prints above).
+
+    STRICTLY best-effort: the ALERT stamp runs AFTER the incident key was
+    claimed (SET NX) and the RECOVERY stamp AFTER it was GETDEL-ed, so a
+    ``print`` failure (``UnicodeEncodeError`` on a non-UTF-8 stdout,
+    ``BrokenPipeError``, ...) must never propagate — a raise here would skip
+    ``_send_alerts`` and NO alert / recovery email would ever go out (until
+    the 7-day TTL). Best-effort fails open, with a log.
+    """
+    try:
+        print(message, flush=True)  # noqa: T201
+    except Exception:
+        _log.warning("watchdog.stamp_print_failed", exc_info=True)
 
 
 async def _send_email_alert(
@@ -480,21 +490,16 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
             # Another machine already claimed this incident — stay silent.
             _log.info("watchdog.alert_already_active conditions=%s", "; ".join(conditions))
             return
-        # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
-        # event needs stdout visibility (repo lesson).
-        print(  # noqa: T201
-            f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)} | {_context_oneline(settings)}",
-            flush=True,
-        )
+        # Stamp carries only the conditions + the environment line: ALERT_CONTEXT
+        # is repr=False precisely to keep it out of logs, so it never goes to
+        # stdout. Best-effort (see _stamp) — it cannot skip the fan-out below.
+        _stamp(f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)} | {alert_environment_line(settings)}")
         await _send_alerts(settings, conditions)
     else:
         state = await _claim_recovery(redis)
         if state is None:
             return  # nothing was alerted — healthy state, stay silent
-        print(  # noqa: T201
-            f"[watchdog] RECOVERY worker-liveness: conditions cleared | {_context_oneline(settings)}",
-            flush=True,
-        )
+        _stamp(f"[watchdog] RECOVERY worker-liveness: conditions cleared | {alert_environment_line(settings)}")
         await _send_alerts(settings, [], recovery_state=state)
 
 
