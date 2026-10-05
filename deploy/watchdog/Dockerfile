@@ -9,7 +9,7 @@
 #
 # That rules out an in-container HTTP healthcheck and any startup line of our
 # own, so this image re-hosts the same upstream /gatus binary on Alpine, which
-# supplies both (all three properties of alpine:3.20 verified by running it):
+# supplies both (all three properties of alpine:3.24 verified by running it):
 #
 #   * /bin/busybox -> the `sh` entrypoint needs it and the compose healthcheck
 #     execs it directly as `/bin/busybox wget ...` (healthcheck CMD does not go
@@ -23,7 +23,7 @@
 # `stable`/`latest` deliberately unused - they float).
 FROM twinproduction/gatus:v5.37.0 AS upstream
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 # Run unprivileged. Nothing here needs root: /gatus is static and binds the
 # unprivileged port 8080, the config is mounted/baked read-only, and Gatus
