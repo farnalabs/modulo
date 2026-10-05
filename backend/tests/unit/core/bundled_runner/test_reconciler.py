@@ -690,6 +690,46 @@ async def test_sweep_reclaims_orphans_through_the_kubernetes_source(monkeypatch:
     k8s_source.close.assert_awaited_once()
 
 
+async def test_source_close_failure_does_not_skip_the_other_tier(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1051 review: a close() failure on the FIRST tier must not skip the
+    second tier's close — teardown is per-tier best-effort, logged not silent."""
+    docker_source = _fake_source([])
+    docker_source.close = AsyncMock(side_effect=RuntimeError("docker close boom"))
+    k8s_source = _fake_source([])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+
+    with caplog.at_level(logging.ERROR):
+        result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0}
+    k8s_source.close.assert_awaited_once()
+    assert "source_close_failed" in caplog.text
+
+
+async def test_source_close_failure_does_not_mask_the_in_flight_sweep_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A close() failure during teardown must not replace the sweep's own
+    exception — the real abort is what surfaces."""
+    docker_source = _fake_source([])
+    docker_source.close = AsyncMock(side_effect=RuntimeError("docker close boom"))
+    k8s_source = _fake_source([])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+
+    with pytest.raises(ReconcilerSweepError, match="cross-reference"):
+        await reconcile_runner_workspaces(_engine_with_active_runs([], fail=True))
+
+    k8s_source.close.assert_awaited_once()
+
+
 async def test_sweep_skips_the_kubernetes_source_when_the_provider_is_unregistered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

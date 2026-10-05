@@ -185,6 +185,19 @@ async def test_kubernetes_profile_resolves_hub_provider(monkeypatch: pytest.Monk
             await route.hub.aclose()
 
 
+async def test_kubernetes_without_image_ref_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1051 review: a kubernetes profile with no image_ref would fall
+    through to the node's E2B ``template_id`` as the pod image and fail at
+    provision time (ImagePullBackOff). Route resolution fails LOUD instead,
+    naming the missing image_ref, before the hub is even built."""
+    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+
+    with pytest.raises(SandboxDispatchUnboundError, match="image_ref"):
+        await resolve_sandbox_dispatch_route(
+            _session_factory_returning(_profile("kubernetes", image_ref=None)), _ORG, _PROFILE_ID
+        )
+
+
 async def test_kubernetes_without_opt_in_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
     """No silent fallback: without ``MODULO_KUBERNETES_ENABLED`` the typed
     config error carries the remediation env var — never E2B, never local,

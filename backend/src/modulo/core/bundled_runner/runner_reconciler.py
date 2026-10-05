@@ -423,8 +423,15 @@ async def reconcile_runner_workspaces(
             if destroyed:
                 orphans_destroyed += 1
     finally:
-        for _, source in sources:
-            await source.close()
+        # FAR-1051 review: close EACH source independently. A raise from one
+        # tier's close() must not skip the other tier's close, nor replace an
+        # in-flight sweep exception with the close error. Best-effort teardown
+        # fails open WITH a log (never silently).
+        for source_name, source in sources:
+            try:
+                await source.close()
+            except Exception:
+                _log.exception("runner.reconciler.source_close_failed source=%s", source_name)
     _log.info(
         "runner.reconciler.sweep_completed scanned=%d orphans_destroyed=%d log_only=%s",
         scanned,

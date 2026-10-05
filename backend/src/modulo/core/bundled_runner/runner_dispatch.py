@@ -218,6 +218,20 @@ async def resolve_sandbox_dispatch_route(
         # (``RateLimitedError`` and friends, ``RuntimeProviderError``) are not
         # caught and propagate unwrapped (error-family site map A).
         #
+        # FAR-1051 review: the Kubernetes tier requires an explicit pod image.
+        # ``node_runner`` falls back to the node's E2B ``template_id`` when the
+        # route carries no image_ref, and a template_id is not a container
+        # image — the pod then ImagePullBackOffs mid-run. Fail LOUD here,
+        # BEFORE building the hub (mirroring the runner_docker
+        # placeholder-digest check above), so the operator is told to set the
+        # profile's image_ref rather than discovering it from a stuck pod.
+        if not (getattr(profile, "image_ref", None) or "").strip():
+            raise SandboxDispatchUnboundError(
+                f"Environment profile '{getattr(profile, 'name', profile)}' is bound to the "
+                "Kubernetes provider but declares no image_ref; the Kubernetes tier requires the "
+                "workspace pod image (an E2B template_id is not a container image), so set the "
+                "profile's image_ref to a runner container image before dispatching."
+            )
         # The returned provider + hub are consumed by ``node_runner``: the
         # provider becomes the dispatch's provider (one client per dispatch)
         # and the hub is aclosed in the dispatch's finally.
