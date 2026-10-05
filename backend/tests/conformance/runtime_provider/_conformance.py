@@ -269,6 +269,17 @@ async def assert_stream_kill_before_collect_detected(provider: RuntimeProvider) 
 
         # Bounded: a stream that never goes live is a hang, not a pass.
         await asyncio.wait_for(_consume_until_live(), timeout=_STREAM_LIVE_WAIT_S)
+        # The stream must actually have gone live BEFORE the kill. Without
+        # this, a stream that dies instantly (broken exec path) ends the
+        # consume loop early and the kill assertions below hold vacuously -
+        # the suite would then "pass" kill detection while never observing a
+        # live stream at all (observed exactly that during local validation).
+        seen_before_kill = "".join(marker_seen)
+        assert "cf-kill-live" in seen_before_kill, (
+            "the stream never delivered the live marker before the kill, so "
+            "kill-before-collect cannot be tested on it (broken exec path?): "
+            f"received {seen_before_kill!r}"
+        )
 
         await process.kill()
         # Drain so the chunk generator finalises and ``done`` fires.

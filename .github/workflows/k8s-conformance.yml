@@ -81,8 +81,11 @@ env:
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
   # Pinned tool versions for the kind leg (and kubectl for all legs).
+  # kubectl: kind v0.33.0 ships a k8s 1.37 node image (observed 2026-10),
+  # and managed clusters currently run 1.35-1.37 - v1.36.0 keeps the client
+  # within kubectl's supported +/-1 minor skew of BOTH.
   KIND_VERSION: v0.33.0
-  KUBECTL_VERSION: v1.35.0
+  KUBECTL_VERSION: v1.36.0
   HELM_VERSION: v3.21.4
   KIND_CLUSTER_NAME: modulo-conformance
 
