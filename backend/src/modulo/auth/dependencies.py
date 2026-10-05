@@ -227,7 +227,9 @@ async def get_current_tenant_user_or_api_key(
         from modulo.auth.api_key import (
             _MK_PREFIX,
             _PREFIX_LEN,
+            ApiKeyGrantsUnavailableError,
             ApiKeyInvalidError,
+            resolve_key_grants,
             validate_api_key,
         )
         from modulo.db.models.api_key import OrgApiKey
@@ -283,8 +285,20 @@ async def get_current_tenant_user_or_api_key(
                     str(key.account_id),
                     str(key.organisation_id),
                 )
+            # FAR-1477: tri-state grant-set (None = legacy role bundle, no
+            # flag read). A grant-bearing key with the flag OFF is denied.
+            # Resolved AFTER the validation session closes: for grant-bearing
+            # keys the flag read opens its own pooled session, and holding two
+            # connections per request risks pool-exhaustion deadlock.
+            key_grants = await resolve_key_grants(key)
         except ApiKeyInvalidError:
             raise InvalidToken from None
+        except ApiKeyGrantsUnavailableError:
+            # Grant flag unreadable: fail closed with 503 (retryable), not 401.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key grants temporarily unavailable.",
+            ) from None
         except SQLAlchemyError as exc:
             # FAR-1481: session-contract violations (InvalidRequestError and
             # subclasses, incl. MissingGreenlet) are local programming bugs,
@@ -340,6 +354,7 @@ async def get_current_tenant_user_or_api_key(
                 # the human_only enforcement's ``client_kind != browser`` rule
                 # subsumes the via_api_key check through this stamp.
                 client_kind=CLIENT_KIND_PROGRAMMATIC,
+                key_grants=key_grants,
             ),
         )
 
