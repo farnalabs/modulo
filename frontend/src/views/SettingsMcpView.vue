@@ -740,7 +740,13 @@ async function loadGrantablePermissions() {
       grantsLoadFailed.value = true
       return
     }
-    if (!data || !data.enabled) return
+    // Only a validated `{enabled: false}` body may hide the picker. A missing or
+    // malformed body with no error is a LOAD FAILURE (never 'grants disabled').
+    if (!data || typeof data.enabled !== 'boolean' || !Array.isArray(data.permissions)) {
+      grantsLoadFailed.value = true
+      return
+    }
+    if (!data.enabled) return
     grantablePermissions.value = data.permissions
     grantsEnabled.value = data.permissions.length > 0
   } catch {

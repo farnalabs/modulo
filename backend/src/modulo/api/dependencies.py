@@ -61,6 +61,26 @@ from modulo.settings import Settings, get_settings
 _CODE_PERMISSION_DENIED = "permission.denied"
 
 
+def _enforce_key_grant(principal: TenantPrincipal, permission: str) -> None:
+    """Raise a 403 when the principal's API-key grant-set does not permit ``permission``.
+
+    A grant-set denial gets its own detail + log reason (``not_granted``), not
+    the role message. ``key_grants is None`` (JWTs, legacy keys) is a no-op; a
+    malformed value fails closed inside ``assert_grant``.
+    """
+    try:
+        assert_grant(principal.key_grants, permission)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={"permission": permission, "reason": "not_granted"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' is not granted to this API key",
+        ) from exc
+
+
 async def _assert_tenant_permission(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -103,18 +123,7 @@ async def _assert_tenant_permission(
         # FAR-1477 / ADR 058: grant-set leg — effective = grant_set INTERSECT
         # bundle(live_role). Deny-only and kill-switch-INELIGIBLE (a grant-set
         # only ever narrows). ``key_grants is None`` (JWTs, legacy keys) is a no-op.
-        try:
-            # grants_permit fails closed on a malformed (non-None, non-frozenset) value.
-            assert_grant(principal.key_grants, permission)
-        except PermissionDenied as exc:
-            logger.warning(
-                _CODE_PERMISSION_DENIED,
-                extra={"permission": permission, "reason": "not_granted"},
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission '{permission}' is not granted to this API key",
-            ) from exc
+        _enforce_key_grant(principal, permission)
     finally:
         if token is not None:
             reset_authz_enforce(token)
@@ -199,19 +208,8 @@ def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Permission '{permission}' requires '{required}' role",
         ) from exc
-    # FAR-1477: a grant-bearing key must also hold the In-Dev permission. A
-    # grant-set denial gets its own detail + log reason (not the role message).
-    try:
-        assert_grant(principal.key_grants, permission)
-    except PermissionDenied as exc:
-        logger.warning(
-            _CODE_PERMISSION_DENIED,
-            extra={"permission": permission, "reason": "not_granted"},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Permission '{permission}' is not granted to this API key",
-        ) from exc
+    # FAR-1477: a grant-bearing key must also hold the In-Dev permission.
+    _enforce_key_grant(principal, permission)
 
 
 def require_permission_any_credential(permission: str) -> Any:

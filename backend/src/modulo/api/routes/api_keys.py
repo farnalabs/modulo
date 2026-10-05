@@ -22,6 +22,7 @@ from modulo.auth.api_key import (
     _UNSET,
     KEY_SCOPES,
     USER_KEY_MAX_TTL_DAYS,
+    ApiKeyGrantsUnavailableError,
     ApiKeyScopeError,
     api_key_grants_enabled,
     create_api_key,
@@ -497,15 +498,21 @@ async def create_api_key_endpoint(
     # FAR-1477: grants are accepted ONLY with the org flag ON (OFF => 422, never
     # a silent downgrade to a legacy full-role key, which would WIDEN access).
     grants_on = False
-    if req.grants is not None:
-        grants_on = await api_key_grants_enabled(principal.organisation_id)
-        if not grants_on:
+    if req.grants is not None or requested_scope == "user":
+        # Mint path reads the flag STRICT: a transient failure must not silently
+        # skip the 90-day user-key cap (or the grants gate) -> retryable 503.
+        try:
+            grants_on = await api_key_grants_enabled(principal.organisation_id, strict=True)
+        except ApiKeyGrantsUnavailableError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key grant settings are temporarily unavailable; retry shortly",
+            ) from None
+        if req.grants is not None and not grants_on:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="API key grant-sets are not enabled for this organisation",
             )
-    elif requested_scope == "user":
-        grants_on = await api_key_grants_enabled(principal.organisation_id)
     expires_at = _resolve_grants_expiry(expires_at, requested_scope, grants_on)
     key, full_key = await _mint_api_key(
         session, principal, name, req.role, team_id, expires_at, requested_scope, req.grants

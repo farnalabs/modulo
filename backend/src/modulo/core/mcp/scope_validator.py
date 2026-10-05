@@ -314,7 +314,7 @@ def resolve_tool_access(
     Returns ``(allowed, permission_key)``. ``permission_key`` is the resolved
     key for error/log detail, or ``""`` when the tool could not be resolved.
 
-    Composes four deny-only legs in a fixed order (never widen):
+    Composes five deny-only legs in a fixed order (never widen):
 
     1. node allowed_tools narrowing (FAR-418/436 semantics preserved exactly).
     2. resolution — the tool/action must map to a permission key
@@ -330,6 +330,11 @@ def resolve_tool_access(
     4. role leg — kill-switch-ELIGIBLE: the org-role hierarchy check; the
        kill switch OFF bypasses the comparison (never the identity checks,
        which deny above).
+    5. grant-set leg (FAR-1477) — runs LAST, after the role leg:
+       ``grants_permit`` requires the permission to be in the key's grant-set
+       and still delegable (live exclusion read). KILL-SWITCH-INELIGIBLE: it
+       applies even when the authz kill switch is OFF, because a grant-set
+       only ever narrows. ``grants is None`` is a no-op.
     """
     # Leg 1: node-level allowed_tools narrowing. When the node's
     # capability_scope declares an allow-list it is an ADDITIONAL filter —

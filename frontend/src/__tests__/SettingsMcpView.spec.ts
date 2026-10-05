@@ -123,6 +123,9 @@ function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, 
     if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mcpConfig, error: undefined })
     if (path === '/api/v1/api-keys') return Promise.resolve({ data: apiKeysData, error: undefined })
     if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: oauth, error: undefined })
+    if (path === '/api/v1/api-keys/grantable-permissions') {
+      return Promise.resolve({ data: { enabled: false, permissions: [] }, error: undefined })
+    }
     return Promise.resolve({ data: null, error: undefined })
   })
 }
@@ -1981,5 +1984,22 @@ describe('SettingsMcpView', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="api-key-grants-selector"]').exists()).toBe(true)
+  })
+
+  it('treats a missing body with no error as a load failure, not grants-disabled', async () => {
+    const wrapper = await openCreateDialogWith({ enabled: false, permissions: [] })
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/api-keys/grantable-permissions') {
+        return Promise.resolve({ data: undefined, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    ;(wrapper.vm as any).openCreateKeyDialog()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="settings-mcp-grants-load-error"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="settings-mcp-create-key-name"]').setValue('New Key')
+    await (wrapper.vm as any).createKey()
+    await flushPromises()
+    expect(postMock).not.toHaveBeenCalled()
   })
 })

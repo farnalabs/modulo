@@ -59,6 +59,7 @@ from modulo.auth.permissions import (
     PermissionDenied,
     assert_org_role,
     grants_and_role,
+    grants_permit,
     resolve_required,
 )
 from modulo.auth.team_rbac import org_role_level
@@ -216,6 +217,19 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
         _CODE_GUARDRAIL_MANAGE,
         lambda: role is not None and org_role_level(role) >= _ADMIN_LEVEL,
     )
+
+
+def _grants_deny_privilege(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``pipeline.graph.update``.
+
+    Passed to the service layer where it can only NARROW the live-role result.
+    """
+    return not grants_permit(principal.key_grants, _CODE_PIPELINE_GRAPH_UPDATE)
+
+
+def _grants_deny_guardrail_admin(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``guardrail.manage``."""
+    return not grants_permit(principal.key_grants, _CODE_GUARDRAIL_MANAGE)
 
 
 def _may_manage_cost(principal: TenantPrincipal) -> bool:
@@ -2695,6 +2709,8 @@ async def replace_pipeline_graph_endpoint(
                 caller_type="rest",
                 account_id=principal.account_id,
                 is_guardrail_admin=_is_guardrail_admin(principal),
+                grants_deny_privilege=_grants_deny_privilege(principal),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
             if graph is not None:
                 # FAR-488a: keep the bound Agent rows in step with node-level
@@ -3044,6 +3060,8 @@ async def _apply_graph_update(
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
+        grants_deny_privilege=_grants_deny_privilege(principal),
+        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -4111,6 +4129,8 @@ async def rollback_snapshot_endpoint(
                 is_privileged=_is_privileged(principal.org_role, principal.key_grants),
                 caller_type="rest",
                 is_guardrail_admin=_is_guardrail_admin(principal),
+                grants_deny_privilege=_grants_deny_privilege(principal),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -4419,6 +4439,8 @@ async def _save_locked_graph(
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
+        grants_deny_privilege=_grants_deny_privilege(principal),
+        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
     )
     if graph is None:
         return None
@@ -4759,6 +4781,8 @@ async def _save_graph(
     caller_type: Literal["rest", "mcp"],
     account_id: uuid.UUID | None = None,
     is_guardrail_admin: bool = False,
+    grants_deny_privilege: bool = False,
+    grants_deny_guardrail_admin: bool = False,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
@@ -4778,6 +4802,8 @@ async def _save_graph(
         caller_type=caller_type,
         account_id=account_id,
         is_guardrail_admin=is_guardrail_admin,
+        grants_deny_privilege=grants_deny_privilege,
+        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
     )
     if graph is not None:
         # FAR-488a: node-conversion saves go through here too — keep the same

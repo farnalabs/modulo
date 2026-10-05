@@ -454,6 +454,7 @@ async def resolve_effective_privilege(
     account_id: uuid.UUID | None,
     is_privileged: bool,
     caller_type: CallerType,
+    grants_deny_privilege: bool = False,
 ) -> bool:
     """Resolve the effective privilege flag under the row lock (plan §3 item 5).
 
@@ -468,13 +469,15 @@ async def resolve_effective_privilege(
     - otherwise: the caller-supplied ``is_privileged`` is used as-is (tests,
       creation-only paths).
 
-    The caller-supplied ``is_privileged`` carries the route's grant-aware
-    decision (FAR-1477: API-key grants intersect the role bundle). The live-role
-    re-read may only NARROW it, never widen it: the result is
-    ``is_privileged AND live-role-privileged``, so a grants denial can never be
-    overridden by the key owner's live role.
+    FAR-1477: ``grants_deny_privilege`` carries an API-key grant-set denial
+    (the key lacks the permission). It can only NARROW the result: when True
+    the effective privilege is False regardless of the live role. The live-role
+    semantics above are otherwise unchanged (the live role stays authoritative
+    for ``rest`` + ``account_id``, including upgrading a stale-low flag).
     """
     if caller_type == "mcp":
+        return False
+    if grants_deny_privilege:
         return False
     if account_id is None:
         return is_privileged
@@ -496,7 +499,7 @@ async def resolve_effective_privilege(
             reason_code=REASON_ROLE_CHANGED,
             detail="No active org membership for the caller.",
         )
-    return is_privileged and is_privileged_role(live_role)
+    return is_privileged_role(live_role)
 
 
 def denial_detail(diff: DiffResult) -> str:
@@ -568,6 +571,7 @@ async def enforce_guardrail_binding_strip(
     is_guardrail_admin: bool,
     caller_type: CallerType,
     account_id: uuid.UUID | None = None,
+    grants_deny_guardrail_admin: bool = False,
 ) -> None:
     """Service-layer guardrail-binding strip guard (FAR-309 PR A review).
 
@@ -588,14 +592,15 @@ async def enforce_guardrail_binding_strip(
     """
     effective_admin = is_guardrail_admin
     if caller_type == "rest" and account_id is not None:
-        # Live role may only narrow the route's grant-aware flag, never widen it.
-        live_admin = await _resolve_effective_guardrail_admin(
+        effective_admin = await _resolve_effective_guardrail_admin(
             session,
             org_id=org_id,
             account_id=account_id,
             caller_type=caller_type,
         )
-        effective_admin = is_guardrail_admin and live_admin
+    # FAR-1477: an API-key grant-set denial can only NARROW the result.
+    if grants_deny_guardrail_admin:
+        effective_admin = False
     if effective_admin:
         return
     from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows

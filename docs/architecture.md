@@ -645,8 +645,10 @@ matching permission (`cost.manage`, `guardrail.manage`, `pipeline.graph.update`,
 grant value is denied, never read as unrestricted. The grant decision is carried
 into the service layer: for REST callers `replace_pipeline_graph` and
 `rollback_to_snapshot` compute the final HITL-privilege and guardrail-admin
-flags as (route-supplied grant-aware flag) AND (live-role re-read under the row
-lock), so the live-role re-read can only narrow, never widen, and never
+flags exactly as before (the live role re-read under the row lock stays
+authoritative for REST callers, including upgrading a stale-low flag), then
+apply the explicit `grants_deny_privilege` / `grants_deny_guardrail_admin`
+parameters, which can only NARROW the result and so a live admin role never
 overrides a grants denial (an admin-owned key holding only
 `pipeline.graph.update` cannot strip a guardrail binding). The grant flag and
 grant-set are resolved after the key-validation DB session closes (never nested
@@ -655,7 +657,14 @@ failure reading the flag for a grant-bearing key (the strict read propagates the
 registry's org-override read error instead of treating it as OFF) answers 503
 (not 401) on REST and a retryable denial on MCP; NULL-grants keys never read the
 flag. Long-lived MCP connections re-run the grant resolver on every
-re-validation. A grant above the key's own minted/live role has no effect,
+re-validation. **Rollback caveat:** a key minted with grants (non-NULL
+`grants`, including the empty deny-all) becomes a full-role key if code older
+than this change ignores the column or if the column is dropped. Migration
+0281's downgrade therefore refuses to run while any grant-bearing key exists.
+Before rolling code back below this change, turn the `api_key_grants` flag off
+and revoke every grant-bearing key. Minting reads the flag strictly: a transient
+read failure answers a retryable 503 instead of silently skipping the grants
+gate or the 90-day user-key cap. A grant above the key's own minted/live role has no effect,
 since `effective = grants ∩ bundle(role)`; the mint cap checks the minter's
 capability, not the new key's role. **Known REST/MCP asymmetry (open design question):** over MCP
 every read-only tool is gated by the single coarse `resource.read_only` key,

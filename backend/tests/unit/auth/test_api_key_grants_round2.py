@@ -11,7 +11,12 @@ from fastapi import HTTPException
 
 from modulo.api import mcp_server
 from modulo.api.dependencies import require_in_dev_operator
-from modulo.api.routes.pipelines import _is_guardrail_admin, _is_privileged
+from modulo.api.routes.pipelines import (
+    _grants_deny_guardrail_admin,
+    _grants_deny_privilege,
+    _is_guardrail_admin,
+    _is_privileged,
+)
 from modulo.auth import api_key as api_key_mod
 from modulo.auth.api_key import ApiKeyGrantsUnavailableError, api_key_grants_enabled
 from modulo.auth.jwt import TenantPrincipal
@@ -38,7 +43,7 @@ def _principal(role: str, grants: frozenset[str] | None) -> TenantPrincipal:
 
 
 class TestPrivilegeCarriesGrantDecision:
-    """Live-role re-read may only narrow the route's grant-aware flag."""
+    """Live role stays authoritative; the grants denial can only narrow it."""
 
     @pytest.mark.asyncio
     async def test_grant_restricted_admin_key_is_not_privileged(self) -> None:
@@ -51,6 +56,7 @@ class TestPrivilegeCarriesGrantDecision:
                 account_id=uuid.uuid4(),
                 is_privileged=route_flag,
                 caller_type="rest",
+                grants_deny_privilege=_grants_deny_privilege(principal),
             )
         assert effective is False
 
@@ -65,8 +71,36 @@ class TestPrivilegeCarriesGrantDecision:
                 account_id=uuid.uuid4(),
                 is_privileged=route_flag,
                 caller_type="rest",
+                grants_deny_privilege=_grants_deny_privilege(principal),
             )
         assert effective is True
+
+    @pytest.mark.asyncio
+    async def test_onboarding_style_default_flag_gets_live_role_upgrade(self) -> None:
+        # onboarding passes a default/stale-low flag with an admin account: the
+        # live role must still upgrade it (origin/main semantics).
+        with patch(_ROLE_PATH, AsyncMock(return_value="admin")):
+            effective = await resolve_effective_privilege(
+                AsyncMock(),
+                org_id=uuid.uuid4(),
+                account_id=uuid.uuid4(),
+                is_privileged=False,
+                caller_type="rest",
+            )
+        assert effective is True
+
+    @pytest.mark.asyncio
+    async def test_grants_deny_beats_live_admin_role(self) -> None:
+        with patch(_ROLE_PATH, AsyncMock(return_value="admin")):
+            effective = await resolve_effective_privilege(
+                AsyncMock(),
+                org_id=uuid.uuid4(),
+                account_id=uuid.uuid4(),
+                is_privileged=True,
+                caller_type="rest",
+                grants_deny_privilege=True,
+            )
+        assert effective is False
 
     @pytest.mark.asyncio
     async def test_live_role_still_narrows(self) -> None:
@@ -105,7 +139,23 @@ class TestGuardrailStripCarriesGrantDecision:
                 is_guardrail_admin=route_flag,
                 caller_type="rest",
                 account_id=uuid.uuid4(),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
+
+    @pytest.mark.asyncio
+    async def test_onboarding_style_default_flag_gets_live_admin(self) -> None:
+        rows = AsyncMock(return_value=[self._bound_row("n1")])
+        with patch(_ROLE_PATH, AsyncMock(return_value="admin")), patch(_ROWS_PATH, rows):
+            await enforce_guardrail_binding_strip(
+                AsyncMock(),
+                pipeline_id=uuid.uuid4(),
+                org_id=uuid.uuid4(),
+                incoming_node_ids=set(),
+                is_guardrail_admin=False,
+                caller_type="rest",
+                account_id=uuid.uuid4(),
+            )
+        rows.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_null_grants_admin_key_may_strip(self) -> None:
@@ -121,6 +171,7 @@ class TestGuardrailStripCarriesGrantDecision:
                 is_guardrail_admin=route_flag,
                 caller_type="rest",
                 account_id=uuid.uuid4(),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
         rows.assert_not_awaited()
 
@@ -208,3 +259,40 @@ class TestInDevOperatorGrantDenialDetail:
         with pytest.raises(HTTPException) as exc:
             require_in_dev_operator(_principal("viewer", None), "connector.list.in_dev")
         assert "requires" in exc.value.detail
+
+
+class TestMintStrictFlagRead:
+    """The mint path must not skip the 90-day cap / grants gate on a flag-read failure."""
+
+    @staticmethod
+    async def _mint(grants: list[str] | None, scope: str) -> None:
+        from modulo.api.routes import api_keys as routes
+
+        req = MagicMock()
+        req.name = "k"
+        req.grants = grants
+        req.team_id = None
+        req.expires_at = None
+        with (
+            patch.object(routes, "_validate_create_request", AsyncMock(return_value=scope)),
+            patch.object(routes, "_resolve_new_team_id", AsyncMock(return_value=None)),
+            patch.object(routes, "api_key_grants_enabled", AsyncMock(side_effect=ApiKeyGrantsUnavailableError)),
+        ):
+            await routes.create_api_key_endpoint(
+                req=req,
+                session=AsyncMock(),
+                principal=_principal("admin", None),
+                settings=MagicMock(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_user_scope_mint_503_when_flag_unreadable(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            await self._mint(None, "user")
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_grant_bearing_mint_503_when_flag_unreadable(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            await self._mint(["run.trigger"], "org")
+        assert exc.value.status_code == 503
