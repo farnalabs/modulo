@@ -2028,3 +2028,56 @@ class TestDbHygieneProbeDidNotCompleteIsAdvisory:
         # still moves the aggregate.
         assert hygiene.detail is not None
         assert "hygiene not measured" in hygiene.detail
+
+    async def test_crashed_probe_alone_leaves_aggregate_ok_with_visible_sub_check(self) -> None:
+        """FAR-1510, crashed-probe edge: the GENERIC-EXCEPTION path is
+        advisory exactly like the timeout path.
+
+        Both shapes produce NO reading — the probe raises, or the query yields
+        no row — so both must stay visible in the body as non-ok ("could not
+        run", never a clean `ok`) while leaving the aggregate at ``ok``, which
+        is what the health_readiness_alert cron keys on.
+        """
+        # (a) the probe raises
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_ExplodingHygieneEngine()),
+        ):
+            raised = await evaluate_readiness()
+        assert raised.status == "ok"
+        raised_hygiene = raised.checks["db_hygiene"]
+        assert raised_hygiene.status == "degraded"
+        assert raised_hygiene.advisory is True
+        assert raised_hygiene.detail is not None
+        assert "could not run" in raised_hygiene.detail
+
+        # (b) the query returns no row — same except branch, same verdict
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_FakeHygieneEngine(None)),
+        ):
+            empty = await evaluate_readiness()
+        assert empty.status == "ok"
+        empty_hygiene = empty.checks["db_hygiene"]
+        assert empty_hygiene.status == "degraded"
+        assert empty_hygiene.advisory is True
+        assert empty_hygiene.detail is not None
+        assert "could not run" in empty_hygiene.detail

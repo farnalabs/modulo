@@ -22,8 +22,8 @@ Liveness and readiness endpoints for deployment health monitoring, plus the prod
 uptime watchdog that alerts on outage (FAR-400). Liveness (`/healthz`) is advisory — it
 never flips readiness. Readiness (`/healthz/ready`) aggregates database, Redis,
 checkpointer schema, Alembic migration status, database hygiene (dead-tuple bloat +
-wraparound age), worker/cron/scheduler liveness, stale-run
-recovery and returns 503 whenever any gate is unavailable. The AI agent can also be
+wraparound age, when the probe completes), worker/cron/scheduler liveness and returns
+503 whenever any gate is unavailable. The AI agent can also be
 redirected to this infra-health surface via `feat-infra-health`.
 
 ## Behaviours
@@ -48,15 +48,25 @@ redirected to this infra-health surface via `feat-infra-health`.
       reading graded over a threshold gates.
 - [x] SAQ worker liveness check — a stopped worker pool for 4+ consecutive probe ticks 503s readiness (Plan F7)
 - [x] System-cron liveness watchdog — fire_due_triggers missing 2x cadence 503s readiness (Plan F8)
-- [x] Stale-run recovery check — stalled/never-dispatched runs block readiness
-- [x] Dispatcher reconcile staleness reported (advisory/bounded)
+- [x] Stale-run recovery sweep outcome — ADVISORY, never gates readiness: a missing or
+      >15min-stale sweep reports `degraded` to alert operators while the app stays
+      healthy (`_check_stale_run_recovery`, health.py)
+- [x] Dispatcher reconcile staleness — two tiers: `degraded` after a single missed 60s tick
+      is advisory (never flips readiness), `unavailable` past 5 minutes — the system
+      worker's cron is silently dead and the fleet can no longer terminalize
+      stalled/never-dispatched runs — 503s readiness
 - [x] Fleet worker / fleet system-cron aggregation (worker process-group health, ADR 021)
 - [x] Break-glass watchdog exposure is advisory and never contributes to readiness
 - [x] Per-check timeout limits, configurable via `modulo_health_*_timeout_seconds` settings
-- [x] Overall status: `unavailable` if any non-advisory gate is `unavailable`, `degraded`
-      if any non-advisory gate is `degraded` — advisory checks are listed in the body but
-      excluded from the aggregate (`break_glass`, `event_loop_lag`, and a database-hygiene
-      probe that did not complete, FAR-1510)
+- [x] Overall status: `unavailable` if any gate is `unavailable`, `degraded` if any gate
+      is `degraded`. Gates are `database`, `redis`, `checkpointer`, `migrations`,
+      `saq_workers`, `system_crons`, a COMPLETED `db_hygiene` reading, and
+      `dispatcher_reconcile` at its `unavailable` tier only. Advisory checks are listed
+      in the body but excluded from the aggregate: `break_glass`, `event_loop_lag`,
+      `stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`,
+      `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe`, the
+      `degraded` tier of `dispatcher_reconcile`, and a database-hygiene probe that did
+      not complete (FAR-1510). Source of truth: `evaluate_readiness` in health.py
 - [x] 503 status code when overall unavailable
 - [x] Latency tracked per check
 - [x] Fly.io deployment wiring — `fly.toml` `[[http_service.checks]]` probes `/healthz/ready`
