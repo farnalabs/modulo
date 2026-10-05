@@ -5,10 +5,16 @@ adr: [ADR 021 (worker-resilience)]
 delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/health.py
+  - backend/src/modulo/core/health_alerts.py
+  - backend/src/modulo/core/saq_worker.py
+  - deploy/watchdog/config.yaml
   - fly.toml
   - .github/workflows/uptime-monitor.yml
 unit-tests:
   - backend/tests/unit/api/test_health.py
+  - backend/tests/unit/core/test_health_alerts.py
+  - backend/tests/unit/test_watchdog_config.py
+  - backend/tests/docker/test_watchdog_container.py
 bdd:
   - backend/tests/bdd/features/infra/health.feature
   - backend/tests/bdd/features/infra/test_health_steps.py
@@ -19,7 +25,9 @@ status: covered
 # Health Checks
 
 Liveness and readiness endpoints for deployment health monitoring, plus the production
-uptime watchdog that alerts on outage (FAR-400). Liveness (`/healthz`) is advisory — it
+uptime watchdog that alerts on outage (FAR-400) and two in-band alerting legs: the
+`health_readiness_alert` system-cron email (FAR-1446) and the compose deployment's
+out-of-process Gatus sentinel (PR #1260). Liveness (`/healthz`) is advisory — it
 never flips readiness. Readiness (`/healthz/ready`) aggregates database, Redis,
 checkpointer schema, Alembic migration status, database hygiene (dead-tuple bloat +
 wraparound age), worker/cron/scheduler liveness, stale-run
@@ -54,6 +62,27 @@ redirected to this infra-health surface via `feat-infra-health`.
 - [x] Worker process-group health check via top-level `[checks]` (ADR 021)
 - [x] Production uptime monitor — `.github/workflows/uptime-monitor.yml` probes
       `app.modulo.run/healthz/ready` every 10 minutes and fails + opens a ticket on outage
+- [x] Readiness-degradation email alert (FAR-1446): the `health_readiness_alert`
+      system cron runs every 5 minutes and emails `ALERT_EMAIL_TO` when readiness
+      CONFIRMEDLY transitions into `degraded`/`unavailable` (edge-triggered with a
+      2-tick `CONFIRM_TICKS` hysteresis, so a one-tick blip/flap never emails),
+      then sends one matching recovery email when it returns to `ok` — never one
+      per tick. It evaluates the SAME `evaluate_readiness` code the HTTP route
+      runs (no reimplemented checks) and keeps its dedup/confirmation state in
+      Redis (one JSON doc, `STATE_TTL_SECONDS` 7 days; NOT the database, since a
+      down database is one of the states being alerted about), send-then-commit
+      so a failed SMTP send retries next tick. Quiet (never raises, hourly INFO
+      log) when `SMTP_HOST`/`ALERT_EMAIL_TO` are unconfigured — the compose
+      default — and the `unique=True` cron slot bounds fleet ticks to one
+      execution per slot (`core/health_alerts.py`, `core/saq_worker.py`,
+      `api/routes/health.py` `evaluate_readiness`, `test_health_alerts.py`)
+- [x] Out-of-process Gatus health sentinel in the compose deployment (PR #1260):
+      `deploy/watchdog/` ships a non-root Gatus container wired into
+      `docker-compose.yml` (on by default, quiet without email creds) that probes
+      the app's health surface independently of the system worker the in-band
+      cron depends on, closing the full-outage case the FAR-1446 cron cannot
+      cover (`deploy/watchdog/config.yaml`, `deploy/watchdog/Dockerfile`,
+      `test_watchdog_config.py`, `test_watchdog_container.py`)
 
 ## Known Gaps
 
@@ -63,6 +92,20 @@ redirected to this infra-health surface via `feat-infra-health`.
 
 ## QA History
 
+- 2026-10-05: **Improve Architecture product-map walk** — closed two untracked
+  sub-surface gaps on this tracker, both shipped after the last walk and
+  invisible to the feature graph / Assistant's `search_documentation` indexer.
+  (1) FAR-1446 readiness-degradation email alert: the `health_readiness_alert`
+  system cron (every 5 minutes, `unique=True`) emails `ALERT_EMAIL_TO` on a
+  hysteresis-confirmed degraded/unavailable transition plus one recovery email,
+  evaluating the SAME `evaluate_readiness` implementation the `/healthz/ready`
+  route now delegates to, with Redis-backed edge state and quiet-when-
+  unconfigured semantics (`core/health_alerts.py`, `core/saq_worker.py`,
+  `api/routes/health.py`); cited here with its `test_health_alerts.py` unit
+  suite. (2) The compose deployment's out-of-process Gatus sentinel
+  (`deploy/watchdog/*`, `docker-compose.yml`), the full-outage leg the in-band
+  cron deliberately does not cover; cited with `test_watchdog_config.py` /
+  `test_watchdog_container.py`. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-08-26: **product-map review pass** — closed the "No BDD feature
   files" gap: added `backend/tests/bdd/features/infra/health.feature` + `test_health_steps.py`
   (7 scenarios, self-contained: real health router in a fresh app with only the per-check

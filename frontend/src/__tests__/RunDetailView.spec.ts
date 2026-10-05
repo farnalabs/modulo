@@ -1036,6 +1036,19 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('pending run without capacity shows the starting-soon banner', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'pending',
+    })
+
+    const banner = wrapper.find('[data-testid="run-detail-queued-starting"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Queued')
+    expect(banner.text()).toContain('starting soon')
+    wrapper.unmount()
+  })
+
   it('run with work_item_refs shows the work items section', async () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),

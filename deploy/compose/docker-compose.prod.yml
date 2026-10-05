@@ -139,12 +139,13 @@ services:
       - "127.0.0.1:8083:8080"
     healthcheck:
       test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      # Tuned faster than the root compose's watchdog (interval 30s,
+      # retries 3): 5s/5 gives quicker feedback. The 10s start_period
+      # matches root so a slow dashboard boot is not flapped unhealthy
+      # before the first probe succeeds.
       interval: 5s
       timeout: 5s
       retries: 5
-      # Match the root compose's grace window: the 5s interval makes the
-      # probes during container start count against `retries`, so a slow
-      # dashboard start would otherwise flap `unhealthy`.
       start_period: 10s
 
 volumes:

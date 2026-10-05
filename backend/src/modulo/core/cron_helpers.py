@@ -2668,7 +2668,9 @@ async def fire_suite_run_trigger(
         dataset_id, model_backend_id, skip = _resolve_suite_run_config(config)
         if skip is not None:
             return skip
-        assert dataset_id is not None and model_backend_id is not None  # nosec B101 - non-None whenever skip is None (see _resolve_suite_run_config)
+        # Non-None whenever skip is None (see _resolve_suite_run_config).
+        assert dataset_id is not None  # nosec B101
+        assert model_backend_id is not None  # nosec B101
 
         skip = await _suite_run_fire_gates(session, trigger, org_id, trigger_id, dataset_id)
         if skip is not None:

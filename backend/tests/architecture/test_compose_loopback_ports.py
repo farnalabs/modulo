@@ -7,10 +7,12 @@ workspace-egress exposure — an egress-permitted workspace can reach the
 host and therefore those ports (control-plane DB, queue broker, app server).
 
 The guard is deliberately scoped to compose files that ship with the
-product.  CI-only overlays (runner-ci.yml) and production overrides
-(docker-compose.prod.yml) that intentionally expose services on all
-interfaces are excluded; their port policy is documented in
-docs/security/bundled-runner-trust-boundary.md instead.
+product.  CI-only overlays (runner-ci.yml) are excluded.  The production
+override (docker-compose.prod.yml) is excluded from the whole-file check
+above because its `modulo` service intentionally publishes on all
+interfaces, but it is still checked service-scoped: every service in it
+other than `modulo` must bind loopback.  That app-level exception is
+documented in docs/security/bundled-runner-trust-boundary.md.
 """
 
 from __future__ import annotations

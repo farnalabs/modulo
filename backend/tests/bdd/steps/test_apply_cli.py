@@ -524,7 +524,8 @@ def step_report_blockers(request) -> None:
 @then("the report has no blockers")
 def step_report_no_blockers(request) -> None:
     report = _state(request)["report"]
-    assert not report.get("blocked") and not report.get("failed"), f"expected no blockers: {report}"
+    assert not report.get("blocked"), f"expected no blockers: {report}"
+    assert not report.get("failed"), f"expected no blockers: {report}"
 
 
 @then("the report is a dry-run report")
