@@ -900,6 +900,11 @@ class KubernetesRuntimeProvider(RuntimeProvider):
 
         Already-gone pods (404) are a logged no-op; every other failure is
         logged and swallowed (Docker parity).
+
+        Only refs this instance created (tracked in ``self._workspaces``) are
+        destroyed; a ref created before a provider restart is not in that set,
+        so this is a no-op for it. Reclaim such pods via
+        :meth:`destroy_workspace_by_ref` (the ADR 040 reconciler path).
         """
         if provider_ref not in self._workspaces:
             return
