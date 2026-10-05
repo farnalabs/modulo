@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -16,7 +17,13 @@ from modulo.core.guardrails import fingerprint_guardrail_pins
 from modulo.db.crud.pipeline_snapshot import (
     SNAPSHOT_LOCK_ATTEMPTS,
     SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS,
+    SNAPSHOT_VERSION_ATTEMPTS,
+    SnapshotLockTerminateDeniedError,
+    SnapshotVersionAllocationError,
+    _pipeline_lock_keys,
     create_snapshot_from_live_graph,
+    inspect_snapshot_lock,
+    terminate_snapshot_lock_holders,
 )
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
@@ -758,3 +765,330 @@ def test_build_lock_engine_skips_ssl_when_settings_url_is_not_postgres() -> None
 
     assert create.call_args.kwargs["connect_args"] == {"timeout": 10}
     assert create.call_args.kwargs["poolclass"] is NullPool
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 Part 2 (Workstream B): bounded optimistic retry of the
+# snapshot_version allocation.
+# ---------------------------------------------------------------------------
+
+
+def _two_node_pipeline(pipeline_id: uuid.UUID) -> tuple[MagicMock, MagicMock]:
+    """A minimal pipeline + edge pair with no agents (no reference-model reads)."""
+    source_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = uuid.uuid4()
+    pipeline.graph_nodes_json = [
+        {"id": str(source_id), "agent_id": None, "connector_binding": None},
+        {"id": str(target_id), "agent_id": None, "connector_binding": None},
+    ]
+    pipeline.run_context_defaults = {}
+
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = source_id
+    edge.target_node_id = target_id
+    edge.edge_type = "normal"
+    edge.hitl_review_config = None
+    edge.condition_expression = None
+    return pipeline, edge
+
+
+def _version_conflict() -> IntegrityError:
+    """The unique violation a concurrent same-pipeline creator produces."""
+    return IntegrityError(
+        "INSERT INTO pipeline_snapshots (snapshot_version)",
+        {},
+        Exception('duplicate key value violates unique constraint "uq_pipeline_snapshot_version"'),
+    )
+
+
+def _per_attempt_reads(max_version: int) -> list[MagicMock]:
+    """The three reads one attempt issues: version max, guardrail pins, policy gates."""
+    return [_scalar_result(max_version), _scalars_result([]), _scalars_result([])]
+
+
+async def test_snapshot_version_conflict_retries_and_lands_on_the_next_version() -> None:
+    """FAR-1287 Part 2: a collision on ``uq_pipeline_snapshot_version`` rolls
+    back to a SAVEPOINT and re-allocates instead of surfacing IntegrityError at
+    the caller.
+
+    The first attempt reads max=0 (the competitor's row is not committed yet),
+    inserts version 1 and fails on the unique constraint; the retry re-reads
+    max=1 and lands on version 2. Each attempt runs in its own ``begin_nested``
+    savepoint, and the FAILED attempt's row object is replaced — a rollback
+    must never let a retry re-use (or duplicate) it.
+    """
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.flush.side_effect = [_version_conflict(), None]
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        *_per_attempt_reads(0),  # attempt 1: max=0 -> version 1 -> conflict
+        *_per_attempt_reads(1),  # attempt 2: competitor committed -> max=1 -> version 2
+    ]
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    assert snapshot.snapshot_version == 2
+    assert session.begin_nested.call_count == 2
+    assert session.flush.await_count == 2
+    added = [call.args[0] for call in session.add.call_args_list]
+    assert [obj.snapshot_version for obj in added] == [1, 2]
+    assert added[0] is not added[1]
+
+
+async def test_snapshot_version_conflict_exhausts_the_bounded_retry_loudly() -> None:
+    """Exhausting ``SNAPSHOT_VERSION_ATTEMPTS`` raises the specific
+    ``SnapshotVersionAllocationError`` — never a silent ``None``, and never an
+    unbounded retry loop. The error subclasses ``IntegrityError`` so every
+    existing route/trigger handler keeps its 409 mapping, and it chains the
+    original driver error."""
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.flush.side_effect = _version_conflict()
+    reads: list[MagicMock] = [_scalar_result(pipeline), _scalars_result([edge])]
+    for _ in range(SNAPSHOT_VERSION_ATTEMPTS):
+        reads.extend(_per_attempt_reads(0))
+    session.execute.side_effect = reads
+
+    with (
+        _bind_lock_connection(session, _lock_attempt_result(True)),
+        pytest.raises(SnapshotVersionAllocationError, match="could not allocate snapshot_version") as excinfo,
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert session.begin_nested.call_count == SNAPSHOT_VERSION_ATTEMPTS
+    assert session.flush.await_count == SNAPSHOT_VERSION_ATTEMPTS
+    assert "uq_pipeline_snapshot_version" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, IntegrityError)
+    # The subclass contract: existing `except IntegrityError` arms still catch it.
+    assert isinstance(excinfo.value, IntegrityError)
+
+
+async def test_non_version_integrity_error_is_never_retried() -> None:
+    """Only the allocation collision is retried. Any other integrity failure
+    (FK, CHECK) would fail identically on every attempt, so it propagates
+    unchanged after the FIRST savepoint — no wasted retries, no masking."""
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.flush.side_effect = IntegrityError(
+        "INSERT INTO snapshot_schema_pins",
+        {},
+        Exception('insert or update violates foreign key constraint "fk_pins_schema"'),
+    )
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        *_per_attempt_reads(0),
+    ]
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)), pytest.raises(IntegrityError) as excinfo:
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert type(excinfo.value) is IntegrityError  # NOT the retrying subclass
+    assert session.begin_nested.call_count == 1
+    assert session.flush.await_count == 1
+
+
+async def test_programming_error_at_the_version_read_still_returns_none() -> None:
+    """The pre-existing contract is preserved: a missing ``snapshot_version``
+    column (migration not applied yet) reports "no snapshot". The error is
+    raised OUT of the savepoint block so SQLAlchemy ROLLS BACK to it — catching
+    it inside would RELEASE the savepoint on an aborted transaction (25P02) and
+    mask the original error."""
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        ProgrammingError("SELECT max(snapshot_version)", {}, Exception("column does not exist")),
+    ]
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert snapshot is None
+    assert session.begin_nested.call_count == 1
+    session.flush.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 Part 2 (Workstream A): the operator snapshot-lock diagnostic and
+# the terminate-only-matching-holders clear path.
+# ---------------------------------------------------------------------------
+
+
+def _negative_key_pipeline_id() -> tuple[uuid.UUID, tuple[int, int]]:
+    """A pipeline id whose derived keys are NEGATIVE, so masking is observable.
+
+    ``pg_locks.classid``/``objid`` are uint32: a signed key is stored as a
+    uint32 bit-cast, so a test that only ever used a positive key could not
+    tell a masked parameter from an unmasked one. Deterministic (uuid5 over a
+    fixed namespace), not random.
+    """
+    for i in range(10000):
+        candidate = uuid.uuid5(uuid.NAMESPACE_URL, f"https://farnalabs.dev/snapshot-lock/{i}")
+        keys = _pipeline_lock_keys(candidate)
+        if keys[0] < 0 and keys[1] < 0:
+            return (candidate, keys)
+    raise AssertionError("no pipeline id with two negative lock keys in 10000 candidates")
+
+
+def _holder_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "pid": 4242,
+            "application_name": "modulo",
+            "state": "idle",
+            "backend_start": datetime(2026, 1, 1, tzinfo=UTC),
+            "query_start": datetime(2026, 1, 1, tzinfo=UTC),
+            "granted": True,
+        }
+    ]
+
+
+async def test_inspect_snapshot_lock_masks_keys_and_returns_holders() -> None:
+    """The diagnostic derives the SAME keys the acquirer uses and binds them
+    MASKED to the uint32 ``pg_locks`` domain — binding the signed value fails
+    outright in Postgres ("value out of uint32 range")."""
+    pipeline_id, (key1, key2) = _negative_key_pipeline_id()
+    assert key1 < 0
+    assert key2 < 0
+
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = _holder_rows()
+    session.execute.return_value = result
+
+    status = await inspect_snapshot_lock(session, pipeline_id)
+
+    assert status["held"] is True
+    assert status["holders"] == _holder_rows()
+    stmt, params = session.execute.call_args.args
+    assert "pg_locks" in str(stmt)
+    assert params == {"key1": key1 & 0xFFFFFFFF, "key2": key2 & 0xFFFFFFFF}
+    assert params["key1"] > 0x7FFFFFFF  # uint32, not the signed key
+
+
+async def test_inspect_snapshot_lock_reports_free_lock_as_not_held() -> None:
+    pipeline_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = []
+    session.execute.return_value = result
+
+    status = await inspect_snapshot_lock(session, pipeline_id)
+
+    assert status["held"] is False
+    assert not status["holders"]
+
+
+async def test_terminate_without_holders_is_an_idempotent_no_op() -> None:
+    """0 holders -> ``released: 0`` and success, and NOT ONE terminate statement
+    is issued (the only execute is the holder read)."""
+    pipeline_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
+
+    outcome = await terminate_snapshot_lock_holders(session, pipeline_id)
+
+    assert outcome["released"] == 0
+    assert not outcome["pids"]
+    assert session.execute.await_count == 1
+
+
+async def test_terminate_targets_only_backends_holding_the_derived_keys() -> None:
+    """Every terminate carries a pid read from the derived-key query — granted
+    rows only, never this session — and a backend whose terminate comes back
+    false (it released/died first) is not counted as released."""
+    pipeline_id, (key1, key2) = _negative_key_pipeline_id()
+
+    pid_read = MagicMock()
+    pid_read.scalars.return_value.all.return_value = [4242, 4243]
+    terminated = MagicMock()
+    terminated.scalar_one.return_value = True
+    already_gone = MagicMock()
+    already_gone.scalar_one.return_value = False
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [pid_read, terminated, already_gone]
+
+    outcome = await terminate_snapshot_lock_holders(session, pipeline_id)
+
+    assert outcome["released"] == 1
+    assert outcome["pids"] == [4242]
+
+    holder_read, *terminate_calls = session.execute.call_args_list
+    assert holder_read.args[1] == {"key1": key1 & 0xFFFFFFFF, "key2": key2 & 0xFFFFFFFF}
+    holder_sql = str(holder_read.args[0])
+    assert "pg_locks" in holder_sql
+    assert "l.granted" in holder_sql
+    assert "pg_backend_pid()" in holder_sql
+    assert [call.args[1]["pid"] for call in terminate_calls] == [4242, 4243]
+    assert all("pg_terminate_backend" in str(call.args[0]) for call in terminate_calls)
+
+
+async def test_terminate_signal_privilege_refusal_becomes_a_typed_error() -> None:
+    """SQLSTATE 42501 (neither superuser nor ``pg_signal_backend``) surfaces as
+    ``SnapshotLockTerminateDeniedError`` naming the grant, so the route can
+    answer with a clear typed 403 instead of a generic 500."""
+    pipeline_id = uuid.uuid4()
+    pid_read = MagicMock()
+    pid_read.scalars.return_value.all.return_value = [4242]
+
+    class _InsufficientPrivilegeError(Exception):
+        sqlstate = "42501"
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        pid_read,
+        DBAPIError(
+            "SELECT pg_terminate_backend(:pid)",
+            {"pid": 4242},
+            _InsufficientPrivilegeError("permission denied"),
+        ),
+    ]
+
+    with pytest.raises(SnapshotLockTerminateDeniedError, match="pg_signal_backend") as excinfo:
+        await terminate_snapshot_lock_holders(session, pipeline_id)
+
+    assert excinfo.value.sqlstate == "42501"
+
+
+async def test_terminate_non_privilege_db_error_propagates_unchanged() -> None:
+    """A different failure (statement timeout, aborted transaction) is NOT
+    re-labelled as a missing grant — it propagates for the normal error
+    mapping."""
+    pipeline_id = uuid.uuid4()
+    pid_read = MagicMock()
+    pid_read.scalars.return_value.all.return_value = [4242]
+
+    class _StatementTimeoutError(Exception):
+        sqlstate = "57014"
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        pid_read,
+        DBAPIError("SELECT pg_terminate_backend(:pid)", {"pid": 4242}, _StatementTimeoutError("canceling statement")),
+    ]
+
+    with pytest.raises(DBAPIError) as excinfo:
+        await terminate_snapshot_lock_holders(session, pipeline_id)
+
+    assert not isinstance(excinfo.value, SnapshotLockTerminateDeniedError)
