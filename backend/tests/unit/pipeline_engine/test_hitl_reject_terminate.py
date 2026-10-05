@@ -73,6 +73,16 @@ _REVIEW_ID = "hitl_review_src_tgt"
         ({"on_reject": "proceed"}, True, REJECT_DISPOSITION_ROUTE),
         ({"correction_target": "node-c"}, True, REJECT_DISPOSITION_ROUTE),
     ],
+    ids=[
+        "empty-no-route-terminates",
+        "explicit-terminate-no-route-terminates",
+        "explicit-proceed-no-route-proceeds",
+        "correction-target-no-route-proceeds",
+        "correction-target-beats-terminate-no-route-proceeds",
+        "empty-with-route-routes",
+        "explicit-proceed-with-route-routes",
+        "correction-target-with-route-routes",
+    ],
 )
 def test_resolve_reject_disposition_precedence(config: dict[str, Any], has_route: bool, expected: str) -> None:
     assert resolve_reject_disposition(config, has_reject_route=has_route) == expected
