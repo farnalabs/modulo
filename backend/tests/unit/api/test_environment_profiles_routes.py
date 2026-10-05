@@ -679,8 +679,11 @@ def test_build_workspace_spec_timeout_default_matches_template_constant() -> Non
     the site this PR changed (``_build_workspace_spec``, used by the
     ``/environment-profiles/{id}/test`` path): a profile whose ``config_json``
     omits ``timeout_seconds`` must fall back to
-    ``TEMPLATE_CONFIG_JSON["timeout_seconds"]``, so if either the constant or
-    this default site drifts, the test fails.
+    ``TEMPLATE_CONFIG_JSON["timeout_seconds"]``. This catches divergence
+    between this site and the constant; a pure constant-value drift is not
+    detected here (the site and the assertion move together) and is covered by
+    the dispatch coupling test and the constant-pinning tests in
+    ``tests/unit/core/bundled_runner/test_profile.py``.
     """
     from modulo.api.routes.environment_profiles import _build_workspace_spec
     from modulo.core.bundled_runner.profile import TEMPLATE_CONFIG_JSON
