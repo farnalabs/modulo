@@ -356,13 +356,13 @@ def _workspace_spec_for_dispatch(
     # FAR-1051 (qa-iterate): the FALLBACK timeout is read from the shipped
     # profile default block (``TEMPLATE_CONFIG_JSON["timeout_seconds"]``) —
     # the same constant the seeded profile's own config starts from — so the
-    # dispatch default and the profile default can never drift apart. An
-    # EXPLICITLY-set ``config_json.timeout_seconds`` keeps its historical
-    # coercion exactly (``int(...)`` on the raw value, including a
-    # TypeError on a non-numeric one — never a silent substitute default).
-    _timeout_seconds = (
-        int(cfg["timeout_seconds"]) if "timeout_seconds" in cfg else int(TEMPLATE_CONFIG_JSON["timeout_seconds"])
-    )
+    # dispatch default and the profile default can never drift apart. This is
+    # the previous expression with ONLY the magic literal replaced: an
+    # explicitly-set ``config_json.timeout_seconds`` keeps its exact
+    # historical coercion (``int`` of the raw value, TypeError on a
+    # non-numeric one, AttributeError on a malformed non-dict config — never
+    # a silent substitute default).
+    _timeout_seconds = int(cfg.get("timeout_seconds", TEMPLATE_CONFIG_JSON["timeout_seconds"]))
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=org_id,  # type: ignore[arg-type]
