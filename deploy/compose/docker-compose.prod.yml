@@ -29,15 +29,74 @@ services:
     image: ghcr.io/farnalabs/modulo:${TAG:-latest}
     ports:
       - "${PORT:-80}:80"
+    # The project-directory .env is BOTH compose's interpolation source (for
+    # the ${...} references below) AND, via env_file, the application's config
+    # file: every entry in it reaches the container. Without this line only the
+    # variables the block below happens to reference would reach the app, and
+    # every optional setting documented in .env.prod.example (MODULO_USERS,
+    # STRIPE_*, MODULO_LICENSE_*, SAQ_*, MODULO_HEALTH_*) would be silently
+    # inert. `required: false` keeps `compose config` usable before the file
+    # exists; the ${SECRET_KEY:?...} / ${FERNET_KEY:?...} references below are
+    # what actually refuse to run without one. `environment:` still wins over
+    # env_file for the names declared there.
+    env_file:
+      - path: .env
+        required: false
+    # Every name below is one the application actually reads: a Settings field
+    # (backend/src/modulo/settings.py - pydantic-settings derives the env name
+    # from the field name, `secret_key` -> `SECRET_KEY`, or from the field's
+    # alias) or a name read straight from os.environ. A name Settings does not
+    # read is silently ignored; a REQUIRED Settings field left unsatisfied is a
+    # ValidationError at boot and the backend crash-loops (FAR-1506). The
+    # contract is enforced by
+    # backend/tests/architecture/test_prod_compose_env_contract.py - do not
+    # rename anything here without that test agreeing.
     environment:
+      # Settings.database_url.
       DATABASE_URL: postgresql+asyncpg://modulo_app:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
+      # Not a Settings field, but read directly from os.environ by
+      # db/bootstrap.py, db/migrations/env.py and api/main.py (the
+      # superuser/migration URL) - alembic runs under it at container start.
       DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
-      MODULO_REDIS_URL: redis://redis:6379/0
+      # Settings.redis_url - REQUIRED at runtime (the API refuses to boot when
+      # it resolves empty) and previously never reached the container, because
+      # the compose passed MODULO_REDIS_URL, which nothing reads: the backend
+      # silently fell back to redis://localhost:6379/0, which is wrong inside a
+      # container. Default = this file's own `redis` service; set REDIS_URL in
+      # .env to use an external/managed Redis instead.
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Settings.modulo_public_url (SSO redirects, absolute links).
       MODULO_PUBLIC_URL: ${MODULO_PUBLIC_URL:-http://localhost:80}
+      # Not a Settings field - read from os.environ by the logging and
+      # error-tracking setup to label the environment of every event.
       MODULO_ENV: production
+      # Settings.modulo_log_level.
       MODULO_LOG_LEVEL: ${MODULO_LOG_LEVEL:-info}
+      # Settings.modulo_license_key.
       MODULO_LICENSE_KEY: ${MODULO_LICENSE_KEY:-}
-      MODULO_SECRET_KEY: ${MODULO_SECRET_KEY:-change-me-in-production}
+      # Settings.secret_key - REQUIRED, no default, at least 32 random bytes
+      # (the validator also rejects placeholder values). There is no safe
+      # default for a JWT-signing secret, so compose fails fast here with the
+      # generation command rather than handing the backend a placeholder it
+      # will reject at boot.
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required - generate one with openssl rand -base64 48}
+      # Settings.fernet_key - REQUIRED, no default, at least 32 bytes and it
+      # must be a REAL Fernet key (urlsafe base64 of 32 bytes), or credential
+      # encryption fails on first use. Generation: see .env.prod.example.
+      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY is required - see .env.prod.example for how to generate a valid Fernet key}
+      # SMTP for the app's own HITL alert email - Settings.smtp_host /
+      # smtp_port / smtp_username / smtp_password / email_from /
+      # alert_email_to. The same names are consumed by the watchdog service
+      # below, so ONE SMTP block in .env configures both (the claim the
+      # watchdog comment already made, which was only true for the watchdog
+      # until these were passed through here). Email stays disabled while
+      # SMTP_HOST is empty, exactly as before.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
     depends_on:
       postgres:
         condition: service_healthy
