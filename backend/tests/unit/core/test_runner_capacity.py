@@ -1433,7 +1433,8 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
     # that SAME handle (the unlock ran and the connection closed).
     assert lock_engine.connect_calls == 1, "the dedup lock must use exactly one dedicated connection"
     assert lock_engine.unlock_calls == 1, "the lock must be released on the acquiring connection"
-    assert lock_engine.last_conn is not None and lock_engine.last_conn.unlocked
+    assert lock_engine.last_conn is not None
+    assert lock_engine.last_conn.unlocked
     assert lock_engine.close_calls == 1, "the dedicated connection must be closed after the sweep"
     assert not any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records), (
         "the advisory lock must be acquired — the lock_failed fail-open path must not fire"

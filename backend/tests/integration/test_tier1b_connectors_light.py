@@ -497,7 +497,8 @@ async def test_sonarqube_health_and_query(
         if health.ok:
             break
         await asyncio.sleep(30.0)
-    assert health is not None and health.ok, f"sonar health against real container failed: {health}"
+    assert health is not None, f"sonar health against real container failed: {health}"
+    assert health.ok, f"sonar health against real container failed: {health}"
     result = await sonarqube_connector.query(ConnectorQuery(resource="projects"))
     keys = {record.get("key") for record in result.records}
     assert sonarqube_service.creds["sonar_project_key"] in keys, f"expected project in real search: {keys!r}"

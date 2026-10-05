@@ -16,9 +16,7 @@
 # on PR #1285: `changelog: none` applied at 07:57:56, but the `opened` run,
 # started at 07:58:10, still saw only `agent-generated` and failed). Reading
 # the live labels removes that race. The payload is only a fallback for when
-# the labels API call fails. The live read requests per_page=100 so a PR
-# carrying more than the endpoint's default 30 labels cannot have a
-# changelog:* label truncated out of the list (edge case, belt-and-braces).
+# the labels API call fails.
 
 name: "Check: Changelog classification"
 
@@ -88,9 +86,14 @@ jobs:
           LABELS_JSON="$EVENT_LABELS_JSON"
           HAS_LABEL="false"
           for attempt in 1 2 3; do
-            LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '[.[].name]' 2>/dev/null || true)"
-            if [ -n "$LIVE_LABELS_JSON" ]; then
-              LABELS_JSON="$LIVE_LABELS_JSON"
+            # --paginate: a changelog:* label beyond the first page (the
+            # labels endpoint returns 30 per page) must still be seen. gh
+            # applies --jq per page, so collect the names as newline-separated
+            # text and rebuild a single JSON array locally; --slurp is not
+            # available on this runner's gh. On API failure the event payload
+            # stays as the LABELS_JSON fallback.
+            if LIVE_LABELS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null)"; then
+              LABELS_JSON="$(printf '%s\n' "$LIVE_LABELS" | jq -Rsc 'split("\n") | map(select(length>0))')"
             fi
             # Exactly one of the four labels (any label starting with
             # "changelog:") satisfies the gate. Labels arrive as a JSON array

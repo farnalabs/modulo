@@ -416,10 +416,12 @@ def test_never_healthy_child_is_terminated_at_the_startup_deadline() -> None:
     harness.supervisor.tick()  # deadline missed → terminate
     assert child.terminating_since is not None
     proc = child.process
-    assert proc is not None and proc.terminated
+    assert proc is not None
+    assert proc.terminated
     harness.clock.advance(0.02)
     harness.supervisor.tick()  # grace elapsed → kill escalation
-    assert proc is not None and proc.killed
+    assert proc is not None
+    assert proc.killed
 
 
 def test_probe_less_child_is_presumed_live_after_the_liveness_deadline() -> None:
