@@ -138,6 +138,32 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+def _make_audit_session() -> AsyncMock:
+    """Contract-correct session double for the fail-closed ``audited(...)`` seam.
+
+    FAR-1472: the audit event is written on a FRESH session (a real engine — these
+    steps run without a database), so the seam must be stubbed or every annotated
+    SCIM mutation would fail closed against a refused connection. The dependency
+    itself, including its fail-closed policy, still runs.
+    """
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalar.return_value = None
+    result.scalar_one_or_none.return_value = None
+    result.first.return_value = None
+    result.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    nested = AsyncMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
+    return session
+
+
 def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
     """Record a response so shared @then steps can inspect it."""
     request.node._resp = resp
@@ -196,7 +222,10 @@ def scim_client() -> Generator[TestClient, None, None]:
 
     from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
     from modulo.api.main import app
+    from modulo.api.routes.scim import get_scim_audit_principal
+    from modulo.auth.jwt import TenantPrincipal
     from modulo.auth.scim_auth import get_scim_plan_context
+    from modulo.core.audit_coverage import audit_session
     from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry, LicenseData, LicenseKeyTier, PlanContext
 
     _plan: PlanContext = LicenseKeyTier(
@@ -210,12 +239,25 @@ def scim_client() -> Generator[TestClient, None, None]:
         )
     )
 
+    async def override_audit_session() -> AsyncGenerator[AsyncMock, None]:
+        yield _make_audit_session()
+
+    async def override_audit_principal() -> TenantPrincipal:
+        return TenantPrincipal(
+            username="scim",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+
     app.dependency_overrides[get_settings] = _make_scim_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
     app.dependency_overrides[get_plan_context] = lambda: _plan
     app.dependency_overrides[get_scim_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
+    app.dependency_overrides[audit_session] = override_audit_session
+    app.dependency_overrides[get_scim_audit_principal] = override_audit_principal
     yield TestClient(app)
     app.dependency_overrides.clear()
 

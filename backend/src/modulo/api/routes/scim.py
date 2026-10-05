@@ -28,7 +28,9 @@ from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin import _raise_bg_pgcode
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
+from modulo.core.audit_coverage import audited
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutError,
@@ -118,6 +120,43 @@ async def _resolve_scim_admin_caller(session: AsyncSession, org_id: uuid.UUID) -
     result = await session.execute(_SCIM_ADMIN_CALLER_SQL, {"org": org_id})
     row = result.first()
     return row[0] if row is not None else None
+
+
+async def get_scim_audit_principal(
+    scim: ScimPrincipal = Depends(get_scim_principal),
+    session: AsyncSession = Depends(get_db_session),
+) -> TenantPrincipal:
+    """Acting principal for ``audited(...)`` on the SCIM mutation routes.
+
+    SCIM authenticates with the shared ``MODULO_SCIM_TOKEN``, so there is no
+    per-user identity to attribute a provisioning write to. ``audited()``
+    requires a ``TenantPrincipal`` (it needs an ``account_id`` for
+    ``audit_events.actor_user_id``), so the actor is resolved the same way the
+    deactivation path resolves its SECURITY DEFINER caller —
+    ``_resolve_scim_admin_caller``, the org's first active non-break-glass
+    admin, deterministic. That is the authority the SCIM token stands in for.
+
+    ``get_scim_principal`` is shared with the handler through FastAPI's
+    dependency cache, so the token is validated exactly once per request.
+
+    When no active admin exists the event has no honest actor, so the mutation
+    is refused with the same 409 the deactivation path already raises —
+    an unattributable provisioning write is not written under a fabricated one.
+    """
+    async with session.begin():
+        await set_rls_org(session, scim.organisation_id)
+        caller = await _resolve_scim_admin_caller(session, scim.organisation_id)
+    if caller is None:
+        raise _scim_error(
+            status.HTTP_409_CONFLICT,
+            _MSG_NO_ACTIVE_ADMIN_EXISTS,
+        )
+    return TenantPrincipal(
+        username="scim",
+        organisation_id=scim.organisation_id,
+        account_id=caller,
+        org_role="admin",
+    )
 
 
 async def _deactivate_scim_user(
@@ -351,7 +390,26 @@ async def list_users(
     )
 
 
-@router.post("/Users", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
+# FAR-1472: SCIM user/group writes are the highest-tenancy-risk surface in the
+# product — a provisioning change that lands with no audit event is an
+# unattributable membership change — so every mutation below is audited
+# fail-closed (scope="function" so an append failure fails the response).
+@router.post(
+    "/Users",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_user_created",
+                "scim_user",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 async def create_user(
     req: ScimUserRequest,
     settings: Settings = Depends(get_settings),
@@ -470,7 +528,21 @@ async def get_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.put("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
+@router.put(
+    "/Users/{user_id}",
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_user_updated",
+                "scim_user",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 async def replace_user(
     user_id: uuid.UUID,
     req: ScimUserRequest,
@@ -602,7 +674,21 @@ def _apply_user_patch_ops(account: Account, operations: list[ScimPatchOperation]
     return deactivate_requested
 
 
-@router.patch("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
+@router.patch(
+    "/Users/{user_id}",
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_user_updated",
+                "scim_user",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 async def patch_user(
     user_id: uuid.UUID,
     req: ScimPatchRequest,
@@ -669,7 +755,22 @@ async def patch_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_scim_feature)])
+@router.delete(
+    "/Users/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_user_deleted",
+                "scim_user",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 async def delete_user(
     user_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
@@ -823,7 +924,24 @@ async def list_groups(
     )
 
 
-@router.post("/Groups", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
+# Group membership drives org role assignment via the provider's group
+# mappings — same fail-closed rationale as the user mutations above.
+@router.post(
+    "/Groups",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_group_created",
+                "scim_group",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 async def create_group(
     req: ScimGroupRequest,
     settings: Settings = Depends(get_settings),
@@ -975,7 +1093,21 @@ async def get_group(
     return _group_to_scim(group, members, base_url)
 
 
-@router.put("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
+@router.put(
+    "/Groups/{group_id}",
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_group_updated",
+                "scim_group",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 async def replace_group(
     group_id: uuid.UUID,
     req: ScimGroupRequest,
@@ -1150,7 +1282,21 @@ async def _build_group_member_refs(session: AsyncSession, group: Any, base_url: 
     ]
 
 
-@router.patch("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
+@router.patch(
+    "/Groups/{group_id}",
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_group_updated",
+                "scim_group",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 async def patch_group(
     group_id: uuid.UUID,
     req: ScimPatchRequest,
@@ -1215,7 +1361,18 @@ async def patch_group(
 @router.delete(
     "/Groups/{group_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_scim_feature)],
+    dependencies=[
+        Depends(require_scim_feature),
+        Depends(
+            audited(
+                "scim_group_deleted",
+                "scim_group",
+                principal_dep=get_scim_audit_principal,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
 )
 async def delete_group(
     group_id: uuid.UUID,

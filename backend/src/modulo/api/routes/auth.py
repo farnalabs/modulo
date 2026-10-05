@@ -23,6 +23,7 @@ from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.api.routes.assistant import clear_session_approvals_for_account
 from modulo.auth.dependencies import (
     OrganisationMembershipNotFound,
+    get_current_tenant_user,
     get_current_user,
     resolve_role_from_membership,
 )
@@ -40,6 +41,7 @@ from modulo.auth.passwords import (
     validate_password_strength,
 )
 from modulo.auth.ws_token import create_ws_token
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
 from modulo.core.rate_limiter import AuthRateLimiter
@@ -489,6 +491,11 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
     return response
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route —
+# the password is verified inside the handler, so no principal exists when a
+# dependency would resolve, and audited(principal_dep=...) requires one.
+# Covering it needs an actor-less variant of audited() in modulo.core
+# (deliberately out of scope for this sweep).
 @router.post("/login")
 @handle_db_errors("auth.login")
 async def login(
@@ -558,6 +565,10 @@ def _demo_not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
+# browser sends NO credentials, so there is no principal to attribute an event
+# to before the handler resolves the demo account. Same actor-less gap as
+# /auth/login (needs a core audited() variant that records a system actor).
 @router.post("/demo")
 @handle_db_errors("auth.demo_login")
 async def demo_login(
@@ -792,6 +803,9 @@ async def _record_invite_rate_limit_success(limiter: AuthRateLimiter | None, ip:
             )
 
 
+# FAR-1472 exemption: already audited in this handler — it appends its own
+# ``invite_consumed`` event (fail-open) once the invitation is redeemed, and the
+# route is PRE-AUTH anyway (the invite token, not a principal, authenticates it).
 @router.post("/accept-invite")
 @handle_db_errors(_CODE_AUTH_ACCEPT_INVITE)
 async def accept_invite(
@@ -1113,6 +1127,10 @@ def _mint_refresh_response(
     return response
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
+# refresh token is parsed inside the handler, so there is no principal for
+# audited(principal_dep=...) to resolve before it runs. Actor-less core variant
+# needed to cover token rotation.
 @router.post("/refresh", dependencies=[Depends(_require_csrf_double_submit)])
 @handle_db_errors(_CODE_AUTH_REFRESH)
 async def refresh(
@@ -1238,6 +1256,9 @@ def _clear_account_session_approvals(claims: dict[str, object]) -> None:
         clear_session_approvals_for_account(account_id_val)
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
+# refresh-cookie identity is established inside the handler, so audited() has no
+# principal to resolve. Actor-less core variant needed to cover session end.
 @router.post("/logout", dependencies=[Depends(_require_csrf_double_submit)])
 @handle_db_errors(_CODE_AUTH_LOGOUT)
 async def logout(
@@ -1305,7 +1326,17 @@ async def _resolve_live_org_role(
     return live_org_role
 
 
-@router.post("/ws-token")
+# Minting a WebSocket token issues a credential, so an unaudited mint would be
+# unattributable -> fail closed.
+@router.post(
+    "/ws-token",
+    dependencies=[
+        Depends(
+            audited("ws_token_issued", "ws_token", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        )
+    ],
+)
 @handle_db_errors("auth.ws_token")
 async def ws_token(
     current_user: TenantPrincipal = require_permission("run.status"),

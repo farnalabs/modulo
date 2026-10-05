@@ -46,6 +46,7 @@ from modulo.auth.oauth import (
     normalize_scopes,
     validate_redirect_uri,
 )
+from modulo.core.audit_coverage import audited
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -81,10 +82,19 @@ class DeleteOAuthClientResponse(BaseModel):
     deleted: bool
 
 
+# Minting an OAuth client secret is a credential grant: an unaudited mint would
+# be unattributable -> fail closed.
 @router.post(
     "/clients",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint), require_feature("mcp_server")],
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        require_feature("mcp_server"),
+        Depends(
+            audited("oauth_client_created", "oauth_client", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        ),
+    ],
 )
 @handle_db_errors("mcp_oauth.register_oauth_client")
 async def register_oauth_client(
@@ -226,9 +236,17 @@ async def list_oauth_clients_endpoint(
     return [OAuthClientItem(**c) for c in clients]
 
 
+# Revoking a client invalidates its issued credentials -> fail closed.
 @router.delete(
     "/clients/{client_id}",
-    dependencies=[Depends(deny_break_glass_mint), require_feature("mcp_server")],
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        require_feature("mcp_server"),
+        Depends(
+            audited("oauth_client_deleted", "oauth_client", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        ),
+    ],
 )
 @handle_db_errors("mcp_oauth.remove_oauth_client")
 async def remove_oauth_client(
@@ -302,7 +320,22 @@ class ConsentApproveResponse(BaseModel):
     redirect_url: str
 
 
-@router.post("/consent/approve", dependencies=[require_feature("mcp_server")])
+# Consent is the grant that lets an OAuth client act for this user -> fail closed.
+@router.post(
+    "/consent/approve",
+    dependencies=[
+        require_feature("mcp_server"),
+        Depends(
+            audited(
+                "oauth_consent_approved",
+                "oauth_consent",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+    ],
+)
 @handle_db_errors("mcp_oauth.approve_consent")
 async def approve_consent(
     req: ConsentApproveRequest,

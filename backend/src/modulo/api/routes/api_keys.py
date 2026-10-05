@@ -30,6 +30,7 @@ from modulo.auth.api_key import (
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.runtime_config.key_bridge import get_public_url
@@ -381,6 +382,10 @@ async def _mint_api_key(
         ) from None
 
 
+# FAR-1472 exemption: already audited in this handler — it appends its own
+# richer ``api_key_created`` event (key scope, lookup prefix, minting principal)
+# after the mint commits. A coarse ``audited(...)`` dependency would append a
+# second event of the same type to the append-only audit chain per mint.
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -603,7 +608,18 @@ async def _apply_key_update(
         ) from None
 
 
-@router.put("/{key_id}", dependencies=[Depends(deny_break_glass_mint)])
+# A key's role, name, team boundary and expiry are all authorization-relevant:
+# an unaudited update would make a privilege change unattributable -> fail closed.
+@router.put(
+    "/{key_id}",
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(
+            audited("api_key_updated", "api_key", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        ),
+    ],
+)
 @handle_db_errors(_CODE_API_KEYS_UPDATE_API)
 async def update_api_key_endpoint(
     key_id: uuid.UUID,
@@ -628,6 +644,9 @@ async def update_api_key_endpoint(
     }
 
 
+# FAR-1472 exemption: already audited in this handler — it appends its own richer
+# ``api_key_revoked`` event (scope, lookup prefix, revoking principal) once the
+# revoke commits. No coarse duplicate is added to the append-only chain.
 @router.delete("/{key_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_API_KEYS_REVOKE_API)
 async def revoke_api_key_endpoint(
