@@ -7323,13 +7323,26 @@ async def create_api_key(
             return team_error
 
         # FAR-1477: grants are accepted ONLY with the org flag ON (OFF => 422,
-        # never a silent downgrade to a legacy full-role key).
-        if grants is not None and not await api_key_grants_enabled(org_id):
-            return {
-                "error": "validation_error",
-                "status": 422,
-                "detail": "API key grant-sets are not enabled for this organisation",
-            }
+        # never a silent downgrade to a legacy full-role key). Read STRICT so a
+        # transient flag-read failure is not mistaken for "flag OFF" — it must
+        # surface as a retryable 503, matching the REST mint path (and this
+        # server's own grant-enforcement auth path).
+        if grants is not None:
+            try:
+                grants_on = await api_key_grants_enabled(org_id, strict=True)
+            except ApiKeyGrantsUnavailableError:
+                _log.warning("mcp.create_api_key_grants_unavailable")
+                return {
+                    "error": "service_unavailable",
+                    "status": 503,
+                    "detail": "API key grant settings are temporarily unavailable; retry shortly",
+                }
+            if not grants_on:
+                return {
+                    "error": "validation_error",
+                    "status": 422,
+                    "detail": "API key grant-sets are not enabled for this organisation",
+                }
 
         async with _session(org_id) as s:
             await _deny_break_glass_mint(s, account_id)

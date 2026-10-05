@@ -356,6 +356,25 @@ class TestCreateApiKeyGrants(AuthContext):
         assert result["error"] == "validation_error"
         assert result["status"] == 422
 
+    async def test_flag_read_failure_returns_503(self) -> None:
+        """FAR-1477: a transient grants-flag read failure fails closed as a
+        retryable 503, matching the REST mint path — never misreported as the
+        permanent-looking 422 "not enabled"."""
+        from modulo.api.mcp_server import create_api_key
+        from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+
+        with (
+            _patch_create_env(role="admin") as mock_session,
+            patch(
+                "modulo.api.mcp_server.api_key_grants_enabled",
+                new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError),
+            ),
+        ):
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            result = await create_api_key(name="CI", grants=["run.list"])
+        assert result["error"] == "service_unavailable"
+        assert result["status"] == 503
+
     async def test_unknown_grant_rejected_422(self) -> None:
         from modulo.api.mcp_server import create_api_key
 
