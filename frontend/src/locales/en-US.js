@@ -3528,6 +3528,7 @@ export default {
     "RunnerTier": {
       "bundled_docker": "Bundled Runner (Docker)",
       "external_e2b": "External Runner (E2B)",
+      "external_kubernetes": "External Runner (Kubernetes)",
       "local": "Local"
     },
     "HitlBriefing": {
