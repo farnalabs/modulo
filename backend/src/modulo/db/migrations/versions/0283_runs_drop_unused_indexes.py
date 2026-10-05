@@ -1,7 +1,7 @@
 """Drop the three genuinely unused indexes on runs (FAR-1443 audit).
 
-Revision ID: 0281_runs_drop_unused_indexes
-Revises: 0280_runs_node_deadline_watchdog_fired_count
+Revision ID: 0283_runs_drop_unused_indexes
+Revises: 0282_env_profiles_kubernetes
 Create Date: 2026-10-05
 
 The ``runs`` table carries ~30 indexes — every one is written on every
@@ -52,7 +52,7 @@ kept:
 The downgrade recreates all three with their original definitions, so the
 drop is reversible end to end (asserted against real Postgres — exact
 ``pg_indexes.indexdef`` equality — by
-``tests/integration/test_migration_0281_runs_drop_unused_indexes.py``).
+``tests/integration/test_migration_0283_runs_drop_unused_indexes.py``).
 Statements are literal (no f-string interpolation): DROP INDEX IF EXISTS /
 CREATE INDEX IF NOT EXISTS keep the revision idempotent under release.sh's
 migration retries, and a blocking DROP takes only a metadata lock (never
@@ -63,8 +63,8 @@ CONCURRENTLY — env.py wraps each revision in one transaction, the 0155/0197/
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0281_runs_drop_unused_indexes"
-down_revision = "0280_runs_node_deadline_watchdog_fired_count"
+revision = "0283_runs_drop_unused_indexes"
+down_revision = "0282_env_profiles_kubernetes"
 branch_labels = None
 depends_on = None
 

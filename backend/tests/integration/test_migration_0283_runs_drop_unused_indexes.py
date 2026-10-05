@@ -3,11 +3,11 @@
 Against REAL Postgres (testcontainers, private database per test — the
 ``test_migration_0279_table_autovacuum_tuning.py`` pattern):
 
-* NEGATIVE CONTROL — at ``0280_runs_node_deadline_watchdog_fired_count`` all
+* NEGATIVE CONTROL — at ``0282_env_profiles_kubernetes`` all
   three indexes EXIST, so the post-migration "absent" assertion fails
   against the pre-migration state and the test discriminates rather than
   passing vacuously;
-* the REAL alembic upgrade of ``0281_runs_drop_unused_indexes`` leaves
+* the REAL alembic upgrade of ``0283_runs_drop_unused_indexes`` leaves
   ``ix_runs_account_id`` / ``ix_runs_dispatcher`` /
   ``ix_runs_org_status_completed`` absent from ``pg_indexes``, while a
   control set (every constraint plus the narrow
@@ -48,8 +48,8 @@ from modulo.db.models.run import Run
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0281_runs_drop_unused_indexes"
-PREV_REV = "0280_runs_node_deadline_watchdog_fired_count"
+MIGRATION_REV = "0283_runs_drop_unused_indexes"
+PREV_REV = "0282_env_profiles_kubernetes"
 
 _DROPPED: tuple[str, ...] = (
     "ix_runs_account_id",
