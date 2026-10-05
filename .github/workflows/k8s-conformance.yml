@@ -294,6 +294,7 @@ jobs:
         shell: bash
         timeout-minutes: 3
         run: |
+          set -euo pipefail
           WEEK="$(date -u +%V)"
           # 10# forces base-10 so weeks like "08" are not read as octal.
           case $(( 10#$WEEK % 3 )) in
@@ -495,14 +496,18 @@ jobs:
           [ "${ANY_GREEN_TS}" -gt 0 ] && ANY_AGE=$(( (NOW_TS - ANY_GREEN_TS) / 86400 ))
           MANAGED_AGE=""
           [ "${MANAGED_TS}" -gt 0 ] && MANAGED_AGE=$(( (NOW_TS - MANAGED_TS) / 86400 ))
+          ANY_AGE_CELL="${ANY_AGE:+${ANY_AGE}d}"
+          ANY_AGE_CELL="${ANY_AGE_CELL:-n/a}"
+          MANAGED_AGE_CELL="${MANAGED_AGE:+${MANAGED_AGE}d}"
+          MANAGED_AGE_CELL="${MANAGED_AGE_CELL:-n/a}"
 
           {
             echo "## Kubernetes conformance - last-green visibility"
             echo ""
             echo "| signal | date | age |"
             echo "| --- | --- | --- |"
-            echo "| Last green run (any leg, staleness-cron runs excluded) | ${ANY_GREEN_DATE:-none yet} | ${ANY_AGE:-n/a}d |"
-            echo "| Last scheduled (managed) run | ${MANAGED_DATE:-none yet} (${MANAGED_CONCLUSION:-n/a}) | ${MANAGED_AGE:-n/a}d |"
+            echo "| Last green run (any leg, staleness-cron runs excluded) | ${ANY_GREEN_DATE:-none yet} | ${ANY_AGE_CELL} |"
+            echo "| Last scheduled (managed) run | ${MANAGED_DATE:-none yet} (${MANAGED_CONCLUSION:-n/a}) | ${MANAGED_AGE_CELL} |"
             echo "| Last green managed run | ${MANAGED_GREEN_DATE:-none yet} | |"
             echo "| Grace windows | ${ANY_GRACE}d (any green) / ${MANAGED_DARK_GRACE}d (managed cron dark) | |"
             echo ""
