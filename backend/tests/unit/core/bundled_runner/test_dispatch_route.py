@@ -246,8 +246,10 @@ def test_workspace_spec_carries_structured_labels_and_network() -> None:
 
 def test_workspace_spec_timeout_default_matches_template_constant() -> None:
     """FAR-1494: the dispatch workspace-spec timeout DEFAULT must equal the
-    shipped template's ``timeout_seconds`` — if either the constant or the
-    default site drifts, this test fails."""
+    shipped template's ``timeout_seconds`` — if either the constant or this
+    dispatch default site drifts, this test fails. (The sandbox-test route
+    default is guarded separately by
+    test_build_workspace_spec_timeout_default_matches_template_constant.)"""
     profile = _profile(
         "runner_docker",
         config_json={"memory_mb": 1024, "workspace_network": "modulo-runner-workspace"},
