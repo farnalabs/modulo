@@ -23,7 +23,7 @@
 # `stable`/`latest` deliberately unused - they float).
 FROM twinproduction/gatus:v5.37.0 AS upstream
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 # Run unprivileged. Nothing here needs root: /gatus is static and binds the
 # unprivileged port 8080, the config is mounted/baked read-only, and Gatus
