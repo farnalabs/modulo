@@ -92,8 +92,8 @@
               <span
                 v-if="(row as RunListItem).capacity?.waiting"
                 :data-testid="`runs-list-queued-${row.run_id}`"
-                :title="capacityReason(row as RunListItem)"
-                :aria-label="capacityReason(row as RunListItem)"
+                :title="queuedCapacityReason((row as RunListItem).capacity, t)"
+                :aria-label="queuedCapacityReason((row as RunListItem).capacity, t)"
                 class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning capitalize"
               >{{ $t('views.RunsListView.queued') }}</span>
               <RunErrorTag
@@ -248,7 +248,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, queuedCapacityReason } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
@@ -472,17 +472,6 @@ function prevPage() {
   positionKnown.value = true
   loadRuns()
   syncQuery()
-}
-
-function capacityReason(run: RunListItem): string {
-  const capacity = run.capacity
-  if (capacity && capacity.concurrency_limit != null) {
-    return t('views.RunsListView.queued_waiting_slot', {
-      active: capacity.active_runs,
-      limit: capacity.concurrency_limit,
-    })
-  }
-  return t('views.RunsListView.queued_starting_soon')
 }
 
 function cancelLabel(runId: string): string {
