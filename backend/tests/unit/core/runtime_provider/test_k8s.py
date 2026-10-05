@@ -820,18 +820,28 @@ class TestDestroyAndStatus:
         core.read_namespaced_pod.side_effect = ApiException(status=500, reason="Boom")
         assert await provider.get_workspace_status("modulo-ws-abc") == "unknown"
 
-    async def test_read_log_tail_is_bounded_and_never_raises(self) -> None:
-        core = AsyncMock()
-        core.read_namespaced_pod_log.return_value = "0123456789abcdefghij"
-        provider = _provider(core=core)
+    async def test_read_log_tail_reads_agent_log_and_is_bounded(self) -> None:
+        provider = _provider()
+        provider.exec_command = AsyncMock(  # type: ignore[method-assign]
+            return_value=ExecResult(exit_code=0, stdout="0123456789abcdefghij", stderr="", duration_ms=1)
+        )
 
         tail = await provider.read_log_tail("modulo-ws-abc", max_bytes=5)
         assert tail == b"fghij"
+        # The read targets the dispatcher's agent-log FILE (the pod's own
+        # container log is the empty keep-alive wait loop), bounded by tail -c.
+        await_args = provider.exec_command.await_args
+        assert await_args is not None
+        command = await_args.args[1]
+        assert command[0] == "sh"
+        assert "tail -c 20 /home/user/agent.log" in command[2]
 
-        core.read_namespaced_pod_log.side_effect = ApiException(status=404, reason="Not Found")
+        provider.exec_command.side_effect = UnknownRefError("gone")
         assert not await provider.read_log_tail("modulo-ws-gone", max_bytes=5)
 
+        provider.exec_command.reset_mock(side_effect=True)
         assert not await provider.read_log_tail("", max_bytes=5)
+        provider.exec_command.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -234,6 +234,16 @@ class _KubernetesWorkspaceSource:
         # destroy_workspace_by_ref is idempotent and label-guarded (a foreign
         # or already-gone pod is a logged no-op), so the sweep's decision is
         # the only gate that matters here.
+        #
+        # Deliberate asymmetry with the Docker source: ``container.delete``
+        # RAISES on an unconfirmed delete, so the sweep never counts a
+        # destroyed container it did not actually remove. Here an unconfirmed
+        # destroy (``False``) is swallowed and ``_reconcile_single_container``
+        # still increments ``orphans_destroyed``. That is acceptable because
+        # the failure is logged by the provider, the pod is re-listed on the
+        # next sweep and retried, and a false ``orphans_destroyed`` count is
+        # an observability blemish, not a safety gap (the label guard already
+        # prevents touching a foreign pod).
         await self._get_provider().destroy_workspace_by_ref(container_id)
 
     async def close(self) -> None:

@@ -136,7 +136,12 @@ _SERVICE_ACCOUNT_ENV = "MODULO_KUBERNETES_SERVICE_ACCOUNT"
 _DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
 _DEFAULT_PROVISION_TIMEOUT_S = 120
 _PROVISION_POLL_INTERVAL = 1.0
-_LOG_TAIL_LINES = 5000
+# Workspace agent log file: the dispatcher redirects the agent command's
+# stdout/stderr here (``node_runner._SANDBOX_LOG_PATH``), so this FILE — not
+# the pod's container log, whose PID 1 is the keep-alive wait loop — is the
+# real workspace log surface (see ``read_log_tail``).
+_SANDBOX_LOG_PATH = "/home/user/agent.log"
+_LOG_TAIL_READ_TIMEOUT_S = 10
 _CLOSE_DESTROY_TIMEOUT_S = 30
 _STREAM_ERROR_TRUNC = 200
 
@@ -447,6 +452,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         pod_spec = V1PodSpec(
             restart_policy="Never",
             containers=[container],
+            # Workspace and /tmp are Memory-backed (tmpfs) emptyDirs so a
+            # read-only rootfs still has writable scratch space. Note the
+            # interaction with ``resource_limits.memory_mb``: tmpfs pages are
+            # charged to the container's memory cgroup, so a workspace that
+            # fills the 512Mi volume counts against the same limit as the
+            # agent's own RSS and the pod OOMKills before the emptyDir ever
+            # reports ENOSPC. Raising a profile's memory_mb therefore buys
+            # agent headroom only if it also leaves room for the workspace.
             volumes=[
                 V1Volume(
                     name="workspace",
@@ -994,32 +1007,41 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         return phase or "unknown"
 
     async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
-        """Read the workspace container's log tail (ADR 040 primitive).
+        """Read the workspace agent-log tail (ADR 040 primitive).
 
-        K8s retains pod logs only while the pod exists (no post-destroy
-        retention window on this tier), so a read after delete returns
-        ``b""``. Best-effort probe contract: never raises — invalid ref,
-        missing pod, RBAC and network failures all yield ``b""``. The
-        ``max_bytes`` bound is a character slice on the decoded tail text
-        before re-encoding (ABC contract).
+        The dispatcher redirects the agent command's stdout/stderr to
+        ``/home/user/agent.log`` (``node_runner._SANDBOX_LOG_PATH``), so the
+        real workspace log lives in that FILE. The pod's container log is the
+        wrong surface on this tier: its PID 1 is the keep-alive wait loop, so
+        ``read_namespaced_pod_log`` is empty for the whole lifetime while the
+        agent output accumulates in the file. Reading the file through the
+        exec subresource keeps the dispatch stall/timeout diagnostics
+        (``_read_log_tail_via_provider``) as useful here as the E2B logs
+        endpoint is on that tier.
+
+        Best-effort probe contract: never raises — invalid ref, missing pod
+        (exec 404), RBAC/network failures and a missing/empty log file all
+        yield ``b""``. ``tail -c`` bounds the transfer; the ``max_bytes``
+        bound itself is a character slice on the decoded tail text before
+        re-encoding (ABC contract).
         """
         if not isinstance(provider_ref, str) or not provider_ref or max_bytes <= 0:
             return b""
+        # Fetch up to 4 bytes/char so the character slice below can still
+        # return ``max_bytes`` chars for a multi-byte tail.
+        byte_bound = max_bytes * 4
         try:
-            core = await self._get_core()
-            text = await core.read_namespaced_pod_log(
-                name=provider_ref,
-                namespace=self._namespace,
-                container=_CONTAINER_NAME,
-                tail_lines=_LOG_TAIL_LINES,
-                timestamps=False,
+            result = await self.exec_command(
+                provider_ref,
+                ["sh", "-c", f"tail -c {byte_bound} {_SANDBOX_LOG_PATH} 2>/dev/null || true"],
+                cmd_timeout=_LOG_TAIL_READ_TIMEOUT_S,
             )
         except asyncio.CancelledError:
             raise
         except Exception:
             _log.info("read_log_tail failed for pod %s (best-effort)", provider_ref, exc_info=True)
             return b""
-        decoded = text if isinstance(text, str) else str(text or "")
+        decoded = result.stdout if isinstance(result.stdout, str) else ""
         return decoded[-max_bytes:].encode("utf-8", errors="replace")
 
     async def apply_isolation(

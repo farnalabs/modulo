@@ -75,6 +75,12 @@ _STATUS_POLL_BOUND_S = 90.0
 _STATUS_POLL_INTERVAL_S = 1.0
 # read_log_tail bound under test.
 _LOG_TAIL_MAX_BYTES = 2048
+# The workspace agent-log file the dispatcher redirects the agent command's
+# stdout/stderr to (``node_runner._SANDBOX_LOG_PATH``). The log-tail check
+# writes its marker here - mirroring that redirect - so the read must return
+# real content; an always-empty tail (e.g. reading the wrong surface) fails.
+_WORKSPACE_LOG_PATH = "/home/user/agent.log"
+_LOG_TAIL_MARKER = "conformance-log-tail"
 
 _CONFORMANCE_CHECKS: dict[str, Callable[[RuntimeProvider], Awaitable[None]]] = {}
 """Registry: check name -> async check callable. Populated at module import."""
@@ -299,11 +305,21 @@ async def assert_stream_kill_before_collect_detected(provider: RuntimeProvider) 
 
 
 async def assert_log_tail_after_process_end(provider: RuntimeProvider) -> None:
-    """``read_log_tail`` works after an exec'd process ends: raw bytes, bounded."""
+    """``read_log_tail`` works after an exec'd process ends: bounded raw bytes WITH content.
+
+    The probe mirrors the dispatcher's own log redirect
+    (``node_runner._wrap_sandbox_command_with_log_redirect``): the marker is
+    written to the workspace agent-log file, so the read only passes if the
+    returned tail actually CONTAINS it. Without the content assertion an
+    always-empty tail - e.g. a provider reading the wrong surface - passed the
+    check vacuously.
+    """
     ref = await _create_workspace(provider)
     try:
         result = await provider.exec_command(
-            ref, ["sh", "-c", "echo conformance-log-tail"], cmd_timeout=_EXEC_TIMEOUT_S
+            ref,
+            ["sh", "-c", f"( echo {_LOG_TAIL_MARKER} ) > {_WORKSPACE_LOG_PATH} 2>&1"],
+            cmd_timeout=_EXEC_TIMEOUT_S,
         )
         assert result.exit_code == 0, (
             f"probing command failed (exit_code={result.exit_code}) - the log-tail read below would not prove anything"
@@ -312,6 +328,10 @@ async def assert_log_tail_after_process_end(provider: RuntimeProvider) -> None:
         assert isinstance(tail, bytes), f"read_log_tail must return raw bytes, got {type(tail).__name__}"
         assert len(tail) <= _LOG_TAIL_MAX_BYTES, (
             f"read_log_tail ignored max_bytes={_LOG_TAIL_MAX_BYTES}: returned {len(tail)} bytes"
+        )
+        assert _LOG_TAIL_MARKER.encode("utf-8") in tail, (
+            "read_log_tail returned no workspace content after the process ended: "
+            f"expected {_LOG_TAIL_MARKER!r} in the tail, got {tail!r}"
         )
     finally:
         await destroy_workspace_quietly(provider, ref)
