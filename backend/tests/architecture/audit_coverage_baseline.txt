@@ -78,7 +78,6 @@ admin_runtime_config.py:reload_runtime_config
 admin_runtime_config.py:set_runtime_config_overrides
 admin_sso.py:create_provider_endpoint
 admin_sso.py:delete_provider_endpoint
-admin_sso.py:set_group_mappings_endpoint
 admin_sso.py:test_provider_connection
 admin_sso.py:toggle_provider_endpoint
 admin_sso.py:update_provider_endpoint
@@ -95,14 +94,12 @@ agents.py:rollback_prompt
 agents.py:update_agent_endpoint
 api_keys.py:create_api_key_endpoint
 api_keys.py:revoke_api_key_endpoint
-api_keys.py:update_api_key_endpoint
 audit.py:batch_detail_endpoint
 auth.py:accept_invite
 auth.py:demo_login
 auth.py:login
 auth.py:logout
 auth.py:refresh
-auth.py:ws_token
 community_library.py:install
 composite_templates.py:create_composite_template_endpoint
 composite_templates.py:delete_composite_template_endpoint
@@ -152,9 +149,6 @@ lifecycle_maps.py:save_lifecycle_map_version_endpoint
 lifecycle_maps.py:self_report_journeys_endpoint
 lifecycle_maps.py:update_lifecycle_map_endpoint
 lifecycle_maps.py:update_lifecycle_map_version_endpoint
-mcp_oauth.py:approve_consent
-mcp_oauth.py:register_oauth_client
-mcp_oauth.py:remove_oauth_client
 model_backends.py:create_model_backend_endpoint
 model_backends.py:delete_model_backend_endpoint
 model_backends.py:recheck_model_backend_health_endpoint
@@ -206,14 +200,6 @@ schemas.py:migration_plan_endpoint
 schemas.py:move_schema_to_folder_endpoint
 schemas.py:update_schema_endpoint
 schemas.py:validate_schema_endpoint
-scim.py:create_group
-scim.py:create_user
-scim.py:delete_group
-scim.py:delete_user
-scim.py:patch_group
-scim.py:patch_user
-scim.py:replace_group
-scim.py:replace_user
 slack.py:receive_slack_event
 sso.py:saml_acs
 sso.py:saml_acs_provider
