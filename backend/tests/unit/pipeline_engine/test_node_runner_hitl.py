@@ -1243,8 +1243,9 @@ async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: p
     org_id = _uuid.UUID("00000000-0000-0000-0000-0000000000a1")
     session = _RecordingSession()
 
+    @asynccontextmanager
     async def _fake_factory():
-        return session
+        yield session
 
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
     monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", AsyncMock())
