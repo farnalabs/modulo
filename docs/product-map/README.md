@@ -986,6 +986,43 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > FAR-654/FAR-742 journey-display double gating (`lifecycle_map_journeys` flag
 > AND the per-visit "Show work items" checkbox, default OFF), citing
 > `LifecycleMapView.spec.ts`. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-05):** closed four untracked sub-surface gaps —
+> shipped behaviour that neither product-map layer described, all merged after
+> the 2026-10-03 walk. `feat-infra-health` (`infra/health-checks.md`): the
+> FAR-1446 readiness-degradation email alert — the `health_readiness_alert`
+> system cron (every 5 min, `unique=True`) emails `ALERT_EMAIL_TO` on a
+> hysteresis-confirmed degraded/unavailable transition plus one recovery email,
+> evaluating the SAME `evaluate_readiness` implementation the `/healthz/ready`
+> route now delegates to, with Redis-backed edge state and quiet-when-
+> unconfigured semantics (`core/health_alerts.py`, `core/saq_worker.py`) — plus
+> the out-of-process Gatus sentinel the compose deployment ships
+> (`deploy/watchdog/*`, PR #1260), the full-outage leg the in-band cron
+> deliberately does not cover. `feat-audit` (`audit/audit-trail.md`, FAR-1471):
+> every pipeline graph mutation (write + snapshot rollback) appends a
+> `pipeline.graph_updated` event in the same transaction with an
+> IDs-and-counts-only before/after payload, and MCP graph writes stamp the
+> caller's account id as `changed_by`. `feat-runs` (`build/runs.md`, FAR-1463):
+> the node-deadline watchdog durably increments
+> `runs.node_deadline_watchdog_fired_count` before the retry consult so BOTH the
+> re-dispatch (which nulls `error_code`) and the terminal fail are observable;
+> the read surface (bucket metric + export field) is tracked under
+> `feat-analytics` (`analytics/analytics.md`). `_ORPHANED_BDD_FEATURES` stays
+> empty.
+
+> **Closed this walk (2026-10-05):** tracked `feat-evals`'s FAR-967 chunk 10
+> policy-gate operator-control + pin-integrity surface —
+> `PATCH /api/v1/evals/{eval_id}/policy-gate/toggle` (admin-only, symmetric
+> `enabled_at`/`disabled_at` stamping, `policy_gate.toggled` audit, break-glass
+> deny), the run-start `policy_gate_pins_fingerprint` re-verification, and the
+> pin-governed evaluation universe (`_resolve_governed_gate`) — in the manifest
+> feature registry and `improve/evals.md`. Also normalised the
+> `EvalEditorView` policy-gate surface and three `PageHeader` titles from the
+> `data-test-id` typo to `data-testid`, registered the now-visible testids in
+> the manifest `elements:` inventory, and added a regression guard
+> (`test_no_data_test_id_typo_in_frontend`) so the typo can never hide a
+> shipped control from the element guard or Playwright's `getByTestId` again.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

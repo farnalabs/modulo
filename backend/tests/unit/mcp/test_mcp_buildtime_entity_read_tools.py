@@ -431,7 +431,8 @@ class TestListConnectorTypes(AuthContext):
         assert len(ids) == len(set(ids))
         assert "github" in ids
         (github,) = (item for item in items if item["id"] == "github")
-        assert isinstance(github["capabilities"], list) and github["capabilities"]
+        assert isinstance(github["capabilities"], list)
+        assert github["capabilities"]
         # Definition-backed types carry credential FIELD metadata (never values).
         (sentry,) = (item for item in items if item["id"] == "sentry")
         assert sentry["credential_fields"] == {"token": {"required": True}}

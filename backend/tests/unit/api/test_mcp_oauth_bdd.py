@@ -39,6 +39,7 @@ from modulo.auth.oauth import (
     create_oauth_access_token,
     validate_client_scopes,
 )
+from modulo.core.audit_coverage import audit_session
 from modulo.core.rate_limiter import RateLimiterRegistry
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -48,6 +49,25 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _CODE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 _CODE_CHALLENGE = compute_pkce_challenge(_CODE_VERIFIER)
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session() -> Generator[None, None, None]:
+    """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
+    fresh ``audit_session`` (a real engine — no database in the unit tier), so
+    stub that seam; the dependency itself still runs."""
+
+    async def _override() -> AsyncGenerator[AsyncMock, None]:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        yield session
+
+    app.dependency_overrides[audit_session] = _override
+    yield
+    app.dependency_overrides.pop(audit_session, None)
 
 
 def _make_settings() -> Settings:
