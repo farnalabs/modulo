@@ -708,6 +708,10 @@ def test_create_user_scoped_key_flag_on(client: TestClient) -> None:
     key.scope = "user"
     with (
         patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        # FAR-1477: the mint path reads the ``api_key_grants`` flag STRICT for
+        # user-scoped keys (to apply the 90-day cap); stub it ON so the test
+        # exercises the happy path rather than the 503 flag-unavailable branch.
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_user_key")) as mint,
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
