@@ -70,7 +70,8 @@ def _gitlab_root_pat(handle: ContainerHandle) -> str:
             "name: 'modulo-ci', scopes: [:api], expires_at: 364.days.from_now); puts t.token",
         ]
     ).strip()
-    assert token and len(token) >= 20, f"expected a real GitLab PAT from rails runner, got {token!r}"
+    assert token, f"expected a real GitLab PAT from rails runner, got {token!r}"
+    assert len(token) >= 20, f"expected a real GitLab PAT from rails runner, got {token!r}"
     return token
 
 

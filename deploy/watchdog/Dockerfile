@@ -9,7 +9,7 @@
 #
 # That rules out an in-container HTTP healthcheck and any startup line of our
 # own, so this image re-hosts the same upstream /gatus binary on Alpine, which
-# supplies both (all three properties of alpine:3.20 verified by running it):
+# supplies both (all three properties of alpine:3.24 verified by running it):
 #
 #   * /bin/busybox -> the `sh` entrypoint needs it and the compose healthcheck
 #     execs it directly as `/bin/busybox wget ...` (healthcheck CMD does not go
@@ -23,7 +23,7 @@
 # `stable`/`latest` deliberately unused - they float).
 FROM twinproduction/gatus:v5.37.0 AS upstream
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 # Run unprivileged. Nothing here needs root: /gatus is static and binds the
 # unprivileged port 8080, the config is mounted/baked read-only, and Gatus
@@ -47,8 +47,16 @@ COPY config.yaml /config/config.yaml
 
 # Mirror the env upstream's image declares (upstream sets an empty
 # GATUS_CONFIG_PATH, which means "use the default config/config.yaml").
+# WATCHDOG_PROBE_URL is the config's endpoint target (config.yaml references
+# it as ${WATCHDOG_PROBE_URL}). It is baked here rather than written literally
+# in config.yaml because the two compose files probe different services (root:
+# backend:8000; production: modulo:80) and Gatus has no ${VAR:-default}
+# syntax - an unset variable expands to an empty URL and the container panics
+# at startup (verified against v5.37.0). The default keeps a bare `docker run`
+# and the root compose working; the production compose overrides it.
 ENV GATUS_LOG_LEVEL=INFO \
     GATUS_CONFIG_PATH= \
+    WATCHDOG_PROBE_URL=http://backend:8000/healthz/ready \
     PORT=8080
 
 WORKDIR /

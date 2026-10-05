@@ -157,6 +157,59 @@ describe('HitlReviewCard', () => {
     expect(decidedEvents![0][0]).toMatchObject({ type: 'success' })
   })
 
+  it('tells the reviewer the run continues normally when no reject route is configured (FAR-1486)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      return Promise.resolve({ data: { ok: true }, error: undefined })
+    })
+    wrapper = mount(HitlReviewCard, { props: { gate: gate() }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-reject"]').trigger('click')
+    await flushPromises()
+
+    const decidedEvents = wrapper.emitted('decided')
+    expect(decidedEvents).toHaveLength(1)
+    // Prove the copy: without a reject consequence the routed claim must not
+    // be asserted. Removing the conditional restores the false claim and
+    // fails this assertion.
+    expect(decidedEvents![0][0]).toMatchObject({
+      type: 'success',
+      text: 'Gate rejected. The run continues along the normal path.',
+    })
+    expect(wrapper.find('[data-testid="hitl-gate-message"]').text()).not.toContain('reject target')
+  })
+
+  it('names the target when the reject route exists (FAR-1486)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      return Promise.resolve({ data: { ok: true }, error: undefined })
+    })
+    wrapper = mount(HitlReviewCard, {
+      props: { gate: gate({ context: { consequences: { reject: { node_id: 'rollback-1', label: 'Roll back deploy' } } } }) },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-reject"]').trigger('click')
+    await flushPromises()
+
+    const decidedEvents = wrapper.emitted('decided')
+    expect(decidedEvents).toHaveLength(1)
+    expect(decidedEvents![0][0]).toMatchObject({
+      type: 'success',
+      text: 'Gate rejected. Pipeline routed to Roll back deploy.',
+    })
+  })
+
   it('renders the approved decision banner for an approved gate', () => {
     wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'approved', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
     expect(wrapper.text()).toContain('Gate was approved. The pipeline has resumed.')
@@ -164,10 +217,36 @@ describe('HitlReviewCard', () => {
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
   })
 
-  it('renders the rejected decision banner for a rejected gate', () => {
-    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
-    expect(wrapper.text()).toContain('Gate was rejected. The pipeline was routed to the reject target.')
+  it('renders the rejected decision banner routed to the reject target when one is configured', () => {
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', decision_at: '2025-06-30T11:00:00Z', context: { consequences: { reject: { node_id: 'rollback-1', label: 'Roll back deploy' } } } }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run was routed to Roll back deploy.')
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
+  })
+
+  it('never claims a reject route when the gate has none (FAR-1486)', () => {
+    // No configured reject route: the run continues along the normal path,
+    // so the banner must say exactly that — not "routed to the reject target".
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run continues along the normal path.')
+    expect(wrapper.text()).not.toContain('reject target')
+    expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['missing consequences', {}],
+    ['consequences not an object', { consequences: 'nope' as unknown }],
+    ['missing reject entry', { consequences: {} }],
+    ['reject entry not an object', { consequences: { reject: 'nope' as unknown } }],
+    ['node_id not a string', { consequences: { reject: { node_id: 123 } } }],
+    ['node_id blank', { consequences: { reject: { node_id: '   ' } } }],
+  ])('falls back to the normal-path copy for a malformed reject consequence (%s) (FAR-1486)', (_name, context) => {
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', context }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run continues along the normal path.')
+  })
+
+  it('names the reject node id when the route has no usable label (FAR-1486)', () => {
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', context: { consequences: { reject: { node_id: 'rollback-1', label: 42 } } } }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run was routed to rollback-1.')
   })
 
   it('omits the run link by default and renders it with showRunLink', async () => {

@@ -330,7 +330,8 @@ def _bdd_import_clean(request) -> None:
     assert data["imported"] is True, f"Expected imported=True, got {data}"
     assert data["status"] == "clean", f"Expected status=clean, got {data}"
     h = data["hash"]
-    assert isinstance(h, str) and len(h) == 64, f"Expected 64-char hex hash, got {h!r}"
+    assert isinstance(h, str), f"Expected 64-char hex hash, got {h!r}"
+    assert len(h) == 64, f"Expected 64-char hex hash, got {h!r}"
     int(h, 16)
     assert data["applied_at"], f"Expected applied_at timestamp, got {data}"
 

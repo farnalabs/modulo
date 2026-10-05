@@ -1036,6 +1036,19 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('pending run without capacity shows the starting-soon banner', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'pending',
+    })
+
+    const banner = wrapper.find('[data-testid="run-detail-queued-starting"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Queued')
+    expect(banner.text()).toContain('starting soon')
+    wrapper.unmount()
+  })
+
   it('run with work_item_refs shows the work items section', async () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),
@@ -2363,7 +2376,11 @@ describe('RunDetailView HITL gates', () => {
   })
 
   it('rejects the gate and routes to the reject target', async () => {
-    mockPendingGates = [gate()]
+    // The routed copy is only truthful when the gate actually HAS a reject
+    // route — the fire-time briefing carries consequences.reject for that case.
+    mockPendingGates = [
+      gate({ context: { consequences: { reject: { node_id: 'rollback-1', label: 'Roll back deploy' } } } }),
+    ]
     mockClaimResult = { claim_token: 'ct-123' }
     const { api } = await import('../lib/api/client')
     const wrapper = await mountAwaiting()
@@ -2382,7 +2399,7 @@ describe('RunDetailView HITL gates', () => {
     })
     // FAR-631: same hoist as the approve flow — the reject success message
     // now renders outside the (emptied) gate section.
-    expect(wrapper.text()).toContain('Gate rejected. Pipeline routed to reject target.')
+    expect(wrapper.text()).toContain('Gate rejected. Pipeline routed to Roll back deploy.')
     expect(wrapper.text()).not.toContain('HITL Gate')
     wrapper.unmount()
   })

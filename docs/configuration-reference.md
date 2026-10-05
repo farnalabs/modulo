@@ -372,6 +372,17 @@ serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
 supported state where monitoring still runs and only the emails are skipped.
 See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
 
+### Readiness health alerts
+
+The same SMTP configuration also drives the system worker's in-app readiness alerting: when **both** `SMTP_HOST` and `ALERT_EMAIL_TO` are set, the `health_readiness_alert` cron (every 5 minutes) evaluates health through the same checks as `/healthz/ready` and emails `ALERT_EMAIL_TO`:
+
+- **One alert email** when readiness *confirmedly* transitions into `degraded` or `unavailable` — the email lists each failing sub-check with its detail.
+- **One recovery email** when readiness returns to `ok`, so an incident has a visible end.
+
+Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled — quiet, not silent.
+
+This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
+
 ---
 
 ## Worker Liveness Watchdog
@@ -386,7 +397,7 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 | `WATCHDOG_ALERT_STATE_TTL_SECONDS` | No | `604800` | Edge-triggered alert state TTL (default 7 days) |
 | `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
 | `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
-| `ALERT_EMAIL_TO` | No | – | Comma-separated email recipients for watchdog alerts |
+| `ALERT_EMAIL_TO` | No | – | Comma-separated email recipients for watchdog alerts and readiness-degradation alerts (see [Readiness health alerts](#readiness-health-alerts)) |
 
 ---
 

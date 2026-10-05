@@ -3,13 +3,15 @@
 import asyncio
 import copy
 import hashlib
+import logging
 import uuid
 from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from modulo.core.composite_engine.expander import expand_composites_in_graph
 from modulo.core.exceptions import SnapshotLockNotAvailableError
@@ -24,6 +26,8 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.schema import Schema
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
+from modulo.db.url_utils import split_engine_sslmode
+from modulo.settings import get_settings
 
 
 def _ids(values: Iterable[Any]) -> set[uuid.UUID]:
@@ -45,6 +49,280 @@ def _pipeline_lock_keys(pipeline_id: uuid.UUID) -> tuple[int, int]:
 # silently dropped the trigger. Module-level so tests can patch them.
 SNAPSHOT_LOCK_ATTEMPTS = 5
 SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS = 0.25
+
+# FAR-1287: bound on the WHOLE acquisition (connect + poll). The poll budget
+# above is 5 x 0.25s of sleeps, so 5s is several times the normal case while
+# staying far below the main pool's 30s ``pool_timeout`` — a saturated or dead
+# lock source fails fast as SnapshotLockNotAvailableError instead of stalling a
+# waiter (and a route) for half a minute. Module-level so tests can patch it.
+_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS = 5.0
+
+# FAR-1287: one dedicated NullPool engine per source URL (see
+# ``_dedicated_lock_engine``). Cached at module level like ``db.session``'s
+# shared engine; a NullPool engine holds no pooled connections between calls,
+# so the entry costs nothing but the engine object.
+_SNAPSHOT_LOCK_ENGINES: dict[str, AsyncEngine] = {}
+
+_log = logging.getLogger(__name__)
+
+
+def _snapshot_lock_engine(session: AsyncSession) -> AsyncEngine:
+    """Resolve the engine that owns this caller's snapshot advisory locks.
+
+    FAR-1287: the lock connection must NEVER be checked out of the caller's
+    pool. Snapshot creation therefore draws it from a DEDICATED NullPool engine
+    (:func:`_dedicated_lock_engine`) instead of ``session.bind``'s pool — so a
+    burst of concurrent snapshot creations cannot consume a second main-pool
+    slot per call and push every waiter into the 30s pool checkout timeout.
+
+    The lock must also never live on the caller's *session*: the caller's
+    transaction is frequently aborted by the time the ``finally`` runs (the
+    ``ProgrammingError`` at snapshot-version read, an ``IntegrityError`` at
+    ``flush``), and a ``pg_advisory_unlock`` issued from an aborted session is
+    rejected (SQLSTATE 25P02 / SQLAlchemy ``PendingRollbackError``). Because the
+    lock is SESSION-scoped, ROLLBACK does not release it either — the pooled
+    connection goes back to the pool still holding it and snapshot creation
+    fails permanently with ``snapshot_lock_busy`` (observed on app.modulo.run as
+    HTTP 503 "Pipeline snapshot lock unavailable after 5 attempts").
+
+    Engine derivation, verified against the pinned SQLAlchemy 2.1.1:
+    ``AsyncSession.bind`` IS the ``AsyncEngine`` (or ``AsyncConnection``) the
+    session was built from; ``AsyncSession.get_bind()`` is documented as
+    "currently not used by AsyncSession" and returns the *sync*
+    ``Engine``/``Connection``, which cannot drive an async connect. A session
+    with no usable engine binding is a hard error, never a fallback to the
+    caller's own connection.
+
+    Module-level and side-effect-free: unit tests mock ``session.bind`` and
+    monkeypatch :func:`_dedicated_lock_engine`, so they never reach a real engine.
+    """
+    bind = session.bind
+    if isinstance(bind, AsyncEngine):
+        return _dedicated_lock_engine(bind)
+    raise RuntimeError(
+        "create_snapshot_from_live_graph requires a session bound to an AsyncEngine so the "
+        f"snapshot advisory lock can live on a dedicated connection; got {type(bind).__name__}"
+    )
+
+
+def _dedicated_lock_engine(bind: AsyncEngine) -> AsyncEngine:
+    """Return the cached NullPool lock engine for *bind*'s database.
+
+    Keyed by the caller engine's URL (including credentials), so the lock always
+    lands in the SAME database the snapshot is written to — a lock keyed to some
+    other URL would serialise nothing. One engine per distinct URL, exactly like
+    ``db.session.get_shared_engine()``.
+
+    ``poolclass=NullPool`` is what satisfies both FAR-1287 requirements at once:
+    there are no pooled slots to contend (nothing to starve the main pool with,
+    nothing to time out after 30s), and ``close()`` physically ends the PG
+    session, so a released lock can never outlive its connection.
+
+    This is the monkeypatch seam unit tests replace.
+    """
+    key = bind.url.render_as_string(hide_password=False)
+    engine = _SNAPSHOT_LOCK_ENGINES.get(key)
+    if engine is None:
+        engine = _build_lock_engine(bind)
+        _SNAPSHOT_LOCK_ENGINES[key] = engine
+    return engine
+
+
+def _build_lock_engine(bind: AsyncEngine) -> AsyncEngine:
+    """Build the NullPool lock engine for *bind*'s database.
+
+    Connect args mirror ``db.session._build_engine`` so a lock connection behaves
+    like every other application connection and nothing can drift:
+
+    * ``timeout=10`` — the app's connect timeout (the acquisition bound below
+      is tighter anyway);
+    * Postgres: ``statement_cache_size=0`` (the asyncpg prepared-statement cache
+      is incompatible with HAProxy) and the deployment's TLS posture.
+
+    The TLS value is read from ``settings.database_url``, NOT ``bind.url``:
+    ``_build_engine`` has already split ``sslmode`` out of the URL it stores on
+    the engine (FAR-1440), so reading it back from ``bind.url`` would always
+    resolve to "absent" and silently downgrade a TLS deployment to plaintext.
+    ``split_engine_sslmode`` is the single gate every asyncpg factory routes
+    through, and it already resolved the deployment's posture once at boot.
+
+    Deliberately NOT mirrored: pool sizing and ``pool_pre_ping`` — a NullPool
+    engine has no pool to size and opens a fresh connection per checkout, so a
+    ping would be a wasted round trip. No RLS reset hook either: this connection
+    only ever runs advisory-lock SQL, never ORM queries.
+    """
+    connect_args: dict[str, Any] = {"timeout": 10}
+    if str(bind.url.drivername).startswith("postgres"):
+        # ssl is None exactly when settings is not a Postgres URL (SQLite/MySQL
+        # deployments), whose drivers take none of these knobs.
+        _, ssl = split_engine_sslmode(get_settings().database_url)
+        if ssl is not None:
+            connect_args["ssl"] = ssl
+            connect_args["statement_cache_size"] = 0
+    return create_async_engine(bind.url, poolclass=NullPool, connect_args=connect_args)
+
+
+async def _dispose_snapshot_lock_connection(lock_conn: AsyncConnection, *, can_pool: bool) -> None:
+    """Dispose the dedicated lock connection — ALWAYS, even under cancellation.
+
+    ``can_pool=True`` (the lock is provably not held): a plain ``close()`` ends
+    the physical session on the NullPool lock engine, which releases every
+    advisory lock it holds.
+
+    ``can_pool=False`` (the lock state is unknown — the unlock attempt was
+    interrupted, or acquisition itself was interrupted): ``invalidate()`` is kept
+    as belt-and-braces. On a POOLED engine this distinction is load-bearing
+    (verified against real Postgres: pooled ``close()`` left the lock in
+    ``pg_locks``, ``invalidate()`` dropped it to 0, only NullPool's ``close()``
+    physically ends the session), and an unexpected non-NullPool engine must
+    never be handed back to a pool still holding the lock.
+
+    ``asyncio.shield`` is what keeps ``asyncio.CancelledError`` from stranding
+    the connection: a cancellation delivered mid-dispose fails THIS ``await``
+    but the dispose coroutine already wrapped by the shield keeps running to
+    completion, so the lock cannot leak. The ``CancelledError`` still propagates
+    afterwards (it is re-raised here), so the caller's own cancellation is
+    never swallowed.
+    """
+    dispose = lock_conn.close() if can_pool else lock_conn.invalidate()
+    try:
+        await asyncio.shield(dispose)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Best-effort teardown: report loudly (a failed teardown can strand a
+        # lock) but never mask the caller's error.
+        _log.warning("snapshot_lock_connection_dispose_failed", exc_info=True)
+
+
+async def _open_and_poll_snapshot_lock(
+    engine: AsyncEngine,
+    *,
+    pipeline_id: uuid.UUID,
+    key1: int,
+    key2: int,
+) -> AsyncConnection:
+    """Open a dedicated connection and poll for the per-pipeline advisory lock.
+
+    Runs inside :func:`_acquire_snapshot_lock`'s ``asyncio.wait_for`` bound, so a
+    lock source that hangs (dead host, saturated Postgres) is cancelled and
+    disposed rather than left waiting. Keeps FAR-527's bounded-wait semantics:
+    up to ``SNAPSHOT_LOCK_ATTEMPTS`` ``pg_try_advisory_lock`` attempts sleeping
+    ``SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS`` between them, raising
+    ``SnapshotLockNotAvailableError`` once the budget is exhausted (mirrors
+    ``core.runner_capacity._acquire_sweep_dedup_lock``).
+
+    The returned connection HOLDS the lock and must be handed to
+    :func:`_release_snapshot_lock`. Every path that leaves without it disposes
+    the connection first, so an interrupted attempt can never strand the
+    connection (and its lock).
+    """
+    lock_conn = await engine.connect()
+    acquired = False
+    exhausted = False
+    try:
+        for attempt in range(1, SNAPSHOT_LOCK_ATTEMPTS + 1):
+            lock_result = await lock_conn.execute(
+                text("SELECT pg_try_advisory_lock(:key1, :key2)"),
+                {"key1": key1, "key2": key2},
+            )
+            if lock_result.scalar_one():
+                acquired = True
+                break
+            if attempt < SNAPSHOT_LOCK_ATTEMPTS:
+                await asyncio.sleep(SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS)
+        if not acquired:
+            # Every attempt completed and reported "not held" and the loop ended
+            # without a break, so the budget is exhausted and the connection is
+            # provably lock-free when it is disposed below.
+            exhausted = True
+            raise SnapshotLockNotAvailableError(
+                f"Cannot acquire snapshot lock for pipeline {pipeline_id} after {SNAPSHOT_LOCK_ATTEMPTS} attempts"
+            )
+    finally:
+        if not acquired:
+            # Budget exhausted cleanly -> the connection is provably lock-free;
+            # a DB error or a cancellation mid-attempt -> the lock state is
+            # unknown, so invalidate (physical close) rather than risk keeping a
+            # holder alive.
+            await _dispose_snapshot_lock_connection(lock_conn, can_pool=exhausted)
+    return lock_conn
+
+
+async def _acquire_snapshot_lock(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    key1: int,
+    key2: int,
+) -> AsyncConnection:
+    """Acquire the per-pipeline snapshot advisory lock on a dedicated connection.
+
+    Two bounds, both surfaced as ``SnapshotLockNotAvailableError`` (FAR-1287):
+
+    * the POLITICAL bound — ``SNAPSHOT_LOCK_ATTEMPTS`` x ``SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS``
+      — covers ordinary contention between near-simultaneous run-starts;
+    * the PHYSICAL bound — ``asyncio.wait_for`` around connect + poll — covers a
+      lock source that never answers, so acquisition can never stall for a
+      pool checkout timeout (30s) and then surface as a raw
+      ``sqlalchemy.exc.TimeoutError``/503.
+
+    Engine derivation happens OUTSIDE the bounded block so its loud
+    ``RuntimeError`` (session has no usable engine binding) is never re-labelled
+    as lock contention; genuine connection failures are logged with their
+    traceback and then re-labelled, because an unavailable lock source is
+    exactly what this contract reports.
+    """
+    engine = _snapshot_lock_engine(session)
+    try:
+        return await asyncio.wait_for(
+            _open_and_poll_snapshot_lock(engine, pipeline_id=pipeline_id, key1=key1, key2=key2),
+            timeout=_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
+        )
+    except SnapshotLockNotAvailableError:
+        raise
+    except TimeoutError:
+        # asyncio.wait_for's own bound, or a connect-level TimeoutError from the
+        # driver — either way the lock source did not answer in time.
+        _log.warning(
+            "snapshot_lock_acquire_timeout pipeline_id=%s budget_s=%s",
+            pipeline_id,
+            _SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
+        )
+        raise SnapshotLockNotAvailableError(
+            f"Cannot acquire snapshot lock for pipeline {pipeline_id}: lock source unavailable "
+            f"within {_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS}s"
+        ) from None
+    except Exception as exc:
+        _log.warning("snapshot_lock_acquire_failed pipeline_id=%s", pipeline_id, exc_info=True)
+        raise SnapshotLockNotAvailableError(
+            f"Cannot acquire snapshot lock for pipeline {pipeline_id}: lock source unavailable ({type(exc).__name__})"
+        ) from exc
+
+
+async def _release_snapshot_lock(lock_conn: AsyncConnection, *, key1: int, key2: int) -> None:
+    """Release the snapshot advisory lock on the SAME connection that holds it.
+
+    The unlock is best-effort — it runs on a dedicated, healthy connection (the
+    caller's aborted transaction can no longer poison it), but a cancellation or
+    a transport error can still interrupt it — so the guaranteed release is the
+    disposal in the inner ``finally``: ``close()`` once the unlock is confirmed,
+    ``invalidate()`` (physical session teardown) when it is not.
+    """
+    unlocked = False
+    try:
+        await lock_conn.execute(
+            text("SELECT pg_advisory_unlock(:key1, :key2)"),
+            {"key1": key1, "key2": key2},
+        )
+        unlocked = True
+    except Exception:
+        # CancelledError is a BaseException and propagates untouched; any other
+        # failure (transport, abort) leaves `unlocked=False`, which makes the
+        # dispose below invalidate the physical session instead of pooling it.
+        _log.warning("snapshot_lock_unlock_failed", exc_info=True)
+    finally:
+        await _dispose_snapshot_lock_connection(lock_conn, can_pool=unlocked)
 
 
 async def _load_pipeline_and_edges(
@@ -446,6 +724,16 @@ async def create_snapshot_from_live_graph(
     snapshot creation for a given pipeline, avoiding transaction-scoped FOR
     UPDATE so the caller's transaction is not blocked during graph loading.
 
+    FAR-1287: the advisory lock lives on a DEDICATED connection opened from a
+    dedicated NullPool lock engine (see :func:`_snapshot_lock_engine` and
+    :func:`_dedicated_lock_engine`) and is released — unlock plus guaranteed
+    disposal — on that same connection in the ``finally``. The caller's
+    session/connection is never asked to acquire or release it, so a failure
+    inside the copy (aborted caller transaction) can no longer leave the lock
+    held by a pooled connection and wedge every later snapshot for that
+    pipeline; and because the lock engine is not the caller's pool, concurrent
+    snapshot creations never consume a second main-pool slot each.
+
     FAR-402 P6: the run-start callers (webhook/replay/trigger/manual/slack)
     keep the defaults and produce a ``version_kind='run'`` snapshot; live-edit
     saves go through ``create_snapshot_edit`` which passes ``version_kind='edit'``
@@ -454,23 +742,22 @@ async def create_snapshot_from_live_graph(
     FAR-527: lock acquisition retries up to ``SNAPSHOT_LOCK_ATTEMPTS`` times,
     sleeping ``SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS`` between attempts, so a
     near-simultaneous run-start (which holds the lock only for the fast graph
-    copy) no longer fails the trigger outright. Raises
-    SnapshotLockNotAvailableError only after the budget is exhausted.
+    copy) no longer fails the trigger outright. The whole acquisition is also
+    bounded by ``_SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS``, so an unavailable
+    lock source fails fast instead of stalling. Raises
+    SnapshotLockNotAvailableError only after a bound is exhausted.
+
+    KNOWN RESIDUAL — pre-existing, recorded for FAR-1287 Part 2 (do NOT fix
+    here): the lock is released in this function's ``finally``, i.e. BEFORE the
+    caller's transaction commits, so ``max(snapshot_version)+1`` is read and the
+    row written inside a window where a second creator — holding the lock right
+    after the release — can read the same max and collide on the unique
+    ``(pipeline_id, snapshot_version)`` at commit time. Part 1 only guarantees
+    the lock is always released; narrowing that window (or making the version
+    allocation itself atomic) is Part 2 work.
     """
-    # Acquire session-scoped advisory lock to serialise snapshot creation.
     key1, key2 = _pipeline_lock_keys(pipeline_id)
-    for attempt in range(1, SNAPSHOT_LOCK_ATTEMPTS + 1):
-        lock_result = await session.execute(
-            text("SELECT pg_try_advisory_lock(:key1, :key2)"),
-            {"key1": key1, "key2": key2},
-        )
-        if lock_result.scalar_one():
-            break
-        if attempt == SNAPSHOT_LOCK_ATTEMPTS:
-            raise SnapshotLockNotAvailableError(
-                f"Cannot acquire snapshot lock for pipeline {pipeline_id} after {SNAPSHOT_LOCK_ATTEMPTS} attempts"
-            )
-        await asyncio.sleep(SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS)
+    lock_conn = await _acquire_snapshot_lock(session, pipeline_id=pipeline_id, key1=key1, key2=key2)
 
     try:
         pipeline, nodes, edge_dicts = await _load_pipeline_and_edges(session, pipeline_id)
@@ -564,10 +851,11 @@ async def create_snapshot_from_live_graph(
 
         return snapshot
     finally:
-        await session.execute(
-            text("SELECT pg_advisory_unlock(:key1, :key2)"),
-            {"key1": key1, "key2": key2},
-        )
+        # Runs on every exit — success, `return None`, a ProgrammingError at the
+        # version read, an IntegrityError at flush, or a cancellation — and the
+        # unlock + disposal happen on the dedicated connection, never the
+        # caller's (possibly aborted) session.
+        await _release_snapshot_lock(lock_conn, key1=key1, key2=key2)
 
 
 async def create_snapshot_edit(

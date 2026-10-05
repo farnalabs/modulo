@@ -56,6 +56,28 @@ const i18n = createI18n({
           create_lifecycle_map: 'Create Lifecycle Map',
           name: 'Name',
           description: 'Description',
+          title: 'Lifecycle Maps',
+          search_placeholder: 'Search maps...',
+          filter_owner: 'All teams',
+          filter_owner_aria: 'Filter by owner team',
+          new_map: 'New Map',
+          empty_search_title: 'No maps match your search',
+          empty_search_description: 'Try a different search term or clear the filters.',
+          empty_title: 'No Lifecycle Maps yet',
+          empty_description: 'Create one to model your SDLC.',
+          empty_create_map: 'Create Map',
+          stages_count: '{count} stage | {count} stages',
+          graduated_count: '{count} graduated',
+          owner_fallback: 'Unassigned',
+          updated: 'Updated {date}',
+          previous: 'Previous',
+          page_of: 'Page {page} of {total}',
+          next: 'Next',
+          name_placeholder: 'My Delivery Lifecycle',
+          description_placeholder: 'Optional description',
+          cancel: 'Cancel',
+          create: 'Create',
+          creating: 'Creating...',
         },
       },
     },
@@ -218,6 +240,31 @@ describe('LifecycleMapList responsive layout (FAR-635)', () => {
     expect(classes).not.toContain('flex')
     expect(classes).not.toContain('items-center')
     expect(classes).not.toContain('justify-between')
+  })
+
+  it('renders the New Map icon and label inside the PageHeader right slot', async () => {
+    // Render the Button's default slot (a plain `Button: true` stub swallows
+    // it) so the header action's icon + translated label actually execute.
+    const ButtonStub = {
+      template: '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+      props: ['disabled'],
+    }
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          ErrorAlert: true,
+          EmptyState: true,
+          Button: ButtonStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const newBtn = wrapper.find('[data-testid="lifecycle-map-list-new"]')
+    expect(newBtn.exists()).toBe(true)
+    expect(newBtn.text()).toContain('New Map')
+    expect(newBtn.find('svg').exists()).toBe(true)
   })
 })
 
