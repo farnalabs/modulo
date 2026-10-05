@@ -4,11 +4,10 @@
 app = 'app-modulo'
 
 # ===== Machine budget (stay within the org limit) =====
-# Standing footprint: 1 x app + 2 x worker (2gb each; one is a stopped cold
-# standby of the other) = 3 machines (verified live 2026-09-02 via `fly scale show`
-# / `fly machines list`). Sizes: the app machine is live AND declared at 4 shared
-# CPU; the WORKER group is declared at 2 shared CPU (FAR-1511) while its started
-# machine is still live at 1 shared CPU - see the worker ops step below.
+# Standing footprint: 1 x app (4 shared CPU, live) + 2 x worker (2 shared CPU
+# declared [FAR-1511] / 1 shared CPU live; 2gb each, one a stopped cold standby
+# of the other) = 3 machines (verified live 2026-09-02 via `fly scale show` / `fly
+# machines list`) - see the worker ops step below for the outstanding resize.
 # [[vm]] changes do NOT resize existing machines on their own - they apply to NEW
 # machines only, so a declared size reaches a live machine only through a deploy
 # that recreates it, or through an explicit `flyctl machine update <machine-id> -a
