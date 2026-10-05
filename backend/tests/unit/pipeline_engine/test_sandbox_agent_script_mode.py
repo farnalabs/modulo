@@ -42,6 +42,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     validate_sandbox_agent_command_jinja,
 )
 from modulo.db.crud.run import SandboxConcurrencyLimit
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _DEFAULT_RUN_ID = str(uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
@@ -802,18 +803,11 @@ def _run_api_key_session_factory(account_id: uuid.UUID | None = _ACCOUNT_ID):
     ``mint_run_api_key``. ``set_rls_org`` takes the generic-backend branch
     (the mock's dialect is not 'postgresql') and only writes ``session.info``.
 
-    The RLS preamble runs against the (unpatched) session mock, so
-    ``in_transaction`` and ``get_bind`` must be SYNC MagicMock methods: on a
-    bare AsyncMock they return never-awaited coroutines (the source of
-    PytestUnraisableException noise FAR-739). The generic dialect keeps the
-    tenant filter on ``session.info`` and leaves the production
-    ``set_config``-per-statement path unexercised, matching pre-fix behaviour.
+    ``configure_rls_preamble`` makes the RLS preamble's sync reads
+    (``in_transaction``/``get_bind``) sync MagicMock methods, avoiding the
+    never-awaited-coroutine noise FAR-739 fixes.
     """
-    session = AsyncMock()
-    session.in_transaction = MagicMock(return_value=True)
-    bind = MagicMock()
-    bind.dialect.name = "sqlite"
-    session.get_bind = MagicMock(return_value=bind)
+    session = configure_rls_preamble(AsyncMock())
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
@@ -917,11 +911,7 @@ async def test_sandbox_mint_helper_binds_the_run_account_id():
         captured["account_id"] = account_id
         return MagicMock(), _FAKE_RUN_KEY
 
-    session = AsyncMock()
-    session.in_transaction = MagicMock(return_value=True)
-    bind = MagicMock()
-    bind.dialect.name = "sqlite"
-    session.get_bind = MagicMock(return_value=bind)
+    session = configure_rls_preamble(AsyncMock())
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
@@ -957,11 +947,7 @@ async def test_sandbox_mint_helper_falls_back_to_first_active_admin():
         captured["account_id"] = account_id
         return MagicMock(), _FAKE_RUN_KEY
 
-    session = AsyncMock()
-    session.in_transaction = MagicMock(return_value=True)
-    bind = MagicMock()
-    bind.dialect.name = "sqlite"
-    session.get_bind = MagicMock(return_value=bind)
+    session = configure_rls_preamble(AsyncMock())
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)

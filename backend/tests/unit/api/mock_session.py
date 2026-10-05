@@ -81,12 +81,26 @@ def _is_rls_set_config_query(stmt: Any) -> bool:
     return _RLS_SET_CONFIG_SNIPPET in str(stmt)
 
 
-def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
-    """Configure AsyncSession contracts, requiring explicit query results by default."""
+def configure_rls_preamble(session: AsyncMock) -> AsyncMock:
+    """Make the RLS preamble's sync reads sync ``MagicMock`` methods.
+
+    ``set_rls_org`` (``modulo/db/rls.py``) calls ``in_transaction()`` and
+    ``get_bind()`` synchronously. On a bare ``AsyncMock`` those attributes are
+    async mocks whose calls return never-awaited coroutines, leaking
+    ``PytestUnraisableException`` noise (FAR-739). The sqlite dialect routes
+    ``set_rls_org`` to the generic ``session.info`` branch, so the production
+    ``set_config``-per-statement path stays unexercised.
+    """
+    session.in_transaction = MagicMock(return_value=True)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
-    session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=bind)
+    return session
+
+
+def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
+    """Configure AsyncSession contracts, requiring explicit query results by default."""
+    configure_rls_preamble(session)
     session.add = MagicMock()
     session.add_all = MagicMock()
     session.expunge = MagicMock()
