@@ -1081,6 +1081,15 @@ async def create_snapshot_from_live_graph(
                     # retried: it would fail identically on every attempt.
                     raise
                 if attempt == SNAPSHOT_VERSION_ATTEMPTS:
+                    # Exhaustion is the terminal outcome of the retry cycle: log
+                    # it explicitly so a fully wedged allocation is visible by
+                    # the failure line alone, without relying on the propagated
+                    # exception surviving log filtering.
+                    _log.warning(
+                        "snapshot_version_allocation_exhausted pipeline_id=%s attempts=%s",
+                        pipeline_id,
+                        SNAPSHOT_VERSION_ATTEMPTS,
+                    )
                     raise SnapshotVersionAllocationError(pipeline_id, SNAPSHOT_VERSION_ATTEMPTS) from exc
                 _log.warning(
                     "snapshot_version_conflict_retry pipeline_id=%s attempt=%s/%s",

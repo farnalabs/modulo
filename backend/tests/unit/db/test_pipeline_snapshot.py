@@ -845,12 +845,16 @@ async def test_snapshot_version_conflict_retries_and_lands_on_the_next_version()
     assert added[0] is not added[1]
 
 
-async def test_snapshot_version_conflict_exhausts_the_bounded_retry_loudly() -> None:
+async def test_snapshot_version_conflict_exhausts_the_bounded_retry_loudly(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Exhausting ``SNAPSHOT_VERSION_ATTEMPTS`` raises the specific
     ``SnapshotVersionAllocationError`` — never a silent ``None``, and never an
     unbounded retry loop. The error subclasses ``IntegrityError`` so every
     existing route/trigger handler keeps its 409 mapping, and it chains the
-    original driver error."""
+    original driver error. The terminal exhaustion also emits its own warning
+    (FAR-1287 review nit) so a wedged allocation is visible by the log line
+    alone when the propagated exception is filtered out."""
     pipeline_id = uuid.uuid4()
     pipeline, edge = _two_node_pipeline(pipeline_id)
 
@@ -863,6 +867,7 @@ async def test_snapshot_version_conflict_exhausts_the_bounded_retry_loudly() -> 
 
     with (
         _bind_lock_connection(session, _lock_attempt_result(True)),
+        caplog.at_level("WARNING", logger="modulo.db.crud.pipeline_snapshot"),
         pytest.raises(SnapshotVersionAllocationError, match="could not allocate snapshot_version") as excinfo,
     ):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -873,6 +878,8 @@ async def test_snapshot_version_conflict_exhausts_the_bounded_retry_loudly() -> 
     assert isinstance(excinfo.value.__cause__, IntegrityError)
     # The subclass contract: existing `except IntegrityError` arms still catch it.
     assert isinstance(excinfo.value, IntegrityError)
+    # Terminal exhaustion is logged, not just raised, so it survives log filtering.
+    assert "snapshot_version_allocation_exhausted" in caplog.text
 
 
 async def test_non_version_integrity_error_is_never_retried() -> None:
