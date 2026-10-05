@@ -10,6 +10,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
+
+from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
 
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -452,3 +455,70 @@ class TestRoundTrip(AuthContext):
             revoked = await revoke_api_key(key_id)
 
         assert revoked == {"id": key_id, "revoked": True}
+
+
+class TestApiKeySessionContract(AuthContext):
+    """FAR-1482: the session-contract guard on the hand-rolled API-key arms.
+
+    Both branches of each guard's ``if`` are pinned: an ``InvalidRequestError``
+    is a programming error (``internal_error`` + the shared ``MSG_SESSION_CONTRACT``
+    text), while a generic ``SQLAlchemyError`` keeps the old transient reply. A
+    test that only pins one branch would leave the other — and the ``if`` line
+    itself — uncovered.
+    """
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("admin")
+
+    async def test_create_api_key_session_contract_error_is_internal(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
+        with _patch_create_env() as mock_session:
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+                result = await create_api_key(name="CI")
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == MSG_SESSION_CONTRACT, result
+
+    async def test_create_api_key_transient_stays_database_unavailable(self) -> None:
+        from modulo.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, create_api_key
+
+        mock_crud = AsyncMock(side_effect=SQLAlchemyError("down"))
+        with _patch_create_env() as mock_session:
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+                result = await create_api_key(name="CI")
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result
+
+    async def test_revoke_api_key_session_contract_error_is_internal(self) -> None:
+        from modulo.api.mcp_server import revoke_api_key
+
+        mock_revoke = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
+        ):
+            mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
+            result = await revoke_api_key(str(_KEY_ID))
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == MSG_SESSION_CONTRACT, result
+
+    async def test_revoke_api_key_transient_stays_database_unavailable(self) -> None:
+        from modulo.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, revoke_api_key
+
+        mock_revoke = AsyncMock(side_effect=SQLAlchemyError("down"))
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
+        ):
+            mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
+            result = await revoke_api_key(str(_KEY_ID))
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result
