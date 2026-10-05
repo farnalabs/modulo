@@ -718,9 +718,11 @@ def test_create_model_backend_emits_model_backend_created_audit(client: TestClie
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
     assert resp.status_code == 201
-    audit.assert_awaited_once()
-    kwargs = audit.await_args.kwargs
-    assert kwargs["event_type"] == "model_backend.created"
+    # TWO appends reach this seam: the route's rich PRD event, and the coarse
+    # audited(...) coverage event (FAR-1472). Assert the PRD event fired once.
+    created = [c.kwargs for c in audit.await_args_list if c.kwargs["event_type"] == "model_backend.created"]
+    assert len(created) == 1
+    kwargs = created[0]
     assert kwargs["org_id"] == _ORG_ID
     assert kwargs["actor_user_id"] == _USER_ID
     assert kwargs["resource_type"] == "model_backend"
@@ -762,9 +764,10 @@ def test_update_model_backend_emits_model_backend_updated_audit(client: TestClie
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 200
-    audit.assert_awaited_once()
-    kwargs = audit.await_args.kwargs
-    assert kwargs["event_type"] == "model_backend.updated"
+    # Route's rich event + the audited(...) coverage event both append here.
+    updated = [c.kwargs for c in audit.await_args_list if c.kwargs["event_type"] == "model_backend.updated"]
+    assert len(updated) == 1
+    kwargs = updated[0]
     assert kwargs["resource_id"] == _BACKEND_ID
     assert kwargs["payload_json"]["changed_fields"] == {"display_name": "GPT-4o"}
 
@@ -781,9 +784,10 @@ def test_update_model_backend_credentials_emits_prd_credentials_audit(client: Te
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"api_key": "sk-new"})
     assert resp.status_code == 200
-    audit.assert_awaited_once()
-    kwargs = audit.await_args.kwargs
-    assert kwargs["event_type"] == "model_backend_credentials_updated"
+    # Route's rich event + the audited(...) coverage event both append here.
+    rotated = [c.kwargs for c in audit.await_args_list if c.kwargs["event_type"] == "model_backend_credentials_updated"]
+    assert len(rotated) == 1
+    kwargs = rotated[0]
     assert kwargs["resource_id"] == _BACKEND_ID
     assert kwargs["payload_json"]["backend_id"] == str(_BACKEND_ID)
     assert kwargs["payload_json"]["provider"] == "openai"
@@ -819,7 +823,11 @@ def test_update_model_backend_404_does_not_emit_audit(client: TestClient) -> Non
     ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 404
-    audit.assert_not_awaited()
+    # No success event for a no-op. The audited(...) coverage dependency (FAR-1472)
+    # DOES record the failed attempt (event_type "model_backend_updated",
+    # outcome "error") - that is deliberate attempt-tracking, not a mutation.
+    updated = [c for c in audit.await_args_list if c.kwargs["event_type"] == "model_backend.updated"]
+    assert not updated
 
 
 def test_delete_model_backend_emits_model_backend_deleted_audit(client: TestClient) -> None:
@@ -882,7 +890,11 @@ def test_delete_model_backend_404_does_not_emit_audit(client: TestClient) -> Non
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 404
-    audit.assert_not_awaited()
+    # No success event for a no-op. The audited(...) coverage dependency (FAR-1472)
+    # DOES record the failed attempt (event_type "model_backend_deleted",
+    # outcome "error") - that is deliberate attempt-tracking, not a mutation.
+    deleted = [c for c in audit.await_args_list if c.kwargs["event_type"] == "model_backend.deleted"]
+    assert not deleted
 
 
 def test_model_backend_no_credentials_shows_false(client: TestClient) -> None:
