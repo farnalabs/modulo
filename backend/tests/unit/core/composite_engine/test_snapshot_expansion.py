@@ -9,10 +9,10 @@ the resulting ``graph_json`` compiles via ``build_graph_from_json`` — the
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -33,6 +33,26 @@ def _scalars_result(values: list[object]) -> MagicMock:
     scalars_mock.__iter__.return_value = iter(values)
     result.scalars.return_value = scalars_mock
     return result
+
+
+def _bind_lock_connection(session: AsyncMock) -> Any:
+    """Build the stubbed DEDICATED lock engine and return a patch that installs it.
+
+    FAR-1287: the snapshot advisory lock is acquired/released on a connection
+    from a dedicated NullPool engine resolved by ``_dedicated_lock_engine`` —
+    never on the caller's session or its pool — so no lock/unlock statement ever
+    appears in ``session.execute``'s sequence. Enter the returned patch around
+    the snapshot call; after it, the lock connection is reachable as
+    ``session.bind.connect.return_value``.
+    """
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [lock_result, MagicMock()]  # try-lock, then unlock
+    engine = MagicMock(spec=AsyncEngine)
+    engine.connect = AsyncMock(return_value=lock_conn)
+    session.bind = engine
+    return patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _template_mock(template_id: uuid.UUID, sub_graph: dict[str, Any]) -> MagicMock:
@@ -104,23 +124,21 @@ async def test_snapshot_with_composite_node_is_expanded_and_compiles() -> None:
     edge.hitl_review_config = None
 
     session = AsyncMock(spec=AsyncSession)
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-    unlock_result = MagicMock()
     session.execute.side_effect = [
-        lock_result,  # 1 pg_try_advisory_lock
-        _scalar_result(pipeline),  # 2 pipeline
-        _scalars_result([edge]),  # 3 edges
-        _scalar_result(template),  # 4 composite template (expander)
-        _scalars_result([_agent_mock(agent_id)]),  # 5 agents
-        _scalars_result([]),  # 6 schemas (schema_ids contains None)
-        _scalar_result(0),  # 7 snapshot version max
-        _scalars_result([]),  # 8 guardrail rows (EvalDefinition)
-        _scalars_result([]),  # 9 policy-gate rows (FAR-967 chunk 10 pin loader)
-        unlock_result,  # 10 pg_advisory_unlock
+        _scalar_result(pipeline),  # 1 pipeline
+        _scalars_result([edge]),  # 2 edges
+        _scalar_result(template),  # 3 composite template (expander)
+        _scalars_result([_agent_mock(agent_id)]),  # 4 agents
+        _scalars_result([]),  # 5 schemas (schema_ids contains None)
+        _scalar_result(0),  # 6 snapshot version max
+        _scalars_result([]),  # 7 guardrail rows (EvalDefinition)
+        _scalars_result([]),  # 8 policy-gate rows (FAR-967 chunk 10 pin loader)
     ]
 
-    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # FAR-1287: the advisory lock is acquired/released on the dedicated lock
+    # connection opened from the dedicated engine — never on the caller's session.
+    with _bind_lock_connection(session):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     assert isinstance(snapshot, PipelineSnapshot)
     nodes = snapshot.graph_json["nodes"]
@@ -185,21 +203,18 @@ async def test_snapshot_sub_node_prompt_injection_survives_without_agent() -> No
     pipeline.run_context_defaults = {}
 
     session = AsyncMock(spec=AsyncSession)
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-    unlock_result = MagicMock()
     session.execute.side_effect = [
-        lock_result,  # 1 pg_try_advisory_lock
-        _scalar_result(pipeline),  # 2 pipeline
-        _scalars_result([]),  # 3 edges
-        _scalar_result(template),  # 4 composite template (expander)
-        _scalar_result(0),  # 5 snapshot version max
-        _scalars_result([]),  # 6 guardrail rows (EvalDefinition)
-        _scalars_result([]),  # 7 policy-gate rows (FAR-967 chunk 10 pin loader)
-        unlock_result,  # 8 pg_advisory_unlock
+        _scalar_result(pipeline),  # 1 pipeline
+        _scalars_result([]),  # 2 edges
+        _scalar_result(template),  # 3 composite template (expander)
+        _scalar_result(0),  # 4 snapshot version max
+        _scalars_result([]),  # 5 guardrail rows (EvalDefinition)
+        _scalars_result([]),  # 6 policy-gate rows (FAR-967 chunk 10 pin loader)
     ]
 
-    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+    # FAR-1287: lock lives on the dedicated connection, never the session.
+    with _bind_lock_connection(session):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
 
     nodes = snapshot.graph_json["nodes"]
     assert len(nodes) == 1
@@ -229,16 +244,12 @@ async def test_snapshot_composite_template_missing_raises() -> None:
     pipeline.run_context_defaults = {}
 
     session = AsyncMock(spec=AsyncSession)
-    lock_result = MagicMock()
-    lock_result.scalar_one.return_value = True
-    unlock_result = MagicMock()
     session.execute.side_effect = [
-        lock_result,  # 1 pg_try_advisory_lock
-        _scalar_result(pipeline),  # 2 pipeline
-        _scalars_result([]),  # 3 edges
-        _scalar_result(None),  # 4 composite template missing
-        unlock_result,  # 5 pg_advisory_unlock
+        _scalar_result(pipeline),  # 1 pipeline
+        _scalars_result([]),  # 2 edges
+        _scalar_result(None),  # 3 composite template missing
     ]
 
-    with pytest.raises(ValueError, match=str(template_id)):
+    # FAR-1287: lock lives on the dedicated connection, never the session.
+    with _bind_lock_connection(session), pytest.raises(ValueError, match=str(template_id)):
         await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
