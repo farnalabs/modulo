@@ -1744,6 +1744,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/notification-delivery:
+      - testid: admin-notification-log-title
+        type: element
+        dynamic_testid: false
       - testid: admin-notification-log-status
         type: select
         dynamic_testid: false
@@ -2639,6 +2642,54 @@ elements:
         type: button
         dynamic_testid: false
       - testid: eval-editor-cancel-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-heading
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-action-warn
+        type: input
+        dynamic_testid: false
+      - testid: policy-gate-action-block
+        type: input
+        dynamic_testid: false
+      - testid: policy-gate-toggle
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-toggle-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-confirm-toggle-disable
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-cancel-toggle-disable
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-confirm-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-error
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-retry
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-badge
+        type: element
+        dynamic_testid: false
+      - testid: dirty-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: dirty-confirm-proceed
+        type: button
+        dynamic_testid: false
+      - testid: dirty-confirm-stay
         type: button
         dynamic_testid: false
       - testid: feature-gate
@@ -4395,6 +4446,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/license:
+      - testid: license-title
+        type: element
+        dynamic_testid: false
       - testid: license-key-input
         type: textarea
         dynamic_testid: false
@@ -4602,6 +4656,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/rate-limits:
+      - testid: rate-limits-title
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -5390,6 +5447,8 @@ features:
             - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
+            # FAR-967 chunk 10: pin integrity + operator enable/disable control
+            - "[x] The policy-gate operator control and pin-set integrity surface (FAR-967 chunk 10): PATCH /api/v1/evals/{eval_id}/policy-gate/toggle (admin-only eval.definition.update, break-glass mint denied) flips enabled and atomically stamps enabled_at/disabled_at so the symmetric ck_policy_gates_enabled_timestamps CHECK always holds, emits a policy_gate.toggled audit event (best-effort) under the same transaction-scoped advisory lock as create/replace, and the /evals/editor policy-gate panel exposes it as a role=switch policy-gate-toggle with a disable-confirmation dialog; at run start the executor re-verifies the snapshot's policy_gate_pins_fingerprint (a tampered/drifted pin set terminalizes as a mechanism error) and pin membership governs the run's evaluation universe (a live action edit cannot re-score a pinned run) while an operator-disabled live gate is removed from evaluation even when pinned (backend/src/modulo/core/eval_engine/policy_gate.py fingerprint_policy_gate_pins, backend/src/modulo/core/pipeline_engine/executor.py _resolve_governed_gate, backend/src/modulo/db/models/policy_gate.py, backend/src/modulo/db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py, backend/src/modulo/api/routes/evals.py, frontend/src/__tests__/EvalEditorViewPolicyGate.spec.ts)"
         deferrals:
             - "Per-token eval breakdown comparison is the remaining deferred comparison sub-surface, tracked under feat-variants"
     feat-feedback:
