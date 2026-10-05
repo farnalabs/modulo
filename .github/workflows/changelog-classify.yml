@@ -26,7 +26,9 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  # The live-label read hits GET /repos/{repo}/issues/{n}/labels, so the
+  # precise scope is `issues: read` (a PR is an issue for this endpoint).
+  issues: read
 
 # NO workflow-level concurrency (deliberate; mirrors fast-lane-classify.yml).
 # Opening a PR fires `opened`, and the auto-applied `agent-generated` label
