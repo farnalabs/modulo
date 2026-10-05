@@ -1203,7 +1203,7 @@ async def reconcile_runner_dispatch_markers(
     # was written more recently than the reconciler's stale-heartbeat window
     # is alive (heartbeat writes refresh updated_at) — the sweep clears its
     # stale marker but never terminalises over it.
-    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR
+    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _bound_org
 
     fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
     now = datetime.now(UTC)
@@ -1258,49 +1258,53 @@ async def reconcile_runner_dispatch_markers(
 
         for org_id in org_ids:
             org_scanned_slot: list[int] = [0]
-            try:
-                org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
-                    factory,
-                    org_id,
-                    settings=settings,
-                    recovery_or=recovery_or,
-                    exclusion=exclusion,
-                    now=now,
-                    fresh_window=fresh_window,
-                    stale_window=stale_window,
-                    scanned_slot=org_scanned_slot,
-                )
-                scanned += org_scanned
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                orgs_failed += 1
-                # qa F5: a failed org pass still reports the PARTIAL scan count —
-                # the rows it had already classified before the failure must not
-                # be silently dropped to zero on the raised RunnerMarkerSweepError.
-                scanned += org_scanned_slot[0]
-                # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
-                # transaction holds a conflicting row lock.  Log at warning level
-                # with a distinctive event name so the sweep is visible in prod
-                # logs without the noisy traceback of a genuine org failure; the
-                # 60s cadence retries the org next tick (fail-open, self-healing).
-                sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
-                if sqlstate == "55P03":
-                    _log.warning(
-                        "runner.capacity.marker_sweep_org_lock_timeout org=%s",
+            # FAR-1501: bind this org so per-org failures logged below
+            # (marker_sweep_org_failed, capacity violations) are attributed
+            # by ErrorTrackingLogHandler instead of dropped as no_org_context.
+            async with _bound_org(org_id):
+                try:
+                    org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
+                        factory,
                         org_id,
+                        settings=settings,
+                        recovery_or=recovery_or,
+                        exclusion=exclusion,
+                        now=now,
+                        fresh_window=fresh_window,
+                        stale_window=stale_window,
+                        scanned_slot=org_scanned_slot,
                     )
-                else:
-                    _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
-                continue
-            # The org transaction COMMITTED — emit the outcomes + the breach
-            # verdict now (post-commit, never phantom).
-            org_cleared, org_transitioned = _emit_sweep_outcomes(org_id, committed_outcomes)
-            cleared += org_cleared
-            transitioned += org_transitioned
-            if org_breach:
-                violations += 1
+                    scanned += org_scanned
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    orgs_failed += 1
+                    # qa F5: a failed org pass still reports the PARTIAL scan count —
+                    # the rows it had already classified before the failure must not
+                    # be silently dropped to zero on the raised RunnerMarkerSweepError.
+                    scanned += org_scanned_slot[0]
+                    # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
+                    # transaction holds a conflicting row lock.  Log at warning level
+                    # with a distinctive event name so the sweep is visible in prod
+                    # logs without the noisy traceback of a genuine org failure; the
+                    # 60s cadence retries the org next tick (fail-open, self-healing).
+                    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+                    org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
+                    if sqlstate == "55P03":
+                        _log.warning(
+                            "runner.capacity.marker_sweep_org_lock_timeout org=%s",
+                            org_id,
+                        )
+                    else:
+                        _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
+                    continue
+                # The org transaction COMMITTED — emit the outcomes + the breach
+                # verdict now (post-commit, never phantom).
+                org_cleared, org_transitioned = _emit_sweep_outcomes(org_id, committed_outcomes)
+                cleared += org_cleared
+                transitioned += org_transitioned
+                if org_breach:
+                    violations += 1
         _log.info(
             "runner.capacity.marker_swept scanned=%d cleared=%d transitioned=%d",
             scanned,
