@@ -20,6 +20,7 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node, resolve_and_reject_mask_sentinels
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.composite_engine.expander import (
     _PARAM_PLACEHOLDER_RE,
     _PROMPT_FIELDS,
@@ -191,7 +192,13 @@ async def list_composite_templates_endpoint(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("composite_templates.create_composite_template_endpoint")
 async def create_composite_template_endpoint(
     req: CompositeTemplateCreate,
@@ -283,7 +290,12 @@ async def get_composite_template_endpoint(
     return _mask_template_response(template)
 
 
-@router.patch("/{template_id}")
+@router.patch(
+    "/{template_id}",
+    dependencies=[
+        Depends(audited("composite_template_updated", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("composite_templates.update_composite_template_endpoint")
 async def update_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -345,7 +357,13 @@ async def update_composite_template_endpoint(
     return _mask_template_response(template)
 
 
-@router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(audited("composite_template_deleted", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("composite_templates.delete_composite_template_endpoint")
 async def delete_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -381,7 +399,12 @@ async def delete_composite_template_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
 
 
-@router.post("/{template_id}/restore")
+@router.post(
+    "/{template_id}/restore",
+    dependencies=[
+        Depends(audited("composite_template_restored", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("composite_templates.restore_composite_template_endpoint")
 async def restore_composite_template_endpoint(
     template_id: uuid.UUID,
@@ -473,7 +496,12 @@ async def get_composite_editor_endpoint(
     )
 
 
-@router.put("/{template_id}/editor")
+@router.put(
+    "/{template_id}/editor",
+    dependencies=[
+        Depends(audited("composite_template_editor_saved", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("composite_templates.save_composite_editor_endpoint")
 async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
@@ -603,6 +631,9 @@ def _detect_parameter_ports(nodes: list[dict[str, Any]]) -> list[ParameterPort]:
     return ports
 
 
+# FAR-1472 audit-coverage exemption (audit_coverage_baseline.txt): read-only
+# POST - scans the caller-supplied nodes for {{parameter.*}} placeholders and
+# returns the detected ports; it persists nothing.
 @router.post("/detect-params")
 @handle_db_errors("composite_templates.detect_params_endpoint")
 async def detect_params_endpoint(
@@ -643,7 +674,12 @@ class PublishResponse(BaseModel):
     published: bool
 
 
-@router.post("/{template_id}/publish")
+@router.post(
+    "/{template_id}/publish",
+    dependencies=[
+        Depends(audited("composite_template_published", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("composite_templates.publish_composite_endpoint")
 async def publish_composite_endpoint(
     template_id: uuid.UUID,
