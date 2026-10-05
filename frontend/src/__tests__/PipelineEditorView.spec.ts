@@ -23,11 +23,15 @@ const snapshotLockState = vi.hoisted(() => ({
   loadError: undefined as unknown,
   releaseResult: { released: 0, pids: [] as number[] } as unknown,
   releaseError: undefined as unknown,
+  // Transport arm of the release refusal: openapi-fetch reports HTTP status on
+  // `response`, which is independent of whether the body is a problem detail.
+  releaseTransportStatus: undefined as number | undefined,
   reset() {
     this.status = { held: false, holders: [] }
     this.loadError = undefined
     this.releaseResult = { released: 0, pids: [] }
     this.releaseError = undefined
+    this.releaseTransportStatus = undefined
   },
 }))
 
@@ -84,10 +88,19 @@ const routeGet = vi.hoisted(() => (url: string): Promise<{ data?: unknown; error
 // FAR-1287: routes the release endpoint through the shared fixture. A
 // successful release also flips the status fixture to "not held", mirroring
 // what the follow-up GET in SnapshotLockCard observes.
-const routePost = vi.hoisted(() => (url: string): Promise<{ data?: unknown; error?: unknown }> => {
+const routePost = vi.hoisted(() => (
+  url: string,
+): Promise<{ data?: unknown; error?: unknown; response?: { status: number } }> => {
   if (String(url).includes('/snapshot-lock/release')) {
     if (snapshotLockState.releaseError) {
-      return Promise.resolve({ data: undefined, error: snapshotLockState.releaseError })
+      const status = snapshotLockState.releaseTransportStatus
+      return Promise.resolve({
+        data: undefined,
+        error: snapshotLockState.releaseError,
+        // Only present when a test seeds the transport arm; the problem-detail
+        // arm must keep `response` absent so it is the body doing the work.
+        ...(status === undefined ? {} : { response: { status } }),
+      })
     }
     const result = snapshotLockState.releaseResult
     snapshotLockState.status = { held: false, holders: [] }
@@ -3247,6 +3260,50 @@ describe('PipelineEditorView - system-admin snapshot lock (FAR-1287)', () => {
     wrapper.unmount()
   })
 
+  // The manifest claims the card reads the GET into the live region across
+  // loading / not-held / held-by-N. Every other case here settles before it
+  // asserts, so only this one can observe the in-flight arm itself: a wrong
+  // snapshot_lock_checking key, or a dropped v-if="loading", would otherwise
+  // pass all of them.
+  it('observes the loading arm while the status GET is in flight, then settles', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+
+    let resolveGet!: (value: { data?: unknown; error?: unknown }) => void
+    const pendingStatus = new Promise<{ data?: unknown; error?: unknown }>((resolve) => {
+      resolveGet = resolve
+    })
+    // The card's probe is the ONLY api.GET issued at mount in this file (the
+    // page loaders sit behind the mocked useDataFetch, and AgentRunnerBindings
+    // only mounts inside the node panel), so one deferred impl intercepts it.
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementationOnce(() => pendingStatus)
+
+    const wrapper = await mountEditorLoaded()
+
+    // Assert on the call while it is still pending, before it can settle.
+    expect(snapshotLockGetCalls()).toHaveLength(1)
+    expect(snapshotLockGetCalls()[0][0]).toBe('/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock')
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.text()).toContain('Checking snapshot lock...')
+    const refresh = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-refresh"]')
+    expect((refresh.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(false)
+
+    resolveGet({ data: { held: false, holders: [] }, error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    // The arm must actually flip - a v-if removed from the loading branch would
+    // leave "Checking..." rendering after the response lands.
+    expect(status.text()).not.toContain('Checking snapshot lock...')
+    expect(status.text()).toContain('Not held')
+    expect((refresh.element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders the holders with pid, application, state and since', async () => {
     vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
     snapshotLockState.status = { held: true, holders: [HOLDER] }
@@ -3361,6 +3418,35 @@ describe('PipelineEditorView - system-admin snapshot lock (FAR-1287)', () => {
     expect(error.attributes('aria-live')).toBe('assertive')
     expect(error.text()).toContain('Release refused:')
     expect(error.text()).toContain('GRANT pg_signal_backend')
+    wrapper.unmount()
+  })
+
+  // Second refusal arm: openapi-fetch reports the HTTP status on `response`,
+  // and a bare HTTPException body is NOT a problem detail (no type/title/status
+  // fields), so isProblemDetail() is false here - only response.status === 403
+  // can select the refusal copy. Without this the transport branch is dead code.
+  it('reads a transport-only 403 as refusal copy, not the generic failure copy', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    snapshotLockState.releaseError = {
+      detail:
+        'Snapshot-lock release requires an organisation context so the terminated backends can be recorded.',
+    }
+    snapshotLockState.releaseTransportStatus = 403
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    expect(releasePostCalls()).toHaveLength(1)
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('aria-live')).toBe('assertive')
+    expect(error.text()).toContain('Release refused:')
+    expect(error.text()).toContain('organisation context')
+    expect(error.text()).not.toContain('Failed to release the snapshot lock')
     wrapper.unmount()
   })
 })
