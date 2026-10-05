@@ -137,16 +137,27 @@ def runner_marker_sweep_lock_keys() -> tuple[int, int]:
 RUNNER_PROVIDER_DOCKER = "runner_docker"
 RUNNER_PROVIDER_E2B = "e2b"
 RUNNER_PROVIDER_LOCAL = "local"
+RUNNER_PROVIDER_KUBERNETES = "kubernetes"
 
 MARKER_STATE_DISPATCHING = "dispatching"
 MARKER_STATE_SCRIPT_EXECUTING = "script_executing"
 MARKER_STATE_CLEARED_AT_HITL = "cleared_at_hitl"
 
-# Providers billed against the HOST (Docker containers / local subprocesses).
-# The absent-key Docker-tier default counts ONLY these (+ legacy tier-less
-# markers, which are Docker-tier by fail-safe); e2b has its own platform-side
-# concurrency quota and is excluded from that default bucket.
-HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset({RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_LOCAL})
+# Providers counted against the DEPLOYMENT's own capacity (Docker containers
+# and local subprocesses on this host, and self-hosted Kubernetes workspace
+# pods on this cluster — FAR-1051). The absent-key Docker-tier default counts
+# ONLY these (+ legacy tier-less markers, which are Docker-tier by
+# fail-safe); e2b is excluded because it has its own platform-side
+# concurrency quota, while a Kubernetes tier has no Modulo-readable per-org
+# quota (the Helm namespace ResourceQuota is a cluster ceiling shared by
+# every org, not a dispatch gate) — leaving it out would give a
+# Kubernetes-bound org NO cap at all, i.e. a silently uncounted tier.
+# The SQL filter that applies this set is
+# ``modulo.db.crud.run.RUNNER_HOST_RESOURCE_FILTER_SQL`` (the DB layer owns
+# the count body); the two MUST stay in step.
+HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset(
+    {RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_LOCAL, RUNNER_PROVIDER_KUBERNETES}
+)
 
 # SQL provider attribution: markers carrying a JSON "provider" key are
 # attributed from it; legacy tier-less markers (pre-D8 JSON without the key,
@@ -167,8 +178,10 @@ def build_dispatch_marker(attempt_key: str, provider: str, *, via_provider: bool
     Base shape (unchanged, fence-compatible — ``_script_lease_probe_ok`` /
     ``rollback_thresholds`` / ``dispatcher_reconcile`` read only
     ``state``/``attempt_key``): ``{"state": "dispatching", "attempt_key": …}``.
-    The D8 gate adds ``"provider"`` (``runner_docker`` | ``e2b`` | ``local``)
-    and ``"written_at"`` for every tier.  ``provider`` is REQUIRED — every
+    The D8 gate adds ``"provider"`` (``runner_docker`` | ``e2b`` | ``local`` |
+    ``kubernetes`` — FAR-1051 added the Kubernetes tier so a pod dispatch is
+    attributed instead of silently uncounted) and ``"written_at"`` for every
+    tier.  ``provider`` is REQUIRED — every
     call site must pass its value explicitly so the type-checker enforces
     correct attribution (FAR-995).
 
@@ -1341,6 +1354,7 @@ __all__ = [
     "MARKER_STATE_SCRIPT_EXECUTING",
     "RUNNER_PROVIDER_DOCKER",
     "RUNNER_PROVIDER_E2B",
+    "RUNNER_PROVIDER_KUBERNETES",
     "RUNNER_PROVIDER_LOCAL",
     "RunnerCapacityDecision",
     "RunnerCapacityDeniedError",

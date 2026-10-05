@@ -24,8 +24,9 @@ Lenses:
   0277_run_daily_facts_trigger_dispatch_phase chains onto 0276, and
   0278_runs_workspace_drift_sweep_index chains onto 0277, and
    0279_table_autovacuum_tuning chains onto 0278, and
-   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning as the
-   single linear head (0259's test documents the run-up through 0280).
+   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning, and
+   0282_env_profiles_kubernetes chains onto 0280_runs_node_deadline_watchdog_fired_count as the
+   single linear head (0259's test documents the run-up through 0281).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -60,7 +61,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0281_org_api_keys_grants"
+_HEAD_MIGRATION = "0282_env_profiles_kubernetes"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

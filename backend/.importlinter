@@ -277,15 +277,20 @@ source_modules =
 forbidden_modules =
     modulo.core.runtime_provider.docker
     modulo.core.runtime_provider.e2b
+    modulo.core.runtime_provider.k8s
     modulo.core.runtime_provider.local
     modulo.core.runtime_provider.local_docker
 ignore_imports =
     # The factory itself wires the concrete providers (build_hub lazy imports).
     modulo.core.runtime_provider -> modulo.core.runtime_provider.docker
     modulo.core.runtime_provider -> modulo.core.runtime_provider.e2b
+    modulo.core.runtime_provider -> modulo.core.runtime_provider.k8s
     modulo.core.runtime_provider -> modulo.core.runtime_provider.local
     modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.docker
     modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.e2b
+    # FAR-1051: the second hub entry point (RuntimeProviderHub.initialise)
+    # wires the concrete Kubernetes provider too, so both factories agree.
+    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.k8s
     # The deprecated local_docker adapter (ADR 044) delegates to the canonical
     # Docker provider; it stays inside the package and is out of D2 scope.
     modulo.core.runtime_provider.local_docker -> modulo.core.runtime_provider.docker
