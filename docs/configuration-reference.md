@@ -372,6 +372,14 @@ serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
 supported state where monitoring still runs and only the emails are skipped.
 See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
 
+The same SMTP setup also sends the **error-tracking** alert emails, which identify the deployment environment:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown on error-tracking alert emails as `Environment: <value>`; an empty value renders as `N/A`. The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
+
+The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails below do not carry an environment line.
+
 ### Readiness health alerts
 
 The same SMTP configuration also drives the system worker's in-app readiness alerting: when **both** `SMTP_HOST` and `ALERT_EMAIL_TO` are set, the `health_readiness_alert` cron (every 5 minutes) evaluates health through the same checks as `/healthz/ready` and emails `ALERT_EMAIL_TO`:
@@ -380,13 +388,6 @@ The same SMTP configuration also drives the system worker's in-app readiness ale
 - **One recovery email** when readiness returns to `ok`, so an incident has a visible end.
 
 Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled — quiet, not silent.
-
-Every alert **and** recovery email from both alert channels — this readiness alert and the [worker-liveness watchdog](#worker-liveness-watchdog) — ends with the same context block: an `Environment: <value>` line, then each line of `ALERT_CONTEXT`:
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `MODULO_ENV` | No | `development` | Deployment environment name. Rendered as `Environment: <value>` in every alert and recovery email, and appended to the alert/recovery stdout stamps that `fly logs` shows — the stamps carry the environment line only, never `ALERT_CONTEXT`. The shipped Fly configs set it (`fly.toml` = `production`, `deploy/fly/fly.staging.toml` = `staging`); an empty value renders as `Environment: unknown`, and the line is truncated at 300 characters. |
-| `ALERT_CONTEXT` | No | – | Operator free text appended after the environment line — runbook links, escalation notes, ticket pointers. One item per line: surrounding whitespace is stripped, blank lines are dropped, each line is truncated to 300 characters, and the block is capped at 20 lines total *including* the environment line, which always survives the cap. HTML-escaped in the HTML part. Unset by default, which leaves the environment line as the only context. |
 
 This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
 
@@ -405,8 +406,6 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 | `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
 | `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
 | `ALERT_EMAIL_TO` | No | – | Comma-separated email recipients for watchdog alerts and readiness-degradation alerts (see [Readiness health alerts](#readiness-health-alerts)) |
-
-Watchdog alert and recovery emails carry the same trailing context block as the readiness emails — the `MODULO_ENV` environment line plus optional `ALERT_CONTEXT` free text (see the table under [Readiness health alerts](#readiness-health-alerts)).
 
 ---
 
