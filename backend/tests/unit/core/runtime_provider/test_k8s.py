@@ -28,8 +28,8 @@ import time
 import uuid
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from typing import Any, Self, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import WSMsgType
@@ -921,3 +921,570 @@ class TestMigration0281Parity:
         )
         sqltext = str(getattr(constraint, "sqltext", constraint))
         assert "kubernetes" in sqltext
+
+
+# ---------------------------------------------------------------------------
+# Changed-lines coverage remediation (Branch Fixer): defensive / error arms.
+# Every test below pins a real behaviour on an otherwise-unexercised branch
+# of the FAR-1051 Kubernetes provider (all clients mocked — no live cluster).
+# ---------------------------------------------------------------------------
+
+
+class _CoroutineCloseWs:
+    """A ws whose ``close()`` returns an awaitable (aiohttp's real shape)."""
+
+    def __init__(self, *, exc: BaseException | None = None) -> None:
+        self._exc = exc
+        self.closed = False
+
+    def close(self) -> Any:
+        if self._exc is not None:
+            raise self._exc
+
+        async def _done() -> None:
+            self.closed = True
+
+        return _done()
+
+
+class TestExitStatusResolution:
+    def test_unparseable_error_payload_is_reported_not_fabricated(self) -> None:
+        """A garbage error-channel payload yields ``(None, note)`` — never a 0."""
+        exit_code, note = k8s_mod._resolve_exit_code("{not json")
+
+        assert exit_code is None
+        assert note is not None
+        assert "unparseable" in note
+
+
+class TestConfigurationResolution:
+    async def test_configuration_is_cached_after_the_first_load(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+        loads: list[dict[str, Any]] = []
+
+        async def _kube(**kwargs: Any) -> None:
+            loads.append(kwargs)
+
+        monkeypatch.setattr(k8s_mod.k8s_config, "load_kube_config", _kube)
+        provider = KubernetesRuntimeProvider()
+
+        first = await provider._get_configuration()
+        second = await provider._get_configuration()
+
+        assert first is second
+        assert len(loads) == 1  # the fast path returned the cached configuration
+
+    async def test_configuration_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+
+        async def _cancel(**kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(k8s_mod.k8s_config, "load_kube_config", _cancel)
+        provider = KubernetesRuntimeProvider()
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider._get_configuration()
+
+    async def test_configuration_already_set_inside_the_lock_is_returned(self) -> None:
+        """Double-checked locking: a racer winning inside the lock is honoured."""
+        provider = KubernetesRuntimeProvider()
+        sentinel = object()
+
+        class _RacingLock:
+            async def __aenter__(self) -> Self:
+                provider._configuration = sentinel
+                return self
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+        provider._client_lock = _RacingLock()  # type: ignore[assignment]
+
+        assert await provider._get_configuration() is sentinel
+
+
+class TestClientConstruction:
+    async def test_get_core_builds_the_plain_client_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = KubernetesRuntimeProvider()
+        configuration = object()
+        provider._get_configuration = AsyncMock(return_value=configuration)  # type: ignore[method-assign]
+        api_client = object()
+        core_api = object()
+        monkeypatch.setattr(k8s_mod.k8s_client, "ApiClient", MagicMock(return_value=api_client))
+        monkeypatch.setattr(k8s_mod.k8s_client, "CoreV1Api", MagicMock(return_value=core_api))
+
+        assert await provider._get_core() is core_api
+        assert provider._api_client is api_client
+        assert await provider._get_core() is core_api  # cached
+
+    async def test_get_ws_core_builds_the_ws_client_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = KubernetesRuntimeProvider()
+        configuration = object()
+        provider._get_configuration = AsyncMock(return_value=configuration)  # type: ignore[method-assign]
+        ws_api_client = object()
+        ws_core = object()
+        monkeypatch.setattr(k8s_mod, "WsApiClient", MagicMock(return_value=ws_api_client))
+        monkeypatch.setattr(k8s_mod.k8s_client, "CoreV1Api", MagicMock(return_value=ws_core))
+
+        assert await provider._get_ws_core() is ws_core
+        assert provider._ws_api_client is ws_api_client
+        assert await provider._get_ws_core() is ws_core  # cached
+
+    async def test_get_core_returns_a_client_set_by_a_racer_inside_the_lock(self) -> None:
+        provider = KubernetesRuntimeProvider()
+        provider._get_configuration = AsyncMock(return_value=object())  # type: ignore[method-assign]
+        sentinel = object()
+
+        class _RacingLock:
+            async def __aenter__(self) -> Self:
+                provider._core_api = sentinel
+                return self
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+        provider._client_lock = _RacingLock()  # type: ignore[assignment]
+
+        assert await provider._get_core() is sentinel
+
+    async def test_get_ws_core_returns_a_client_set_by_a_racer_inside_the_lock(self) -> None:
+        provider = KubernetesRuntimeProvider()
+        provider._get_configuration = AsyncMock(return_value=object())  # type: ignore[method-assign]
+        sentinel = object()
+
+        class _RacingLock:
+            async def __aenter__(self) -> Self:
+                provider._ws_core_api = sentinel
+                return self
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+        provider._client_lock = _RacingLock()  # type: ignore[assignment]
+
+        assert await provider._get_ws_core() is sentinel
+
+
+class TestSpecMappingArms:
+    def test_non_int_memory_falls_back_to_the_default(self) -> None:
+        assert KubernetesRuntimeProvider._resolve_memory_mb("abc") == k8s_mod._DEFAULT_MEMORY_MB
+        assert KubernetesRuntimeProvider._resolve_memory_mb(None) == k8s_mod._DEFAULT_MEMORY_MB
+
+    def test_control_char_env_entry_is_skipped_with_the_rest_kept(self) -> None:
+        env = KubernetesRuntimeProvider._build_container_env({"A": "line\nbreak", "B": "ok"})
+
+        assert [e.name for e in env] == ["B"]
+
+    def test_invalid_label_key_is_skipped_in_labels_but_kept_in_annotations(self) -> None:
+        provider = KubernetesRuntimeProvider()
+
+        labels, annotations = provider._build_metadata(
+            _spec(workspace_metadata={"bad key!": "v", "modulo.run.id": "run-1"})
+        )
+
+        assert "bad key!" not in labels
+        assert labels["modulo.run.id"] == "run-1"
+        # Annotations carry the raw metadata (nothing is lossy there).
+        assert annotations["bad key!"] == "v"
+
+    async def test_allow_root_user_skips_the_non_root_stamp(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        provider = _provider(core=core)
+
+        await provider.create_workspace(_spec(allow_root_user=True))
+
+        body = core.create_namespaced_pod.await_args.kwargs["body"]
+        security = body.spec.containers[0].security_context
+        assert security.run_as_non_root is None
+        assert security.run_as_user is None
+        assert body.spec.security_context is None
+
+    def test_command_with_only_invalid_env_names_is_left_untouched(self) -> None:
+        command = KubernetesRuntimeProvider._command_with_environment(["echo", "hi"], {"BAD-NAME": "x"})
+
+        assert command == ["echo", "hi"]
+
+
+class TestPodPhaseAndNote:
+    def test_terminated_state_note_includes_reason_and_exit_code(self) -> None:
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Failed",
+                container_statuses=[
+                    SimpleNamespace(
+                        state=SimpleNamespace(
+                            waiting=None,
+                            terminated=SimpleNamespace(reason="OOMKilled", exit_code=137),
+                        )
+                    )
+                ],
+            )
+        )
+
+        phase, note = KubernetesRuntimeProvider._pod_phase_and_note(pod)
+
+        assert phase == "failed"
+        assert "OOMKilled" in note
+        assert "137" in note
+
+    def test_empty_waiting_reason_falls_through_to_terminated_note(self) -> None:
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Failed",
+                container_statuses=[
+                    SimpleNamespace(
+                        state=SimpleNamespace(
+                            waiting=SimpleNamespace(reason="", message=""),
+                            terminated=SimpleNamespace(reason="Error", exit_code=1),
+                        )
+                    )
+                ],
+            )
+        )
+
+        phase, note = KubernetesRuntimeProvider._pod_phase_and_note(pod)
+
+        assert phase == "failed"
+        assert note.startswith("Error")
+
+    def test_terminated_note_loop_continues_to_the_next_container_status(self) -> None:
+        pod = SimpleNamespace(
+            status=SimpleNamespace(
+                phase="Failed",
+                container_statuses=[
+                    SimpleNamespace(
+                        state=SimpleNamespace(
+                            waiting=None,
+                            terminated=SimpleNamespace(reason="", exit_code=None),
+                        )
+                    ),
+                    SimpleNamespace(
+                        state=SimpleNamespace(
+                            waiting=None,
+                            terminated=SimpleNamespace(reason="OOMKilled", exit_code=137),
+                        )
+                    ),
+                ],
+            )
+        )
+
+        _phase, note = KubernetesRuntimeProvider._pod_phase_and_note(pod)
+
+        assert "OOMKilled" in note
+
+
+class TestCreateAndDeleteArms:
+    async def test_create_cancellation_propagates(self) -> None:
+        core = AsyncMock()
+        core.create_namespaced_pod.side_effect = asyncio.CancelledError
+        provider = _provider(core=core)
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.create_workspace(_spec())
+
+    async def test_pod_disappearing_mid_provision_raises(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = None
+        provider = _provider(core=core)
+
+        with pytest.raises(RuntimeProviderError, match="disappeared"):
+            await provider.create_workspace(_spec())
+
+        core.delete_namespaced_pod.assert_awaited_once()
+
+    async def test_read_pod_cancellation_propagates(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.side_effect = asyncio.CancelledError
+        provider = _provider(core=core)
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider._read_pod("modulo-ws-abc")
+
+    async def test_delete_best_effort_swallows_404_and_logs_other_failures(self) -> None:
+        core = AsyncMock()
+        provider = _provider(core=core)
+
+        core.delete_namespaced_pod.side_effect = ApiException(status=404, reason="Not Found")
+        await provider._delete_pod_best_effort("modulo-ws-gone")
+
+        core.delete_namespaced_pod.side_effect = ApiException(status=500, reason="Boom")
+        await provider._delete_pod_best_effort("modulo-ws-abc")
+
+        core.delete_namespaced_pod.side_effect = ConnectionRefusedError("apiserver down")
+        await provider._delete_pod_best_effort("modulo-ws-abc")
+
+    async def test_delete_best_effort_cancellation_propagates(self) -> None:
+        core = AsyncMock()
+        core.delete_namespaced_pod.side_effect = asyncio.CancelledError
+        provider = _provider(core=core)
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider._delete_pod_best_effort("modulo-ws-abc")
+
+
+class TestExecArms:
+    async def test_exec_command_cancellation_propagates(self) -> None:
+        provider = _provider(ws_core=_FakeWsCore(_FakeWs([], receive_exc=asyncio.CancelledError())))
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.exec_command("modulo-ws-abc", ["sh"])
+
+    async def test_exec_command_unexpected_frame_failure_is_backend_unreachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider = _provider(ws_core=_FakeWsCore(_FakeWs([])))
+
+        async def _boom(ws: Any, state: Any) -> Any:
+            raise RuntimeError("frame reader exploded")
+            yield  # pragma: no cover - unreachable, marks an async generator
+
+        monkeypatch.setattr(provider, "_read_exec_frames", _boom)
+
+        with pytest.raises(BackendUnreachableError, match="frame reader exploded"):
+            await provider.exec_command("modulo-ws-abc", ["sh"])
+
+    async def test_open_exec_cancellation_propagates(self) -> None:
+        provider = _provider(ws_core=_FakeWsCore(exc=asyncio.CancelledError()))
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider._open_exec("modulo-ws-abc", ["sh"])
+
+    async def test_open_exec_non_404_failure_is_backend_unreachable(self) -> None:
+        provider = _provider(ws_core=_FakeWsCore(exc=ApiException(status=500, reason="Boom")))
+
+        with pytest.raises(BackendUnreachableError, match="unreachable"):
+            await provider._open_exec("modulo-ws-abc", ["sh"])
+
+    async def test_read_exec_frames_control_frames_unknown_channel_and_error(self) -> None:
+        provider = _provider()
+        state = k8s_mod._ExecStreamState()
+        messages = [
+            SimpleNamespace(type=WSMsgType.PING, data=None),
+            SimpleNamespace(type=WSMsgType.TEXT, data=""),
+            SimpleNamespace(type=WSMsgType.BINARY, data=bytes([1])),
+            _frame(9, "unknown-channel"),
+            SimpleNamespace(type=WSMsgType.ERROR, data=RuntimeError("transport error")),
+        ]
+        ws = _FakeWs(messages)
+        seen: list[tuple[str, str]] = []
+
+        async for item in provider._read_exec_frames(ws, state):
+            seen.append(item)
+
+        assert seen == [("stderr", "unknown-channel")]
+        assert state.error is not None
+        assert "transport error" in state.error
+
+    async def test_close_ws_awaits_a_coroutine_close(self) -> None:
+        provider = _provider()
+        ws = _CoroutineCloseWs()
+
+        await provider._close_ws(ws)
+
+        assert ws.closed is True
+
+    async def test_close_ws_swallows_a_close_failure(self) -> None:
+        provider = _provider()
+
+        await provider._close_ws(_CoroutineCloseWs(exc=RuntimeError("close boom")))  # must not raise
+
+    async def test_close_ws_cancellation_propagates(self) -> None:
+        provider = _provider()
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider._close_ws(_CoroutineCloseWs(exc=asyncio.CancelledError()))
+
+
+class TestDestroyByRefArms:
+    async def test_read_cancellation_propagates(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.side_effect = asyncio.CancelledError
+        provider = _provider(core=core)
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.destroy_workspace_by_ref("modulo-ws-abc")
+
+    async def test_delete_cancellation_propagates(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        core.delete_namespaced_pod.side_effect = asyncio.CancelledError
+        provider = _provider(core=core)
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.destroy_workspace_by_ref("modulo-ws-abc")
+
+    async def test_delete_404_is_idempotent_success(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        core.delete_namespaced_pod.side_effect = ApiException(status=404, reason="Not Found")
+        provider = _provider(core=core)
+        provider._workspaces.add("modulo-ws-abc")
+
+        assert await provider.destroy_workspace_by_ref("modulo-ws-abc") is True
+        assert "modulo-ws-abc" not in provider._workspaces
+
+    async def test_delete_generic_failure_returns_false(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        core.delete_namespaced_pod.side_effect = ConnectionRefusedError("apiserver down")
+        provider = _provider(core=core)
+
+        assert await provider.destroy_workspace_by_ref("modulo-ws-abc") is False
+
+
+class TestListWorkspacePodsArms:
+    async def test_skips_no_metadata_nameless_and_unparseable_age(self) -> None:
+        core = AsyncMock()
+        identity = KubernetesRuntimeProvider._deployment_identity()
+        items = [
+            SimpleNamespace(metadata=None),
+            _listed_pod(
+                "",
+                labels={"modulo.created_at": "not-a-number"},
+                annotations={k8s_mod._MACHINE_ANNOTATION: identity},
+            ),
+            _listed_pod(
+                "modulo-ws-ok",
+                labels={"modulo.created_at": "not-a-number"},
+                annotations={k8s_mod._MACHINE_ANNOTATION: identity},
+            ),
+        ]
+        core.list_namespaced_pod.return_value = SimpleNamespace(items=items)
+        provider = _provider(core=core)
+
+        entries = await provider.list_workspace_pods()
+
+        assert [entry.ref for entry in entries] == ["modulo-ws-ok"]
+        assert entries[0].created_age_s == 0.0
+
+
+class TestStatusAndLogArms:
+    async def test_status_cancellation_propagates(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod.side_effect = asyncio.CancelledError
+        provider = _provider(core=core)
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.get_workspace_status("modulo-ws-abc")
+
+    async def test_log_tail_cancellation_propagates(self) -> None:
+        core = AsyncMock()
+        core.read_namespaced_pod_log.side_effect = asyncio.CancelledError
+        provider = _provider(core=core)
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.read_log_tail("modulo-ws-abc", max_bytes=5)
+
+
+class TestIsolationArms:
+    async def test_git_credentials_none_runs_the_none_script(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = _provider()
+        calls: list[list[str]] = []
+
+        async def _fake_exec(provider_ref: str, command: list[str], *, cmd_timeout: int | None = None) -> ExecResult:
+            calls.append(command)
+            return ExecResult(exit_code=0, stdout="", stderr="", duration_ms=1)
+
+        monkeypatch.setattr(provider, "exec_command", _fake_exec)
+
+        status = await provider.apply_isolation(
+            "modulo-ws-abc",
+            _spec(),
+            IsolationPolicy(git_credentials="none", command_timeout=5.0),
+        )
+
+        assert status is None
+        assert len(calls) == 1
+
+    async def test_guard_install_detail_is_logged(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        provider = _provider()
+
+        async def _fake_exec(provider_ref: str, command: list[str], *, cmd_timeout: int | None = None) -> ExecResult:
+            return ExecResult(exit_code=0, stdout="", stderr="", duration_ms=1)
+
+        monkeypatch.setattr(provider, "exec_command", _fake_exec)
+        monkeypatch.setattr(
+            "modulo.core.pipeline_engine.sandbox_policy.install_gh_pr_guard_via_exec",
+            AsyncMock(return_value=SimpleNamespace(status="installed", detail="guard note")),
+        )
+
+        with caplog.at_level("WARNING"):
+            status = await provider.apply_isolation(
+                "modulo-ws-abc",
+                _spec(),
+                IsolationPolicy(single_pr_per_run=True, command_timeout=5.0),
+            )
+
+        assert status == "installed"
+        assert "guard note" in caplog.text
+
+
+class TestCloseArms:
+    async def test_close_destroys_tracked_workspaces_and_closes_clients(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = _provider()
+        provider._workspaces.add("modulo-ws-abc")
+        destroy = AsyncMock()
+        monkeypatch.setattr(provider, "destroy_workspace", destroy)
+        api_client = SimpleNamespace(close=AsyncMock())
+        ws_api_client = SimpleNamespace(close=AsyncMock())
+        provider._api_client = api_client
+        provider._ws_api_client = ws_api_client
+
+        await provider.close()
+
+        destroy.assert_awaited_once_with("modulo-ws-abc")
+        api_client.close.assert_awaited_once()
+        ws_api_client.close.assert_awaited_once()
+        assert provider._api_client is None
+        assert provider._ws_api_client is None
+
+    async def test_close_cancellation_from_destroy_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = _provider()
+        provider._workspaces.add("modulo-ws-abc")
+        monkeypatch.setattr(provider, "destroy_workspace", AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.close()
+
+    async def test_close_times_out_destroy_and_force_drops_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = _provider()
+        provider._workspaces.add("modulo-ws-abc")
+        monkeypatch.setattr(provider, "destroy_workspace", AsyncMock(side_effect=asyncio.TimeoutError))
+
+        await provider.close()
+
+        assert "modulo-ws-abc" not in provider._workspaces
+
+    async def test_close_swallows_a_destroy_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = _provider()
+        provider._workspaces.add("modulo-ws-abc")
+        monkeypatch.setattr(provider, "destroy_workspace", AsyncMock(side_effect=RuntimeError("boom")))
+
+        await provider.close()  # must not raise
+
+    async def test_close_client_cancellation_propagates(self) -> None:
+        provider = _provider()
+        provider._api_client = SimpleNamespace(close=AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await provider.close()
+
+    async def test_close_client_timeout_is_swallowed(self) -> None:
+        provider = _provider()
+        provider._api_client = SimpleNamespace(close=AsyncMock(side_effect=asyncio.TimeoutError))
+
+        await provider.close()
+
+        assert provider._api_client is None
+
+    async def test_close_client_generic_failure_is_swallowed(self) -> None:
+        provider = _provider()
+        provider._ws_api_client = SimpleNamespace(close=AsyncMock(side_effect=RuntimeError("boom")))
+
+        await provider.close()
+
+        assert provider._ws_api_client is None

@@ -748,3 +748,109 @@ async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_
 
     assert [entry.run_id for entry in listed] == [run_id]
     assert listed[0].created_age_s == 42.0
+
+
+# ---------------------------------------------------------------------------
+# Branch Fixer coverage: lazy Kubernetes source build + per-tier skip logging
+# ---------------------------------------------------------------------------
+
+
+async def test_kubernetes_source_builds_its_provider_lazily_via_importlib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_get_provider`` imports the concrete provider module on first use and
+    caches the instance (the concrete import stays inside the provider package
+    boundary — it is never imported at this module's scope)."""
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    provider = MagicMock()
+    provider.list_workspace_pods = AsyncMock(return_value=[])
+    fake_module = SimpleNamespace(KubernetesRuntimeProvider=MagicMock(return_value=provider))
+    monkeypatch.setattr("importlib.import_module", lambda name: fake_module)
+
+    listed = await source.list_labelled_workspaces()
+    await source.list_labelled_workspaces()  # cached — no second build
+
+    assert listed == []
+    assert source._provider is provider
+    fake_module.KubernetesRuntimeProvider.assert_called_once()
+
+
+async def test_kubernetes_source_close_without_a_provider_is_a_noop() -> None:
+    source = runner_reconciler._KubernetesWorkspaceSource()
+
+    await source.close()
+
+    assert source._provider is None
+
+
+async def test_workspace_source_protocol_stub_bodies_are_executable() -> None:
+    """The structural boundary the sweep drives is implementable without a
+    shared base class; its declared method bodies are callable no-ops."""
+
+    class _MinimalSource(runner_reconciler._WorkspaceSource):
+        pass
+
+    source = _MinimalSource()
+
+    assert await source.list_labelled_workspaces() is None
+    assert await source.destroy_by_container_id("ref") is None
+    assert await source.close() is None
+
+
+def test_kubernetes_skip_reason_reports_a_hub_build_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hub-build failure is an explicit, named skip reason — never a crash."""
+    monkeypatch.setattr(
+        "modulo.core.runtime_provider.build_hub",
+        MagicMock(side_effect=RuntimeError("hub down")),
+    )
+
+    reason = runner_reconciler.kubernetes_endpoint_skip_reason()
+
+    assert reason is not None
+    assert "hub could not be built" in reason
+
+
+async def test_sweep_logs_distinct_kubernetes_skip_when_docker_also_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When BOTH tiers are inapplicable, the historical Docker skip envelope is
+    returned and the distinct Kubernetes reason is logged alongside it."""
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "docker-reason")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", lambda: "k8s-reason")
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "docker-reason"}
+
+
+async def test_sweep_with_identical_skip_reasons_does_not_log_the_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both tiers report the SAME reason, the Kubernetes reason is not
+    logged a second time (the Docker envelope already carries it)."""
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "same-reason")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", lambda: "same-reason")
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "same-reason"}
+
+
+async def test_sweep_runs_kubernetes_tier_while_logging_the_docker_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Docker-inapplicable / Kubernetes-applicable deployment sweeps ONLY the
+    Kubernetes source — the Docker skip is logged, the tier is not built."""
+    docker_factory = MagicMock(side_effect=AssertionError("docker source must not be built"))
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", docker_factory)
+    k8s_source = _fake_source([])
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "no docker endpoint")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", lambda: None)
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0}
+    docker_factory.assert_not_called()
+    k8s_source.close.assert_awaited_once()
