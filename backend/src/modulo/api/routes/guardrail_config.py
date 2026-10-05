@@ -586,7 +586,7 @@ async def propose_guardrail_config(
             audited(
                 "guardrail_config_applied", "guardrail_config", principal_dep=get_current_tenant_user, fail_closed=True
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
     ],

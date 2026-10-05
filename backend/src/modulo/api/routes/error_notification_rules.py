@@ -343,7 +343,7 @@ async def update_notification_rule(
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

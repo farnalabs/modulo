@@ -229,7 +229,7 @@ async def update_hitl_email_preferences(
     dependencies=[
         Depends(
             audited("password_changed", "user_credential", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -423,7 +423,7 @@ async def update_user_skill(
     dependencies=[
         Depends(
             audited("user_skill_deleted", "user_skill", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -519,7 +519,7 @@ async def set_user_context_source(
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

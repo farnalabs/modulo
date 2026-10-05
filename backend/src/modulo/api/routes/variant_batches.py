@@ -501,7 +501,7 @@ async def get_batch(
     dependencies=[
         Depends(
             audited("variant_batch_deleted", "variant_batch", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

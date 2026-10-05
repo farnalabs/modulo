@@ -294,7 +294,7 @@ async def update_node_category_endpoint(
     dependencies=[
         Depends(
             audited("node_category_deleted", "node_category", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

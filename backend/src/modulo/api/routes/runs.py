@@ -2813,7 +2813,7 @@ class GuardrailOverrideResponse(BaseModel):
     dependencies=[
         Depends(
             audited("run_guardrail_overridden", "run", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

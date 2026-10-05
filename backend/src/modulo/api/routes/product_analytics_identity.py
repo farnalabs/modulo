@@ -140,7 +140,7 @@ async def get_identity(
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
     ],

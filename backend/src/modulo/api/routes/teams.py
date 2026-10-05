@@ -718,7 +718,8 @@ async def update_team_endpoint(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[
         Depends(
-            audited("team_deleted", "team", principal_dep=get_current_tenant_user, fail_closed=True), scope="function"
+            audited("team_deleted", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -829,7 +830,7 @@ async def delete_team_endpoint(
     dependencies=[
         Depends(
             audited("team_resources_reassigned", "team", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -973,7 +974,7 @@ async def list_members_endpoint(
     dependencies=[
         Depends(
             audited("team_member_added", "team", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -1070,7 +1071,7 @@ async def add_member_endpoint(
     dependencies=[
         Depends(
             audited("team_member_removed", "team", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -1161,7 +1162,7 @@ async def remove_member_endpoint(
     dependencies=[
         Depends(
             audited("team_member_role_changed", "team", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

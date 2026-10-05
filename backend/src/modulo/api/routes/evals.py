@@ -841,7 +841,7 @@ async def update_policy_gate(
     dependencies=[
         Depends(
             audited("policy_gate_deleted", "policy_gate", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
     ],
@@ -963,7 +963,7 @@ _MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION = (
     dependencies=[
         Depends(
             audited("policy_gate_toggled", "policy_gate", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
     ],
@@ -2158,7 +2158,7 @@ async def update_eval_dataset(
     dependencies=[
         Depends(
             audited("eval_dataset_deleted", "eval_dataset", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -2450,7 +2450,7 @@ async def update_eval_suite(
     dependencies=[
         Depends(
             audited("eval_suite_deleted", "eval_suite", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -2704,7 +2704,7 @@ async def update_eval_definition(
             audited(
                 "eval_definition_deleted", "eval_definition", principal_dep=get_current_tenant_user, fail_closed=True
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
     ],

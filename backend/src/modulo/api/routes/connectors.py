@@ -842,7 +842,7 @@ async def update_connector_endpoint(
     dependencies=[
         Depends(
             audited("connector_deleted", "connector", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
     ],

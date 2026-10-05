@@ -621,7 +621,7 @@ def _raise_pending_rollback_error(exc: PendingRollbackError, log_key: str) -> No
     dependencies=[
         Depends(
             audited("hitl_review_claimed", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -894,7 +894,7 @@ async def _run_hitl_manager(
     dependencies=[
         Depends(
             audited("hitl_review_approved", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -980,7 +980,7 @@ async def approve_review(
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -1069,7 +1069,7 @@ async def approve_review_with_modification(
     dependencies=[
         Depends(
             audited("hitl_review_rejected", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -1155,7 +1155,7 @@ async def reject_review(
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -1233,7 +1233,7 @@ async def deliver_manual_output(
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )

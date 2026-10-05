@@ -497,7 +497,7 @@ async def test_forwarder(
             audited(
                 "error_forwarder_deleted", "error_forwarder", principal_dep=get_current_tenant_user, fail_closed=True
             ),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         require_feature("error_forwarders"),
         Depends(deny_break_glass_mint),

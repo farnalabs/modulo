@@ -454,7 +454,7 @@ async def update_group(
     dependencies=[
         Depends(
             audited("variant_group_deleted", "variant_group", principal_dep=get_current_tenant_user, fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
