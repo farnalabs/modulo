@@ -2190,7 +2190,8 @@ async def publish_collection_endpoint(
     except ProgrammingError:
         _log.exception("library.publish_collection_endpoint")
         raise _not_implemented_error() from None
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library.publish_collection_endpoint")
         _log.exception("publish_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
     return _collection_response(prim)

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, InvalidRequestError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -550,12 +550,29 @@ class TestPublishCollectionErrorPaths:
             resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/publish")
         assert resp.status_code == 503
 
-    def test_publish_pin_lookup_db_error_returns_503_not_422(self, client: TestClient) -> None:
-        """FAR-1483: a DB failure while resolving a pin is an outage, not a bad pin.
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (ProgrammingError("stmt", {}, RuntimeError("missing table")), 501),
+            (SQLAlchemyError("db down"), 503),
+            (InvalidRequestError("Autobegin is disabled on this Session"), 500),
+        ],
+        ids=["501", "503", "500"],
+    )
+    def test_publish_pin_lookup_db_error_maps_by_class_never_422(
+        self, client: TestClient, exc: Exception, expected: int
+    ) -> None:
+        """FAR-1483: a pin-lookup DB failure is mapped by its class, never to 422.
 
         ``_lookup_pin_primitive`` used to swallow ``SQLAlchemyError`` and return
-        ``None``, so the endpoint reported 422 "pin references unknown primitive"
-        while the database was down. The failure must surface as 503.
+        ``None``, so ANY pin-lookup DB failure became 422 "pin references unknown
+        primitive". Every leg is raised from the SAME ``session.execute`` pin-lookup
+        target - not patched at ``get_primitive`` - so the mapping is proven on the
+        route's own pin-lookup arm (FAR-1464 convention: ``_GET_501_503`` in
+        ``test_library_routes.py``); ``ProgrammingError`` (missing table) -> 501,
+        plain ``SQLAlchemyError`` -> 503, and an ``InvalidRequestError`` session-
+        contract violation is surfaced by the arm's leading
+        ``raise_session_contract_error`` guard as 500 (never a retry-inviting 503).
         """
         mock_prim = _make_collection_primitive(manifest_pins=[{"slug": "my-schema", "version": "1.0"}])
         mock_session = client.mock_session  # type: ignore[attr-defined]
@@ -563,7 +580,7 @@ class TestPublishCollectionErrorPaths:
 
         def _raise_on_pin_lookup(stmt: object, *args: object, **kwargs: object) -> object:
             if "library_primitives" in str(stmt):
-                raise SQLAlchemyError("db down")
+                raise exc
             assert original_side_effect is not None
             return original_side_effect(stmt, *args, **kwargs)
 
@@ -575,7 +592,7 @@ class TestPublishCollectionErrorPaths:
             mock_session.execute.side_effect = _raise_on_pin_lookup
             resp = client.post(f"/api/v1/libraries/collections/{mock_prim.id}/publish")
 
-        assert resp.status_code == 503
+        assert resp.status_code == expected, f"pin lookup {type(exc).__name__} should map to {expected}"
         assert "unknown primitive" not in resp.text
 
 
