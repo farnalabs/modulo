@@ -1835,7 +1835,8 @@ def test_single_pr_per_run_rejected_on_non_sandbox_nodes():
     codes = [i.code for i in result.issues]
     assert codes == ["SANDBOX_POLICY_FIELD_ON_NON_SANDBOX", "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX"]
     flagged = [i for i in result.issues if i.node_id == _UUID_A]
-    assert flagged and "single_pr_per_run" in flagged[0].message
+    assert flagged
+    assert "single_pr_per_run" in flagged[0].message
 
 
 def test_single_pr_per_run_accepted_on_sandbox_nodes_and_default_elsewhere():
