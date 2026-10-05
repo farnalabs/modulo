@@ -1215,6 +1215,9 @@ class TestCreateAndDeleteArms:
         core.delete_namespaced_pod.side_effect = ConnectionRefusedError("apiserver down")
         await provider._delete_pod_best_effort("modulo-ws-abc")
 
+        # Every failure was attempted and swallowed (no exception escaped).
+        assert core.delete_namespaced_pod.await_count == 3
+
     async def test_delete_best_effort_cancellation_propagates(self) -> None:
         core = AsyncMock()
         core.delete_namespaced_pod.side_effect = asyncio.CancelledError
@@ -1287,8 +1290,11 @@ class TestExecArms:
 
     async def test_close_ws_swallows_a_close_failure(self) -> None:
         provider = _provider()
+        ws = _CoroutineCloseWs(exc=RuntimeError("close boom"))
 
-        await provider._close_ws(_CoroutineCloseWs(exc=RuntimeError("close boom")))  # must not raise
+        await provider._close_ws(ws)  # must not raise
+
+        assert ws.closed is False
 
     async def test_close_ws_cancellation_propagates(self) -> None:
         provider = _provider()
@@ -1465,6 +1471,9 @@ class TestCloseArms:
         monkeypatch.setattr(provider, "destroy_workspace", AsyncMock(side_effect=RuntimeError("boom")))
 
         await provider.close()  # must not raise
+
+        # A generic destroy failure is logged, not discarded from the tracking set.
+        assert "modulo-ws-abc" in provider._workspaces
 
     async def test_close_client_cancellation_propagates(self) -> None:
         provider = _provider()

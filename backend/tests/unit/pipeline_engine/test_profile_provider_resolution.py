@@ -445,7 +445,7 @@ async def test_legacy_e2b_arm_keeps_its_unclosed_per_call_provider(
 
 
 async def test_close_seam_provider_none_is_a_noop() -> None:
-    await nr._close_seam_provider(None)
+    assert await nr._close_seam_provider(None) is None
 
 
 async def test_close_seam_provider_swallows_failures_and_propagates_cancellation() -> None:
