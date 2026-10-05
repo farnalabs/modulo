@@ -34,7 +34,9 @@ from modulo.api.models.error import (
     SchedulerStarvationResponse,
     SessionKeyResponse,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 from modulo.db.crud.error_tracking import (
     count_error_events_by_group,
@@ -137,7 +139,22 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 # only the read/dashboard/management routes are team-gated.
 
 
-@router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/session-key",
+    response_model=SessionKeyResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited(
+                "error_session_key_created",
+                "error_session_key",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",
+        )
+    ],
+)
 @handle_db_errors("errors.create_session_key")
 async def create_session_key(
     principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
@@ -153,7 +170,12 @@ async def create_session_key(
     return {"key": key, "expires_in_seconds": 3600}
 
 
-@router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/ingest",
+    response_model=ErrorIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("error_events_ingested", "error_event", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ERRORS_INGEST_ERRORS)
 async def ingest_errors(
     request: Request,
@@ -237,6 +259,11 @@ async def ingest_errors(
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route - the
+# browser sends NO credentials on the public frontend ingest, so no principal
+# exists for audited(principal_dep=...) to resolve before the handler runs.
+# Covering it needs an actor-less variant of audited() in modulo.core
+# (deliberately out of scope for this sweep).
 @router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
 async def ingest_errors_public(
@@ -611,7 +638,14 @@ async def get_error_group_detail(
     }
 
 
-@router.patch("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
+@router.patch(
+    "/{error_id}",
+    response_model=ErrorGroupDetail,
+    dependencies=[
+        Depends(audited("error_group_updated", "error_group", principal_dep=get_current_tenant_user)),
+        require_feature("error_tracking"),
+    ],
+)
 @handle_db_errors("errors.patch_error_group")
 async def patch_error_group(
     error_id: uuid.UUID,

@@ -18,7 +18,9 @@ from modulo.api.constants import (
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.runs import _mask_output_value, _serialize_node_token_usage
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.run import get_run
 from modulo.db.crud.variant_group import (
     check_pipeline_run_quota,
@@ -231,7 +233,12 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
     }
 
 
-@router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=VariantGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("variant_group_created", "variant_group", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_VARIANTS_CREATE_GROUP)
 async def create_group(
     req: CreateVariantGroupRequest,
@@ -377,7 +384,11 @@ async def get_group(
     return _variant_to_response(group)
 
 
-@router.put("/{group_id}", response_model=VariantGroupResponse)
+@router.put(
+    "/{group_id}",
+    response_model=VariantGroupResponse,
+    dependencies=[Depends(audited("variant_group_updated", "variant_group", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_VARIANTS_UPDATE_GROUP)
 async def update_group(
     group_id: uuid.UUID,
@@ -437,7 +448,16 @@ async def update_group(
     return _variant_to_response(group)
 
 
-@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("variant_group_deleted", "variant_group", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        )
+    ],
+)
 @handle_db_errors(_CODE_VARIANTS_DELETE_GROUP)
 async def delete_group(
     group_id: uuid.UUID,
@@ -479,7 +499,11 @@ async def delete_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VARIANT_GROUP_NOT_FOUND)
 
 
-@router.post("/{group_id}/restore", response_model=VariantGroupResponse)
+@router.post(
+    "/{group_id}/restore",
+    response_model=VariantGroupResponse,
+    dependencies=[Depends(audited("variant_group_restored", "variant_group", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_VARIANTS_RESTORE_GROUP)
 async def restore_group(
     group_id: uuid.UUID,
@@ -522,7 +546,11 @@ async def restore_group(
     return _variant_to_response(group)
 
 
-@router.post("/{group_id}/run", response_model=RunVariantResponse)
+@router.post(
+    "/{group_id}/run",
+    response_model=RunVariantResponse,
+    dependencies=[Depends(audited("variant_run_triggered", "variant_group", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_VARIANTS_RUN_VARIANT)
 async def run_variant(
     group_id: uuid.UUID,
@@ -611,7 +639,13 @@ async def run_variant(
     }
 
 
-@router.post("/{group_id}/batch-run", response_model=RunVariantBatchResponse)
+@router.post(
+    "/{group_id}/batch-run",
+    response_model=RunVariantBatchResponse,
+    dependencies=[
+        Depends(audited("variant_batch_run_triggered", "variant_group", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_VARIANTS_RUN_VARIANT_BATCH)
 async def run_batch(
     group_id: uuid.UUID,

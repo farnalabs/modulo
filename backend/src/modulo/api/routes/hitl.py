@@ -55,7 +55,9 @@ from modulo.api.hitl_answer_validation import (
     validate_hitl_answer,
 )
 from modulo.api.models.problem import ProblemException, ProblemType
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -616,6 +618,12 @@ def _raise_pending_rollback_error(exc: PendingRollbackError, log_key: str) -> No
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/claim",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_claimed", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        )
+    ],
 )
 @handle_db_errors(_CODE_HITL_CLAIM_REVIEW)
 async def claim_review(
@@ -883,6 +891,12 @@ async def _run_hitl_manager(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/approve",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_approved", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        )
+    ],
 )
 @handle_db_errors("hitl.approve_review")
 async def approve_review(
@@ -958,6 +972,17 @@ async def approve_review(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/approve-with-modification",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_approved_with_modification",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",
+        )
+    ],
 )
 @handle_db_errors("hitl.approve_review_with_modification")
 async def approve_review_with_modification(
@@ -1041,6 +1066,12 @@ async def approve_review_with_modification(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/reject",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_rejected", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        )
+    ],
 )
 @handle_db_errors("hitl.reject_review")
 async def reject_review(
@@ -1116,6 +1147,17 @@ async def reject_review(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/deliver-manual",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_manual_output_delivered",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",
+        )
+    ],
 )
 @handle_db_errors("hitl.deliver_manual_output")
 async def deliver_manual_output(
@@ -1183,6 +1225,17 @@ async def deliver_manual_output(
 @router.post(
     "/runs/{run_id}/manual/{review_id}/submit",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_manual_output_submitted",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",
+        )
+    ],
 )
 @handle_db_errors("hitl.submit_manual_output")
 async def submit_manual_output(

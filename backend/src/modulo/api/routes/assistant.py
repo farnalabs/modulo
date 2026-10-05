@@ -66,6 +66,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.assistant.config_service import AssistantConfig, AssistantConfigService
 from modulo.core.assistant.skill_loader import SkillLoader
+from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import get_registry
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.ssrf import pinned_async_client
@@ -1415,7 +1416,13 @@ async def _resolve_provider_model(
     return provider, model
 
 
-@router.post("/sessions", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sessions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("assistant_session_created", "assistant_session", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("assistant.create_session")
 async def create_session(
     req: CreateSessionRequest,
@@ -1517,6 +1524,9 @@ async def get_session(
     "/sessions/{session_id}",
     status_code=status.HTTP_200_OK,
     responses={404: {"description": "Session not found"}},
+    dependencies=[
+        Depends(audited("assistant_session_renamed", "assistant_session", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("assistant.rename_session")
 async def rename_session(
@@ -1561,6 +1571,17 @@ async def rename_session(
     "/sessions/{session_id}",
     status_code=status.HTTP_200_OK,
     responses={404: {"description": "Session not found"}},
+    dependencies=[
+        Depends(
+            audited(
+                "assistant_session_deleted",
+                "assistant_session",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",
+        )
+    ],
 )
 @handle_db_errors("assistant.delete_session")
 async def delete_session(
@@ -1685,6 +1706,9 @@ async def list_messages(
     "/sessions/{session_id}/messages",
     status_code=status.HTTP_201_CREATED,
     responses={404: {"description": "Session not found"}},
+    dependencies=[
+        Depends(audited("assistant_message_appended", "assistant_message", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("assistant.append_message")
 async def append_message(
@@ -1927,6 +1951,9 @@ async def _stream_event_generator(
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
+    dependencies=[
+        Depends(audited("assistant_chat_streamed", "assistant_session", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("assistant.stream_chat")
 async def stream_chat(
@@ -1988,6 +2015,9 @@ async def stream_chat(
         404: {"description": "Not Found"},
         403: {"description": "Permission request does not belong to this session"},
     },
+    dependencies=[
+        Depends(audited("assistant_permission_responded", "assistant_session", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("assistant.submit_permission_response")
 async def submit_permission_response(
@@ -2047,6 +2077,13 @@ async def submit_permission_response(
 @router.post(
     "/sessions/{session_id}/ui-command-results",
     responses={404: {"description": "Not Found"}},
+    dependencies=[
+        Depends(
+            audited(
+                "assistant_ui_command_results_submitted", "assistant_session", principal_dep=get_current_tenant_user
+            )
+        )
+    ],
 )
 @handle_db_errors("assistant.submit_ui_command_results")
 async def submit_ui_command_results(
@@ -2098,6 +2135,11 @@ async def submit_ui_command_results(
 @router.post(
     "/sessions/{session_id}/reset-permissions",
     responses={404: {"description": "Not Found"}},
+    dependencies=[
+        Depends(
+            audited("assistant_session_permissions_reset", "assistant_session", principal_dep=get_current_tenant_user)
+        )
+    ],
 )
 @handle_db_errors("assistant.reset_session_permissions")
 async def reset_session_permissions(
@@ -2144,6 +2186,9 @@ async def reset_session_permissions(
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
+    dependencies=[
+        Depends(audited("assistant_session_resumed", "assistant_session", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("assistant.resume_session")
 async def resume_session(
@@ -2195,6 +2240,9 @@ async def resume_session(
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
+    dependencies=[
+        Depends(audited("assistant_session_stopped", "assistant_session", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("assistant.stop_session")
 async def stop_session(
@@ -2352,6 +2400,9 @@ async def get_audit_trail(
 @router.post(
     "/sessions/{session_id}/undo",
     responses={404: {"description": "Not Found"}},
+    dependencies=[
+        Depends(audited("assistant_action_undone", "assistant_session", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("assistant.undo_last_action")
 async def undo_last_action(

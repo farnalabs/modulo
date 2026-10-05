@@ -15,7 +15,9 @@ from sqlalchemy import case, func, select
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.runs import _serialize_node_token_usage
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw
@@ -493,7 +495,16 @@ async def get_batch(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/{batch_id}", response_model=None)
+@router.delete(
+    "/{batch_id}",
+    response_model=None,
+    dependencies=[
+        Depends(
+            audited("variant_batch_deleted", "variant_batch", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        )
+    ],
+)
 @handle_db_errors(_CODE_DELETE)
 async def delete_batch(
     batch_id: uuid.UUID,
@@ -518,7 +529,11 @@ async def delete_batch(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{batch_id}/re-fire", response_model=None)
+@router.post(
+    "/{batch_id}/re-fire",
+    response_model=None,
+    dependencies=[Depends(audited("variant_batch_refired", "variant_batch", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_RE_FIRE)
 async def re_fire_batch(
     batch_id: uuid.UUID,

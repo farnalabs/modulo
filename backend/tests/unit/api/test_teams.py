@@ -682,7 +682,7 @@ class TestRemoveMember:
             "role": "operator",
         }
 
-    def test_not_found_does_not_emit_audit(self, client: TestClient) -> None:
+    def test_not_found_emits_only_the_failed_attempt_audit(self, client: TestClient) -> None:
         audit = AsyncMock(return_value=MagicMock())
         with (
             patch(
@@ -696,7 +696,14 @@ class TestRemoveMember:
         ):
             resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}")
         assert resp.status_code == 404
-        audit.assert_not_awaited()
+        # FAR-1472: the handler's own team_member_removed event must not fire for
+        # a 404, but the route's audited(...) dependency records the FAILED
+        # attempt as one coarse error-outcome event (payload = method/path/
+        # outcome, no team_id).
+        assert audit.await_count == 1
+        attempt = audit.await_args.kwargs
+        assert attempt["payload_json"]["outcome"] == "error"
+        assert "team_id" not in attempt["payload_json"]
 
     def test_audit_failure_does_not_block_removal(self, client: TestClient) -> None:
         async def _raise_audit(*_a: object, **_k: object) -> object:
@@ -840,7 +847,7 @@ class TestChangeMemberRole:
             "new_role": "operator",
         }
 
-    def test_not_found_does_not_emit_audit(self, client: TestClient) -> None:
+    def test_not_found_emits_only_the_failed_attempt_audit(self, client: TestClient) -> None:
         audit = AsyncMock(return_value=MagicMock())
         with (
             patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
@@ -854,7 +861,14 @@ class TestChangeMemberRole:
                 json={"role": "operator"},
             )
         assert resp.status_code == 404
-        audit.assert_not_awaited()
+        # FAR-1472: the handler's own team_member_role_changed event must not
+        # fire for a 404, but the route's audited(...) dependency records the
+        # FAILED attempt as one coarse error-outcome event (payload = method/
+        # path/outcome, no team_id).
+        assert audit.await_count == 1
+        attempt = audit.await_args.kwargs
+        assert attempt["payload_json"]["outcome"] == "error"
+        assert "team_id" not in attempt["payload_json"]
 
     def test_audit_failure_does_not_block_role_change(self, client: TestClient) -> None:
         async def _raise_audit(*_a: object, **_k: object) -> object:

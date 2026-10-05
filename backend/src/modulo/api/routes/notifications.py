@@ -18,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.notifier import endpoint_events_to_list
 from modulo.core.ssrf import validate_outbound_url, validate_outbound_url_async
 from modulo.db.models.notification_endpoint import NotificationEndpoint
@@ -125,7 +127,12 @@ async def list_endpoints(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(
+            audited("notification_endpoint_created", "notification_endpoint", principal_dep=get_current_tenant_user)
+        ),
+        Depends(deny_break_glass_mint),
+    ],
 )
 @handle_db_errors("notifications.create_endpoint")
 async def create_endpoint(
@@ -237,7 +244,15 @@ async def get_endpoint(
     return _ep_to_response(ep)
 
 
-@router.put("/{endpoint_id}", dependencies=[Depends(deny_break_glass_mint)])
+@router.put(
+    "/{endpoint_id}",
+    dependencies=[
+        Depends(
+            audited("notification_endpoint_updated", "notification_endpoint", principal_dep=get_current_tenant_user)
+        ),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("notifications.update_endpoint")
 async def update_endpoint(
     endpoint_id: uuid.UUID,
@@ -308,7 +323,22 @@ async def update_endpoint(
     return _ep_to_response(ep)
 
 
-@router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@router.delete(
+    "/{endpoint_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "notification_endpoint_deleted",
+                "notification_endpoint",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",
+        ),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("notifications.delete_endpoint")
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
@@ -355,7 +385,15 @@ async def delete_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENDPOINT_NOT_FOUND)
 
 
-@router.post("/{endpoint_id}/restore", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/{endpoint_id}/restore",
+    dependencies=[
+        Depends(
+            audited("notification_endpoint_restored", "notification_endpoint", principal_dep=get_current_tenant_user)
+        ),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("notifications.restore_endpoint")
 async def restore_endpoint(
     endpoint_id: uuid.UUID,

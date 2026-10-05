@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.node_category import (
     NodeCategoryInUseError,
     create_node_category,
@@ -126,7 +128,11 @@ async def list_node_categories_endpoint(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("node_category_created", "node_category", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("node_categories.create_node_category_endpoint")
 async def create_node_category_endpoint(
     req: NodeCategoryCreate,
@@ -229,7 +235,10 @@ async def get_node_category_endpoint(
     return NodeCategoryResponse.model_validate(category)
 
 
-@router.patch("/{category_id}")
+@router.patch(
+    "/{category_id}",
+    dependencies=[Depends(audited("node_category_updated", "node_category", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("node_categories.update_node_category_endpoint")
 async def update_node_category_endpoint(
     category_id: uuid.UUID,
@@ -279,7 +288,16 @@ async def update_node_category_endpoint(
     return NodeCategoryResponse.model_validate(category)
 
 
-@router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{category_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("node_category_deleted", "node_category", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",
+        )
+    ],
+)
 @handle_db_errors("node_categories.delete_node_category_endpoint")
 async def delete_node_category_endpoint(
     category_id: uuid.UUID,
@@ -333,7 +351,10 @@ async def delete_node_category_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_CATEGORY_NOT_FOUND)
 
 
-@router.post("/{category_id}/restore")
+@router.post(
+    "/{category_id}/restore",
+    dependencies=[Depends(audited("node_category_restored", "node_category", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("node_categories.restore_node_category_endpoint")
 async def restore_node_category_endpoint(
     category_id: uuid.UUID,

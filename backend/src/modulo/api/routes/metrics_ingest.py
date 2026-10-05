@@ -20,7 +20,9 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.product_analytics.metrics_constants import (
     API_ERROR_DAILY_CAP,
     MAX_BATCH_SIZE,
@@ -194,7 +196,11 @@ async def _stage_single_event(
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 
-@router.post("/events", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/events",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(audited("metrics_events_ingested", "metrics_event", principal_dep=get_current_tenant_user))],
+)
 async def ingest_events(
     req: MetricsEventBatchRequest,
     request: Request,
