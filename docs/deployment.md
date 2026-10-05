@@ -165,9 +165,13 @@ the pinned image):
 - The config lives in [`deploy/watchdog/config.yaml`](../deploy/watchdog/config.yaml);
   edits apply on the next `docker compose up -d watchdog` (the file is mounted,
   so no rebuild is needed).
-- Scope: this ships in the root `docker-compose.yml` only. The production
-  override (`deploy/compose/docker-compose.prod.yml`) and any Helm chart do not
-  have it yet.
+- Scope: the root `docker-compose.yml` and the production compose
+  (`deploy/compose/docker-compose.prod.yml`). The two probe different targets:
+  the production compose runs the all-in-one image, so it probes
+  `GET http://modulo:80/healthz/ready` (service `modulo` behind nginx on port
+  80 — uvicorn's own `127.0.0.1:8000` is loopback-bound inside the container),
+  and its dashboard is loopback-bound at `127.0.0.1:8083`. The Helm chart does
+  not have it.
 
 ---
 

@@ -45,6 +45,45 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Health watchdog (Gatus) - same image and config as the root
+  # docker-compose.yml's watchdog: built from ../watchdog and mounted from
+  # there, so nothing is duplicated in this directory. Enabled by default.
+  #
+  # Probes THIS deployment over the compose network: the all-in-one image
+  # serves the app behind nginx on port 80, whose `location /health` prefix
+  # proxies /healthz/ready through to uvicorn - uvicorn's own 127.0.0.1:8000
+  # is loopback-bound inside the container, so backend:8000 (the root compose's
+  # target) does not exist here.
+  #
+  # No `depends_on` on `modulo`, deliberately: this service reports the app
+  # being unhealthy, so it must start regardless. Monitoring is on from the
+  # first `up`; email alerting stays off until SMTP_HOST / SMTP_PORT /
+  # EMAIL_FROM / ALERT_EMAIL_TO are set (the same variables the app uses for
+  # HITL email - one SMTP setup serves both). See deploy/watchdog/README.md.
+  watchdog:
+    build: ../watchdog
+    restart: unless-stopped
+    environment:
+      WATCHDOG_PROBE_URL: http://modulo:80/healthz/ready
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+    volumes:
+      - ../watchdog/config.yaml:/config/config.yaml:ro
+    ports:
+      # Loopback-only dashboard. 8083 rather than the root compose's 8082 so
+      # a root-compose stack and this one can share a host; it collides with
+      # nothing in this file (the modulo app publishes ${PORT:-80}:80).
+      - "127.0.0.1:8083:8080"
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
   redis_data:
