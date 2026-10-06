@@ -2401,6 +2401,8 @@ async def set_pipeline_owners(
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
+    from modulo.api.routes.runs import _optional_str
+
     child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     child_cost = _quantize_mcp_cost_rollup(child_cost)
     own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
@@ -2410,6 +2412,12 @@ def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str,
         "pipeline_id": str(r.pipeline_id),
         "status": r.status,
         "trigger_type": r.trigger_type,
+        # FAR-1141 / ADR-042: a dispatched run must never read
+        # indistinguishably from one Modulo executed. ``getattr`` degrades a
+        # partial run stand-in (no column loaded) to ``None``; ``_optional_str``
+        # then degrades a ``MagicMock``'s unset attribute the same way
+        # ``cancel_reason`` does on the REST list item.
+        "execution_origin": _optional_str(getattr(r, "execution_origin", None)),
         "run_number": r.run_number,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "started_at": r.started_at.isoformat() if r.started_at else None,
@@ -2764,7 +2772,10 @@ async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
         "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
         "and error_code for filtering/grouping by failure code. `dimension` groups the "
         "series by a key — `trigger_type`, `trigger_id`, `status`, `pipeline`, `folder`, "
-        "`team` or `error_code` — which is how per-trigger latency is read. The result "
+        "`team`, `error_code` or `execution_origin` — which is how per-trigger latency is "
+        "read, and how a dispatched run is told apart from one Modulo executed "
+        "(`execution_origin` groups on the FAR-1141 run provenance column: `dispatched` "
+        "vs NULL). The result "
         "also carries a `deep_link` to the /analytics view pre-filtered with the same "
         "parameters — share that link instead of dumping the raw buckets. Requires "
         "the analytics.query permission and the analytics_page plan feature."
@@ -3692,11 +3703,18 @@ async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
 
 
 def _run_status_base(run: Run) -> dict[str, Any]:
+    from modulo.api.routes.runs import _optional_str
+
     result: dict[str, Any] = {
         "run_id": str(run.id),
         "pipeline_id": str(run.pipeline_id),
         "status": run.status,
         "trigger_type": run.trigger_type,
+        # FAR-1141 / ADR-042: ``get_run_status`` is a claim-ready surface, so
+        # it carries the run's execution origin ('dispatched' / NULL) exactly
+        # like the REST detail. ``getattr`` + ``_optional_str`` degrade a
+        # partial run stand-in and a ``MagicMock`` to ``None``.
+        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
         "created_at": run.created_at.isoformat(),
     }
     if run.started_at:

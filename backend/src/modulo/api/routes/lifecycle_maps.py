@@ -274,6 +274,11 @@ class JourneyRunHistoryItem(BaseModel):
     status: str | None = None
     completed_at: datetime | None = None
     provenance: str | None = None
+    # FAR-1141 / ADR-042: a journey's run history is a claim-ready run surface,
+    # so each entry carries the run's execution origin ('dispatched' / NULL) and
+    # a dispatched run never reads like one Modulo executed itself. The column
+    # shipped in migration 0285; pre-column rows read NULL.
+    execution_origin: str | None = None
 
 
 class JourneyDetailResponse(JourneySummaryResponse):
@@ -1417,6 +1422,8 @@ async def get_journey_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
+    from modulo.api.routes.runs import _optional_str
+
     return JourneyDetailResponse(
         **_build_journey_summary(journey, unattributed).model_dump(),
         runs=[
@@ -1425,6 +1432,10 @@ async def get_journey_endpoint(
                 status=r.status,
                 completed_at=r.completed_at,
                 provenance=r.trigger_type,
+                # FAR-1141 / ADR-042: the run's execution origin. ``getattr``
+                # degrades a stand-in with no column loaded; ``_optional_str``
+                # degrades a MagicMock the way the REST list item does.
+                execution_origin=_optional_str(getattr(r, "execution_origin", None)),
             )
             for r in runs
         ],

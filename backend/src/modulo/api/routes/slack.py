@@ -377,4 +377,14 @@ async def receive_slack_event(
     run_id = run.id
     background_tasks.add_task(_dispatch_slack_run, str(run_id), str(org_id))
 
-    return {"run_id": str(run_id), "status": "accepted"}
+    # FAR-1141 / ADR-042: the ack is a claim-ready run surface, so it carries the
+    # run's execution origin ('dispatched' / NULL). A deferred import keeps the
+    # route->route edge out of module import order; ``_optional_str`` degrades a
+    # MagicMock stand-in to ``None`` the way the REST list item does.
+    from modulo.api.routes.runs import _optional_str
+
+    return {
+        "run_id": str(run_id),
+        "status": "accepted",
+        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
+    }

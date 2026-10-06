@@ -236,6 +236,19 @@ def _sanitize_detail(detail: Any, limit: int | None = 5000) -> str:
     return sanitize_error_text(detail, limit)
 
 
+def _optional_run_str(value: Any) -> str | None:
+    """Coerce a run attribute to a plain ``str`` or ``None`` (FAR-1141).
+
+    Core-local twin of ``api.routes.runs._optional_str`` — the import-linter
+    ``core-does-not-import-api`` contract forbids importing the API layer here.
+    The run row is a plain ORM entity in production, but unit tests pass
+    ``MagicMock`` run stand-ins whose unset attribute resolves to a mock — that
+    must degrade to ``None`` (origin not recorded) instead of leaking a repr
+    into an immutable, hash-linked audit payload.
+    """
+    return value if isinstance(value, str) else None
+
+
 async def _safe_pipeline_name(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
@@ -2223,6 +2236,13 @@ class PipelineExecutor:
             )
             payload: dict[str, Any] = {
                 "pipeline_id": str(pipeline_id),
+                # FAR-1141 / ADR-042: the run-keyed audit payload carries the
+                # run's execution origin ('dispatched' / NULL) so the audit log
+                # can tell a dispatched run from one Modulo executed. The
+                # coercion mirrors api.routes.runs._optional_str (core may not
+                # import the API layer): a MagicMock/partial run stand-in whose
+                # attribute is not a plain string degrades to NULL, never a repr.
+                "execution_origin": _optional_run_str(getattr(running_run, "execution_origin", None)),
                 "summary": compose_run_started_summary(
                     await _safe_pipeline_name(session, pipeline_id, org_id, run_id),
                     pipeline_id,
@@ -3840,6 +3860,23 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1141 / ADR-042: the run's execution origin travels with this
+            # run-keyed payload so the audit log can tell a dispatched run from
+            # one Modulo executed. Best-effort and read INSIDE this audit's own
+            # transaction: a read failure degrades the field to NULL (logged)
+            # and never suppresses the audit event itself.
+            execution_origin: str | None = None
+            try:
+                origin_run = await get_run(session, run_id)
+                execution_origin = _optional_run_str(getattr(origin_run, "execution_origin", None))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning(
+                    "audit.eval_blocked_origin_unavailable",
+                    extra={"run_id": str(run_id)},
+                    exc_info=True,
+                )
             try:
                 await append_audit_event(
                     session,
@@ -3849,6 +3886,7 @@ class PipelineExecutor:
                     resource_id=run_id,
                     payload_json={
                         "pipeline_id": str(pipeline_id),
+                        "execution_origin": execution_origin,
                         "error_detail": _sanitize_detail(error_detail, limit=None),
                         "actor": SYSTEM_ACTOR,
                         "summary": f"Guardrail eval blocked the run (pipeline {short_id(pipeline_id)})",

@@ -27,6 +27,19 @@ from modulo.db.models.run import Run
 _log = logging.getLogger(__name__)
 
 
+def _optional_run_str(value: Any) -> str | None:
+    """Coerce a run attribute to a plain ``str`` or ``None`` (FAR-1141).
+
+    Core-local twin of ``api.routes.runs._optional_str`` — the import-linter
+    ``core-does-not-import-api`` contract forbids importing the API layer here
+    (and importing ``pipeline_engine.executor`` for one line would drag
+    LangGraph into this module). A ``MagicMock``/partial run stand-in whose
+    attribute is not a plain string degrades to ``None``, never a repr, so an
+    immutable audit payload can always serialise.
+    """
+    return value if isinstance(value, str) else None
+
+
 class RecoveryNotAllowedError(RuntimeError):
     """Raised when the run state does not permit recovery."""
 
@@ -160,7 +173,18 @@ async def recover_node(
     async with guard_dual_write(session):
         await _apply_recovery_markers(session, run, node_id, input_data)
         await session.flush()
-    await _record_recovery_audit(session, org_id, run_id, node_id, node_type, input_data, actor_id)
+    await _record_recovery_audit(
+        session,
+        org_id,
+        run_id,
+        node_id,
+        node_type,
+        input_data,
+        actor_id,
+        # FAR-1141: resolved from the run row this function already holds —
+        # the coercion degrades a MagicMock/partial stand-in to NULL.
+        execution_origin=_optional_run_str(getattr(run, "execution_origin", None)),
+    )
 
     return run
 
@@ -334,17 +358,27 @@ async def _record_recovery_audit(
     node_type: str,
     input_data: dict[str, Any] | None,
     actor_id: uuid.UUID | None,
+    execution_origin: str | None = None,
 ) -> None:
     """Emit the ``node.recovery`` audit event and the applied-log line.
 
     Audit recording failures are non-fatal — they are logged and swallowed so a
     recovery is never blocked by a transient audit write error.
+
+    ``execution_origin`` (FAR-1141 / ADR-042) is the run's execution provenance
+    ('dispatched' / NULL), resolved by the caller from the run row it already
+    holds so this helper never adds a read; ``None`` degrades to a NULL payload
+    key rather than being omitted.
     """
     action = "skip" if input_data is None else "replay"
     payload: dict[str, Any] = {
         "node_id": node_id,
         "node_type": node_type,
         "recovery_action": action,
+        # FAR-1141 / ADR-042: run-keyed audit payloads carry the run's
+        # execution origin so a recovery on a dispatched run is distinguishable
+        # from one on a run Modulo executed itself.
+        "execution_origin": execution_origin,
         "summary": f'{action.capitalize()} recovery applied to node "{node_id}"',
     }
     if actor_id is None:
