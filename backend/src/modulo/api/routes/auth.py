@@ -501,7 +501,7 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
     dependencies=[
         Depends(
             audited_system("login_attempted", "session", actor_source="pre_auth", fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -587,7 +587,7 @@ def _demo_not_found() -> HTTPException:
     dependencies=[
         Depends(
             audited_system("demo_login_attempted", "session", actor_source="pre_auth", fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -1164,7 +1164,7 @@ def _mint_refresh_response(
         Depends(_require_csrf_double_submit),
         Depends(
             audited_system("token_refresh_attempted", "session", actor_source="pre_auth", fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )
@@ -1306,7 +1306,7 @@ def _clear_account_session_approvals(claims: dict[str, object]) -> None:
         Depends(_require_csrf_double_submit),
         Depends(
             audited_system("logout_attempted", "session", actor_source="pre_auth", fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
     ],
 )

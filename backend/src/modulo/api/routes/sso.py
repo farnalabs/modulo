@@ -450,7 +450,7 @@ async def _saml_login_redirect(
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
@@ -681,7 +681,7 @@ async def saml_login(
     dependencies=[
         Depends(
             audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
-            scope="function",
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
 )
