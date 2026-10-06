@@ -13,6 +13,7 @@ all stubbed; only the wiring between the tool call and the audit event is real.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import uuid
 from collections.abc import AsyncGenerator
@@ -45,6 +46,11 @@ async def _fail_closed_tool() -> dict[str, Any]:
 @mcp_audited("widget_deleted", "widget", fail_closed=True)
 async def _raising_tool() -> dict[str, Any]:
     raise ValueError("boom")
+
+
+@mcp_audited("widget_deleted", "widget")
+async def _cancelled_tool() -> dict[str, Any]:
+    raise asyncio.CancelledError
 
 
 def _audit_session_mock() -> AsyncMock:
@@ -210,3 +216,65 @@ class TestCommitOutcome(_AuthContext):
         assert result == {"id": "w1"}
         messages = [record.getMessage() for record in caplog.records]
         assert "mcp_audit.widget_created.append_failed.close_failed" in messages
+
+
+class TestSessionSetupFailures(_AuthContext):
+    """Establishing the audit transaction never replaces the tool's result."""
+
+    async def test_setup_failure_is_logged_and_the_event_skipped(
+        self, audit_env, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _session, append = audit_env
+        monkeypatch.setattr(mcp_audit, "set_rls_org", AsyncMock(side_effect=RuntimeError("rls down")))
+        with caplog.at_level("WARNING", logger=mcp_audit.__name__):
+            result = await _fail_open_tool()
+
+        assert result == {"id": "w1"}
+        assert append.await_count == 0
+        assert any(getattr(record, "stage", None) == "session_setup" for record in caplog.records)
+
+    async def test_cancellation_during_setup_propagates(self, audit_env, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A cancelled call is never turned into an audit write."""
+        monkeypatch.setattr(mcp_audit, "set_rls_org", AsyncMock(side_effect=asyncio.CancelledError()))
+        with pytest.raises(asyncio.CancelledError):
+            await _fail_open_tool()
+
+    async def test_cancellation_during_append_propagates(self, audit_env, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(mcp_audit, "append_audit_event", AsyncMock(side_effect=asyncio.CancelledError()))
+        with pytest.raises(asyncio.CancelledError):
+            await _fail_open_tool()
+
+    async def test_cancellation_during_close_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        session = _audit_session_mock()
+        session.begin.return_value.__aexit__ = AsyncMock(side_effect=asyncio.CancelledError())
+
+        @asynccontextmanager
+        async def _fresh() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        monkeypatch.setattr(mcp_audit, "_fresh_session", _fresh)
+        monkeypatch.setattr(mcp_audit, "append_audit_event", AsyncMock())
+        monkeypatch.setattr(mcp_audit, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(mcp_audit, "set_rls_user_context", AsyncMock())
+        with pytest.raises(asyncio.CancelledError):
+            await _fail_open_tool()
+
+    async def test_cancelled_tool_is_not_recorded(self, audit_env) -> None:
+        """No completed business outcome: nothing is appended."""
+        _session, append = audit_env
+        with pytest.raises(asyncio.CancelledError):
+            await _cancelled_tool()
+
+        assert append.await_count == 0
+
+
+class TestDecoratorValidation:
+    """``mcp_audited`` rejects blank event/resource types at definition time."""
+
+    def test_blank_event_type_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="non-empty event_type"):
+            mcp_audited("", "widget")
+
+    def test_blank_resource_type_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="non-empty resource_type"):
+            mcp_audited("widget_created", "  ")
