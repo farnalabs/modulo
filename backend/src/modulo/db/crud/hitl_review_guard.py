@@ -72,10 +72,22 @@ _ON_REJECT_PROCEED = "proceed"
 
 
 def _on_reject_weakened(old_cfg: dict[str, Any] | None, new_cfg: dict[str, Any] | None) -> bool:
-    """True when ``on_reject`` moves TO ``proceed`` from terminate/route/unset."""
+    """True when ``on_reject`` moves TO ``proceed`` from any other value or unset."""
     new_proceed = (new_cfg or {}).get("on_reject") == _ON_REJECT_PROCEED
     old_proceed = (old_cfg or {}).get("on_reject") == _ON_REJECT_PROCEED
     return new_proceed and not old_proceed
+
+
+# FAR-1532: an automated ``correction_target`` is the parallel vector for the
+# exact same weakening. ``resolve_reject_disposition`` (hitl_context) makes a
+# truthy ``correction_target`` WIN over terminating when no reject route exists,
+# so ADDING one flips a gate to continue-on-reject without touching ``on_reject``
+# and would otherwise bypass the guard. Flagged fail-closed on addition.
+def _correction_target_weakened(old_cfg: dict[str, Any] | None, new_cfg: dict[str, Any] | None) -> bool:
+    """True when a truthy ``correction_target`` is ADDED (absent/falsy -> truthy)."""
+    new_target = bool((new_cfg or {}).get("correction_target"))
+    old_target = bool((old_cfg or {}).get("correction_target"))
+    return new_target and not old_target
 
 
 def is_privileged_role(role: str | None) -> bool:
@@ -219,9 +231,12 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
     - ``condition``: changed at all (evaluated before ``human_only`` is
       consulted, so any change can silently gate off a formerly-always-on gate).
     - ``eval_condition``: changed at all (same reasoning).
-    - ``on_reject``: changed TO ``proceed`` from terminate/route/unset
+    - ``on_reject``: changed TO ``proceed`` from any other value or unset
       (FAR-1532) — restores continue-on-reject, so a rejection no longer ends
       the run. Changing away from ``proceed`` tightens and is not flagged.
+    - ``correction_target``: a truthy target ADDED where none was set
+      (FAR-1532) — an automated correction also wins over terminating
+      (``resolve_reject_disposition``), so adding one is the same weakening.
 
     ``claim_expiry_minutes`` is NOT weakening when shortened: a shorter expiry
     is stricter, not weaker. On expiry the claim is reset (run returns to
@@ -253,6 +268,8 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
         types.append("response_contract")
     if _on_reject_weakened(old_cfg, new_cfg):
         types.append("on_reject")
+    if _correction_target_weakened(old_cfg, new_cfg):
+        types.append("correction_target")
     return types
 
 
@@ -302,9 +319,10 @@ def _hitl_node_weakenings(
       effectively human-only (the fail-safe default), so
       absent -> explicit false is a true relaxation and stays gated;
     - explicit false -> explicit false is silent;
-    - FAR-1532: a change TO ``on_reject: proceed`` (from terminate/route/unset)
-      is weakening (``on_reject``); proceed -> proceed or away from proceed is
-      silent;
+    - FAR-1532: a change TO ``on_reject: proceed`` (from any other value or
+      unset) is weakening (``on_reject``), as is ADDING a truthy
+      ``correction_target`` (``correction_target`` — the automated parallel
+      vector); proceeding unchanged or away from either is silent;
     - an old hitl node whose id is absent from the new list (node removed,
       or flipped off ``node_type == "hitl"``) is a structural weakening
       (``structural:hitl_node_removed``) — deletion is the one way a
@@ -341,6 +359,9 @@ def _hitl_node_weakenings(
         # FAR-1532: switching the node's gate to ``on_reject: proceed``.
         if _on_reject_weakened(matching_old["hitl_config"], normalized["hitl_config"]):
             node_types.append("on_reject")
+        # FAR-1532: adding a ``correction_target`` is the automated parallel vector.
+        if _correction_target_weakened(matching_old["hitl_config"], normalized["hitl_config"]):
+            node_types.append("correction_target")
         if node_types:
             detections.append(
                 EdgeWeakening(
