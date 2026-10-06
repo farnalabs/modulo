@@ -23,7 +23,9 @@ from starlette.responses import Response
 
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_system_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
 from modulo.core.license import get_license
@@ -458,7 +460,11 @@ class ToggleFlagRequest(BaseModel):
     enabled: bool
 
 
-@router.put("/{flag_name}", response_model=None)
+@router.put(
+    "/{flag_name}",
+    dependencies=[Depends(audited("feature_flag_override_set", "org", principal_dep=get_current_tenant_user))],
+    response_model=None,
+)
 @handle_db_errors("admin.feature_flags.toggle_feature_flag")
 async def toggle_feature_flag(
     flag_name: str,
@@ -586,7 +592,11 @@ async def get_org_flag_override(
         )
 
 
-@router.put("/{flag_name}/org-override", response_model=None)
+@router.put(
+    "/{flag_name}/org-override",
+    dependencies=[Depends(audited("feature_flag_override_set", "org", principal_dep=get_current_tenant_user))],
+    response_model=None,
+)
 @handle_db_errors("admin.feature_flags.set_org_flag_override")
 async def set_org_flag_override(
     flag_name: str,
@@ -642,7 +652,20 @@ async def set_org_flag_override(
         )
 
 
-@router.delete("/{flag_name}/org-override", response_model=None)
+@router.delete(
+    "/{flag_name}/org-override",
+    dependencies=[
+        Depends(
+            audited(
+                "feature_flag_override_cleared",
+                "org",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    response_model=None,
+)
 @handle_db_errors("admin.feature_flags.clear_org_flag_override")
 async def clear_org_flag_override(
     flag_name: str,

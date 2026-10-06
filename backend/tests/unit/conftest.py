@@ -4,7 +4,23 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tests.helpers.audit_session import patch_audit_session_factory
 from tests.unit._e2b_sandbox_bridge import install_bridge
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the ``audited(...)`` fresh-session write to an in-memory double.
+
+    ``audit_coverage.audit_session`` builds its session from
+    ``_shared_session_factory`` (lazy-imported process-shared engine), so
+    patching that factory covers every annotated route in the unit suite -
+    including tests that ``dependency_overrides.clear()`` mid-test, which would
+    defeat a dependency override on ``audit_session`` itself. Integration tests
+    are deliberately untouched: they run against real Postgres and exercise the
+    genuine append.
+    """
+    patch_audit_session_factory(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

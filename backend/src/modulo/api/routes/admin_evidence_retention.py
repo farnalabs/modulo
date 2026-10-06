@@ -26,7 +26,9 @@ from modulo.api.dependencies import (
     get_db_session,
     require_system_or_org_admin,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.evidence_retention import (
     DEFAULT_MAX_AGE_DAYS,
     EvidenceRetentionPolicy,
@@ -154,7 +156,13 @@ async def get_evidence_retention(
     )
 
 
-@router.put("", status_code=http_status.HTTP_200_OK)
+@router.put(
+    "",
+    dependencies=[
+        Depends(audited("evidence_retention_updated", "evidence_retention", principal_dep=get_current_tenant_user))
+    ],
+    status_code=http_status.HTTP_200_OK,
+)
 async def update_evidence_retention(
     req: UpdateEvidenceRetentionPolicyRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -227,7 +235,20 @@ async def update_evidence_retention(
     )
 
 
-@router.post("/purge", status_code=http_status.HTTP_200_OK)
+@router.post(
+    "/purge",
+    dependencies=[
+        Depends(
+            audited(
+                "evidence_retention_purged",
+                "evidence_retention",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=http_status.HTTP_200_OK,
+)
 async def purge_evidence_retention(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     organisation_id: Annotated[uuid.UUID | None, Query()] = None,
