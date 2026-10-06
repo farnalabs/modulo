@@ -2055,6 +2055,71 @@ async def list_pipelines_tool(
         return _tool_error("Failed to list pipelines")
 
 
+class _CreatePipelineParsed(NamedTuple):
+    """Parsed UUID arguments for ``create_pipeline``."""
+
+    folder_id: uuid.UUID | None
+    business_owner_id: uuid.UUID | None
+    reliability_owner_id: uuid.UUID | None
+
+
+def _validate_create_pipeline_args(
+    *,
+    folder_id: str | None,
+    hitl_review_window_seconds: int | None,
+    circuit_breaker_threshold: float | None,
+    business_owner_id: str | None,
+    reliability_owner_id: str | None,
+    default_autonomy_level: str,
+    max_autonomy_level: str | None,
+) -> _CreatePipelineParsed | dict[str, Any]:
+    """Validate ``create_pipeline``'s arguments before auth (FAR-* checks).
+
+    Returns the parsed UUIDs on success, or the standard error envelope for
+    the first argument that fails validation:
+
+    - ``folder_id`` must be a UUID (``invalid_folder_id``).
+    - ``hitl_review_window_seconds`` must sit in the 60..604800 envelope
+      (FAR-1257: the same envelope as the REST/Pydantic layer and
+      ``ck_pipelines_hitl_review_window`` — validated up front so an
+      out-of-range value is a clean tool error, not a DB IntegrityError).
+    - ``circuit_breaker_threshold`` runs the shared FAR-1182 check.
+    - owner ids must parse as optional UUIDs (FAR-1161).
+    - the autonomy ceiling must be a valid level at or above the default
+      (FAR-1163, same rule as the REST create route).
+    """
+    parsed_folder_id: uuid.UUID | None = None
+    if folder_id is not None:
+        try:
+            parsed_folder_id = uuid.UUID(folder_id)
+        except ValueError:
+            return {"error": "invalid_folder_id", "detail": f"Invalid folder_id UUID: {folder_id}"}
+    if hitl_review_window_seconds is not None and not (60 <= hitl_review_window_seconds <= 604800):
+        return {
+            "error": "validation_failed",
+            "detail": (
+                f"hitl_review_window_seconds must be between 60 and 604800 seconds, got {hitl_review_window_seconds}"
+            ),
+        }
+    threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
+    if threshold_error is not None:
+        return threshold_error
+    parsed_business_owner, business_owner_err = _parse_optional_uuid(business_owner_id, "business_owner_id")
+    if business_owner_err is not None:
+        return business_owner_err
+    parsed_reliability_owner, reliability_owner_err = _parse_optional_uuid(reliability_owner_id, "reliability_owner_id")
+    if reliability_owner_err is not None:
+        return reliability_owner_err
+    if max_autonomy_level is not None:
+        from modulo.core.run_context.autonomy import validate_autonomy_ceiling
+
+        try:
+            validate_autonomy_ceiling(default_autonomy_level, max_autonomy_level)
+        except ValueError as exc:
+            return {"error": "invalid_max_autonomy_level", "detail": str(exc)}
+    return _CreatePipelineParsed(parsed_folder_id, parsed_business_owner, parsed_reliability_owner)
+
+
 @mcp.tool(
     description="Create a new pipeline in the organisation. Returns the created pipeline details. "
     "Optional circuit_breaker_threshold (USD, > 0) sets a monthly spend circuit breaker: when the "
@@ -2083,41 +2148,20 @@ async def create_pipeline(
     business_owner_id: str | None = None,
     reliability_owner_id: str | None = None,
 ) -> dict[str, Any]:
-    parsed_folder_id: uuid.UUID | None = None
-    if folder_id is not None:
-        try:
-            parsed_folder_id = uuid.UUID(folder_id)
-        except ValueError:
-            return {"error": "invalid_folder_id", "detail": f"Invalid folder_id UUID: {folder_id}"}
-    # FAR-1257: same 60..604800 envelope as the REST/Pydantic layer and
-    # ck_pipelines_hitl_review_window — validate up front so an out-of-range
-    # value is a clean tool error, not a DB IntegrityError.
-    if hitl_review_window_seconds is not None and not (60 <= hitl_review_window_seconds <= 604800):
-        return {
-            "error": "validation_failed",
-            "detail": (
-                f"hitl_review_window_seconds must be between 60 and 604800 seconds, got {hitl_review_window_seconds}"
-            ),
-        }
-    threshold_error = _circuit_breaker_threshold_error(circuit_breaker_threshold)
-    if threshold_error is not None:
-        return threshold_error
-    parsed_business_owner, business_owner_err = _parse_optional_uuid(business_owner_id, "business_owner_id")
-    if business_owner_err is not None:
-        return business_owner_err
-    parsed_reliability_owner, reliability_owner_err = _parse_optional_uuid(reliability_owner_id, "reliability_owner_id")
-    if reliability_owner_err is not None:
-        return reliability_owner_err
-
-    # FAR-1163: the autonomy ceiling must be a valid level and sit at or
-    # above the default (same rule as the REST create route).
-    if max_autonomy_level is not None:
-        from modulo.core.run_context.autonomy import validate_autonomy_ceiling
-
-        try:
-            validate_autonomy_ceiling(default_autonomy_level, max_autonomy_level)
-        except ValueError as exc:
-            return {"error": "invalid_max_autonomy_level", "detail": str(exc)}
+    args = _validate_create_pipeline_args(
+        folder_id=folder_id,
+        hitl_review_window_seconds=hitl_review_window_seconds,
+        circuit_breaker_threshold=circuit_breaker_threshold,
+        business_owner_id=business_owner_id,
+        reliability_owner_id=reliability_owner_id,
+        default_autonomy_level=default_autonomy_level,
+        max_autonomy_level=max_autonomy_level,
+    )
+    if isinstance(args, dict):
+        return args
+    parsed_folder_id = args.folder_id
+    parsed_business_owner = args.business_owner_id
+    parsed_reliability_owner = args.reliability_owner_id
 
     try:
         if not await validate_current_auth():
