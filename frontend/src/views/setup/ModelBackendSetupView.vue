@@ -1,30 +1,33 @@
 <template>
   <div class="flex min-h-screen items-center justify-center bg-background p-4">
     <div class="w-full max-w-md rounded-lg border p-6 shadow-sm">
-      <PageHeader :title="t('views.ModelBackendSetupView.complete_setup_title')" :subtitle="t('views.ModelBackendSetupView.complete_setup_subtitle')" />
+      <PageHeader :title="$t('views.ModelBackendSetupView.complete_model_backend_setup')"
+        :subtitle="$t('views.ModelBackendSetupView.page_subtitle')" />
 
       <div v-if="success" class="space-y-4">
         <div class="rounded-md bg-green-50 p-3 text-sm text-green-800">
-          {{ t('views.ModelBackendSetupView.backend_active', { name: backendName }) }}
+          {{ $t('views.ModelBackendSetupView.backend_now_active', { name: backendName }) }}
         </div>
-        <Button severity="secondary" outlined class="w-full" data-testid="model-backend-setup-view-backends" @click="router.push('/admin/model-backends')">
-          {{ t('views.ModelBackendSetupView.view_model_backends') }}
+        <Button severity="secondary" outlined class="w-full"
+          data-testid="model-backend-setup-view-backends"
+          @click="router.push('/admin/model-backends')">
+          {{ $t('views.ModelBackendSetupView.view_model_backends') }}
         </Button>
       </div>
 
       <div v-else-if="!token" class="space-y-4">
         <div class="rounded-md bg-amber-50 p-3 text-sm text-amber-800">
-          {{ t('views.ModelBackendSetupView.missing_token') }}
+          {{ $t('views.ModelBackendSetupView.missing_token_hint') }}
         </div>
       </div>
 
       <form v-else data-testid="model-backend-setup-form" @submit.prevent="() => submit()" class="space-y-4">
         <div>
-          <label for="model-backend-setup-api-key" class="mb-1 block text-sm font-medium">{{ t('views.ModelBackendSetupView.api_key') }}</label>
-          <InputText id="model-backend-setup-api-key"
+          <label for="model-backend-api-key" class="mb-1 block text-sm font-medium">{{ $t('views.ModelBackendSetupView.api_key') }}</label>
+          <InputText id="model-backend-api-key"
             v-model="apiKey"
             type="password"
-            :placeholder="t('views.ModelBackendSetupView.api_key_placeholder')"
+            :placeholder="$t('views.ModelBackendSetupView.api_key_placeholder')"
             :disabled="loading"
             data-testid="model-backend-setup-api-key"
             class="w-full"
@@ -33,8 +36,9 @@
 
         <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
 
-        <Button type="submit" :disabled="loading || !apiKey.trim()" class="w-full" data-testid="model-backend-setup-submit">
-          {{ loading ? t('views.ModelBackendSetupView.saving') : t('views.ModelBackendSetupView.complete_setup_action') }}
+        <Button type="submit" :disabled="loading || !apiKey.trim()" class="w-full"
+          data-testid="model-backend-setup-submit">
+          {{ loading ? $t('views.ModelBackendSetupView.saving') : $t('views.ModelBackendSetupView.complete_setup') }}
         </Button>
       </form>
     </div>
@@ -85,11 +89,11 @@ const { loading, error, mutate: submit } = useMutation(async () => {
       ? String((e as Record<string, unknown>).detail ?? (e as Record<string, unknown>).message ?? '')
       : ''
     if (detail.includes('invalid_token')) {
-      throw new Error(t('views.ModelBackendSetupView.setup_failed_expired_token'))
+      throw new Error(t('views.ModelBackendSetupView.error_link_expired'))
     } else if (detail.includes('backend_not_found')) {
-      throw new Error(t('views.ModelBackendSetupView.setup_failed_backend_not_found'))
+      throw new Error(t('views.ModelBackendSetupView.error_backend_not_found'))
     }
-    throw new Error(t('views.ModelBackendSetupView.setup_failed_generic'))
+    throw new Error(t('views.ModelBackendSetupView.error_setup_failed'))
   }
 })
 
