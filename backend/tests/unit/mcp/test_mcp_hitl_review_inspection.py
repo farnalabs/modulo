@@ -460,7 +460,7 @@ class TestHitlInspectionBranches(_AuthContext):
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
         out = await list_hitl_reviews()
-        assert out["error"] == "internal_error"
+        assert out["error"] == "server_error"
 
     @patch("modulo.api.mcp_server._load_hitl_run", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._session")
@@ -528,7 +528,7 @@ class TestHitlInspectionBranches(_AuthContext):
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
         out = await get_hitl_review(run_id=str(uuid.uuid4()), review_id="hitl_review_a_b")
-        assert out["error"] == "internal_error"
+        assert out["error"] == "server_error"
 
     @patch("modulo.api.mcp_server._pipeline_owner_team_id", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server._session")
@@ -580,7 +580,7 @@ class TestHitlInspectionBranches(_AuthContext):
         self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
     ) -> None:
         out = await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
-        assert out["error"] == "internal_error"
+        assert out["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_get_pipeline_reviews_invalid_uuid_returns_invalid_id(self, mock_validate_auth: AsyncMock) -> None:

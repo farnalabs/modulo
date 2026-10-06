@@ -34,7 +34,7 @@ listed org roles always granted).
 ## Behaviours
 
 - [x] Sessions: `GET/POST /api/v1/assistant/sessions`, `GET/PATCH/DELETE
-      /api/v1/assistant/sessions/{id}` — create, rename, list and delete sessions; delete
+      /api/v1/assistant/sessions/{id}` – create, rename, list and delete sessions; delete
       removes the session and its messages
 - [x] Messages: `GET /api/v1/assistant/sessions/{id}/messages` lists paginated messages and
       `POST` appends a user message
@@ -75,13 +75,13 @@ listed org roles always granted).
 
 ## Known Gaps
 
-- **No PRD section reference for the plugin/registry-adjacent assistant tool surface** — the
+- **No PRD section reference for the plugin/registry-adjacent assistant tool surface**: the
   MCP API-key/JWT binding is tracked under `feat-mcp` (ADR 014), not here.
-- **Test breadth** — the user-session streaming/SSE surface is BDD-covered at the
+- **Test breadth**: the user-session streaming/SSE surface is BDD-covered at the
   feature-file level; the API-level unit coverage is split across
   `test_assistant_routes.py` (session/message CRUD, the SSE
   stream/permission-response/reset-permissions routes, and the permission
-  round-trip helpers — `_default_tool_permission`, `_resolve_tool_permission`,
+  round-trip helpers – `_default_tool_permission`, `_resolve_tool_permission`,
   `_check_nogo`, `_tool_allowlist_disabled`, `_build_permission_request_payload`
   / `_merge_ui_command_results`, `_classify_ui_tool_permissions`,
   `clear_session_approvals_for_account`) and `test_admin_assistant_routes.py`
@@ -89,7 +89,7 @@ listed org roles always granted).
   user-facing skills list/create path.
 
 ## QA History
-- 2026-09-28: **Improve Architecture product-map walk** — reconciled the stale
+- 2026-09-28: **Improve Architecture product-map walk**: reconciled the stale
   "Test breadth" known gap and the under-cited unit coverage. The tracker cited
   only `test_me_assistant_skills.py` while claiming deeper permission-round-trip
   coverage lived there, but the permission helpers
@@ -101,16 +101,16 @@ listed org roles always granted).
   `test_assistant_routes.py`, with the admin config surface in
   `test_admin_assistant_routes.py`. Added both files to `unit-tests:` and
   re-worded the gap to name the actual distribution.
-- 2026-09-26: **Improve Architecture product-map walk** — closed `feat-assistant`'s
+- 2026-09-26: **Improve Architecture product-map walk**: closed `feat-assistant`'s
   stale "auto-execute thresholds and guidance tuning are partially wired" gap. Both
   surfaces ship end to end: `auto_execute_threshold` (AssistantConfig default 0.8)
-  is enforced in `_default_tool_permission` (`api/routes/assistant.py`) — a
-  `full_auto` action below the threshold is demoted to `requires_approval` — and is
+  is enforced in `_default_tool_permission` (`api/routes/assistant.py`) – a
+  `full_auto` action below the threshold is demoted to `requires_approval` – and is
   read/written by the `/admin/assistant` safety panel; `additional_guidance` is a
   first-class `GET/PUT /api/v1/admin/assistant/config` field edited from the
   Additional Guidance textarea. The manifest registry entry is now `status: covered`
   with both behaviours ticked.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   `AnalyticsChart` surface (`components/analytics/AnalyticsChart.vue` static testids
   `analytics-chart` / `analytics-chart-canvas` / `analytics-chart-empty`) in the
   manifest `elements:` inventory for `/assistant`: `AssistantChat.vue` renders
@@ -119,7 +119,7 @@ listed org roles always granted).
   The component is now part of the route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/assistant`
   and wired the two components into the reverse testid-coverage guard
@@ -127,7 +127,7 @@ listed org roles always granted).
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass**: extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/assistant`: the whole-page view(s) `UserAssistantSkillsView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -135,14 +135,14 @@ listed org roles always granted).
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the
+- 2026-09-11: **product-map review pass**: registered the
   Assistant chat surface on the `/assistant` manifest `elements:` inventory: the page
   already documented its `AssistantOnlyView.vue` chrome (`assistant-only-*`) but not the
   `assistant-analytics-card` static testid its embedded chat panel
   (`components/assistant/AssistantChat.vue`) ships. `test_mapped_route_elements_cover_owning_view_testids`
   now maps `/assistant` to `AssistantOnlyView.vue` + `AssistantChat.vue` so the chat surface
   cannot drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-28: **product-map review pass** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass**: added this behaviour-tracker
   for the registered manifest feature `feat-assistant`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/assistant.py`,
   `api/routes/admin_assistant.py`, `core/assistant/*` and the `backend/tests/bdd/features/assistant/`

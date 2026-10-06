@@ -71,7 +71,7 @@ class TestCreateAgentErrors(AuthContext):
             model_backend_id="not-a-uuid",
         )
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -363,7 +363,7 @@ class TestInferSchemaErrors(AuthContext):
 
         result = await infer_schema(input_sample={"name": "x"})
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "feature_required"
         assert "developer mode" in result.get("detail", "")
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

@@ -854,7 +854,7 @@ class TestMcpTools:
         ):
             result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=5)
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     # ------------------------------------------------------------------
     # FAR-1184: raise/clear requires cost.manage (org admin)
