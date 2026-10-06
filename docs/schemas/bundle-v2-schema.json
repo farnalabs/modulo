@@ -38,6 +38,20 @@
           ],
           "description": "Team name for ownership resolution on import"
         },
+        "business_owner_email": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "format": "email" }
+          ],
+          "description": "Accountable business owner, referenced by the member's email (FAR-1161). Export resolves the pipeline's business_owner_id to its email, or null when no owner is set. Import resolves the email to an active org member and leaves it unassigned with a disclosed warning when it does not resolve."
+        },
+        "reliability_owner_email": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "format": "email" }
+          ],
+          "description": "Accountable reliability/SRE owner, referenced by the member's email (FAR-1161). Same export/import resolution as business_owner_email."
+        },
         "visibility": {
           "type": "string",
           "enum": ["org", "team", "private"],

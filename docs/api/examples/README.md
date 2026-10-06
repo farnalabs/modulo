@@ -1,6 +1,6 @@
 # Modulo API Client Examples
 
-Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Modulo API operations, except the login refresh/logout flow: `auth-login/` and the refresh/logout steps of `full-workflow.py` predate the cookie-based auth contract and do not run against a current server (see [Known issues](#known-issues)).
+Standalone, copy-paste runnable code examples in **Python** (`httpx`), **curl**, and **JavaScript** (`fetch`) covering all common Modulo API operations, except the login refresh/logout flow: `auth-login/` and the login step of `full-workflow.py` predate the cookie-based auth contract and do not run against a current server (see [Known issues](#known-issues)).
 
 ## Prerequisites
 
@@ -151,14 +151,16 @@ bash library/curl.sh
 ## Known issues
 
 - `auth-login/python.py`, `auth-login/js.js`, `auth-login/curl.sh` and the
-  login/refresh/logout steps of `full-workflow.py` still implement the
+  login step of `full-workflow.py` still implement the
   pre-FAR-1197 contract: they read `refresh_token` from the login response
   body (the field no longer exists, so the Python examples raise `KeyError`
   while parsing the login response and the JavaScript example throws on
   `.slice`) and POST the refresh token back in the request body (ignored by
   the server). The curl script gets further – its login succeeds and the
-  Bearer calls work – but its refresh step fails. Until they are ported to
-  the cookie + CSRF flow described under [Authentication
-  model](#authentication-model), none of these four runs end-to-end. Every
-  other example only uses the access token from the login response and runs
-  as documented.
+  Bearer calls work – but its refresh step fails. `full-workflow.py` has no
+  refresh or logout step at all: it dies inside `login()`, because that
+  function returns `data["refresh_token"]` alongside the access token.
+  Until they are ported to the cookie + CSRF flow described under
+  [Authentication model](#authentication-model), none of these four runs
+  end-to-end. Every other example only uses the access token from the login
+  response and runs as documented.
