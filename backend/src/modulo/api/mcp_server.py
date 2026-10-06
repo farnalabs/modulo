@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import Any, ParamSpec, cast
+from typing import Any, NamedTuple, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
 from fastapi import HTTPException as FastAPIHTTPException
@@ -175,6 +175,7 @@ from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
+from modulo.db.models.agent import Agent
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.run import (
@@ -1799,6 +1800,91 @@ def _parse_optional_uuid(
 _TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
 
 
+class _DbShellConfig(NamedTuple):
+    """Parameters for the shared DB/tool exception ladder."""
+
+    log_constant: str
+    integrity_detail: str | None
+    fallback: str
+    handle_http_exception: bool = False
+    db_errors_to_fallback: bool = False
+
+
+async def _run_db_shell[**TOOL_SHELL_P](
+    fn: Callable[TOOL_SHELL_P, Awaitable[dict[str, Any]]],
+    cfg: _DbShellConfig,
+    *args: TOOL_SHELL_P.args,
+    **kwargs: TOOL_SHELL_P.kwargs,
+) -> dict[str, Any]:
+    """Run one MCP tool body under the shared DB/tool exception ladder.
+
+    Reproduces the verbatim per-tool ``try/except`` shells the ladder
+    replaces, keyed by ``cfg`` so the remaining tools can adopt it without
+    hardcoding:
+
+    - ``MCPAuthorizationError`` → ``insufficient_scope`` (all shells).
+    - ``StarletteHTTPException`` → ``validation_failed`` when
+      ``cfg.handle_http_exception`` is True; otherwise the generic
+      ``Exception`` behaviour (log + ``cfg.fallback``), which is what shells
+      without the clause did.
+    - ``IntegrityError`` → ``conflict`` with ``cfg.integrity_detail``
+      formatted with ``orig``; when ``integrity_detail`` is None the
+      ``SQLAlchemyError`` behaviour (log + ``database_unavailable``), which is
+      what shells without an IntegrityError clause did. When
+      ``cfg.db_errors_to_fallback`` is True the clause is skipped entirely
+      and the exception falls through to the generic ``Exception``
+      behaviour, reproducing shells (e.g. ``get_trigger``) that had no
+      IntegrityError clause at all.
+    - ``ProgrammingError`` → ``migration_required``.
+    - ``SQLAlchemyError`` → the FAR-1482 session-contract classifier first
+      (a programming bug surfaces as ``.session_contract_error``, never as
+      the generic fallback), then ``database_unavailable``; when
+      ``cfg.db_errors_to_fallback`` is True the clause is skipped entirely
+      and the exception falls through to the generic ``Exception``
+      behaviour, reproducing shells that had no SQLAlchemyError clause.
+    - ``Exception`` → log + ``_tool_error(cfg.fallback)``.
+    """
+    # `fn.__name__` is the only per-tool identity available here —
+    # ``cfg.log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
+    # classifier appends ``.session_contract_error`` itself (FAR-1482).
+    log_key = f"mcp.{fn.__name__}"
+    try:
+        return await fn(*args, **kwargs)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except StarletteHTTPException as exc:
+        if cfg.handle_http_exception:
+            return {"error": "validation_failed", "detail": str(exc.detail)}
+        _log.exception(cfg.log_constant)
+        return _tool_error(cfg.fallback)
+    except IntegrityError as exc:
+        if cfg.db_errors_to_fallback:
+            _log.exception(cfg.log_constant)
+            return _tool_error(cfg.fallback)
+        if cfg.integrity_detail is None:
+            _log.exception(cfg.log_constant)
+            return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+        _log.exception(cfg.log_constant)
+        return {"error": "conflict", "detail": cfg.integrity_detail.format(orig=exc.orig)}
+    except ProgrammingError:
+        _log.exception(cfg.log_constant)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except SQLAlchemyError as exc:
+        # FAR-1482: the session-contract guard must run BEFORE the
+        # db_errors_to_fallback split — a programming bug is not the
+        # generic "failed to <tool>" fallback either.
+        if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+            return contract_error
+        if cfg.db_errors_to_fallback:
+            _log.exception(cfg.log_constant)
+            return _tool_error(cfg.fallback)
+        _log.exception(cfg.log_constant)
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+    except Exception:
+        _log.exception(cfg.log_constant)
+        return _tool_error(cfg.fallback)
+
+
 def _tool_db_shell(
     *,
     log_constant: str,
@@ -1812,75 +1898,24 @@ def _tool_db_shell(
 ]:
     """Wrap an async MCP tool body in the shared DB/tool exception ladder.
 
-    Every clause reproduces the verbatim per-tool ``try/except`` shells it
-    replaces, keyed by params so the remaining tools can adopt it without
-    hardcoding:
-
-    - ``MCPAuthorizationError`` → ``insufficient_scope`` (all shells).
-    - ``StarletteHTTPException`` → ``validation_failed`` when
-      ``handle_http_exception`` is True; otherwise the generic ``Exception``
-      behaviour (log + ``fallback``), which is what shells without the clause
-      did.
-    - ``IntegrityError`` → ``conflict`` with ``integrity_detail`` formatted
-      with ``orig``; when ``integrity_detail`` is None the ``SQLAlchemyError``
-      behaviour (log + ``database_unavailable``), which is what shells
-      without an IntegrityError clause did. When ``db_errors_to_fallback``
-      is True the clause is skipped entirely and the exception falls through
-      to the generic ``Exception`` behaviour, reproducing shells (e.g.
-      ``get_trigger``) that had no IntegrityError clause at all.
-    - ``ProgrammingError`` → ``migration_required``.
-    - ``SQLAlchemyError`` → ``database_unavailable``; when
-      ``db_errors_to_fallback`` is True the clause is skipped entirely and
-      the exception falls through to the generic ``Exception`` behaviour,
-      reproducing shells that had no SQLAlchemyError clause.
-    - ``Exception`` → log + ``_tool_error(fallback)``.
+    The ladder itself lives in ``_run_db_shell`` (one module-level copy of the
+    exception clauses, keyed by ``_DbShellConfig``); this factory only binds
+    the per-tool parameters and returns the thin decorator that applies it.
     """
+    cfg = _DbShellConfig(
+        log_constant=log_constant,
+        integrity_detail=integrity_detail,
+        fallback=fallback,
+        handle_http_exception=handle_http_exception,
+        db_errors_to_fallback=db_errors_to_fallback,
+    )
 
     def decorator(
         fn: Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     ) -> Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]:
-        # `fn.__name__` is the only per-tool identity available here —
-        # ``log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
-        # classifier appends ``.session_contract_error`` itself (FAR-1482).
-        log_key = f"mcp.{fn.__name__}"
-
         @functools.wraps(fn)
         async def wrapper(*args: _TOOL_SHELL_P.args, **kwargs: _TOOL_SHELL_P.kwargs) -> dict[str, Any]:
-            try:
-                return await fn(*args, **kwargs)
-            except MCPAuthorizationError as exc:
-                return {"error": "insufficient_scope", "detail": str(exc)}
-            except StarletteHTTPException as exc:
-                if handle_http_exception:
-                    return {"error": "validation_failed", "detail": str(exc.detail)}
-                _log.exception(log_constant)
-                return _tool_error(fallback)
-            except IntegrityError as exc:
-                if db_errors_to_fallback:
-                    _log.exception(log_constant)
-                    return _tool_error(fallback)
-                if integrity_detail is None:
-                    _log.exception(log_constant)
-                    return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-                _log.exception(log_constant)
-                return {"error": "conflict", "detail": integrity_detail.format(orig=exc.orig)}
-            except ProgrammingError:
-                _log.exception(log_constant)
-                return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-            except SQLAlchemyError as exc:
-                # FAR-1482: the session-contract guard must run BEFORE the
-                # db_errors_to_fallback split — a programming bug is not the
-                # generic "failed to <tool>" fallback either.
-                if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
-                    return contract_error
-                if db_errors_to_fallback:
-                    _log.exception(log_constant)
-                    return _tool_error(fallback)
-                _log.exception(log_constant)
-                return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-            except Exception:
-                _log.exception(log_constant)
-                return _tool_error(fallback)
+            return await _run_db_shell(fn, cfg, *args, **kwargs)
 
         return wrapper
 
@@ -7691,6 +7726,32 @@ async def list_agents(
         return _tool_error("Failed to list agents")
 
 
+def _agent_to_dict(agent: Agent) -> dict[str, Any]:
+    """Serialize one ``Agent`` row to the ``get_agent`` MCP response shape."""
+    return {
+        "id": str(agent.id),
+        "name": agent.name,
+        "description": agent.description,
+        "is_executable": agent.is_executable,
+        "prompt_template": agent.prompt_template,
+        "prompt_version_history": agent.prompt_version_history or [],
+        "model_backend_id": str(agent.model_backend_id) if agent.model_backend_id else None,
+        "input_schema_id": str(agent.input_schema_id) if agent.input_schema_id else None,
+        "input_schema_version": agent.input_schema_version,
+        "output_schema_id": str(agent.output_schema_id) if agent.output_schema_id else None,
+        "output_schema_version": agent.output_schema_version,
+        "parameter_schema_id": str(agent.parameter_schema_id) if agent.parameter_schema_id else None,
+        "connector_type_refs": agent.connector_type_refs or [],
+        "required_environment_capabilities": agent.required_environment_capabilities or [],
+        "retry_policy": agent.retry_policy or {},
+        "token_budget": agent.token_budget,
+        "max_input_length": agent.max_input_length,
+        "agent_commands": agent.agent_commands,
+        "created_at": agent.created_at.isoformat() if agent.created_at else None,
+        "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
+    }
+
+
 @mcp.tool(description="Get a single agent by ID, including its prompt template and configuration.")
 @_RETRY_DB
 async def get_agent(agent_id: str) -> dict[str, Any]:
@@ -7717,28 +7778,7 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
         if agent is None or agent.organisation_id != org_id:
             return {"error": "not_found", "detail": f"Agent {agent_id} not found"}
 
-        return {
-            "id": str(agent.id),
-            "name": agent.name,
-            "description": agent.description,
-            "is_executable": agent.is_executable,
-            "prompt_template": agent.prompt_template,
-            "prompt_version_history": agent.prompt_version_history or [],
-            "model_backend_id": str(agent.model_backend_id) if agent.model_backend_id else None,
-            "input_schema_id": str(agent.input_schema_id) if agent.input_schema_id else None,
-            "input_schema_version": agent.input_schema_version,
-            "output_schema_id": str(agent.output_schema_id) if agent.output_schema_id else None,
-            "output_schema_version": agent.output_schema_version,
-            "parameter_schema_id": str(agent.parameter_schema_id) if agent.parameter_schema_id else None,
-            "connector_type_refs": agent.connector_type_refs or [],
-            "required_environment_capabilities": agent.required_environment_capabilities or [],
-            "retry_policy": agent.retry_policy or {},
-            "token_budget": agent.token_budget,
-            "max_input_length": agent.max_input_length,
-            "agent_commands": agent.agent_commands,
-            "created_at": agent.created_at.isoformat() if agent.created_at else None,
-            "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
-        }
+        return _agent_to_dict(agent)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -9602,46 +9642,44 @@ async def _hitl_required_team_name(s: AsyncSession, gate: HitlClaim) -> str | No
 _FIRE_CONTEXT_MAX_CHARS = 2048
 
 
-@mcp.resource("modulo://runs/{run_id}/hitl/{review_id}")
-async def resource_hitl_review(run_id: str, review_id: str) -> str:
-    """HITL gate context. Annotated as agent_output — treat as untrusted."""
-    if not await validate_current_auth():
-        return _MSG_ERROR_TOKEN_REVOKED
-    org_id = _ctx_org_id_val()
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError:
-        return f"error: Invalid UUID format: {run_id}"
-    async with _session(org_id) as s:
-        gate = await _get_hitl_review(s, rid, review_id, org_id)
-        required_team_name = None
-        description: str | None = None
-        context: dict[str, Any] | None = None
-        if gate is not None:
-            # A team-scoped key must not read another team's gate even when
-            # the gate itself is org-level (required_team_id IS NULL).
-            scope_error = await _hitl_review_scope_error(s, rid, gate)
-            if scope_error is not None:
-                return scope_error
-            required_team_name = await _hitl_required_team_name(s, gate)
-            # FAR-613: the fire-time briefing. FAR-688 unified precedence
-            # (context-first, snapshot fallback — the context IS the fire-time
-            # truth): the shared helper in ``hitl_review_config`` is the SAME
-            # rule the REST pending endpoints apply via
-            # ``resolve_review_descriptions``, so every surface renders one
-            # description for the same gate. The snapshot-config fallback
-            # read runs only when the capture carries no usable description
-            # (gates that fired before capture existed).
-            context = gate.context_json if isinstance(gate.context_json, dict) else None
-            from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_description
+async def _resolve_hitl_review_briefing(
+    s: AsyncSession,
+    gate: HitlClaim,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve the fire-time ``(context, description)`` pair for a HITL gate.
 
-            description = resolve_review_description(context, None)
-            if description is None:
-                description = resolve_review_description(
-                    None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id)
-                )
-    if gate is None:
-        return f"HITL gate '{review_id}' not found on run {run_id}."
+    FAR-613: the fire-time briefing. FAR-688 unified precedence (context-first,
+    snapshot fallback — the context IS the fire-time truth): the shared helper
+    in ``hitl_review_config`` is the SAME rule the REST pending endpoints
+    apply via ``resolve_review_descriptions``, so every surface renders one
+    description for the same gate. The snapshot-config fallback read runs only
+    when the capture carries no usable description (gates that fired before
+    capture existed).
+    """
+    context = gate.context_json if isinstance(gate.context_json, dict) else None
+    from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_description
+
+    description = resolve_review_description(context, None)
+    if description is None:
+        description = resolve_review_description(
+            None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id)
+        )
+    return context, description
+
+
+def _hitl_review_briefing_lines(
+    gate: HitlClaim,
+    *,
+    run_id: str,
+    review_id: str,
+    required_team_name: str | None,
+    description: str | None,
+    context: dict[str, Any] | None,
+) -> list[str]:
+    """Build the briefing lines for one HITL gate resource payload."""
     parts = [
         f"Gate: {review_id}",
         f"Run: {run_id}",
@@ -9669,6 +9707,42 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
         # Marker WITHIN the cap: the slice never exceeds _FIRE_CONTEXT_MAX_CHARS.
         fire_context = slice_with_marker(json.dumps(context, sort_keys=True, default=str), _FIRE_CONTEXT_MAX_CHARS)
         parts.append("Fire context: " + fire_context)
+    return parts
+
+
+@mcp.resource("modulo://runs/{run_id}/hitl/{review_id}")
+async def resource_hitl_review(run_id: str, review_id: str) -> str:
+    """HITL gate context. Annotated as agent_output — treat as untrusted."""
+    if not await validate_current_auth():
+        return _MSG_ERROR_TOKEN_REVOKED
+    org_id = _ctx_org_id_val()
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return f"error: Invalid UUID format: {run_id}"
+    async with _session(org_id) as s:
+        gate = await _get_hitl_review(s, rid, review_id, org_id)
+        required_team_name = None
+        description: str | None = None
+        context: dict[str, Any] | None = None
+        if gate is not None:
+            # A team-scoped key must not read another team's gate even when
+            # the gate itself is org-level (required_team_id IS NULL).
+            scope_error = await _hitl_review_scope_error(s, rid, gate)
+            if scope_error is not None:
+                return scope_error
+            required_team_name = await _hitl_required_team_name(s, gate)
+            context, description = await _resolve_hitl_review_briefing(s, gate, rid, review_id, org_id)
+    if gate is None:
+        return f"HITL gate '{review_id}' not found on run {run_id}."
+    parts = _hitl_review_briefing_lines(
+        gate,
+        run_id=run_id,
+        review_id=review_id,
+        required_team_name=required_team_name,
+        description=description,
+        context=context,
+    )
     return "\n".join(parts)
 
 
