@@ -671,6 +671,21 @@ class Settings(BaseSettings):
     dispatcher_reconcile_max_rows_per_tick: int = Field(
         default=500, alias="DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK", ge=50, le=10000
     )
+    # FAR-1525: per-ORG TIME bound inside the tick. The row budget (FAR-904 /
+    # FAR-1425) bounds ROWS, not time — a single org whose pass hangs on a
+    # wedged await consumed the ENTIRE inner budget at stage
+    # ``reconcile_org:<org-id>`` and starved every other org plus
+    # record_facts / the compensating sweeps (7 consecutive prod ticks, 2026-10).
+    # Each org's pass is cut at this bound; the org's transaction rolls back
+    # at its safe boundary, the tick records a truthful status='timeout' +
+    # org_timeouts marker naming the org, and the loop continues. The
+    # effective slice is additionally clamped to the tick's REMAINING budget
+    # minus a tail reserve for facts/sweeps, so this field alone never
+    # dictates the tail. ge=1 keeps a usable slice; le=119 mirrors the outer
+    # budget's ceiling (the clamp, not this field, enforces < outer budget).
+    dispatcher_reconcile_org_budget_seconds: int = Field(
+        default=30, alias="DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS", ge=1, le=119
+    )
     # FAR-705: per-run capacity-retry budget for the stale-run sweep's
     # capacity_timeout TTL terminalisation. capacity.* is a RETRYABLE registry
     # class (all four capacity codes carry retryable=True), so a capacity-
