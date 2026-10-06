@@ -6521,6 +6521,93 @@ def _recompute_ongoing_next_fire(
             trigger.next_fire_at = datetime.now(UTC)
 
 
+async def _update_trigger_txn(
+    org_id: uuid.UUID,
+    tid: uuid.UUID,
+    *,
+    active: bool | None,
+    max_concurrent_runs: int | None,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+    daily_spend_limit: float | None,
+    clear_daily_spend_limit: bool,
+    config_json: dict[str, Any] | None,
+) -> tuple[Any, int, dict[str, Any], bool] | dict[str, Any]:
+    """Run the trigger update inside its own session (validate-then-mutate).
+
+    Returns ``(trigger, in_flight, updated_streak_status, prev_active)`` on
+    success, or a standard error envelope (team scope / not found / validation)
+    when the write must not proceed. ``prev_active`` is captured before the
+    field updates so the caller can clear the re-enable streak (FAR-190) after
+    the commit.
+    """
+    async with _session(org_id) as s:
+        trigger = await _load_trigger_for_update(s, org_id, tid)
+        if trigger is _TEAM_SCOPE_ERROR:
+            return _team_scope_error("pipeline", str(tid))
+        if trigger is None:
+            return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
+
+        cron_config_requested = cron_expression is not None or cron_timezone is not None
+        if cron_config_requested and trigger.trigger_type != "cron":
+            return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
+
+        ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
+            s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit
+        )
+        if ongoing_err:
+            return ongoing_err
+
+        next_fire_at, cron_err = _validate_cron_update(trigger, cron_expression, cron_timezone)
+        if cron_err:
+            return cron_err
+
+        prev_max = trigger.max_concurrent_runs
+        prev_active = trigger.active
+        # Validate the write-time config gate ONLY when config_json was
+        # part of the request (mirrors the REST _apply_trigger_update
+        # semantics): a legacy trigger with an unread key must stay
+        # updatable by any other field via MCP, same as via REST.
+        #
+        # Validate the MERGED config BEFORE mutating the ORM object.
+        # `_session()` wraps the body in `s.begin()`, so a clean early
+        # return COMMITS — validating after mutation would persist an
+        # invalid merged config while reporting a validation error.
+        if config_json is not None:
+            merged_config = merge_masked_config(trigger.config_json, config_json)
+            try:
+                _validate_trigger_config_keys(merged_config, context="merged config_json")
+            except FastAPIHTTPException as exc:
+                return {"error": "validation", "detail": exc.detail}
+        await _apply_trigger_field_updates(
+            s,
+            trigger,
+            active,
+            max_concurrent_runs,
+            daily_spend_limit,
+            clear_daily_spend_limit,
+            config_json,
+            cron_expression,
+            cron_timezone,
+            next_fire_at,
+            prev_active,
+        )
+
+        _recompute_ongoing_next_fire(
+            trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
+        )
+        await s.flush()
+        from modulo.core.cron_helpers import _count_ongoing_runs
+
+        in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
+        # FAR-251 — surface the updated trigger's streak_status exactly as
+        # the REST update serializer does (computed inside the RLS
+        # transaction so a re-enabled trigger reflects its reset streak).
+        updated_streak_status = await _streak_status_for(s, trigger)
+
+    return trigger, in_flight, updated_streak_status, prev_active
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
@@ -6549,69 +6636,20 @@ async def update_trigger(
         if tid is None:
             raise RuntimeError("_validate_trigger_update_inputs returned an error dict but no parsed trigger id")
 
-        async with _session(org_id) as s:
-            trigger = await _load_trigger_for_update(s, org_id, tid)
-            if trigger is _TEAM_SCOPE_ERROR:
-                return _team_scope_error("pipeline", str(tid))
-            if trigger is None:
-                return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-
-            cron_config_requested = cron_expression is not None or cron_timezone is not None
-            if cron_config_requested and trigger.trigger_type != "cron":
-                return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
-
-            ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
-                s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit
-            )
-            if ongoing_err:
-                return ongoing_err
-
-            next_fire_at, cron_err = _validate_cron_update(trigger, cron_expression, cron_timezone)
-            if cron_err:
-                return cron_err
-
-            prev_max = trigger.max_concurrent_runs
-            prev_active = trigger.active
-            # Validate the write-time config gate ONLY when config_json was
-            # part of the request (mirrors the REST _apply_trigger_update
-            # semantics): a legacy trigger with an unread key must stay
-            # updatable by any other field via MCP, same as via REST.
-            #
-            # Validate the MERGED config BEFORE mutating the ORM object.
-            # `_session()` wraps the body in `s.begin()`, so a clean early
-            # return COMMITS — validating after mutation would persist an
-            # invalid merged config while reporting a validation error.
-            if config_json is not None:
-                merged_config = merge_masked_config(trigger.config_json, config_json)
-                try:
-                    _validate_trigger_config_keys(merged_config, context="merged config_json")
-                except FastAPIHTTPException as exc:
-                    return {"error": "validation", "detail": exc.detail}
-            await _apply_trigger_field_updates(
-                s,
-                trigger,
-                active,
-                max_concurrent_runs,
-                daily_spend_limit,
-                clear_daily_spend_limit,
-                config_json,
-                cron_expression,
-                cron_timezone,
-                next_fire_at,
-                prev_active,
-            )
-
-            _recompute_ongoing_next_fire(
-                trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
-            )
-            await s.flush()
-            from modulo.core.cron_helpers import _count_ongoing_runs
-
-            in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
-            # FAR-251 — surface the updated trigger's streak_status exactly as
-            # the REST update serializer does (computed inside the RLS
-            # transaction so a re-enabled trigger reflects its reset streak).
-            updated_streak_status = await _streak_status_for(s, trigger)
+        outcome = await _update_trigger_txn(
+            org_id,
+            tid,
+            active=active,
+            max_concurrent_runs=max_concurrent_runs,
+            cron_expression=cron_expression,
+            cron_timezone=cron_timezone,
+            daily_spend_limit=daily_spend_limit,
+            clear_daily_spend_limit=clear_daily_spend_limit,
+            config_json=config_json,
+        )
+        if isinstance(outcome, dict):
+            return outcome
+        trigger, in_flight, updated_streak_status, prev_active = outcome
 
         # FAR-190: clear the config-failure Redis counter only AFTER the commit
         # (the _session context commits on exit); best-effort.
