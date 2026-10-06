@@ -382,7 +382,7 @@ class TestGetRunStatus(_AuthContext):
 
         result = await get_run_status(run_id=str(uuid.uuid4()))
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------

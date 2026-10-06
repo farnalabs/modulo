@@ -457,4 +457,4 @@ class TestQueryAnalytics(_AuthContext):
             for p in patches:
                 stack.enter_context(p)
             result = await query_analytics()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"

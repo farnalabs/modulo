@@ -339,7 +339,7 @@ class TestListTriggersErrors(_AuthContext):
 
         result = await list_triggers()
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
         assert result["detail"] == "Failed to list triggers"
 
 
