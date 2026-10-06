@@ -5,9 +5,9 @@ app = 'app-modulo'
 
 # ===== Machine budget (stay within the org limit) =====
 # Standing footprint: 1 x app (4 shared CPU, live) + 2 x worker (2 shared CPU
-# declared [FAR-1511] / 1 shared CPU live; 2gb each, one a stopped cold standby
-# of the other) = 3 machines (verified live 2026-09-02 via `fly scale show` / `fly
-# machines list`) - see the worker ops step below for the outstanding resize.
+# declared [FAR-1511] and live on the started worker; 2gb each, one a stopped
+# cold standby still on its recorded 1-CPU config) = 3 machines (verified live
+# 2026-09-02 via `fly scale show` / `fly machines list`).
 # [[vm]] changes do NOT resize existing machines on their own - they apply to NEW
 # machines only, so a declared size reaches a live machine only through a deploy
 # that recreates it, or through an explicit `flyctl machine update <machine-id> -a
@@ -17,12 +17,11 @@ app = 'app-modulo'
 #   `flyctl machine status` on 2026-10-05, so no resize step is outstanding (this
 #   block previously instructed one; the "after the live resize" invoice note below
 #   refers to that completed resize).
-#   WORKER: outstanding - post-merge ops step: `flyctl machine update
-#   <worker-machine-id> -a app-modulo --vm-size shared-cpu-2x` (brief restart of the
-#   ONLY started worker machine, so do it in a quiet window; read the
-#   `process=worker` row that is `started`). The stopped cold standby is an
-#   EXISTING machine, so starting it later does NOT apply the declared 2 CPU - it
-#   keeps its recorded 1-CPU config until it too is updated (`flyctl machine update
+#   WORKER: already done - the started worker machine was recreated at the
+#   declared shared-cpu-2x by the overnight deploy (run 37414967179), so no
+#   resize step is outstanding for it. The stopped cold standby is an EXISTING
+#   machine, so starting it later does NOT apply the declared 2 CPU - it keeps
+#   its recorded 1-CPU config until it too is updated (`flyctl machine update
 #   <standby-machine-id> ... --vm-size shared-cpu-2x`, safe while stopped) or is
 #   recreated by a deploy. Until then a worker failover lands on 1 CPU.
 #   Rationale + the observations behind the bump:
@@ -231,8 +230,9 @@ primary_region = 'lhr'
   # event_loop_lag 5-18ms over the same window, and with no runs executing
   # every system cron held its exact 60s cadence. Full attribution note:
   # docs/operations/far-1511-worker-event-loop-stalls.md. NOTE: [[vm]] applies
-  # to NEW machines only - see the machine-budget block above for the
-  # live-resize ops step.
+  # to NEW machines only - the started worker has already been recreated at
+  # this size by a deploy (see the machine-budget block above); only the
+  # stopped cold standby still carries its old recorded size.
   # 1024 MB swap: applied manually 2026-09-10 to both live worker machines
   # (flyctl machine update --swap-size 1024) after cgroup v1 near-miss
   # (Committed_As ~1.25GB > CommitLimit 0.96GB, no swap, ~755MB available at
