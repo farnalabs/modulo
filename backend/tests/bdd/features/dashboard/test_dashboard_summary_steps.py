@@ -295,7 +295,8 @@ def _then_eval_pass_rate(request: Any) -> None:
 @then("the summary contains a 7-day trend with run counts and spend")
 def _then_trend(request: Any) -> None:
     trend = _body(request)["trend"]
-    assert isinstance(trend, list) and len(trend) == 7
+    assert isinstance(trend, list)
+    assert len(trend) == 7
     for point in trend:
         for field in ("date", "run_count", "eval_pass_rate", "token_spend_usd"):
             assert field in point, f"trend point missing '{field}': {point}"

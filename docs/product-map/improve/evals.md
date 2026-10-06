@@ -11,7 +11,10 @@ code:
   - backend/src/modulo/core/eval_engine/regression.py
   - backend/src/modulo/core/eval_engine/policy_gate.py
   - backend/src/modulo/core/eval_engine/author_warnings.py
+  - backend/src/modulo/core/pipeline_engine/executor.py
   - backend/src/modulo/core/pipeline_engine/eval_persist_order.py
+  - backend/src/modulo/db/models/policy_gate.py
+  - backend/src/modulo/db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py
   - backend/src/modulo/api/routes/feedback.py
   - frontend/src/views/EvalEditorView.vue
   - frontend/src/views/EvalProposalsQueueView.vue
@@ -21,13 +24,19 @@ unit-tests:
   - backend/tests/unit/api/test_evals_coverage_gap.py
   - backend/tests/unit/api/test_eval_regression_alert.py
   - backend/tests/unit/api/test_eval_leaderboards.py
+  - backend/tests/unit/api/test_policy_gate_routes_coverage.py
   - backend/tests/unit/core/test_eval_engine.py
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_persist_order_failopen.py
+  - backend/tests/unit/core/test_policy_gate_pin.py
+  - backend/tests/unit/core/pipeline_engine/test_policy_gate_eval_wiring.py
   - backend/tests/unit/core/eval_engine/test_policy_gate_decision_row.py
   - backend/tests/unit/core/evidence/test_author_warnings.py
   - backend/tests/unit/db/test_eval_suite_run.py
+  - backend/tests/integration/api/test_policy_gate_acceptance.py
+  - backend/tests/integration/test_policy_gate_pin_migration.py
   - frontend/src/__tests__/EvalEditorView.spec.ts
+  - frontend/src/__tests__/EvalEditorViewPolicyGate.spec.ts
   - frontend/src/__tests__/EvalProposalsQueueView.spec.ts
 bdd:
   - backend/tests/bdd/features/eval/eval_run.feature
@@ -94,6 +103,32 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       the `PolicyGateResponse` carries the non-blocking `warnings` list
       (`core/eval_engine/author_warnings.py`,
       `tests/unit/core/evidence/test_author_warnings.py`)
+- [x] Policy-gate operator control and pin-set integrity (FAR-967 chunk 10):
+      `PATCH /api/v1/evals/{eval_id}/policy-gate/toggle` (admin-only
+      `eval.definition.update`, break-glass mint denied) flips the gate's
+      `enabled` flag and atomically stamps `enabled_at`/`disabled_at` so the
+      symmetric `ck_policy_gates_enabled_timestamps` CHECK always holds; it
+      emits a `policy_gate.toggled` audit event (best-effort) under the same
+      transaction-scoped advisory lock as create/replace (a lock timeout is
+      503), and the `/evals/editor` policy-gate panel exposes it as a
+      `role=switch` `policy-gate-toggle` with a disable-confirmation dialog.
+      At run start the executor re-verifies the snapshot's
+      `policy_gate_pins_fingerprint` — a mismatch means the pin set was
+      tampered with or drifted and the run terminalizes as a mechanism error
+      (`fingerprint_policy_gate_pins` digests every entry, `None` ≠ `[]`) —
+      and, for a pinned snapshot, pin MEMBERSHIP governs the run's evaluation
+      universe and the PINNED `action` governs (`_resolve_governed_gate`): a
+      live `action` edit cannot re-score an already-started run, a live gate
+      absent from the pin set is never evaluated, and an operator-disabled
+      live gate is removed from evaluation even when pinned (control can only
+      remove, never add, gates) (`core/eval_engine/policy_gate.py`,
+      `core/pipeline_engine/executor.py`, `api/routes/evals.py`,
+      `db/models/policy_gate.py`,
+      `db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py`,
+      `test_policy_gate_pin.py`, `test_policy_gate_eval_wiring.py`,
+      `test_policy_gate_routes_coverage.py`,
+      `test_policy_gate_pin_migration.py`,
+      `EvalEditorViewPolicyGate.spec.ts`)
 - [x] Results are queryable per run (`GET /api/v1/runs/{run_id}/evals`) and
       comparable side-by-side between two runs (`POST /api/v1/evals/compare`)
 - [x] Leaderboards aggregate pass/fail over a window grouped by pipeline, node,
@@ -128,6 +163,21 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
   triggered/run via the suite machinery, not a standalone cron in the eval API.
 
 ## QA History
+- 2026-10-05: **Improve Architecture product-map walk** – tracked the
+  FAR-967 chunk 10 policy-gate operator-control + pin-integrity surface that
+  shipped without a product-map home: the admin `PATCH .../policy-gate/toggle`
+  endpoint (symmetric `enabled_at`/`disabled_at` stamping under the create/
+  replace advisory lock, `policy_gate.toggled` audit, break-glass deny), the
+  run-start `policy_gate_pins_fingerprint` re-verification, and the pin-governed
+  evaluation universe (`_resolve_governed_gate`). Registered the newly visible
+  `/evals/editor` policy-gate testids in the manifest `elements:` inventory and
+  added the checked behaviour line + code/unit-test citations (migration 0274,
+  `test_policy_gate_pin.py`, `test_policy_gate_eval_wiring.py`,
+  `test_policy_gate_routes_coverage.py`, `test_policy_gate_pin_migration.py`,
+  `EvalEditorViewPolicyGate.spec.ts`). The policy-gate UI controls were written
+  with a `data-test-id` typo that hid them from the product-map element guard and
+  from Playwright's `getByTestId`; this walk normalised them to `data-testid`
+  (with a regression guard in `test_product_map_consistency.py`).
 - 2026-09-30: **Improve Architecture product-map walk** – ticked the FAR-957
   advisory author-warning surface: policy-gate binding
   (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`) runs

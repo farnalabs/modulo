@@ -214,6 +214,80 @@ def test_evaluate_no_changed_lines_fails(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# No changed coverable lines — every changed file IS measured → SKIP (FAR-706)
+# ---------------------------------------------------------------------------
+def test_evaluate_no_changed_lines_measured_but_non_instrumentable_skips(tmp_path):
+    """diff-cover finds no coverable changed lines, but every changed file is in
+    the report → there is nothing to cover → SKIP (FAR-706).
+
+    Regression for PR #1304: a large ``data-test-id`` → ``data-testid`` rename
+    changed only static ``.vue`` template markup.  v8 never instruments template
+    lines, so diff-cover emitted its "No lines with coverage information"
+    marker and the gate FAILed at 0% even though all four touched views are
+    present in the LCOV report.  The measured-but-non-instrumentable
+    distinction (``_report_counts_files``) must apply on this early path too,
+    not only on the threshold path below.
+    """
+    lcov = tmp_path / "lcov.info"
+    lcov.write_text("SF:src/views/OnlyTemplate.vue\nDA:1,1\nend_of_record\n")
+
+    with (
+        patch.object(
+            mod,
+            "_get_changed_production_files",
+            return_value={"frontend/src/views/OnlyTemplate.vue": 15},
+        ),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_NO_LINES_STDOUT)),
+        patch.object(mod, "_get_diff_cover_json", return_value=JSON_REPORT_EMPTY),
+    ):
+        result = mod.evaluate(
+            language="JavaScript",
+            report_path=lcov,
+            compare_branch="origin/main",
+            fail_under=98,
+        )
+
+    assert result.skipped is True
+    assert result.passed is True
+    assert result.unmeasured_lines == 0
+
+
+def test_evaluate_no_changed_lines_mixed_present_and_absent_fails(tmp_path):
+    """No coverable changed lines, and at least one changed file is absent from
+    the report → FAIL, scoring only the absent file's lines (FAR-706).
+
+    A measured file with no instrumentable changed lines must not be charged;
+    a genuinely unmeasured file still is.
+    """
+    lcov = tmp_path / "lcov.info"
+    lcov.write_text("SF:src/views/OnlyTemplate.vue\nDA:1,1\nend_of_record\n")
+
+    with (
+        patch.object(
+            mod,
+            "_get_changed_production_files",
+            return_value={
+                "frontend/src/views/OnlyTemplate.vue": 15,
+                "frontend/src/views/NewUntested.vue": 7,
+            },
+        ),
+        patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_NO_LINES_STDOUT)),
+        patch.object(mod, "_get_diff_cover_json", return_value=JSON_REPORT_EMPTY),
+    ):
+        result = mod.evaluate(
+            language="JavaScript",
+            report_path=lcov,
+            compare_branch="origin/main",
+            fail_under=98,
+        )
+
+    assert result.skipped is False
+    assert result.passed is False
+    assert result.actual_pct == 0.0
+    assert result.unmeasured_lines == 7
+
+
+# ---------------------------------------------------------------------------
 # diff-cover exits 0 with unparseable output → FAIL closed (FAR-992)
 # ---------------------------------------------------------------------------
 def test_evaluate_unparseable_output_fails_closed(tmp_path):

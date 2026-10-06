@@ -1,7 +1,7 @@
 """Widen env-profile provider_type CHECK with 'kubernetes' (FAR-1051).
 
-Revision ID: 0281_env_profiles_kubernetes
-Revises: 0280_runs_node_deadline_watchdog_fired_count
+Revision ID: 0282_env_profiles_kubernetes
+Revises: 0281_org_api_keys_grants
 Create Date: 2026-10-04
 
 What this revision changes
@@ -40,8 +40,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0281_env_profiles_kubernetes"
-down_revision: str | None = "0280_runs_node_deadline_watchdog_fired_count"
+revision: str = "0282_env_profiles_kubernetes"
+down_revision: str | None = "0281_org_api_keys_grants"
 branch_labels: str | None = None
 depends_on: str | None = None
 

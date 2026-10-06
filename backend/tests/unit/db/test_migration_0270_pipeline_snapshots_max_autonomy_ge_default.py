@@ -20,7 +20,7 @@ Lenses:
   0278_runs_workspace_drift_sweep_index chains onto 0277, and
    0279_table_autovacuum_tuning chains onto 0278, and
    0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning, and
-   0281_env_profiles_kubernetes chains onto 0280_runs_node_deadline_watchdog_fired_count as the single
+   0282_env_profiles_kubernetes chains onto 0280_runs_node_deadline_watchdog_fired_count as the single
    linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
@@ -63,7 +63,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0281_env_profiles_kubernetes"
+_HEAD_MIGRATION = "0282_env_profiles_kubernetes"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264
@@ -192,7 +192,8 @@ class TestUpgrade:
         assert logger.info.call_count == 1, "the repair rowcount must be logged exactly once"
         fmt, *args = logger.info.call_args.args
         assert "%s" in fmt or "%d" in fmt, fmt
-        assert args and args[0] == 7, f"the logged value must be the rowcount, got {args}"
+        assert args, f"the logged value must be the rowcount, got {args}"
+        assert args[0] == 7, f"the logged value must be the rowcount, got {args}"
 
     def test_repair_selects_exactly_the_inverted_rows(self) -> None:
         """``ceiling IS NOT NULL`` AND ``rank(default) > rank(ceiling)``.

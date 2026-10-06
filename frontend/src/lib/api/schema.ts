@@ -791,6 +791,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Pipeline Snapshot Lock
+         * @description Report whether this pipeline's snapshot advisory lock is held, and by whom.
+         *
+         *     Read-only — it neither acquires nor releases anything. Run it before the
+         *     release endpoint to see WHICH backend is wedged (pid, application, state,
+         *     how long it has been there) instead of terminating blind.
+         */
+        get: operations["get_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Pipeline Snapshot Lock
+         * @description Terminate the backend(s) holding this pipeline's snapshot advisory lock.
+         *
+         *     Idempotent: no holder means ``{"released": 0, "pids": []}`` and HTTP 200, so
+         *     an operator can re-issue it after a crash without checking first. Only
+         *     backends holding THIS pipeline's derived keys are terminated, never this
+         *     session and never an unrelated backend.
+         *
+         *     Two deliberate refusal arms, both fail-closed:
+         *
+         *     * no organisation context on the principal → 403. Terminating a backend is a
+         *       destructive operator action and must land on an audit chain; one that
+         *       cannot be recorded is not performed.
+         *     * the database role lacks the signal right (SQLSTATE 42501) → 403 problem
+         *       detail naming the grant (``GRANT pg_signal_backend TO "<app role>";``).
+         *       ``pg_terminate_backend`` requires superuser or ``pg_signal_backend``, and
+         *       a self-hosted deployment's runtime role normally has neither.
+         *
+         *     The audit event is written AFTER the termination through
+         *     ``append_audit_event_isolated`` (fail-open with a loud log): the backends are
+         *     already gone and a failed audit write must never resurrect them.
+         */
+        post: operations["release_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/dev-mode": {
         parameters: {
             query?: never;
@@ -5256,6 +5319,32 @@ export interface paths {
         post?: never;
         /** Revoke Api Key Endpoint */
         delete: operations["revoke_api_key_endpoint_api_v1_api_keys__key_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-keys/grantable-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Grantable Permissions Endpoint
+         * @description List permissions a new key's grant-set may contain.
+         *
+         *     Sourced from the registry through ``is_delegable`` (the same predicate the
+         *     mint cap and the enforcement resolvers use), so non-delegable permissions
+         *     are never offered. Filtered to the caller's own role level for the UI; the
+         *     mint cap remains the authority. ``enabled`` mirrors the ``api_key_grants``
+         *     flag -- when OFF the list is empty.
+         */
+        get: operations["grantable_permissions_endpoint_api_v1_api_keys_grantable_permissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -10352,6 +10441,8 @@ export interface components {
             team_id?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** ApiKeyCreatedResponse */
         ApiKeyCreatedResponse: {
@@ -10380,6 +10471,8 @@ export interface components {
              * @default org
              */
             scope: string;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** ApiKeyRevokeResponse */
         ApiKeyRevokeResponse: {
@@ -10403,6 +10496,8 @@ export interface components {
             expires_at?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** AppendMessageRequest */
         AppendMessageRequest: {
@@ -12994,6 +13089,23 @@ export interface components {
         GraduateStageRequest: {
             /** Pipeline Id */
             pipeline_id?: string | null;
+        };
+        /** GrantablePermission */
+        GrantablePermission: {
+            /** Name */
+            name: string;
+            /** Min Role */
+            min_role: string;
+        };
+        /**
+         * GrantablePermissionsResponse
+         * @description Delegable permissions the caller may put in an API key grant-set (FAR-1477).
+         */
+        GrantablePermissionsResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Permissions */
+            permissions: components["schemas"]["GrantablePermission"][];
         };
         /** GraphPosition */
         GraphPosition: {
@@ -18264,6 +18376,46 @@ export interface components {
             /** Total */
             total: number;
         };
+        /**
+         * SnapshotLockHolder
+         * @description One backend holding the pipeline's snapshot advisory lock.
+         *
+         *     Every field except ``pid`` may be NULL: ``pg_locks`` is readable by any
+         *     role, but ``pg_stat_activity`` redacts the detail columns of backends the
+         *     viewer does not own unless it holds ``pg_read_all_stats``. ``pid`` and
+         *     ``granted`` are always present, which is what the diagnostic is for.
+         */
+        SnapshotLockHolder: {
+            /** Pid */
+            pid: number;
+            /** Application Name */
+            application_name?: string | null;
+            /** State */
+            state?: string | null;
+            /** Backend Start */
+            backend_start?: string | null;
+            /** Query Start */
+            query_start?: string | null;
+            /**
+             * Granted
+             * @default false
+             */
+            granted: boolean;
+        };
+        /** SnapshotLockReleaseResponse */
+        SnapshotLockReleaseResponse: {
+            /** Released */
+            released: number;
+            /** Pids */
+            pids: number[];
+        };
+        /** SnapshotLockStatusResponse */
+        SnapshotLockStatusResponse: {
+            /** Held */
+            held: boolean;
+            /** Holders */
+            holders: components["schemas"]["SnapshotLockHolder"][];
+        };
         /** SnapshotResponse */
         SnapshotResponse: {
             /**
@@ -21703,6 +21855,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelemetryStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotLockStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_release_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotLockReleaseResponse"];
                 };
             };
             /** @description Validation Error */
@@ -31710,6 +31928,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiKeyRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grantable_permissions_endpoint_api_v1_api_keys_grantable_permissions_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantablePermissionsResponse"];
                 };
             };
             /** @description Validation Error */

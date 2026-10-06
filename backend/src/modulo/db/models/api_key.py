@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, Uuid, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -46,6 +46,13 @@ class OrgApiKey(OrgScoped):
     # reach caller-scoped (``.self``) MCP tools. IMMUTABLE post-mint — the
     # update paths never accept a scope payload.
     scope: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
+    # FAR-1477 / ADR 058: explicit capability grant-set (space-joined PERMISSIONS
+    # keys, same shape as oauth_clients.scopes). TRI-STATE: NULL = legacy
+    # role-bundle behaviour; "" = explicit deny-all; otherwise the exact set.
+    # IMMUTABLE post-mint. NULL and "" must never be collapsed.
+    grants: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Space-separated permission grants; NULL=legacy role bundle, ''=deny-all"
+    )
     team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True

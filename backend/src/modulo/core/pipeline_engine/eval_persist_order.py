@@ -358,7 +358,9 @@ async def run_evals_persist_before_decide(
 
         # --- 2. Persist (own transaction, per-eval commit) -------------
         if can_persist:
-            assert session_factory is not None and org_id is not None and run_id is not None
+            assert session_factory is not None
+            assert org_id is not None
+            assert run_id is not None
             try:
                 async with session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
@@ -417,7 +419,9 @@ async def run_evals_persist_before_decide(
         # persisted with a fail-OPEN wrapper (opposite of EvalResult's
         # fail-CLOSED for block gates).
         if can_persist and eval_def.policy_gate_id is not None:
-            assert session_factory is not None and org_id is not None and run_id is not None
+            assert session_factory is not None
+            assert org_id is not None
+            assert run_id is not None
             if eval_def.policy_gate_node_id is None:
                 _log.warning(
                     "eval_persist_order.policy_gate_node_id_missing",

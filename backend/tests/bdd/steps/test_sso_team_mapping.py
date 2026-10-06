@@ -4,6 +4,7 @@ import base64
 import contextlib
 import json
 import uuid
+from collections.abc import AsyncGenerator, Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,6 +14,38 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.api.dependencies import get_anonymous_plan_context, get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session() -> Generator[None, None, None]:
+    """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
+    fresh ``audit_session`` (a real engine — these steps run without a database),
+    so stub that seam; the dependency itself still runs."""
+    from modulo.api.main import app
+    from modulo.core.audit_coverage import audit_session
+
+    async def _override() -> AsyncGenerator[AsyncMock, None]:
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar.return_value = None
+        result.scalar_one_or_none.return_value = None
+        result.first.return_value = None
+        result.all.return_value = []
+        session.execute = AsyncMock(return_value=result)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        nested = AsyncMock()
+        nested.__aenter__ = AsyncMock(return_value=None)
+        nested.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=nested)
+        yield session
+
+    app.dependency_overrides[audit_session] = _override
+    yield
+    app.dependency_overrides.pop(audit_session, None)
+
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/sso_team_mapping.feature")

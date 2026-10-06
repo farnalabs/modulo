@@ -1100,11 +1100,11 @@ class TestClientConfiguration:
 
 
 # ---------------------------------------------------------------------------
-# Migration 0281 structural parity (mirrors the 0178 migration test)
+# Migration 0282 structural parity (mirrors the 0178 migration test)
 # ---------------------------------------------------------------------------
 
 _VERSIONS = Path(__file__).resolve().parents[4] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0281_env_profiles_kubernetes"
+_MIGRATION_NAME = "0282_env_profiles_kubernetes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 
@@ -1129,11 +1129,11 @@ def _migration_section(section: str) -> str:
     return body
 
 
-class TestMigration0281Parity:
+class TestMigration0282Parity:
     def test_metadata_pins_chain(self) -> None:
         module = _load_migration()
         assert module.revision == _MIGRATION_NAME
-        assert module.down_revision == "0280_runs_node_deadline_watchdog_fired_count"
+        assert module.down_revision == "0281_org_api_keys_grants"
         assert module.branch_labels is None
         assert module.depends_on is None
 

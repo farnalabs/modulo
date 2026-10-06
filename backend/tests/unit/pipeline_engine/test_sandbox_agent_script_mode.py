@@ -42,6 +42,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     validate_sandbox_agent_command_jinja,
 )
 from modulo.db.crud.run import SandboxConcurrencyLimit
+from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _DEFAULT_RUN_ID = str(uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
@@ -817,8 +818,12 @@ def _run_api_key_session_factory(account_id: uuid.UUID | None = _ACCOUNT_ID):
     the admin fallback path); the mint helper then calls the patched
     ``mint_run_api_key``. ``set_rls_org`` takes the generic-backend branch
     (the mock's dialect is not 'postgresql') and only writes ``session.info``.
+
+    ``configure_rls_preamble`` makes the RLS preamble's sync reads
+    (``in_transaction``/``get_bind``) sync MagicMock methods, avoiding the
+    never-awaited-coroutine noise FAR-739 fixes.
     """
-    session = AsyncMock()
+    session = configure_rls_preamble(AsyncMock())
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
@@ -922,7 +927,7 @@ async def test_sandbox_mint_helper_binds_the_run_account_id():
         captured["account_id"] = account_id
         return MagicMock(), _FAKE_RUN_KEY
 
-    session = AsyncMock()
+    session = configure_rls_preamble(AsyncMock())
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
@@ -958,7 +963,7 @@ async def test_sandbox_mint_helper_falls_back_to_first_active_admin():
         captured["account_id"] = account_id
         return MagicMock(), _FAKE_RUN_KEY
 
-    session = AsyncMock()
+    session = configure_rls_preamble(AsyncMock())
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=session)
