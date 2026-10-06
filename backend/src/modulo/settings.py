@@ -867,6 +867,17 @@ class Settings(BaseSettings):
     # (whitespace-trimmed, empties dropped). None or empty = the email channel
     # is disabled — email also requires smtp_host to be set.
     alert_email_to: str | None = Field(default=None, alias="ALERT_EMAIL_TO", repr=False)
+    # Deployment environment name — carried on every operator alert email so a
+    # recipient can tell staging from production at a glance (FAR-1495).
+    # This field MIRRORS the pre-existing scattered ``os.environ.get("MODULO_ENV",
+    # "development")`` convention for the alert path; the pre-existing call
+    # sites are deliberately not migrated in this change.
+    environment: str = Field("development", alias="MODULO_ENV")
+    # Operator-supplied free text appended verbatim to every alert email body
+    # (FAR-1495) — runbook links, escalation notes, ticket pointers. One item
+    # per line; blank lines are dropped and the rendering is bounded by
+    # ``core.alert_context``. None (default) = the environment line only.
+    alert_context: str | None = Field(default=None, alias="ALERT_CONTEXT", repr=False)
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)

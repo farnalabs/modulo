@@ -1009,6 +1009,25 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > the read surface (bucket metric + export field) is tracked under
 > `feat-analytics` (`analytics/analytics.md`). `_ORPHANED_BDD_FEATURES` stays
 > empty.
+>
+> **Closed this walk (2026-10-05):** reconciled the graph with shipped
+> behaviour and removed stale/ill-formed manifest deferrals. `feat-library`
+> (`library/library.md`) gained the FAR-1380 composite library-primitive
+> credential-masking surface — the shared
+> `LibraryPrimitiveResponse._mask_composite_graph_credentials` validator on every
+> read surface, the MCP `modulo://library/{type}/{slug}` mask, and the FAR-1374
+> sentinel refusal on the library write surfaces — with the
+> `test_library_primitive_masking.py` citation. The manifest `feat-pipelines`
+> deferral that still claimed the library-primitive surface was "excluded ...
+> pending FAR-1380" was removed (the same control statement in
+> `docs/deployment-security.md` §2.6 is corrected), and the manifest
+> `feat-triggers` deferral that still claimed Slack app-mention triggers ship
+> "without a BDD feature file" was removed (the file was wired up on
+> 2026-09-17). Four `feat-runtime` deferrals that YAML had silently reparsed
+> into single-key mappings (an unquoted `follow-up: ...` colon) are quoted back
+> to strings, and `test_product_map_feature_registry.py` gained
+> `test_deferrals_are_non_empty_strings` so the corruption class fails closed.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-10-05):** tracked `feat-evals`'s FAR-967 chunk 10
 > policy-gate operator-control + pin-integrity surface —

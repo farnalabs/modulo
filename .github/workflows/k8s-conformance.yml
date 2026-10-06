@@ -1,0 +1,573 @@
+name: "K8s conformance (kind + managed)"
+
+# Kubernetes conformance gate - FAR-1053.
+#
+# Three legs, one workflow (every `run` step carries an explicit
+# timeout-minutes; `uses:` steps are bounded by the job-level timeout; NO
+# continue-on-error anywhere - a failing leg must fail):
+#
+#   1. kind (pull_request + push to main, path-filtered; workflow_dispatch
+#      job=kind): creates a throwaway kind cluster, runs the
+#      runtime-provider conformance suite (backend/tests/conformance/,
+#      marker `runtime_provider_conformance`) against it, and ALWAYS deletes
+#      the cluster afterwards (if: always()). The suite includes the negative
+#      suite: a deliberately broken adapter must FAIL, and a
+#      kill-before-collect must be detected rather than reported as a
+#      synthetic success.
+#
+#   2. managed (weekly schedule Monday 04:00 UTC; workflow_dispatch
+#      job=managed): rotates ONE of EKS/AKS/GKE per ISO week so all three
+#      cycle over three weeks, runs the same suite against that cluster.
+#
+#      *** NEEDS-HUMAN - THE CLOUD SECRETS ARE NOT YET PROVISIONED ***
+#      This leg requires three repository secrets, each holding the RAW
+#      kubeconfig YAML of a dedicated conformance cluster:
+#        - K8S_CONFORMANCE_EKS_KUBECONFIG
+#        - K8S_CONFORMANCE_AKS_KUBECONFIG
+#        - K8S_CONFORMANCE_GKE_KUBECONFIG
+#      The kubeconfig's user must be able to create/delete namespaces and
+#      use pods/exec and pods/log (cluster-conformance RBAC, not readonly).
+#      Until a secret exists this leg FAILS LOUDLY with that exact message -
+#      never a silent skip: no green run means that substrate is NOT claimed
+#      conformant. See docs/deployment/k8s-conformance-parity.md.
+#
+#   3. staleness (daily schedule 05:17 UTC; workflow_dispatch
+#      job=staleness): last-green visibility on the deploy-staleness-check
+#      pattern. It publishes the date of the last green run (and the last
+#      scheduled run) to the step summary and FAILS when the gate goes dark
+#      (never green, last green older than the grace window, or the weekly
+#      cron stops producing runs), so a dropped cron or a permanently red
+#      suite is visible instead of silent.
+#
+# Claim discipline (docs/deployment/k8s-conformance-parity.md): a substrate
+# is claimed conformant ONLY while its most recent conformance run is green.
+# A red run withdraws the claim immediately. The parity table records what
+# these runs cannot prove (workload identity, NetworkPolicy enforcement,
+# Pod Security defaults on kind).
+#
+# `run-name` distinguishes the legs in the run history: the staleness job
+# excludes its own cron's runs from the last-green computation (a
+# self-referencing measurement would keep itself fresh forever - the
+# deploy-throttle lesson), and identifies the weekly managed leg by name.
+#
+# CROSS-LINK (staleness coupling): the template below must produce exactly the
+# two names the `staleness` job matches on - its env `STALENESS_RUN_NAME` and
+# `MANAGED_RUN_NAME`. Changing this template without updating those two
+# constants stops the managed leg being tracked; the staleness job now WARNS
+# loudly when a scheduled run matches neither name, so the drift is visible
+# rather than silent.
+
+run-name: "K8s conformance - ${{ github.event_name == 'schedule' && format('cron {0}', github.event.schedule) || github.event_name }}"
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly managed-cloud run -> the `managed` leg (rotation inside `pick`).
+    - cron: "0 4 * * 1"
+    # Daily last-green staleness check -> the `staleness` leg.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which leg to run"
+        type: choice
+        required: true
+        default: kind
+        options:
+          - kind
+          - managed
+          - staleness
+
+env:
+  # Authenticate GitHub git fetches so `uv sync --frozen` can resolve
+  # git-pinned dependencies (pytest-bdd source archive) - mirrors ci.yml.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
+  GIT_CONFIG_VALUE_0: "https://github.com/"
+  # Pinned tool versions for the kind leg (and kubectl for all legs).
+  # kubectl: kind v0.33.0 ships a k8s 1.37 node image (observed 2026-10),
+  # and managed clusters currently run 1.35-1.37 - v1.36.0 keeps the client
+  # within kubectl's supported +/-1 minor skew of BOTH.
+  KIND_VERSION: v0.33.0
+  KUBECTL_VERSION: v1.36.0
+  HELM_VERSION: v3.21.4
+  KIND_CLUSTER_NAME: modulo-conformance
+
+permissions:
+  contents: read
+
+# Same shape as ci.yml: superseded PR pushes cancel; every other event gets a
+# unique group so it can never be cancelled.
+concurrency:
+  group: k8s-conformance-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  kind:
+    name: kind cluster conformance
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.job == 'kind')
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Path detection diffs against the base; no credentials persisted.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect changed paths
+        id: detect
+        shell: bash
+        # Step-level path gate on the runner-ci-harness pattern: the job still
+        # REPORTS on every PR (a job-level skip surfaces as a non-green
+        # "skipped" check), but the expensive cluster steps only run when the
+        # conformance surface changed. FAIL-OPEN: any diff error runs the
+        # suite rather than silently skipping it.
+        working-directory: .
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/ backend/tests/conformance/ backend/pyproject.toml backend/uv.lock .github/workflows/k8s-conformance.yml"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # PRs check out the merge commit: HEAD^ is the base side.
+            if git rev-parse -q --verify "HEAD^2" >/dev/null 2>&1; then
+              BASE="HEAD^"
+            else
+              BASE="origin/$GITHUB_BASE_REF"
+            fi
+          elif [ "$EVENT_NAME" = "push" ]; then
+            if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "Push without a resolvable before-SHA - running the conformance suite."
+              exit 0
+            fi
+            BASE="$EVENT_BEFORE"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch - running the conformance suite unconditionally."
+            exit 0
+          fi
+          rc=0
+          CHANGED="$(git diff --name-only "$BASE" HEAD -- $PATHS)" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::path-filter git diff failed (rc=$rc); running the conformance suite unconditionally (fail open)"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$CHANGED" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Conformance surface changed:"
+            echo "$CHANGED"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No runtime-provider / bundled-runner / pipeline-engine / conformance changes - skipping the cluster steps."
+          fi
+
+      - name: Install kind, kubectl and helm (pinned)
+        if: steps.detect.outputs.changed == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
+          curl -fsSL --proto '=https' --proto-redir '=https' -o helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          tar -xzf helm.tgz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+          kind version
+          kubectl version --client=true
+          helm version
+
+      - name: Create the kind cluster
+        if: steps.detect.outputs.changed == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          kind create cluster --name "$KIND_CLUSTER_NAME" --wait 180s
+          kubectl wait --for=condition=Ready nodes --all --timeout=120s
+
+      - name: Pre-load the workspace image into the kind node
+        if: steps.detect.outputs.changed == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          # The provider's default workspace image (k8s.py _DEFAULT_IMAGE).
+          # Loading it into the node sidesteps Docker Hub pull limits on
+          # shared runner IPs. If the default image ever changes this becomes
+          # a harmless warm-up miss - the node then pulls the real default
+          # itself (slower, still correct).
+          docker pull python:3.13-slim
+          kind load docker-image python:3.13-slim --name "$KIND_CLUSTER_NAME"
+
+      - name: Lint the Helm chart
+        if: steps.detect.outputs.changed == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 3
+        # FAR-1053 exists because the previous Helm configs rotted away
+        # unexercised - `helm lint` is the cheapest exercise that keeps the
+        # chart from silently breaking. It does NOT install anything: the
+        # conformance suite validates the runtime provider, not chart
+        # behaviour (see the parity doc for what is and is not covered).
+        run: helm lint deploy/helm/modulo
+
+      - name: Sync backend deps
+        if: steps.detect.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          ignore-nothing-to-cache: true
+
+      - name: uv sync
+        if: steps.detect.outputs.changed == 'true'
+        shell: bash
+        timeout-minutes: 10
+        # Deliberately WITHOUT --no-build (NOSONAR githubactions:S8541):
+        # pytest-bdd is a pinned source archive with no wheel, so `--no-build`
+        # hard-fails the sync on a cold uv cache (FAR-791). `--frozen` locks the
+        # exact revisions, so the builds are deterministic and trusted.
+        run: uv sync --frozen  # NOSONAR
+
+      - name: Run the runtime-provider conformance suite
+        if: steps.detect.outputs.changed == 'true'
+        shell: bash
+        timeout-minutes: 20
+        # The CLI -m overrides the backend/pyproject.toml addopts deselection
+        # (pytest keeps the last -m), so the selection is explicit - the suite
+        # is never implicitly on and never silently skipped green here.
+        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600
+
+      - name: Cluster diagnostics (evidence dump)
+        if: always() && steps.detect.outputs.changed == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 3
+        # Evidence only - never gates the job (same posture as the
+        # runner-ci-harness proxy log dump).
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -n 60 || true
+
+      - name: Delete the kind cluster (always)
+        if: always() && steps.detect.outputs.changed == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 5
+        # The finally-clause: runs after success AND failure so a red run
+        # never leaks the cluster on the runner.
+        run: kind delete cluster --name "$KIND_CLUSTER_NAME"
+
+      - name: Record the green run (staleness visibility)
+        if: success() && steps.detect.outputs.changed == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 3
+        # Publishing step: stamp this green run's date into the run summary.
+        # The staleness job reads the same run history and does the
+        # authoritative cross-run computation (including excluding its own
+        # cron runs).
+        run: |
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "## Kubernetes conformance (kind) - green"
+            echo ""
+            echo "Green run recorded at: ${STAMP}"
+            echo ""
+            echo "Claim: the kind substrate is conformant while its latest run is green (docs/deployment/k8s-conformance-parity.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  pick:
+    name: Pick this week's managed cloud
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 4 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.job == 'managed')
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Rotate EKS -> AKS -> GKE by ISO week
+        id: pick
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          WEEK="$(date -u +%V)"
+          # 10# forces base-10 so weeks like "08" are not read as octal.
+          case $(( 10#$WEEK % 3 )) in
+            0) CLOUD="eks" ;;
+            1) CLOUD="aks" ;;
+            2) CLOUD="gke" ;;
+          esac
+          case "$CLOUD" in
+            eks) SECRET="K8S_CONFORMANCE_EKS_KUBECONFIG" ;;
+            aks) SECRET="K8S_CONFORMANCE_AKS_KUBECONFIG" ;;
+            gke) SECRET="K8S_CONFORMANCE_GKE_KUBECONFIG" ;;
+          esac
+          echo "matrix={\"include\":[{\"cloud\":\"$CLOUD\",\"kubeconfig_secret\":\"$SECRET\"}]}" >> "$GITHUB_OUTPUT"
+          echo "Managed conformance target this week: ${CLOUD} (ISO week ${WEEK}: week % 3 rotates one cloud per week, all three cycle every three weeks)."
+
+  managed:
+    name: managed conformance (${{ matrix.cloud }})
+    needs: [pick]
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 4 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.job == 'managed')
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.pick.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      KUBECONFIG: ${{ github.workspace }}/.kube/conformance.yaml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install kubectl (pinned)
+        working-directory: .
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
+          kubectl version --client=true
+
+      - name: Materialise the kubeconfig and verify cluster access
+        working-directory: .
+        shell: bash
+        timeout-minutes: 3
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          KUBECONFIG_SECRET_NAME: ${{ matrix.kubeconfig_secret }}
+          KUBECONFIG_RAW: ${{ secrets[matrix.kubeconfig_secret] }}
+        run: |
+          if [ -z "$KUBECONFIG_RAW" ]; then
+            echo "::error::FAR-1053 needs-human: the ${CLOUD} conformance kubeconfig secret '${KUBECONFIG_SECRET_NAME}' is not provisioned. Store the RAW kubeconfig YAML of a dedicated ${CLOUD} conformance cluster under that repository secret (user needs namespace create/delete plus pods/exec and pods/log). Until it exists the ${CLOUD} substrate is NOT claimed conformant, and this leg fails loudly by design - never a silent skip. See docs/deployment/k8s-conformance-parity.md."
+            exit 1
+          fi
+          mkdir -p "$(dirname "$KUBECONFIG")"
+          printf '%s\n' "$KUBECONFIG_RAW" > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl cluster-info
+          kubectl get namespaces >/dev/null
+          echo "Connected to the ${CLOUD} conformance cluster."
+
+      - name: Sync backend deps
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          ignore-nothing-to-cache: true
+
+      - name: uv sync
+        shell: bash
+        timeout-minutes: 10
+        # NOSONAR githubactions:S8541: pytest-bdd is a pinned source archive with
+        # no wheel, so `--no-build` hard-fails the sync on a cold uv cache
+        # (FAR-791). `--frozen` locks the exact revisions, so the builds are
+        # deterministic and trusted (no untrusted setup scripts execute).
+        run: uv sync --frozen  # NOSONAR
+
+      - name: Run the runtime-provider conformance suite
+        shell: bash
+        timeout-minutes: 25
+        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600
+
+      - name: Cluster diagnostics (evidence dump)
+        if: always()
+        working-directory: .
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -n 60 || true
+
+      - name: Sweep conformance namespaces (always)
+        if: always()
+        working-directory: .
+        shell: bash
+        timeout-minutes: 5
+        # The session fixture deletes its own namespace; this backstops a run
+        # killed mid-flight. It GATES: a leaked namespace on a managed
+        # cluster costs money until someone finds it.
+        run: kubectl delete namespace -l modulo.conformance=true --ignore-not-found --wait=true --timeout=180s
+
+      - name: Record the green run (staleness visibility)
+        if: success()
+        working-directory: .
+        shell: bash
+        timeout-minutes: 3
+        env:
+          CLOUD: ${{ matrix.cloud }}
+        run: |
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "## Kubernetes conformance (managed ${CLOUD}) - green"
+            echo ""
+            echo "Green run recorded at: ${STAMP}"
+            echo ""
+            echo "Claim: the ${CLOUD} substrate is conformant while its latest scheduled run is green (docs/deployment/k8s-conformance-parity.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  staleness:
+    name: Last-green conformance staleness
+    # The staleness job reads this workflow's run history via the Actions API
+    # with github.token (a token lacking this scope yields 404 - indistinguishable
+    # from an empty result, so declare it explicitly). `actions: read` is scoped to
+    # THIS job only (githubactions:S8264) - no other job touches the Actions API. A
+    # job-level `permissions` block replaces the workflow-level one, so
+    # `contents: read` is restated here.
+    permissions:
+      contents: read
+      actions: read
+    if: (github.event_name == 'schedule' && github.event.schedule == '17 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.job == 'staleness')
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    steps:
+      - name: Compute and publish the last-green dates
+        shell: bash
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_FILE: k8s-conformance.yml
+          # The two run names produced by this workflow's run-name template
+          # (kept in sync with the template at the top of this file - a rename
+          # must update all three, or scheduled legs classify as unrecognised;
+          # the scan below WARNS loudly when that happens).
+          STALENESS_RUN_NAME: "K8s conformance - cron 17 5 * * *"
+          MANAGED_RUN_NAME: "K8s conformance - cron 0 4 * * 1"
+          # Grace windows (days), overridable via repo variables:
+          #   ANY_GRACE  - the scheduled leg refreshes weekly once the secrets
+          #                are provisioned, so 28d = four missed cycles; before
+          #                that it is refreshed by kind-leg greens (PR runs or
+          #                a manual workflow_dispatch job=kind).
+          #   MANAGED_DARK_GRACE - the weekly cron must produce a run at least
+          #                every ~7d; 14d means GitHub dropped the cron or the
+          #                workflow was edited out from under it.
+          ANY_GRACE: ${{ vars.K8S_CONFORMANCE_STALENESS_GRACE_DAYS || 28 }}
+          MANAGED_DARK_GRACE: ${{ vars.K8S_CONFORMANCE_MANAGED_DARK_GRACE_DAYS || 14 }}
+        run: |
+          set -euo pipefail
+          # Fail open WITH a loud warning on API failure (a token/scope problem
+          # must not read as "no runs found" - the Actions 404-vs-empty lesson).
+          # (.conclusion // "pending" keeps every TSV field non-empty: an empty
+          # field would collapse under IFS-whitespace and shift the columns.)
+          rc=0
+          RUNS_TSV="$(gh api "repos/${REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=100" \
+            --jq '.workflow_runs[] | [.name, .event, (.conclusion // "pending"), .created_at] | @tsv' 2>&1)" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::could not read this workflow's run history (rc=${rc}) - cannot determine staleness this cycle. Transient failures warn, not fail; if this repeats, investigate the Actions API read (token scope yields 404, which looks like an empty result)."
+            {
+              echo "## Kubernetes conformance - staleness"
+              echo ""
+              echo "UNKNOWN this cycle: run-history read failed (rc=${rc})."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          NOW_TS="$(date -u +%s)"
+          ANY_GREEN_TS=0
+          ANY_GREEN_DATE=""
+          MANAGED_TS=0
+          MANAGED_DATE=""
+          MANAGED_CONCLUSION=""
+          MANAGED_GREEN_TS=0
+          MANAGED_GREEN_DATE=""
+          # First scheduled run whose name matches neither known leg name. A
+          # run-name template rename would otherwise classify every scheduled
+          # leg as "other" and silently stop tracking the managed leg.
+          SCHEDULE_NAME_DRIFT=""
+          while IFS=$'\t' read -r NAME EVENT CONCLUSION CREATED; do
+            [ -z "${CREATED}" ] && continue
+            # Self-reference guard: the staleness cron's own runs never count
+            # (a green staleness run would otherwise refresh the last-green
+            # date forever and the check could never fire).
+            if [ "${NAME}" = "${STALENESS_RUN_NAME}" ]; then
+              continue
+            fi
+            TS="$(date -u -d "${CREATED}" +%s)"
+            if [ "${CONCLUSION}" = "success" ] && [ "${TS}" -gt "${ANY_GREEN_TS}" ]; then
+              ANY_GREEN_TS="${TS}"
+              ANY_GREEN_DATE="${CREATED}"
+            fi
+            if [ "${NAME}" = "${MANAGED_RUN_NAME}" ]; then
+              if [ "${TS}" -gt "${MANAGED_TS}" ]; then
+                MANAGED_TS="${TS}"
+                MANAGED_DATE="${CREATED}"
+                MANAGED_CONCLUSION="${CONCLUSION}"
+              fi
+              if [ "${CONCLUSION}" = "success" ] && [ "${TS}" -gt "${MANAGED_GREEN_TS}" ]; then
+                MANAGED_GREEN_TS="${TS}"
+                MANAGED_GREEN_DATE="${CREATED}"
+              fi
+            elif [ "${EVENT}" = "schedule" ] && [ -z "${SCHEDULE_NAME_DRIFT}" ]; then
+              # A scheduled run must be one of the two known legs; anything
+              # else means the run-name template drifted from the constants
+              # above (or a third schedule was added). Record it so the check
+              # fails loud below instead of silently under-reporting.
+              SCHEDULE_NAME_DRIFT="${NAME}"
+            fi
+          done <<< "${RUNS_TSV}"
+
+          if [ -n "${SCHEDULE_NAME_DRIFT}" ]; then
+            echo "::warning::a scheduled run named '${SCHEDULE_NAME_DRIFT}' matches neither '${STALENESS_RUN_NAME}' nor '${MANAGED_RUN_NAME}' - the run-name template has drifted from the names this job tracks (or a new schedule was added). Update STALENESS_RUN_NAME / MANAGED_RUN_NAME to match - see the run-name template comment at the top of this workflow. Until then the managed-leg staleness signal is incomplete."
+          fi
+
+          ANY_AGE=""
+          [ "${ANY_GREEN_TS}" -gt 0 ] && ANY_AGE=$(( (NOW_TS - ANY_GREEN_TS) / 86400 ))
+          MANAGED_AGE=""
+          [ "${MANAGED_TS}" -gt 0 ] && MANAGED_AGE=$(( (NOW_TS - MANAGED_TS) / 86400 ))
+          ANY_AGE_CELL="${ANY_AGE:+${ANY_AGE}d}"
+          ANY_AGE_CELL="${ANY_AGE_CELL:-n/a}"
+          MANAGED_AGE_CELL="${MANAGED_AGE:+${MANAGED_AGE}d}"
+          MANAGED_AGE_CELL="${MANAGED_AGE_CELL:-n/a}"
+
+          {
+            echo "## Kubernetes conformance - last-green visibility"
+            echo ""
+            echo "| signal | date | age |"
+            echo "| --- | --- | --- |"
+            echo "| Last green run (any leg, staleness-cron runs excluded) | ${ANY_GREEN_DATE:-none yet} | ${ANY_AGE_CELL} |"
+            echo "| Last scheduled (managed) run | ${MANAGED_DATE:-none yet} (${MANAGED_CONCLUSION:-n/a}) | ${MANAGED_AGE_CELL} |"
+            echo "| Last green managed run | ${MANAGED_GREEN_DATE:-none yet} | |"
+            echo "| Grace windows | ${ANY_GRACE}d (any green) / ${MANAGED_DARK_GRACE}d (managed cron dark) | |"
+            echo ""
+            echo "Claim discipline: a substrate is claimed conformant ONLY while its most recent conformance run is green (docs/deployment/k8s-conformance-parity.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "${ANY_GREEN_DATE}" ]; then
+            echo "::error::Kubernetes conformance has NEVER run green (FAR-1053). Establish the first green: land a PR touching the conformance surface, or run workflow_dispatch with job=kind. Until then the Kubernetes tier is not claimed conformant."
+            exit 1
+          fi
+
+          if [ "${ANY_AGE}" -gt "${ANY_GRACE}" ]; then
+            echo "::error::Kubernetes conformance is STALE: the last green run was ${ANY_AGE} days ago (${ANY_GREEN_DATE}), past the ${ANY_GRACE}-day grace window. Either the gate stopped running (dropped cron, path filter never matching) or every recent run failed - inspect the k8s-conformance workflow runs. A quick refresh: workflow_dispatch with job=kind. The conformance claim is withdrawn while this is red."
+            exit 1
+          fi
+
+          if [ -n "${MANAGED_DATE}" ] && [ "${MANAGED_AGE}" -gt "${MANAGED_DARK_GRACE}" ]; then
+            echo "::error::The weekly managed leg is DARK: its most recent run was ${MANAGED_AGE} days ago (${MANAGED_DATE}) - the scheduled cron should produce a run every 7 days. GitHub has been known to drop cron events on busy repos; verify the schedule fired and re-dispatch with job=managed if needed."
+            exit 1
+          fi
+
+          if [ -n "${MANAGED_DATE}" ] && [ -z "${MANAGED_GREEN_DATE}" ]; then
+            echo "::warning::The managed leg has run but has NEVER been green - EKS/AKS/GKE are not claimed conformant (FAR-1053 needs-human: provision the K8S_CONFORMANCE_*_KUBECONFIG secrets, or investigate the latest managed run)."
+          fi
+
+          echo "::notice::Kubernetes conformance last green ${ANY_AGE}d ago (${ANY_GREEN_DATE}) - within the ${ANY_GRACE}-day grace window."

@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,7 +21,10 @@ from modulo.api.dependencies import deny_break_glass_mint, get_db_session, requi
 from modulo.auth.api_key import (
     _UNSET,
     KEY_SCOPES,
+    USER_KEY_MAX_TTL_DAYS,
+    ApiKeyGrantsUnavailableError,
     ApiKeyScopeError,
+    api_key_grants_enabled,
     create_api_key,
     list_api_keys,
     revoke_api_key,
@@ -29,6 +32,7 @@ from modulo.auth.api_key import (
 )
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.permissions import PERMISSIONS, is_delegable
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
@@ -98,6 +102,10 @@ class ApiKeyCreate(BaseModel):
     # behaviour); 'user' = per-user key (flag-gated + quota'd). The scope is
     # stamped at mint and IMMUTABLE afterwards.
     scope: str | None = None
+    # FAR-1477 / ADR 058: explicit grant-set (flag-gated by ``api_key_grants``).
+    # TRI-STATE: omitted/None = legacy role bundle (NULL); [] = explicit
+    # deny-all; a list = the exact set. Immutable after mint.
+    grants: list[str] | None = None
 
 
 class ApiKeyUpdate(BaseModel):
@@ -108,6 +116,9 @@ class ApiKeyUpdate(BaseModel):
     # FAR-620: present ONLY so an explicit payload field can be rejected —
     # the caller scope is immutable post-mint.
     scope: str | None = None
+    # FAR-1477: present ONLY so an explicit payload field can be rejected --
+    # the grant-set is immutable post-mint.
+    grants: list[str] | None = None
 
 
 class ApiKeyCreatedResponse(BaseModel):
@@ -119,6 +130,8 @@ class ApiKeyCreatedResponse(BaseModel):
     created_at: datetime
     team_id: str | None = None
     scope: str = "org"
+    # FAR-1477: echoed ONLY for grant-bearing keys (None = legacy role bundle).
+    grants: list[str] | None = None
 
     model_config = {"from_attributes": False}
 
@@ -182,6 +195,81 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(f"Cannot use role '{requested_role}' for an API key while your live role is '{live_role}'"),
         )
+
+
+async def _enforce_grants_mint_cap(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    requested_grants: list[str],
+) -> None:
+    """REST wrapper over :func:`enforce_grants_mint_cap_for` (principal -> ids)."""
+    await enforce_grants_mint_cap_for(session, principal.account_id, principal.organisation_id, requested_grants)
+
+
+async def enforce_grants_mint_cap_for(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    org_id: uuid.UUID,
+    requested_grants: list[str],
+) -> None:
+    """FAR-1477 mint cap: requested grants must be a subset of the caller's LIVE capability.
+
+    Generalises ``_enforce_mint_cap``. Each grant must be (a) a known
+    ``PERMISSIONS`` key, (b) delegable per the registry-level exclusion flag
+    (read LIVE -- the same ``is_delegable`` the enforcement resolvers use), and
+    (c) within the caller's live role bundle. The caller's live role is re-read
+    from membership (never trusted from the JWT).
+    """
+    unknown = sorted(g for g in requested_grants if g not in PERMISSIONS)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown permission grant(s): {', '.join(unknown)}",
+        )
+    excluded = sorted(g for g in requested_grants if not is_delegable(g))
+    if excluded:
+        logger.warning("permission.api_key_grant_not_delegable", extra={"grants": excluded})
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission(s) cannot be delegated to an API key: {', '.join(excluded)}",
+        )
+    live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
+    if live_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active organisation membership required to manage API keys",
+        )
+    live_level = org_role_level(live_role)
+    above = sorted(g for g in requested_grants if org_role_level(PERMISSIONS[g]) > live_level)
+    if above:
+        logger.warning(
+            "permission.api_key_grant_cap",
+            extra={"grants": above, "live_role": live_role},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Cannot grant {', '.join(above)} while your live role is '{live_role}'",
+        )
+
+
+def _resolve_grants_expiry(expires_at: datetime | None, requested_scope: str, grants_on: bool) -> datetime | None:
+    """User-scoped keys: 90d default AND maximum (FAR-1477; grants flag ON only).
+
+    Flag OFF returns ``expires_at`` untouched (pre-FAR-1477 behaviour, 365d
+    default applied downstream). Mandatory expiry is unchanged: the result is
+    never None for a user-scoped key under the flag.
+    """
+    if not grants_on or requested_scope != "user":
+        return expires_at
+    ceiling = datetime.now(UTC) + timedelta(days=USER_KEY_MAX_TTL_DAYS)
+    if expires_at is None:
+        return ceiling
+    if expires_at > ceiling:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"User-scoped API keys expire within {USER_KEY_MAX_TTL_DAYS} days",
+        )
+    return expires_at
 
 
 async def _user_keys_flag_enabled(org_id: uuid.UUID) -> bool:
@@ -315,12 +403,15 @@ async def _create_key_tx(
     team_id: uuid.UUID | None,
     expires_at: datetime | None,
     requested_scope: str,
+    grants: list[str] | None = None,
 ) -> tuple[OrgApiKey, str]:
     """Mint the key in one transaction: RLS context, role cap, quota, create."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
         await _enforce_mint_cap(session, principal, role)
+        if grants is not None:
+            await _enforce_grants_mint_cap(session, principal, grants)
         if requested_scope == "user":
             await _enforce_user_key_quota(session, principal)
         return await create_api_key(
@@ -332,6 +423,7 @@ async def _create_key_tx(
             team_id=team_id,
             expires_at=expires_at,
             scope=requested_scope,
+            grants=grants,
         )
 
 
@@ -343,10 +435,11 @@ async def _mint_api_key(
     team_id: uuid.UUID | None,
     expires_at: datetime | None,
     requested_scope: str,
+    grants: list[str] | None = None,
 ) -> tuple[OrgApiKey, str]:
     """Mint the key, mapping DB errors to the route's HTTP error contract."""
     try:
-        return await _create_key_tx(session, principal, name, role, team_id, expires_at, requested_scope)
+        return await _create_key_tx(session, principal, name, role, team_id, expires_at, requested_scope, grants)
     except ApiKeyScopeError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -407,7 +500,28 @@ async def create_api_key_endpoint(
         )
     team_id = await _resolve_new_team_id(req.team_id, settings, session, principal)
     expires_at = _parse_future_expires_at(req.expires_at)
-    key, full_key = await _mint_api_key(session, principal, name, req.role, team_id, expires_at, requested_scope)
+    # FAR-1477: grants are accepted ONLY with the org flag ON (OFF => 422, never
+    # a silent downgrade to a legacy full-role key, which would WIDEN access).
+    grants_on = False
+    if req.grants is not None or requested_scope == "user":
+        # Mint path reads the flag STRICT: a transient failure must not silently
+        # skip the 90-day user-key cap (or the grants gate) -> retryable 503.
+        try:
+            grants_on = await api_key_grants_enabled(principal.organisation_id, strict=True)
+        except ApiKeyGrantsUnavailableError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key grant settings are temporarily unavailable; retry shortly",
+            ) from None
+        if req.grants is not None and not grants_on:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="API key grant-sets are not enabled for this organisation",
+            )
+    expires_at = _resolve_grants_expiry(expires_at, requested_scope, grants_on)
+    key, full_key = await _mint_api_key(
+        session, principal, name, req.role, team_id, expires_at, requested_scope, req.grants
+    )
 
     # PRD §8.12 ``api_key_created``: key minting was never audited. Written in a
     # fresh transaction (the create above already committed) and failure-isolated
@@ -430,6 +544,7 @@ async def create_api_key_endpoint(
             "auth_type": "jwt",
             "key_scope": key.scope if isinstance(key.scope, str) else requested_scope,
             "lookup_prefix": f"mk_{key.lookup_prefix}****",
+            **({"grants": sorted(req.grants)} if req.grants is not None else {}),
         },
         log_key="api_keys.create_audit_failed",
     )
@@ -443,6 +558,7 @@ async def create_api_key_endpoint(
         created_at=key.created_at,
         team_id=str(key.team_id) if key.team_id else None,
         scope=key.scope if isinstance(key.scope, str) else requested_scope,
+        grants=sorted(req.grants) if req.grants is not None else None,
     )
 
 
@@ -501,6 +617,12 @@ def _validate_update_payload(req: ApiKeyUpdate) -> None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="scope is immutable: an API key's caller scope cannot be changed after mint",
+        )
+    # FAR-1477: the grant-set is likewise immutable (mint a new key instead).
+    if "grants" in req.model_fields_set:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="grants are immutable: an API key's grant-set cannot be changed after mint",
         )
 
 
@@ -716,6 +838,44 @@ async def revoke_api_key_endpoint(
     )
 
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
+
+
+class GrantablePermission(BaseModel):
+    name: str
+    min_role: str
+
+
+class GrantablePermissionsResponse(BaseModel):
+    """Delegable permissions the caller may put in an API key grant-set (FAR-1477)."""
+
+    enabled: bool
+    permissions: list[GrantablePermission]
+
+
+@router.get("/grantable-permissions")
+@handle_db_errors("api_keys.grantable_permissions_endpoint")
+async def grantable_permissions_endpoint(
+    principal: TenantPrincipal = require_permission("api_key.create"),
+) -> GrantablePermissionsResponse:
+    """List permissions a new key's grant-set may contain.
+
+    Sourced from the registry through ``is_delegable`` (the same predicate the
+    mint cap and the enforcement resolvers use), so non-delegable permissions
+    are never offered. Filtered to the caller's own role level for the UI; the
+    mint cap remains the authority. ``enabled`` mirrors the ``api_key_grants``
+    flag -- when OFF the list is empty.
+    """
+    if not await api_key_grants_enabled(principal.organisation_id):
+        return GrantablePermissionsResponse(enabled=False, permissions=[])
+    caller_level = org_role_level(principal.org_role)
+    return GrantablePermissionsResponse(
+        enabled=True,
+        permissions=[
+            GrantablePermission(name=name, min_role=min_role)
+            for name, min_role in sorted(PERMISSIONS.items())
+            if is_delegable(name) and org_role_level(min_role) <= caller_level
+        ],
+    )
 
 
 @router.get("/mcp-config")

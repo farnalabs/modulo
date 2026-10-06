@@ -91,7 +91,7 @@ class TestValidateCurrentAuth:
         mock_validate_api_key: AsyncMock,
         mock_resolve_role: AsyncMock,
     ) -> None:
-        mock_validate_api_key.return_value = MagicMock(role="operator", id=uuid.uuid4())
+        mock_validate_api_key.return_value = MagicMock(role="operator", id=uuid.uuid4(), grants=None)
         mock_resolve_role.return_value = "operator"
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
@@ -539,7 +539,7 @@ class TestMcpAuthMiddlewareContext:
         mock_resolve_role: AsyncMock,
     ) -> None:
         """Verify the middleware flow sets _ctx_auth_token and _ctx_auth_type."""
-        mock_key = MagicMock(role="operator", id=uuid.uuid4())
+        mock_key = MagicMock(role="operator", id=uuid.uuid4(), grants=None)
         mock_key.run_id = None
         mock_key.name = None
         mock_validate_api_key.return_value = mock_key

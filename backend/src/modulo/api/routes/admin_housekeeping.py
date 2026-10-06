@@ -16,7 +16,9 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
 from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, purge_terminal_checkpoints
@@ -121,7 +123,19 @@ async def list_housekeeping(
     return HousekeepingScanResponse(categories=categories_list, total_count=total)
 
 
-@router.post("/cleanup")
+@router.post(
+    "/cleanup",
+    dependencies=[
+        Depends(
+            audited(
+                "housekeeping_cleanup_performed",
+                "housekeeping",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+)
 async def perform_cleanup(
     req: CleanupRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -220,7 +234,19 @@ class CheckpointRetentionPurgeResponse(BaseModel):
     bytes_freed: int
 
 
-@router.post("/checkpoints/purge")
+@router.post(
+    "/checkpoints/purge",
+    dependencies=[
+        Depends(
+            audited(
+                "checkpoint_purged",
+                "checkpoint",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+)
 async def purge_checkpoints(
     req: CheckpointRetentionPurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],

@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.runtime_config.store import get_runtime_config_store
 
 scenarios("runtime-config.feature")
@@ -32,10 +32,16 @@ def _build_app(request: Any) -> FastAPI:
     admin scenarios (no flag stashed) get a system admin, viewer scenarios get
     a viewer, and unauth scenarios get no ``get_current_user`` override so the
     real auth dependency returns 401.
+
+    ``get_current_tenant_user`` is overridden too: the routes carry
+    ``audited(..., principal_dep=get_current_tenant_user)``, and resolving that
+    for real would re-read the account/org from a database this fresh app never
+    wires up. This mirrors the shared BDD ``client`` fixture, which stubs both
+    resolvers.
     """
     from modulo.api.dependencies import get_plan_context
     from modulo.api.routes.admin_runtime_config import router as runtime_config_router
-    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 
     class _AllFeatures:
         def feature_enabled(self, name: str) -> bool:
@@ -57,6 +63,7 @@ def _build_app(request: Any) -> FastAPI:
     is_viewer = bool(getattr(request.node, "_viewer_auth", False))
     is_unauth = bool(getattr(request.node, "_unauth", False))
     principal: AuthenticatedPrincipal | None
+    tenant: TenantPrincipal | None
     if is_viewer:
         principal = AuthenticatedPrincipal(
             username="viewer",
@@ -65,8 +72,16 @@ def _build_app(request: Any) -> FastAPI:
             org_role="viewer",
             is_system_admin=False,
         )
+        tenant = TenantPrincipal(
+            username="viewer",
+            organisation_id=_ORG_ID,
+            account_id=principal.account_id,
+            org_role="viewer",
+            is_system_admin=False,
+        )
     elif is_unauth:
         principal = None
+        tenant = None
     else:
         principal = AuthenticatedPrincipal(
             username="testuser",
@@ -75,9 +90,17 @@ def _build_app(request: Any) -> FastAPI:
             org_role="admin",
             is_system_admin=True,
         )
+        tenant = TenantPrincipal(
+            username="testuser",
+            organisation_id=_ORG_ID,
+            account_id=principal.account_id,
+            org_role="admin",
+            is_system_admin=True,
+        )
 
-    if principal is not None:
+    if principal is not None and tenant is not None:
         app.dependency_overrides[get_current_user] = lambda: principal
+        app.dependency_overrides[get_current_tenant_user] = lambda: tenant
     return app
 
 

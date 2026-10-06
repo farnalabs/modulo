@@ -240,7 +240,7 @@ Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-s
 
 ### Runtime Provider Hub (`modulo/core/runtime_provider/`)
 
-Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), and `runner_docker` (registered when a `MODULO_RUNNER_*` variable or a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
+Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), `runner_docker` (registered when a `MODULO_RUNNER_*` variable or a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier), and `kubernetes` (alias `k8s`; registered when `MODULO_KUBERNETES_ENABLED` is a non-falsy value; workspace pods run in `MODULO_KUBERNETES_NAMESPACE`, default `modulo`, under ServiceAccount `MODULO_KUBERNETES_SERVICE_ACCOUNT`, default `default`). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
 
 E2B direct-path inventory, sanctioned-site list, and the rewire plan that moved every E2B dispatch onto the RuntimeProvider ABC (FAR-1050 deliverable 1). The `MODULO_E2B_VIA_PROVIDER` flag the plan originally gated on was **retired by slice R6 (PR #1033)**: the provider path is now unconditional, and `via_provider` survives only as a historical attribution field on the dispatch marker and node telemetry: [`docs/design/e2b-provider-conformance-rewire.md`](design/e2b-provider-conformance-rewire.md).
 
@@ -619,6 +619,61 @@ minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag
 account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
 surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
+
+**Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
+`org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,
+tri-state: `NULL` = legacy role-bundle behaviour (unchanged), empty = explicit
+deny-all, a list = the exact set. Enforcement is
+`effective = grants ∩ bundle(live_role)` on both the REST resolver
+(`_assert_tenant_permission`) and the MCP chokepoint (`resolve_tool_access`);
+the grant leg only ever narrows and is not lifted by the authz kill switch.
+Minting (`POST /api/v1/api-keys` with `grants`) caps requested grants to the
+caller's LIVE capability and rejects non-delegable keys. Delegability is a
+single registry-level flag, `modulo.auth.permissions.is_delegable`, read live
+at enforcement and mint time (never-grantable: human_only HITL, `api_key.*`,
+`oauth.client.*`, `system.*`, `org.delete`, break-glass controls); OAuth
+scopes and principals must consume it rather than keep a second list. With the
+flag OFF a grant-bearing key is denied (401), never widened to its role, and
+`grants` on mint is rejected (422). With the flag ON, user-scoped keys default
+to and are capped at 90 days. Grants are immutable after mint. The MCP
+`create_api_key` tool accepts the same optional `grants` (always an org-scoped
+key, so no 90-day user-key TTL) and runs the same mint cap and flag gate as
+REST. The Settings > MCP create-key dialog offers a grant picker, sourced from
+`GET /api/v1/api-keys/grantable-permissions` (delegable permissions only,
+empty with the flag OFF); it omits `grants` unless the user restricts the key.
+Privilege helpers that gate admin/operator-only extras inside a route (cost
+breaker, guardrail strip, HITL weakening, In-Dev reveal) also require the
+matching permission (`cost.manage`, `guardrail.manage`, `pipeline.graph.update`,
+`*.list.in_dev`) in the grant-set when the key carries one; a malformed
+grant value is denied, never read as unrestricted. The grant decision is carried
+into the service layer: for REST callers `replace_pipeline_graph` and
+`rollback_to_snapshot` compute the final HITL-privilege and guardrail-admin
+flags exactly as before (the live role re-read under the row lock stays
+authoritative for REST callers, including upgrading a stale-low flag), then
+apply the explicit `grants_deny_privilege` / `grants_deny_guardrail_admin`
+parameters, which can only NARROW the result and so a live admin role never
+overrides a grants denial (an admin-owned key holding only
+`pipeline.graph.update` cannot strip a guardrail binding). The grant flag and
+grant-set are resolved after the key-validation DB session closes (never nested
+inside it, to avoid holding two pooled connections per request). A transient
+failure reading the flag for a grant-bearing key (the strict read propagates the
+registry's org-override read error instead of treating it as OFF) answers 503
+(not 401) on REST and a retryable denial on MCP; NULL-grants keys never read the
+flag. Long-lived MCP connections re-run the grant resolver on every
+re-validation. **Rollback caveat:** a key minted with grants (non-NULL
+`grants`, including the empty deny-all) becomes a full-role key if code older
+than this change ignores the column or if the column is dropped. Migration
+0281's downgrade therefore refuses to run while any grant-bearing key exists.
+Before rolling code back below this change, turn the `api_key_grants` flag off
+and revoke every grant-bearing key. Minting reads the flag strictly: a transient
+read failure answers a retryable 503 instead of silently skipping the grants
+gate or the 90-day user-key cap. A grant above the key's own minted/live role has no effect,
+since `effective = grants ∩ bundle(role)`; the mint cap checks the minter's
+capability, not the new key's role. **Known REST/MCP asymmetry (open design question):** over MCP
+every read-only tool is gated by the single coarse `resource.read_only` key,
+not the fine-grained REST read keys (`pipeline.list`, `pipeline.graph.read`,
+...), so MCP reads are all-or-nothing per grant-set; REST enforces the fine keys.
+
 
 ### Row-Level Security
 

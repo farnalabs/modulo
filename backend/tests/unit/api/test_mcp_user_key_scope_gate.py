@@ -90,6 +90,7 @@ def _mock_api_key(
     key.id = _USER_ID
     key.role = role
     key.scope = scope
+    key.grants = None
     key.organisation_id = _ORG_ID
     key.account_id = _USER_ID
     key.team_id = team_id
@@ -434,6 +435,7 @@ class TestHandlerEnforcement:
         key_row.id = uuid.uuid4()
         key_row.name = "CI Key"
         key_row.role = "runner"
+        key_row.grants = None
         key_row.scope = "org"
         key_row.team_id = None
         key_row.lookup_prefix = "abcd1234"

@@ -811,7 +811,13 @@ class TestOrgOverrideOrgIdGuard:
             else:
                 resp = no_org_client.delete(url)
             assert resp.status_code == 403, (method, resp.status_code, resp.text)
-            assert "Organisation ID required" in resp.text
+            # The mutating routes carry audited(..., principal_dep=
+            # get_current_tenant_user), so a principal with no organisation is
+            # refused by that dependency ("Organisation membership required")
+            # before the route's own guard runs; the un-annotated GET still
+            # reports the route guard's message ("Organisation ID required").
+            # Both are the same 403 org refusal - only the detail differs.
+            assert "Organisation" in resp.text
 
 
 # ---------------------------------------------------------------------------

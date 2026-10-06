@@ -63,12 +63,14 @@ def test_local_always_registered_and_gated_types_absent_without_env(
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
 
     hub = build_hub()
 
     assert hub.get("local") is not None
     assert hub.get("e2b") is None
     assert hub.get("runner_docker") is None
+    assert hub.get("kubernetes") is None
 
 
 # ---------------------------------------------------------------------------
