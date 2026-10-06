@@ -1181,6 +1181,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/system-audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List System Audit Events
+         * @description List durable, org-independent org-lifecycle audit records.
+         *
+         *     System-admin only: these records span every organisation, including ones
+         *     that no longer exist, so an org-role gate would leak cross-org history.
+         */
+        get: operations["admin_list_system_audit_events_api_v1_admin_system_audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system-admin/config": {
         parameters: {
             query?: never;
@@ -18726,6 +18749,46 @@ export interface components {
             /** Event Id */
             event_id: string;
         };
+        /**
+         * SystemAuditEventItem
+         * @description One durable org-lifecycle record as it appears on the wire.
+         */
+        SystemAuditEventItem: {
+            /** Id */
+            id: string;
+            /** Event Type */
+            event_type: string;
+            /** Org Id */
+            org_id?: string | null;
+            /** Actor User Id */
+            actor_user_id?: string | null;
+            /** Resource Type */
+            resource_type?: string | null;
+            /** Resource Id */
+            resource_id?: string | null;
+            /** Payload Json */
+            payload_json: {
+                [key: string]: unknown;
+            };
+            /** Request Id */
+            request_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /**
+         * SystemAuditEventPage
+         * @description Repo-standard offset page envelope (items / total / page / page_size).
+         */
+        SystemAuditEventPage: {
+            /** Items */
+            items: components["schemas"]["SystemAuditEventItem"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
         /** TargetInjection */
         TargetInjection: {
             /**
@@ -22897,6 +22960,70 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    admin_list_system_audit_events_api_v1_admin_system_audit_get: {
+        parameters: {
+            query?: {
+                /** @description 1-based page number */
+                page?: number;
+                /** @description Number of records per page */
+                page_size?: number;
+                /** @description Filter by exact event type */
+                event_type?: string | null;
+                /** @description Filter by the organisation the event is about */
+                org_id?: string | null;
+                /** @description Inclusive lower bound on created_at (ISO 8601) */
+                from_date?: string | null;
+                /** @description Inclusive upper bound on created_at (ISO 8601) */
+                to_date?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemAuditEventPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

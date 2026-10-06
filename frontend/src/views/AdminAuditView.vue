@@ -4,7 +4,7 @@
     <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')" />
-      <div class="flex items-center gap-2">
+      <div v-if="auditSource === 'org'" class="flex items-center gap-2">
         <button
           type="button"
           :disabled="verifying"
@@ -34,6 +34,48 @@
         </button>
       </div>
     </header>
+
+    <div
+      v-if="isSystemAdmin"
+      role="tablist"
+      :aria-label="$t('views.AdminAuditView.audit_source_group')"
+      class="mb-4 flex flex-wrap gap-2"
+      data-testid="admin-audit-source-tabs"
+    >
+      <button
+        id="admin-audit-tab-org"
+        type="button"
+        role="tab"
+        :aria-selected="auditSource === 'org'"
+        aria-controls="admin-audit-source-org"
+        class="rounded-lg border border-input px-4 py-2 text-sm font-medium"
+        :class="auditSource === 'org' ? 'bg-accent' : 'bg-background hover:bg-accent'"
+        data-testid="admin-audit-tab-org"
+        @click="auditSource = 'org'"
+      >
+        {{ $t('views.AdminAuditView.tab_org_events') }}
+      </button>
+      <button
+        id="admin-audit-tab-system"
+        type="button"
+        role="tab"
+        :aria-selected="auditSource === 'system'"
+        aria-controls="admin-audit-source-system"
+        class="rounded-lg border border-input px-4 py-2 text-sm font-medium"
+        :class="auditSource === 'system' ? 'bg-accent' : 'bg-background hover:bg-accent'"
+        data-testid="admin-audit-tab-system"
+        @click="auditSource = 'system'"
+      >
+        {{ $t('views.AdminAuditView.tab_system_events') }}
+      </button>
+    </div>
+
+    <div
+      v-if="auditSource === 'org'"
+      id="admin-audit-source-org"
+      :role="isSystemAdmin ? 'tabpanel' : undefined"
+      :aria-labelledby="isSystemAdmin ? 'admin-audit-tab-org' : undefined"
+    >
     <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" data-testid="admin-audit-chain-result">
       <strong>{{ chainResult.valid ? $t('views.AdminAuditView.chain_valid') : $t('views.AdminAuditView.chain_broken') }}</strong>
       <span v-if="chainResult.event_count" class="ml-2">— {{ $t('views.AdminAuditView.events_verified', { count: chainResult.event_count }) }}</span>
@@ -284,6 +326,231 @@
         </button>
       </div>
     </template>
+    </div>
+
+    <section
+      v-else
+      id="admin-audit-source-system"
+      role="tabpanel"
+      aria-labelledby="admin-audit-tab-system"
+      class="space-y-4"
+      data-testid="admin-audit-system-section"
+    >
+      <div>
+        <h2 class="text-base font-semibold">{{ $t('views.AdminAuditView.tab_system_events') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ $t('views.AdminAuditView.system_subtitle') }}</p>
+      </div>
+
+      <div class="card p-4">
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label for="admin-audit-system-event-type" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
+            <input
+              id="admin-audit-system-event-type"
+              v-model="systemFilterEventType"
+              type="text"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              data-testid="admin-audit-system-event-type"
+            />
+          </div>
+          <div>
+            <label for="admin-audit-system-org-id" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.system_organisation') }}</label>
+            <input
+              id="admin-audit-system-org-id"
+              v-model="systemFilterOrgId"
+              type="text"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              data-testid="admin-audit-system-org-id"
+            />
+          </div>
+          <div>
+            <label for="admin-audit-system-date-from" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.from') }}</label>
+            <input
+              id="admin-audit-system-date-from"
+              v-model="systemFilterDateFrom"
+              type="date"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              data-testid="admin-audit-system-date-from"
+            />
+          </div>
+          <div>
+            <label for="admin-audit-system-date-to" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
+            <input
+              id="admin-audit-system-date-to"
+              v-model="systemFilterDateTo"
+              type="date"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              data-testid="admin-audit-system-date-to"
+            />
+          </div>
+        </div>
+        <div class="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            data-testid="admin-audit-system-reset"
+            @click="resetSystemFilters"
+          >
+            {{ $t('views.AdminAuditView.reset') }}
+          </button>
+          <span
+            role="status"
+            aria-live="polite"
+            class="ml-auto text-sm text-muted-foreground"
+            data-testid="admin-audit-system-status"
+          >
+            <template v-if="systemLoading">{{ $t('views.AdminAuditView.system_loading') }}</template>
+            <template v-else-if="systemError">{{ $t('views.AdminAuditView.system_failed_to_load') }} {{ systemError }}</template>
+            <template v-else>{{ $t('views.AdminAuditView.system_records_count', { count: systemTotal }, systemTotal) }}</template>
+          </span>
+        </div>
+      </div>
+
+      <div v-if="systemLoading" aria-hidden="true" class="table-wrapper overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr>
+              <th class="table-header">{{ $t('views.AdminAuditView.timestamp') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.system_organisation') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.actor') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.summary') }}</th>
+              <th class="w-8 table-header" />
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <tr v-for="row in 5" :key="row">
+              <td class="table-cell whitespace-nowrap"><div class="h-4 w-28 rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="h-4 w-32 rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="h-4 w-32 rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="h-4 w-24 rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="h-4 w-full max-w-sm rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="ml-auto h-4 w-4 rounded bg-muted/50" /></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ErrorAlert v-else-if="systemError" :message="systemError" :on-retry="loadSystemEvents" />
+
+      <EmptyState
+        v-else-if="systemEvents.length === 0"
+        :title="$t('views.AdminAuditView.system_none_found')"
+        :description="$t('views.AdminAuditView.system_try_adjusting')"
+      />
+
+      <template v-else>
+        <div class="table-wrapper overflow-x-auto">
+          <table class="w-full">
+            <thead>
+              <tr>
+                <th class="table-header">{{ $t('views.AdminAuditView.timestamp') }}</th>
+                <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
+                <th class="table-header">{{ $t('views.AdminAuditView.system_organisation') }}</th>
+                <th class="table-header">{{ $t('views.AdminAuditView.actor') }}</th>
+                <th class="table-header">{{ $t('views.AdminAuditView.summary') }}</th>
+                <th class="w-8 table-header" />
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr
+                v-for="event in systemEvents"
+                :key="event.id"
+                class="cursor-pointer transition-colors hover:bg-muted/30"
+                :data-testid="'admin-audit-system-event-row-' + event.id"
+                tabindex="0"
+                @click="toggleSystemExpand(event.id)"
+                @keydown.enter="toggleSystemExpand(event.id)"
+                @keydown.space.prevent="toggleSystemExpand(event.id)"
+              >
+                <td class="table-cell whitespace-nowrap">
+                  {{ formatTimestamp(event.created_at) }}
+                </td>
+                <td class="table-cell">
+                  <span :class="badgeClass(event.event_type)">
+                    {{ event.event_type }}
+                  </span>
+                </td>
+                <td class="table-cell font-mono text-xs">
+                  <span v-if="event.org_id">{{ shortId(event.org_id) }}</span>
+                  <span v-else class="text-muted-foreground/50">&mdash;</span>
+                </td>
+                <td class="table-cell font-mono">
+                  <span v-if="event.actor_user_id">usr_{{ shortId(event.actor_user_id).replace('#', '') }}</span>
+                  <span v-else class="text-muted-foreground/50">&mdash;</span>
+                </td>
+                <td class="table-cell max-w-xs truncate text-muted-foreground" v-tooltip.top="{ value: summarize(event), showDelay: 300 }">{{ summarize(event) }}</td>
+                <td class="table-cell text-xs text-muted-foreground">
+                  <button
+                    type="button"
+                    class="inline-flex items-center rounded p-1 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :aria-label="$t('views.AdminAuditView.expand_event', { id: event.id })"
+                    :data-testid="'admin-audit-system-event-expand-' + event.id"
+                    @click.stop="toggleSystemExpand(event.id)"
+                  >
+                    <ChevronDown
+                      class="h-4 w-4 transition-transform"
+                      :class="{ 'rotate-180': expandedSystemId === event.id }"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="expandedSystemId">
+                <td colspan="6" class="border-t bg-muted p-4">
+                  <div class="space-y-3">
+                    <div v-if="expandedSystemEvent?.payload_json && Object.keys(expandedSystemEvent.payload_json).length > 0">
+                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.details') }}</h4>
+                      <JsonViewer :data="expandedSystemEvent?.payload_json ?? null" :show-toolbar="true" :max-height="'20rem'" />
+                    </div>
+                    <div v-if="expandedSystemEvent?.org_id">
+                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.system_organisation') }}</h4>
+                      <code class="block break-all rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedSystemEvent.org_id }}</code>
+                    </div>
+                    <div v-if="expandedSystemEvent?.actor_user_id">
+                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.actor') }}</h4>
+                      <code class="block break-all rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedSystemEvent.actor_user_id }}</code>
+                    </div>
+                    <div v-if="expandedSystemEvent?.request_id">
+                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.request_id') }}</h4>
+                      <code class="rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedSystemEvent.request_id) }}</code>
+                    </div>
+                    <div>
+                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.event_id') }}</h4>
+                      <code class="block break-all rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedSystemEvent?.id }}</code>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <button
+            type="button"
+            :disabled="systemPage <= 1"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+            data-testid="admin-audit-system-previous"
+            @click="goSystemPage(systemPage - 1)"
+          >
+            {{ $t('views.AdminAuditView.previous') }}
+          </button>
+          <span class="text-sm text-muted-foreground">
+            {{ $t('views.AdminAuditView.system_page_of_total', { page: systemPage, count: systemEvents.length, total: systemTotal }) }}
+          </span>
+          <button
+            type="button"
+            :disabled="systemPage * SYSTEM_PAGE_SIZE >= systemTotal"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+            data-testid="admin-audit-system-next"
+            @click="goSystemPage(systemPage + 1)"
+          >
+            {{ $t('views.AdminAuditView.next') }}
+          </button>
+        </div>
+      </template>
+    </section>
   </div>
   </FeatureGate>
 </template>
@@ -306,10 +573,16 @@ import { formatDateFilename } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
 import { ChevronDown } from '@lucide/vue'
+import { useCurrentUser } from '../composables/useCurrentUser'
 
 const { t } = useI18n()
 
 const planStore = usePlanStore()
+
+// The system/organisation-lifecycle ledger is system-admin only: the tab that
+// reveals it is rendered off the JWT is_system_admin claim, so a non-system
+// admin never issues a request the backend would 403.
+const { isSystemAdmin } = useCurrentUser()
 
 interface AuditEvent {
   id: string
@@ -328,6 +601,47 @@ interface AuditPage {
   next_cursor: string | null
   prev_cursor: string | null
 }
+
+interface SystemAuditEvent {
+  id: string
+  event_type: string
+  org_id: string | null
+  actor_user_id: string | null
+  resource_type: string | null
+  resource_id: string | null
+  payload_json: Record<string, unknown> | null
+  request_id: string | null
+  created_at: string | null
+}
+interface SystemAuditPage {
+  items: SystemAuditEvent[]
+  total: number
+  page: number
+  page_size: number
+}
+
+// The summary heuristic only needs these three fields, so both audit sources
+// (the org chain and the durable system ledger) share one implementation.
+type Summarisable = Pick<AuditEvent, 'event_type' | 'resource_type' | 'payload_json'>
+
+const SYSTEM_PAGE_SIZE = 50
+
+// Two audit sources behind one view: the hash-chained per-organisation trail
+// (default) and the org-independent durable ledger that survives a hard org
+// delete. `auditSource` is the single switch between the two panels.
+const auditSource = ref<'org' | 'system'>('org')
+
+const systemPage = ref(1)
+const systemFilterEventType = ref('')
+const systemFilterOrgId = ref('')
+const systemFilterDateFrom = ref('')
+const systemFilterDateTo = ref('')
+const systemEvents = ref<SystemAuditEvent[]>([])
+const systemTotal = ref(0)
+const systemLoading = ref(false)
+const systemError = ref<string | null>(null)
+const expandedSystemId = ref<string | null>(null)
+const expandedSystemEvent = ref<SystemAuditEvent | null>(null)
 
 const cursor = ref<string | null>(null)
 const currentPage = ref(1)
@@ -397,7 +711,7 @@ function badgeClass(eventType: string): string {
   return 'badge badge-context-slate'
 }
 
-function summarize(event: AuditEvent): string {
+function summarize(event: Summarisable): string {
   // Prefer the descriptive summary the backend composed at emit time (part of
   // the hash-chained payload); the heuristic below is the legacy fallback for
   // events written before summaries existed.
@@ -485,6 +799,81 @@ function resetFilters() {
   cursor.value = null
   loadEvents()
 }
+
+function buildSystemQuery() {
+  const q: Record<string, unknown> = { page: systemPage.value, page_size: SYSTEM_PAGE_SIZE }
+  if (systemFilterEventType.value) q.event_type = systemFilterEventType.value
+  if (systemFilterOrgId.value) q.org_id = systemFilterOrgId.value
+  if (systemFilterDateFrom.value) q.from_date = systemFilterDateFrom.value
+  if (systemFilterDateTo.value) q.to_date = systemFilterDateTo.value
+  return q
+}
+
+async function loadSystemEvents() {
+  systemLoading.value = true
+  systemError.value = null
+  try {
+    const { data, error: err } = await api.GET('/api/v1/admin/system-audit', {
+      params: { query: buildSystemQuery() as any },
+    })
+    if (err) {
+      systemError.value = formatError(err)
+      return
+    }
+    const page = data as unknown as SystemAuditPage | undefined
+    systemEvents.value = page?.items ?? []
+    systemTotal.value = page?.total ?? 0
+  } catch (e: unknown) {
+    systemError.value = formatApiError(e)
+  } finally {
+    systemLoading.value = false
+  }
+}
+
+function applySystemFilters() {
+  systemPage.value = 1
+  loadSystemEvents()
+}
+
+function resetSystemFilters() {
+  systemFilterEventType.value = ''
+  systemFilterOrgId.value = ''
+  systemFilterDateFrom.value = ''
+  systemFilterDateTo.value = ''
+  systemPage.value = 1
+  loadSystemEvents()
+}
+
+function goSystemPage(page: number) {
+  if (page < 1) return
+  systemPage.value = page
+  loadSystemEvents()
+}
+
+function toggleSystemExpand(id: string) {
+  if (expandedSystemId.value === id) {
+    expandedSystemId.value = null
+    expandedSystemEvent.value = null
+    return
+  }
+  expandedSystemId.value = id
+  expandedSystemEvent.value = systemEvents.value.find(e => e.id === id) ?? null
+}
+
+// Switching to the ledger fetches it (the first switch is the initial load);
+// filters apply immediately on the dropdown/date controls and debounced on the
+// free-text fields, mirroring the organisation trail above.
+watch(auditSource, (source) => {
+  if (source === 'system') loadSystemEvents()
+})
+
+let systemDebounce: ReturnType<typeof setTimeout> | null = null
+const applySystemFiltersDebounced = () => {
+  if (systemDebounce) clearTimeout(systemDebounce)
+  systemDebounce = setTimeout(applySystemFilters, 300)
+}
+watch([systemFilterEventType, systemFilterOrgId], applySystemFiltersDebounced)
+watch([systemFilterDateFrom, systemFilterDateTo], applySystemFiltersDebounced)
 
 async function exportCsv() {
   exporting.value = true

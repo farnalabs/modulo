@@ -1026,6 +1026,42 @@ elements:
       - testid: admin-audit-next
         type: button
         dynamic_testid: false
+      - testid: admin-audit-source-tabs
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-tab-org
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-tab-system
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-section
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-system-event-type
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-org-id
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-date-from
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-date-to
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-reset
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-status
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-system-previous
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-next
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
