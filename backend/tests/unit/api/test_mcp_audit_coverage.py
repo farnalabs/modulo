@@ -278,3 +278,20 @@ class TestDecoratorValidation:
     def test_blank_resource_type_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="non-empty resource_type"):
             mcp_audited("widget_created", "  ")
+
+
+class TestFreshSession:
+    """``_fresh_session`` wraps the shared ``audit_session`` generator."""
+
+    async def test_delegates_to_the_shared_audit_session_factory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sentinel = MagicMock()
+
+        async def _fake_audit_session() -> AsyncGenerator[Any, None]:
+            yield sentinel
+
+        import modulo.core.audit_coverage as audit_coverage
+
+        monkeypatch.setattr(audit_coverage, "audit_session", _fake_audit_session)
+
+        async with mcp_audit._fresh_session() as session:
+            assert session is sentinel
