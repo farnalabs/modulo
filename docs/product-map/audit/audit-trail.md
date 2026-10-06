@@ -6,6 +6,7 @@ code:
   - backend/src/modulo/api/routes/audit.py
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py
+  - backend/src/modulo/core/audit_coverage.py
   - backend/src/modulo/db/crud/pipeline.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
   - backend/src/modulo/api/mcp_server.py
@@ -17,6 +18,9 @@ unit-tests:
   - backend/tests/unit/api/test_audit.py
   - backend/tests/unit/api/test_audit_bdd.py
   - backend/tests/unit/api/test_audit_gating.py
+  - backend/tests/unit/api/test_audit_coverage.py
+  - backend/tests/unit/api/test_far1464_route_arm_coverage.py
+  - backend/tests/unit/api/test_webhooks_endpoint.py
   - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
   - backend/tests/integration/test_audit_append_only.py
   - backend/tests/integration/test_audit_immutability.py
@@ -96,6 +100,28 @@ guarded against tampering at both the ORM and the database layer.
       (`db/crud/pipeline.py` `graph_update_audit_payload` + `GRAPH_UPDATED_EVENT`,
       `db/crud/pipeline_snapshot_versioning.py`, `api/mcp_server.py`,
       `test_pipeline_graph_updated_audit.py`)
+- [x] Pre-auth and webhook routes are audited through the actor-less
+      `audited_system` variant (FAR-1516): sign-in/out, token refresh, the
+      SAML ACS POST, the public error ingest and inbound webhooks record the
+      same isolated-append event WITHOUT fabricating an actor — `actor_user_id`
+      stays NULL, the payload carries the `SYSTEM_ACTOR` marker plus an
+      `actor_source` string (`pre_auth` / `unauthenticated` /
+      `signature_verified` / `authenticated`) stating HOW the request was
+      admitted, never WHO; the route publishes its tenant via
+      `bind_audit_org(request, org_id)` at the point it becomes known (with no
+      tenant yet, the unattributed `SYSTEM_ORG_ID` sentinel is used so the
+      attempt is still recorded, and the real org rebinds the moment it
+      resolves), an event with no published org is logged
+      (`audit_coverage.<event_type>.no_org_context`) and skipped rather than
+      written into a fabricated tenant, and `bind_audit_actor_source()` lets
+      the route STRENGTHEN its declared `actor_source` once a verified
+      signature or an authenticated principal lands — recorded provenance is
+      always the strongest TRUE admission statement
+      (`core/audit_coverage.py` `audited_system` / `bind_audit_org` /
+      `bind_audit_actor_source`, applied in `api/routes/auth.py`, `sso.py`,
+      `slack.py`, `stripe_webhook.py`, `webhooks.py`, `errors.py`;
+      `test_audit_coverage.py`, `test_webhooks_endpoint.py`,
+      `test_far1464_route_arm_coverage.py`)
 
 ## Known Gaps
 
@@ -104,6 +130,18 @@ guarded against tampering at both the ORM and the database layer.
   chain.
 
 ## QA History
+- 2026-10-06: **Improve Architecture product-map walk** — closed the untracked
+  FAR-1516 surface: pre-auth and webhook routes (sign-in/out, token refresh,
+  SAML ACS, public error ingest, inbound webhooks) ship an actor-less
+  `audited_system` audit variant that never fabricates an actor — recording a
+  `SYSTEM_ACTOR` marker + `actor_source` admission basis with the tenant
+  published by the route (`bind_audit_org`, unattributed `SYSTEM_ORG_ID`
+  sentinel fallback) and promotable via `bind_audit_actor_source` — but did not
+  appear in either product-map layer. Added the checked behaviour line and the
+  `code:` / `unit-tests:` citations (`core/audit_coverage.py`;
+  `test_audit_coverage.py`, `test_webhooks_endpoint.py`,
+  `test_far1464_route_arm_coverage.py`) plus the `frontend/src/manifest.yaml`
+  `feat-audit` registry line. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-05: **Improve Architecture product-map walk**: closed the untracked
   FAR-1471 surface: every pipeline graph mutation (the `replace_pipeline_graph`
   write path and `rollback_to_snapshot`) now appends a `pipeline.graph_updated`
