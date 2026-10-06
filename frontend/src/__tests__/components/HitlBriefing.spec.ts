@@ -238,6 +238,28 @@ describe('HitlBriefing', () => {
     expect(consequences.text()).not.toContain('Reject')
   })
 
+  it.each([
+    ['terminate', { disposition: 'terminate' }, 'Reject → ends the run (status Rejected)'],
+    ['proceed', { disposition: 'proceed' }, 'Reject → the run continues anyway (set to proceed on reject)'],
+    ['route', { disposition: 'route', node_id: 'fixer-1', label: 'Fixer' }, 'Reject → routes to Fixer'],
+  ])('states the reject consequence for the %s disposition (FAR-1487)', (_name, reject, expected) => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Review this comment.',
+        context: {
+          ...fullContext,
+          consequences: {
+            approve: { node_id: '660e8400-e29b-41d4-a716-446655440001', label: 'Poster' },
+            reject,
+          },
+        },
+      },
+    })
+    const consequences = wrapper.find('[data-testid="hitl-briefing-consequences"]')
+    expect(consequences.text()).toContain('Approve → continues to Poster')
+    expect(consequences.text()).toContain(expected)
+  })
+
   it('hides consequences when context has none (FAR-859)', async () => {
     const wrapper = mount(HitlBriefing, {
       props: { description: 'Why this gate exists.', context: fullContext },

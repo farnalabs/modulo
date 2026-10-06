@@ -158,9 +158,12 @@ class TestCreateFeedback:
             )
 
         assert resp.status_code == 201
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.created"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.created"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["org_id"] == _ORG_ID
         assert kwargs["actor_user_id"] == _USER_ID
         assert kwargs["resource_type"] == "feedback_record"
@@ -332,9 +335,12 @@ class TestUpdateStatus:
             )
 
         assert resp.status_code == 200
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.status_changed"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["org_id"] == _ORG_ID
         assert kwargs["actor_user_id"] == _USER_ID
         assert kwargs["resource_type"] == "feedback_record"
@@ -387,7 +393,10 @@ class TestUpdateStatus:
             )
 
         assert resp.status_code == 404
-        audit.assert_not_awaited()
+        # FAR-1472: no rich status_changed event for a 404 - only the audited(...)
+        # dependency's coarse failed-attempt event fires.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert not rich
 
     def test_accepts_dismissed_status(self, client: TestClient) -> None:
         """'dismissed' is a valid terminal status per PRD 8.20 — PATCH must accept it."""
@@ -640,9 +649,12 @@ class TestReviewFeedback:
             )
 
         assert resp.status_code == 200
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.status_changed"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["resource_id"] == _RECORD_ID
         assert kwargs["payload_json"]["old_status"] == "pending"
         assert kwargs["payload_json"]["new_status"] == "resolved"
@@ -668,9 +680,12 @@ class TestReviewFeedback:
             )
 
         assert resp.status_code == 200
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.status_changed"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["payload_json"]["old_status"] == "pending"
         assert kwargs["payload_json"]["new_status"] == "correcting"
         assert kwargs["payload_json"]["action"] == "create_correction_run"

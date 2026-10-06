@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.view import (
     create_view,
     get_view,
@@ -125,7 +127,10 @@ async def list_views_endpoint(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_feature("view_modes")],
+    dependencies=[
+        require_feature("view_modes"),
+        Depends(audited("view_created", "view", principal_dep=get_current_tenant_user)),
+    ],
 )
 async def create_view_endpoint(
     req: ViewCreate,
@@ -213,7 +218,13 @@ async def get_view_endpoint(
     return ViewResponse.model_validate(view)
 
 
-@router.patch("/{view_id}", dependencies=[require_feature("view_modes")])
+@router.patch(
+    "/{view_id}",
+    dependencies=[
+        require_feature("view_modes"),
+        Depends(audited("view_updated", "view", principal_dep=get_current_tenant_user)),
+    ],
+)
 async def update_view_endpoint(
     view_id: uuid.UUID,
     req: ViewUpdate,
@@ -254,7 +265,14 @@ async def update_view_endpoint(
     return ViewResponse.model_validate(view)
 
 
-@router.delete("/{view_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("view_modes")])
+@router.delete(
+    "/{view_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        require_feature("view_modes"),
+        Depends(audited("view_deleted", "view", principal_dep=get_current_tenant_user, fail_closed=True)),
+    ],
+)
 async def delete_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -292,7 +310,13 @@ async def delete_view_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VIEW_NOT_FOUND)
 
 
-@router.post("/{view_id}/restore", dependencies=[require_feature("view_modes")])
+@router.post(
+    "/{view_id}/restore",
+    dependencies=[
+        require_feature("view_modes"),
+        Depends(audited("view_restored", "view", principal_dep=get_current_tenant_user)),
+    ],
+)
 async def restore_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

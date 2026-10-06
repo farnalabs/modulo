@@ -29,8 +29,10 @@ from modulo.api.dependencies import (
     require_permission_any_credential,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.model_backend_hub import _build_backend
 from modulo.core.model_backend_presets import MODEL_BACKEND_PRESETS
@@ -585,7 +587,10 @@ def _validate_provider(provider: str) -> None:
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint_any_credential)],
+    dependencies=[
+        Depends(deny_break_glass_mint_any_credential),
+        Depends(audited("model_backend_created", "model_backend", principal_dep=get_current_tenant_user_or_api_key)),
+    ],
 )
 @handle_db_errors(_CODE_MODEL_BACKENDS_CREATE_MODEL)
 async def create_model_backend_endpoint(
@@ -971,7 +976,13 @@ async def _apply_backend_update(
         ) from None
 
 
-@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint_any_credential)])
+@router.patch(
+    "/{backend_id}",
+    dependencies=[
+        Depends(deny_break_glass_mint_any_credential),
+        Depends(audited("model_backend_updated", "model_backend", principal_dep=get_current_tenant_user_or_api_key)),
+    ],
+)
 @handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
@@ -985,7 +996,14 @@ async def update_model_backend_endpoint(
     return await _apply_backend_update(session, backend_id, principal, req, settings, updates)
 
 
-@router.post("/{backend_id}/health-check")
+@router.post(
+    "/{backend_id}/health-check",
+    dependencies=[
+        Depends(
+            audited("model_backend_health_checked", "model_backend", principal_dep=get_current_tenant_user_or_api_key)
+        )
+    ],
+)
 @handle_db_errors(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
 async def recheck_model_backend_health_endpoint(
     backend_id: uuid.UUID,
@@ -1060,7 +1078,16 @@ async def recheck_model_backend_health_endpoint(
     return ModelBackendHealthCheckResponse(status=label, detail=detail, checked_at=datetime.now(UTC))
 
 
-@router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@router.delete(
+    "/{backend_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(
+            audited("model_backend_deleted", "model_backend", principal_dep=get_current_tenant_user, fail_closed=True)
+        ),
+    ],
+)
 @handle_db_errors(_CODE_MODEL_BACKENDS_DELETE_MODEL)
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,

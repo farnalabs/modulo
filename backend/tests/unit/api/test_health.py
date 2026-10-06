@@ -29,6 +29,7 @@ from modulo.api.routes.health import (
     _grade_db_hygiene,
     _live_worker_hostnames,
     _per_check_timeout,
+    evaluate_readiness,
 )
 from modulo.db.migration_guard import DivergenceCheckResult
 from modulo.settings import Settings, get_settings
@@ -1696,6 +1697,9 @@ class TestDbHygieneCheck:
         assert result.detail is not None
         assert "freeze age 4,821/200,000,000" in result.detail
         assert result.latency_ms is not None
+        # A COMPLETED reading is never advisory (FAR-1510): only a probe that
+        # did not run to completion is.
+        assert result.advisory is False
 
     async def test_incident_bloat_grades_degraded_and_names_the_table(self) -> None:
         result, _engine = await self._run(_HYGIENE_INCIDENT_ROW)
@@ -1703,6 +1707,8 @@ class TestDbHygieneCheck:
         assert result.detail is not None
         assert "runs" in result.detail
         assert "361,302" in result.detail
+        # FAR-1510: a genuinely graded finding still gates (never advisory).
+        assert result.advisory is False
 
     async def test_probe_binds_the_configured_dead_tuple_floor(self) -> None:
         result, engine = await self._run(_HYGIENE_HEALTHY_ROW)
@@ -1739,7 +1745,14 @@ class TestDbHygieneCheck:
         ):
             result = await _check_db_hygiene()
         assert result.status == "degraded"
-        assert "timed out after 0.2s" in (result.detail or "").lower()
+        # FAR-1510: a timeout names the REAL condition (the probe never ran to
+        # completion — an event-loop stall, not bloat) instead of claiming a
+        # hygiene reading, and is marked advisory so it cannot gate readiness.
+        detail = result.detail or ""
+        assert "did not complete within 0.2s" in detail
+        assert "hygiene not measured" in detail
+        assert "event_loop_lag" in detail
+        assert result.advisory is True
         assert result.latency_ms is not None
         assert result.latency_ms < 60_000
 
@@ -1752,6 +1765,9 @@ class TestDbHygieneCheck:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "could not run" in result.detail
+        # FAR-1510: no reading was taken, so the result is advisory — it must
+        # not be presented or gated as a hygiene failure.
+        assert result.advisory is True
 
     async def test_probe_returning_no_row_is_degraded_never_ok(self) -> None:
         """``row = None`` from ``mappings().first()`` (the query yielded
@@ -1761,6 +1777,7 @@ class TestDbHygieneCheck:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "could not run" in result.detail
+        assert result.advisory is True
 
     async def test_dead_ratio_setting_changes_the_grade_end_to_end(self) -> None:
         """The configured ratio must flow settings → probe → grade.
@@ -1898,3 +1915,169 @@ class TestDbHygieneAggregation:
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
         assert resp.json()["status"] != "unavailable"
+
+
+# --- FAR-1510: a db_hygiene probe that did NOT complete is advisory -------
+#
+# Production: app.modulo.run emailed "[Modulo] Readiness degraded" several
+# times a day, and every incident's detail was "database hygiene check timed
+# out after 1s" — never a real hygiene reading (live db_hygiene was clean).
+# The timeout co-occurred with the ADVISORY event_loop_lag check reporting a
+# 0.6-1.2s stall on the SAQ worker: an event-loop stall was being reported,
+# and gated, as a database-hygiene failure — and that aggregate gate is what
+# fired the email. The probe's own docstring already stated that a failure to
+# INSPECT hygiene says nothing about serving ability; now the aggregate agrees.
+
+
+class TestDbHygieneProbeDidNotCompleteIsAdvisory:
+    """FAR-1510: a probe that produced NO reading stays visible, never gates.
+
+    Every test below patches the OTHER gating sub-checks to ``ok``, so the
+    aggregate can only be moved by db_hygiene itself.
+    """
+
+    def test_timeout_keeps_overall_ok_while_the_sub_check_stays_visible(self, client: TestClient) -> None:
+        """A probe that hangs past its budget: aggregate ``ok`` (so no
+        readiness email), while the body still shows db_hygiene as non-ok and
+        names the real condition — hygiene was not measured."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            # The REAL _check_db_hygiene runs here, against an engine whose
+            # connect() never returns — the production event-loop-stall shape.
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+        ):
+            resp = client.get("/healthz/ready")
+        # The gate that fired the false emails: aggregate must stay ok, and
+        # the endpoint must stay HTTP 200 (never unavailable / 503).
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        hygiene = body["checks"]["db_hygiene"]
+        assert hygiene["status"] == "degraded"
+        detail = hygiene["detail"] or ""
+        assert "did not complete within" in detail
+        assert "hygiene not measured" in detail
+        # ``advisory`` is an internal classification, deliberately off the
+        # readiness wire contract (the generated schema.ts must not change).
+        assert "advisory" not in hygiene
+
+    def test_graded_bloat_over_both_thresholds_still_gates(self, client: TestClient) -> None:
+        """A COMPLETED reading over BOTH thresholds still degrades the
+        aggregate exactly as before FAR-1510 — the fix excludes only a probe
+        that never produced a reading."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch(
+                "modulo.api.routes.health.get_or_create_engine",
+                return_value=_FakeHygieneEngine(_HYGIENE_INCIDENT_ROW),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "degraded"
+        hygiene = body["checks"]["db_hygiene"]
+        assert hygiene["status"] == "degraded"
+        detail = hygiene["detail"] or ""
+        # BOTH configured thresholds are exceeded by this row: 361,302 dead
+        # tuples is over the 10,000 floor, and 97.2% dead is over the 60% ratio.
+        assert "floor 10,000 dead" in detail
+        assert "60% threshold" in detail
+
+    async def test_evaluate_readiness_does_not_degrade_on_a_timeout_alone(self) -> None:
+        """The shared implementation (also what the health_readiness_alert
+        cron emails from) must not degrade on a db_hygiene timeout alone."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+        ):
+            result = await evaluate_readiness()
+        assert result.status == "ok"
+        hygiene = result.checks["db_hygiene"]
+        assert hygiene.status == "degraded"
+        assert hygiene.advisory is True
+        # ...and the not-measured result is what stays out of the gate, not
+        # the check itself: a graded reading (TestDbHygieneAggregation above)
+        # still moves the aggregate.
+        assert hygiene.detail is not None
+        assert "hygiene not measured" in hygiene.detail
+
+    async def test_crashed_probe_alone_leaves_aggregate_ok_with_visible_sub_check(self) -> None:
+        """FAR-1510, crashed-probe edge: the GENERIC-EXCEPTION path is
+        advisory exactly like the timeout path.
+
+        Both shapes produce NO reading — the probe raises, or the query yields
+        no row — so both must stay visible in the body as non-ok ("could not
+        run", never a clean `ok`) while leaving the aggregate at ``ok``, which
+        is what the health_readiness_alert cron keys on.
+        """
+        # (a) the probe raises
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_ExplodingHygieneEngine()),
+        ):
+            raised = await evaluate_readiness()
+        assert raised.status == "ok"
+        raised_hygiene = raised.checks["db_hygiene"]
+        assert raised_hygiene.status == "degraded"
+        assert raised_hygiene.advisory is True
+        assert raised_hygiene.detail is not None
+        assert "could not run" in raised_hygiene.detail
+
+        # (b) the query returns no row — same except branch, same verdict
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch("modulo.api.routes.health.get_or_create_engine", return_value=_FakeHygieneEngine(None)),
+        ):
+            empty = await evaluate_readiness()
+        assert empty.status == "ok"
+        empty_hygiene = empty.checks["db_hygiene"]
+        assert empty_hygiene.status == "degraded"
+        assert empty_hygiene.advisory is True
+        assert empty_hygiene.detail is not None
+        assert "could not run" in empty_hygiene.detail

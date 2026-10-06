@@ -127,6 +127,10 @@ def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
     return email, org_name
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route - the
+# request authenticates with the Stripe-Signature header, not a Modulo
+# principal, so audited(principal_dep=...) has nothing to resolve before the
+# handler runs. Actor-less core variant needed to cover purchase fulfilment.
 @router.post("/stripe")
 async def stripe_webhook(
     request: Request,

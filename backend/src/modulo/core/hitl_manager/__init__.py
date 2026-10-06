@@ -1082,9 +1082,9 @@ class HITLManager:
         # decided — approve resumes from the checkpoint (the API route's
         # executor.resume), reject resumes through the same path and routes
         # to the gate's reject route (``reject_target`` config or a reject
-        # edge) when one is configured — with no reject route the run
-        # continues along the normal path (it does NOT terminate; the
-        # terminate-by-default change is FAR-1487) — and a decision committed
+        # edge) when one is configured — with no reject route the run ENDS
+        # ``rejected`` (FAR-1487; ``on_reject: proceed`` opts back into
+        # continuing along the normal path) — and a decision committed
         # without an inline resume
         # (the MCP flow) leaves the run ``awaiting_human`` with a committed
         # decision, which dispatcher_reconcile's gated recovery then resumes.

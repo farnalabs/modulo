@@ -14,6 +14,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.pipeline import create_pipeline, replace_pipeline_graph
 from modulo.db.crud.schema import create_schema, create_schema_version
@@ -247,7 +248,10 @@ async def get_onboarding_status(
     )
 
 
-@router.post("/actions/{action_id}/complete")
+@router.post(
+    "/actions/{action_id}/complete",
+    dependencies=[Depends(audited("onboarding_action_completed", "onboarding", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("onboarding.mark_action_completed")
 async def mark_action_completed(
     action_id: str,
@@ -280,7 +284,10 @@ async def mark_action_completed(
     )
 
 
-@router.post("/actions/{action_id}/skip")
+@router.post(
+    "/actions/{action_id}/skip",
+    dependencies=[Depends(audited("onboarding_action_skipped", "onboarding", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("onboarding.mark_action_skipped")
 async def mark_action_skipped(
     action_id: str,
@@ -311,7 +318,10 @@ async def mark_action_skipped(
     )
 
 
-@router.post("/dismiss")
+@router.post(
+    "/dismiss",
+    dependencies=[Depends(audited("onboarding_dismissed", "onboarding", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("onboarding.dismiss")
 async def dismiss_onboarding(
     session: AsyncSession = Depends(get_db_session),
@@ -325,7 +335,11 @@ async def dismiss_onboarding(
     return DismissResponse(dismissed=True)
 
 
-@router.post("/seed-examples", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/seed-examples",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("onboarding_examples_seeded", "onboarding", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("onboarding.seed_examples")
 async def seed_examples(
     session: AsyncSession = Depends(get_db_session),
@@ -469,7 +483,11 @@ async def seed_examples(
     )
 
 
-@router.post("/starter-pipeline", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/starter-pipeline",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("starter_pipeline_created", "onboarding", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("onboarding.create_starter_pipeline")
 async def create_starter_pipeline(
     session: AsyncSession = Depends(get_db_session),

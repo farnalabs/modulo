@@ -87,6 +87,15 @@ class TestComputeBatchStatus:
     def test_cancelled(self) -> None:
         assert _compute_batch_status(["cancelled", "cancelled"]) == "cancelled"
 
+    def test_rejected_counts_as_cancelled(self) -> None:
+        assert _compute_batch_status(["rejected", "rejected"]) == "cancelled"
+
+    def test_rejected_and_cancelled_together(self) -> None:
+        assert _compute_batch_status(["cancelled", "rejected"]) == "cancelled"
+
+    def test_rejected_with_complete_is_partial(self) -> None:
+        assert _compute_batch_status(["complete", "rejected"]) == "partial"
+
     def test_eval_failed_counts_as_failed(self) -> None:
         assert _compute_batch_status(["complete", "eval_failed"]) == "failed"
 

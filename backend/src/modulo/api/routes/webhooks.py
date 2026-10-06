@@ -40,9 +40,11 @@ from modulo.api.dependencies import (
     system_engine_is_fallback,
 )
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_delivery, record_busy_delivery
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.core.audit_coverage import audited
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
@@ -194,6 +196,13 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
         await _ingest_webhook_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
+# is OPTIONAL - HMAC-less triggers accept unauthenticated calls by design, and
+# an HMAC-verified caller carries no Modulo credential. audited() takes a
+# required principal resolver (it needs an account_id for
+# audit_events.actor_user_id) and get_current_tenant_user_optional can return
+# None, so there is nothing to attribute the event to. Actor-less variant
+# needed to cover webhook ingestion.
 @router.post(
     "/{trigger_id}/webhook",
     status_code=status.HTTP_202_ACCEPTED,
@@ -599,6 +608,10 @@ async def receive_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): same gap as
+# receive_webhook - the replay's principal is optional (an HMAC-only caller
+# carries no Modulo credential), so audited(principal_dep=...) has no
+# guaranteed actor. Actor-less core variant needed to cover replay.
 @router.post(
     "/{trigger_id}/webhook/replay/{event_id}",
     status_code=status.HTTP_202_ACCEPTED,
@@ -926,7 +939,13 @@ async def replay_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
-@router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
+@router.post(
+    "/cleanup-expired",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("webhook_events_cleaned_up", "webhook_event", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("webhooks.cleanup_expired")
 async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),

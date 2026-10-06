@@ -297,6 +297,30 @@ describe('PipelineEditorView - ownerless-gate advisory', () => {
     wrapper.unmount()
   })
 
+  it('carries over on_reject and correction_target the form cannot edit', async () => {
+    const wrapper = await mountWithEdge(edgeFixture({
+      hitl_review_config: {
+        label: 'Review gate',
+        description: 'Approve the deploy only after a human reviews the plan.',
+        claim_expiry_minutes: 30,
+        human_only: true,
+        on_reject: 'proceed',
+        correction_target: 'node-9',
+      },
+    }))
+
+    await wrapper.find(SAVE_EDGE).trigger('click')
+    await flushPromises()
+
+    const bodies = graphPatchBodies()
+    expect(bodies).toHaveLength(1)
+    const config = (bodies[0] as { edges: Array<{ hitl_review_config: Record<string, unknown> }> }).edges[0]
+      .hitl_review_config
+    expect(config.on_reject).toBe('proceed')
+    expect(config.correction_target).toBe('node-9')
+    wrapper.unmount()
+  })
+
   it('does not advise before an edge is selected', async () => {
     const wrapper = await mountEditor()
     const vm = wrapper.vm as any

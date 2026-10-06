@@ -29,16 +29,20 @@ class ForwarderRegistry:
         self._forwarders: dict[str, type[BaseForwarder]] = dict(_FORWARDERS)
 
     def register(self, name: str, cls: type[BaseForwarder]) -> None:
+        """Register ``cls`` under ``name``, replacing any existing entry."""
         self._forwarders[name] = cls
 
     def get(self, type_name: str) -> type[BaseForwarder] | None:
+        """Return the forwarder class for ``type_name``, or ``None`` when unknown."""
         return self._forwarders.get(type_name)
 
     def list_types(self) -> list[str]:
+        """Return the registered forwarder type names in registration order."""
         return list(self._forwarders)
 
 
 def get_default_registry() -> ForwarderRegistry:
+    """Return the process-wide shared registry, creating it on first use."""
     global _DEFAULT_REGISTRY
     if _DEFAULT_REGISTRY is None:
         _DEFAULT_REGISTRY = ForwarderRegistry()
@@ -46,6 +50,7 @@ def get_default_registry() -> ForwarderRegistry:
 
 
 def get_forwarder(type_name: str) -> BaseForwarder | None:
+    """Instantiate the forwarder for ``type_name``, or ``None`` when unknown."""
     cls = get_default_registry().get(type_name)
     if cls is None:
         return None

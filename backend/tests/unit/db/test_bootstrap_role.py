@@ -363,6 +363,62 @@ class TestCreateOrUpdateRole:
         assert any(f'ALTER ROLE "{_NOLOGIN_ROLE}" WITH NOSUPERUSER NOLOGIN NOBYPASSRLS' in q for q in conn.executed)
 
 
+class TestUnconfiguredPasswordPreserve:
+    """FAR-1519: password=None (role's URL unconfigured) must never reset a
+    working credential, and must still create a missing role."""
+
+    async def test_existing_login_role_keeps_its_password_when_url_unset(self, conn: _FakeConn) -> None:
+        conn.roles[_SYSTEM_ROLE] = True
+        await _create_or_update_role(conn, _SYSTEM_ROLE, login=True, password=None, bypassrls=True)
+        alters = [q for q in conn.executed if q.startswith("ALTER ROLE")]
+        assert alters
+        # Attributes are re-asserted, but NO PASSWORD clause — the existing
+        # password is untouched.
+        assert not any("PASSWORD" in q for q in alters)
+        assert not any(q.startswith("CREATE ROLE") for q in conn.executed)
+
+    async def test_missing_login_role_gets_placeholder_when_url_unset(self, conn: _FakeConn) -> None:
+        """The role must still exist (the posture assertion requires it) —
+        created with a non-empty placeholder a later URL-configured boot
+        reconciles."""
+        await _create_or_update_role(conn, _SYSTEM_ROLE, login=True, password=None, bypassrls=True)
+        creates = [q for q in conn.executed if q.startswith("CREATE ROLE")]
+        assert creates
+        assert "PASSWORD '" in creates[0]
+
+    async def test_configured_password_still_sets_on_create_and_alter(self, conn: _FakeConn) -> None:
+        await _create_or_update_role(conn, _SYSTEM_ROLE, login=True, password="syspw", bypassrls=True)
+        assert any('CREATE ROLE "modulo_system"' in q and "PASSWORD 'syspw'" in q for q in conn.executed)
+        conn.roles[_SYSTEM_ROLE] = True
+        await _create_or_update_role(conn, _SYSTEM_ROLE, login=True, password="syspw2", bypassrls=True)
+        assert any('ALTER ROLE "modulo_system"' in q and "PASSWORD 'syspw2'" in q for q in conn.executed)
+
+    async def test_bootstrap_preserves_system_password_when_url_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _clean_posture_conn()
+        monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+        monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
+        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+            await _bootstrap(
+                "postgres://admin:secret@db:5432/modulo",
+                "postgres://modulo_app:apppw@db:5432/modulo",
+            )
+        sys_alters = [q for q in fake.executed if q.startswith('ALTER ROLE "modulo_system"')]
+        assert sys_alters
+        assert not any("PASSWORD" in q for q in sys_alters)
+
+    async def test_bootstrap_sets_system_password_from_configured_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _clean_posture_conn()
+        monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "postgres://modulo_system:syspw@db:5432/modulo")
+        monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
+        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+            await _bootstrap(
+                "postgres://admin:secret@db:5432/modulo",
+                "postgres://modulo_app:apppw@db:5432/modulo",
+            )
+        sys_alters = [q for q in fake.executed if q.startswith('ALTER ROLE "modulo_system"')]
+        assert any("PASSWORD 'syspw'" in q for q in sys_alters)
+
+
 # ---------------------------------------------------------------------------
 # role-name DDL guards (FAR-915 / FAR-918 / GitHub #129 defence-in-depth)
 #

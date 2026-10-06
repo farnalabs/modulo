@@ -16,7 +16,9 @@ from modulo.api.db_error_handling import handle_db_errors, raise_session_contrac
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import validate_owner_team_for_create
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
 from modulo.core.lifecycle_map.import_export import (
@@ -532,7 +534,11 @@ async def list_lifecycle_maps_endpoint(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("lifecycle_map_created", "lifecycle_map", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE)
 async def create_lifecycle_map_endpoint(
     req: LifecycleMapCreate,
@@ -597,7 +603,11 @@ async def create_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@router.post("/import", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/import",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("lifecycle_map_imported", "lifecycle_map", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
 async def import_lifecycle_map_endpoint(
     req: LifecycleMapTransfer,
@@ -741,7 +751,10 @@ async def get_lifecycle_map_endpoint(
     return _build_detail(lifecycle_map)
 
 
-@router.put("/{lifecycle_map_id}")
+@router.put(
+    "/{lifecycle_map_id}",
+    dependencies=[Depends(audited("lifecycle_map_updated", "lifecycle_map", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
 async def update_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
@@ -805,7 +818,15 @@ async def update_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@router.delete("/{lifecycle_map_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{lifecycle_map_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("lifecycle_map_deleted", "lifecycle_map", principal_dep=get_current_tenant_user, fail_closed=True)
+        )
+    ],
+)
 @handle_db_errors("lifecycle_maps.delete_lifecycle_map_endpoint")
 async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
@@ -851,7 +872,10 @@ async def delete_lifecycle_map_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
 
 
-@router.post("/{lifecycle_map_id}/restore")
+@router.post(
+    "/{lifecycle_map_id}/restore",
+    dependencies=[Depends(audited("lifecycle_map_restored", "lifecycle_map", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE)
 async def restore_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
@@ -950,6 +974,9 @@ async def list_lifecycle_map_versions_endpoint(
 @router.post(
     "/{lifecycle_map_id}/versions",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("lifecycle_map_version_saved", "lifecycle_map_version", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
 async def save_lifecycle_map_version_endpoint(
@@ -1020,7 +1047,14 @@ async def save_lifecycle_map_version_endpoint(
     return _build_version_entry(lifecycle_map)
 
 
-@router.put("/{lifecycle_map_id}/versions/{version_id}")
+@router.put(
+    "/{lifecycle_map_id}/versions/{version_id}",
+    dependencies=[
+        Depends(
+            audited("lifecycle_map_version_updated", "lifecycle_map_version", principal_dep=get_current_tenant_user)
+        )
+    ],
+)
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
 async def update_lifecycle_map_version_endpoint(
     lifecycle_map_id: uuid.UUID,
@@ -1136,6 +1170,9 @@ async def get_lifecycle_map_version_endpoint(
 
 @router.patch(
     "/{lifecycle_map_id}/versions/{version_id}/stages/{stage_id}/graduate",
+    dependencies=[
+        Depends(audited("lifecycle_map_stage_graduated", "lifecycle_map_stage", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
 async def graduate_lifecycle_map_stage_endpoint(
@@ -1394,7 +1431,18 @@ async def get_journey_endpoint(
     )
 
 
-@router.post("/{lifecycle_map_id}/journeys/self-report")
+@router.post(
+    "/{lifecycle_map_id}/journeys/self-report",
+    dependencies=[
+        Depends(
+            audited(
+                "lifecycle_map_journeys_self_reported",
+                "lifecycle_map",
+                principal_dep=get_current_tenant_user_or_api_key,
+            )
+        )
+    ],
+)
 @handle_db_errors("lifecycle_maps.self_report_journeys_endpoint")
 async def self_report_journeys_endpoint(
     lifecycle_map_id: uuid.UUID,
