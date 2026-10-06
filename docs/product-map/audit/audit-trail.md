@@ -106,9 +106,10 @@ guarded against tampering at both the ORM and the database layer.
       `organisations.id` with `ON DELETE CASCADE`, so a hard-deleted org took
       its ENTIRE chain with it – including the `org_deletion_requested` row
       written moments earlier – and a post-commit append could never satisfy
-      the FK on an org that no longer exists. The four org-lifecycle writers
-      (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-confirm`,
-      `POST /api/v1/admin/org/deletion-cancel`, and the system-admin
+      the FK on an org that no longer exists. The five org-lifecycle writers
+      (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request`,
+      `POST /api/v1/admin/org/deletion-confirm`,
+      `PATCH /api/v1/admin/org/deletion-cancel`, and the system-admin
       `DELETE /api/v1/admin/orgs/{org_id}`) now mirror the same evidence
       (`org_deletion_requested` / `org_deletion_completed` /
       `org_deletion_cancelled`) into `system_audit_events` **inside the
@@ -127,7 +128,9 @@ guarded against tampering at both the ORM and the database layer.
       `tests/architecture/audit_coverage_baseline.txt` because `audited()`'s
       post-commit org-scoped append cannot record anything after a hard delete
       (`core/system_audit_logger.py`, `db/models/system_audit_event.py`,
-      migration 0285, `tests/integration/test_system_audit_org_deletion.py`,
+      migration 0285, the writer files `api/routes/admin.py` and
+      `api/routes/admin_orgs.py`,
+      `tests/integration/test_system_audit_org_deletion.py`,
       `tests/unit/core/test_system_audit_logger.py`)
 
 ## Known Gaps
