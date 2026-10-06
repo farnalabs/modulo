@@ -332,6 +332,33 @@ class TestAfterProcess:
         assert ingest_args[2]["context_json"]["function"] == "modulo.core.saq_worker.fire_cron_trigger"
 
     @pytest.mark.asyncio
+    async def test_failed_fire_without_org_skips_ingest_for_system_sentinel(self) -> None:
+        """A failed job with no tenant org resolves to ``SYSTEM_ORG_ID``.
+
+        The system sentinel has no tenant partition to write into, so
+        ``_ingest_error_event`` must log the system error and return WITHOUT
+        opening a DB session. Covers the ``parsed == SYSTEM_ORG_ID`` arm
+        (the sibling ``test_failed_fire_ingests_error_event`` covers a real
+        org).
+        """
+        ctx = {
+            "job": _job(
+                "modulo.core.saq_worker.fire_cron_trigger",
+                Status.FAILED,
+                "boom",
+                {},  # no org_id -> SYSTEM_ORG_ID sentinel
+            )
+        }
+        with (
+            patch.object(saq_hooks, "_open_factory") as factory,
+            patch.object(saq_hooks._log, "error") as log_error,
+        ):
+            await saq_hooks.after_process(ctx)
+
+        factory.assert_not_called()
+        assert any("no tenant context" in str(call.args[0]) for call in log_error.call_args_list)
+
+    @pytest.mark.asyncio
     async def test_noop_statuses_do_not_touch_db(self) -> None:
         for status in (Status.QUEUED, Status.ACTIVE, Status.ABORTED, Status.COMPLETE):
             ctx = {"job": _job("modulo.core.saq_worker.execute_run", status, None, {"run_id": RUN_ID})}
