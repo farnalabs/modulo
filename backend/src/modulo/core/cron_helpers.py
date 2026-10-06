@@ -437,6 +437,9 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "last_error": None,
     "terminalize_capped": 0,
     "facts_deferred": 0,
+    # FAR-1525 per-org time bound counters (same additive .get() contract).
+    "org_timeouts": 0,
+    "orgs_deferred": 0,
 }
 
 
@@ -478,6 +481,10 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["last_error"] = stats.get("last_error")
     _dispatcher_reconcile_stats["terminalize_capped"] = stats.get("terminalize_capped", 0)
     _dispatcher_reconcile_stats["facts_deferred"] = stats.get("facts_deferred", 0)
+    # FAR-1525 per-org time bound: carry the cut/deferred org counters into
+    # the in-process mirror (a missing copy line would silently zero them).
+    _dispatcher_reconcile_stats["org_timeouts"] = stats.get("org_timeouts", 0)
+    _dispatcher_reconcile_stats["orgs_deferred"] = stats.get("orgs_deferred", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -5288,6 +5295,19 @@ _RECONCILE_BUDGET_DEFAULT_SECONDS = 95
 _RECONCILE_TERMINALIZE_DEFAULT_MAX = 25
 _RECONCILE_FACTS_DEFAULT_MAX = 25
 _RECONCILE_MAX_ROWS_DEFAULT = 500
+# FAR-1525: per-ORG time bound (the row budget bounds ROWS, not time) and the
+# tick-tail reserve that keeps record_facts + the compensating sweeps inside
+# the inner deadline even when an org runs to its bound.
+_RECONCILE_ORG_BUDGET_DEFAULT_SECONDS = 30
+# Seconds of the tick's tail never handed to an org pass: the facts writes
+# (bounded at dispatcher_reconcile_facts_max_per_tick, each an RLS session +
+# re-select) plus the compensating sweeps must still get their window after
+# the last org. Capped at a third of a tiny outer budget so a small
+# dispatcher_reconcile_budget_seconds can never starve the org loop entirely.
+_RECONCILE_POST_ORGS_RESERVE_SECONDS = 15
+# Smallest org slice worth starting: below this the remaining budget goes to
+# record_facts / the compensating sweeps and the org is deferred, not cut.
+_RECONCILE_ORG_MIN_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -6080,6 +6100,20 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         the compensating daily-fact writes at
         ``dispatcher_reconcile_facts_max_per_tick`` per tick — a big zombie
         backlog drains gradually instead of blowing the tick budget.
+      * PER-ORG TIME BOUND (FAR-1525): the row budget bounds ROWS, not time
+        — a single org whose pass hangs on a wedged await consumed the WHOLE
+        inner budget at ``stage=reconcile_org:<org-id>`` (7 consecutive prod
+        ticks, 2026-10) and never reached ``record_facts`` / the
+        compensating sweeps. Each org pass now runs under its own
+        ``asyncio.timeout`` at ``dispatcher_reconcile_org_budget_seconds``
+        (default 30s), clamped to the tick's remaining budget minus a tail
+        reserve for facts/sweeps. On expiry the org's transaction rolls back
+        at the same safe boundary, its in-memory counts and collected
+        terminalizer ids are unwound to match, a truthful ``status='timeout'``
+        + ``org_timeouts`` marker names the org, and the loop CONTINUES —
+        never a false success, never a silent no-op. The OUTER deadline
+        semantics are unchanged: it still fires only when the tick as a whole
+        exceeds ``dispatcher_reconcile_budget_seconds``.
     """
     settings = get_settings()
     queue_name = settings.saq_runs_queue
@@ -6223,7 +6257,26 @@ async def _dispatcher_reconcile_body(
     lifecycle. ``stage`` is the outer handler's mutable current-operation
     hint (FAR-904): the body names each stage before starting it so a
     deadline expiry can be attributed.
+
+    FAR-1525: each org pass is additionally bounded by TIME (not only by the
+    FAR-1425 row budget) via its own ``asyncio.timeout`` at
+    ``dispatcher_reconcile_org_budget_seconds``, clamped to the budget left
+    after reserving the tick tail — so one hung org can never spend the whole
+    inner budget, and ``record_facts`` + the compensating sweeps are always
+    reached.
     """
+    # FAR-1525: the tick's working clock and time knobs. Captured at body
+    # entry (the outer asyncio.timeout starts microseconds earlier —
+    # immaterial here) so each org's slice can be clamped to the budget that
+    # is actually left.
+    body_started = time.monotonic()
+    outer_budget_seconds = _int_setting(
+        getattr(_settings, "dispatcher_reconcile_budget_seconds", None), _RECONCILE_BUDGET_DEFAULT_SECONDS
+    )
+    org_budget_seconds = _int_setting(
+        getattr(_settings, "dispatcher_reconcile_org_budget_seconds", None),
+        _RECONCILE_ORG_BUDGET_DEFAULT_SECONDS,
+    )
     if stage is not None:
         stage["op"] = "collect_org_ids"
     org_ids = await _collect_org_ids(factory)
@@ -6281,24 +6334,79 @@ async def _dispatcher_reconcile_body(
             if rows_processed >= max_rows:
                 summary["rows_deferred"] = summary.get("rows_deferred", 0) + len(org_ids) - org_ids.index(org_id)
                 break
+            # FAR-1525: per-organisation TIME bound. The row budget above bounds
+            # ROWS; a hung await inside ONE org's pass still had the whole inner
+            # budget to itself (prod: 7 consecutive ticks frozen at
+            # stage=reconcile_org:<org-id>, record_facts/sweeps never reached).
+            # The org's slice is ``org_budget`` clamped to the budget actually
+            # left after reserving the tick tail for record_facts + the
+            # compensating sweeps, so a bounded org can never push those stages
+            # past the OUTER deadline (whose semantics are unchanged: it still
+            # fires only for the tick as a whole).
+            remaining_seconds = outer_budget_seconds - (time.monotonic() - body_started)
+            tail_reserve = min(_RECONCILE_POST_ORGS_RESERVE_SECONDS, max(outer_budget_seconds // 3, 1))
+            org_slice_seconds = min(float(org_budget_seconds), remaining_seconds - tail_reserve)
+            if org_slice_seconds < _RECONCILE_ORG_MIN_SECONDS:
+                # Not even the minimum useful slice fits: stop starting org work
+                # (counted, drains on later 60s ticks) and spend the reserved
+                # tail on facts/sweeps instead of racing the deadline. Never a
+                # silent no-op — orgs_deferred makes the skip visible.
+                summary["orgs_deferred"] = summary.get("orgs_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+                break
             rows_before = summary["scanned"]
-            enqueue_failed_redispatched = await _reconcile_org(
-                factory=factory,
-                q=q,
-                redis_client=redis_client,
-                org_id=org_id,
-                re_dispatch_predicate=re_dispatch_predicate,
-                tuning=tuning,
-                enqueue_failed_redispatched=enqueue_failed_redispatched,
-                summary=summary,
-                terminalized_run_ids=terminalized_run_ids,
-                terminalize_max=terminalize_max,
-                early_detect_minutes=early_detect_minutes,
-                # FAR-1425: hand the ORG the remainder of the tick's row budget,
-                # not just the inter-org gate.  ``rows_processed < max_rows`` is
-                # guaranteed here (the break above), so this is always >= 1.
-                row_budget=max_rows - rows_processed,
-            )
+            # FAR-1525 unwind anchors: if the bound fires, the org's transaction
+            # has rolled back, so its in-memory counts and the terminalizer ids
+            # it collected must be unwound to match — a rolled-back org must
+            # contribute neither counters nor compensating facts to the tick.
+            summary_before = dict(summary)
+            terminalized_len_before = len(terminalized_run_ids)
+            org_pass_started = time.monotonic()
+            try:
+                async with asyncio.timeout(org_slice_seconds):
+                    enqueue_failed_redispatched = await _reconcile_org(
+                        factory=factory,
+                        q=q,
+                        redis_client=redis_client,
+                        org_id=org_id,
+                        re_dispatch_predicate=re_dispatch_predicate,
+                        tuning=tuning,
+                        enqueue_failed_redispatched=enqueue_failed_redispatched,
+                        summary=summary,
+                        terminalized_run_ids=terminalized_run_ids,
+                        terminalize_max=terminalize_max,
+                        early_detect_minutes=early_detect_minutes,
+                        # FAR-1425: hand the ORG the remainder of the tick's row budget,
+                        # not just the inter-org gate.  ``rows_processed < max_rows`` is
+                        # guaranteed here (the break above), so this is always >= 1.
+                        row_budget=max_rows - rows_processed,
+                    )
+            except TimeoutError:
+                # FAR-1525: the org's pass hit the per-org bound. The session
+                # context managers inside _reconcile_org rolled back + closed at
+                # the safe boundary (same mechanism as the outer deadline), so
+                # unwind this org's in-memory accounting, record a TRUTHFUL
+                # bounded-failure marker, and CONTINUE — the remaining orgs,
+                # record_facts and the compensating sweeps still run this tick.
+                org_elapsed = time.monotonic() - org_pass_started
+                summary.clear()
+                summary.update(summary_before)
+                del terminalized_run_ids[terminalized_len_before:]
+                summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
+                summary["status"] = "timeout"
+                summary["last_error"] = (
+                    f"per-org bound after {org_elapsed:.1f}s "
+                    f"(org_budget={org_budget_seconds}s, budget={outer_budget_seconds}s, max_rows={max_rows}) "
+                    f"during stage=reconcile_org:{org_id}"
+                )[:200]
+                _log.warning(
+                    "dispatcher_reconcile: per-org time bound fired after %.1fs "
+                    "(org_budget=%ds, budget=%ds) for org %s; org transaction rolled back, tick continues",
+                    org_elapsed,
+                    org_budget_seconds,
+                    outer_budget_seconds,
+                    org_id,
+                )
+                continue
             rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
@@ -6376,6 +6484,12 @@ def _dispatcher_summary() -> dict[str, Any]:
         "last_error": None,
         "terminalize_capped": 0,
         "facts_deferred": 0,
+        # FAR-1525 per-org time bound: orgs cut by the bound this tick (a cut
+        # org's transaction rolled back — its counts are unwound, never
+        # reported as work done) and orgs NOT started because only the
+        # reserved tail of the budget remained (drains on later ticks).
+        "org_timeouts": 0,
+        "orgs_deferred": 0,
     }
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720) — a new terminalizer registers once below without a
@@ -6419,6 +6533,13 @@ async def _reconcile_org(
 
     ``row_budget=None`` (a direct caller such as a test that is exercising
     one specific branch) means unbounded, exactly as before FAR-1425.
+
+    TIME: this pass is bounded by the CALLER (FAR-1525) — the reconcile body
+    wraps the call in ``asyncio.timeout`` at
+    ``dispatcher_reconcile_org_budget_seconds``. On expiry the transaction
+    above rolls back at its safe boundary and the caller unwinds the counts
+    and terminalizer ids this pass recorded; direct callers (tests) remain
+    unbounded, exactly as before.
     """
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.run import Run
