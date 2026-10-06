@@ -1231,10 +1231,10 @@ async def test_process_one_due_cron_row_advance_failure_variants():
         patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary)
     summary2: dict[str, Any] = {"cron_due": 0, "cron_enqueued": 0}
     with patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, side_effect=RuntimeError("db down")):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary2)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary2)
     assert summary2["cron_due"] == 1
 
 
@@ -1261,7 +1261,7 @@ async def test_process_one_due_cron_row_enqueue_failure_rolls_back():
         patch.object(ch, "_ingest_saq_error", ingest),
         pytest.raises(asyncio.CancelledError),
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary)
     summary2: dict[str, Any] = {"cron_due": 0, "cron_enqueued": 0, "enqueue_failures": 0}
     rollback2 = AsyncMock(side_effect=RuntimeError("db down"))
     with (
@@ -1270,7 +1270,7 @@ async def test_process_one_due_cron_row_enqueue_failure_rolls_back():
         patch.object(ch, "_rollback_cron_advance", rollback2),
         patch.object(ch, "_ingest_saq_error", ingest),
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary2)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary2)
     ingest.assert_awaited()
 
 
@@ -1292,7 +1292,7 @@ async def test_process_one_due_cron_row_not_advanced_returns():
         patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=False),
         patch.object(ch, "_enqueue_cron_fire", new_callable=AsyncMock) as enqueue,
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary)
     enqueue.assert_not_awaited()
 
 
