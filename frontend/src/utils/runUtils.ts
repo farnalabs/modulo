@@ -96,6 +96,19 @@ export function triggerTypeLabel(type: string | null | undefined, t: (key: strin
   return key ? t(key) : type
 }
 
+/**
+ * Run execution-origin provenance (FAR-1141). `execution_origin` is
+ * `'dispatched'` when the run's frozen graph contains a dispatch node — part
+ * of the work ran outside Modulo — and `null` for runs Modulo executed itself
+ * (and for runs recorded before the column shipped). One shared predicate so
+ * the runs list and the run detail can never disagree on what counts as a
+ * dispatched run. Accepts `unknown` because the list payload is an untyped
+ * dict on the wire (`RunListItem` extends `Record<string, unknown>`).
+ */
+export function isDispatchedRun(origin: unknown): boolean {
+  return origin === 'dispatched'
+}
+
 export function formatRunDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   const d = toDate(dateStr)

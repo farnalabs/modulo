@@ -545,6 +545,13 @@
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
                   </div></template>
+          <!-- FAR-1141: dispatch nodes render with their own badge/colour so
+               they never fall back to the `agent` node rendering. Display
+               only — no config panel or palette entry in this slice. -->
+          <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-600 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
+                  </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
@@ -1423,6 +1430,7 @@ function nodeTypeBadgeClass(nodeType: string): string {
   if (nodeType === 'manual') return 'badge badge-status-warning'
   if (nodeType === 'router') return 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
   if (nodeType === 'hitl') return 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
+  if (nodeType === 'dispatch') return 'badge bg-cyan-500/10 text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300'
   return 'badge badge-status-primary'
 }
 
@@ -1431,6 +1439,9 @@ function nodeTypeLabel(nodeType: string): string {
   if (nodeType === 'sandbox_agent') return t('views.PipelineEditorView.sandbox_agent')
   if (nodeType === 'router') return t('views.PipelineEditorView.node_router_label')
   if (nodeType === 'hitl') return t('views.PipelineEditorView.node_hitl_label')
+  // FAR-1141: a dispatch node must never fall through to the agent label —
+  // its work ran outside Modulo, and mislabelling it hides that provenance.
+  if (nodeType === 'dispatch') return t('views.PipelineEditorView.node_dispatch_label')
   return t('views.PipelineEditorView.node_type_agent')
 }
 const planStore = usePlanStore()
@@ -1457,7 +1468,7 @@ const singlePrPerRun = computed<boolean>({
 })
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
-const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl' }
+const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch' }
 const { fitView, onPaneReady } = useVueFlow()
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the
@@ -2221,6 +2232,9 @@ function convertBackendNode(n: any): any {
     n.node_type === 'manual' ? 'manual'
     : n.node_type === 'router' ? 'router'
     : n.node_type === 'hitl' ? 'hitl'
+    // FAR-1141: dispatch is a first-class canvas type — never collapse it
+    // into the generic `agent` node.
+    : n.node_type === 'dispatch' ? 'dispatch'
     : 'agent'
   return {
     id: n.id,
@@ -2576,9 +2590,16 @@ async function convertToAgent() {
       params: { path: { pipeline_id: pipelineId, node_id: nodeId } },
       body: {
         agent_id: pickerAgentId.value,
+        // FAR-1141: `operation` / `dispatch_action` are now part of the
+        // generated ConnectorBinding contract (they used to be silently
+        // dropped on save). A converted agent node performs a plain query
+        // binding, which is exactly the API default — stated explicitly so
+        // the wire payload matches the schema instead of relying on it.
         connector_binding: {
           type: connectors.value.find(c => c.id === pickerConnectorId.value)?.connector_type_id || '',
           instance_id: pickerConnectorId.value,
+          operation: 'query' as const,
+          dispatch_action: 'trigger_run' as const,
         },
         model_backend_id: selectedAgent.value?.model_backend_id,
       },

@@ -1028,6 +1028,8 @@ export default {
       "node_router_label": "Router",
       "node_hitl_badge": "HITL",
       "node_hitl_label": "Human-in-the-loop",
+      "node_dispatch_badge": "DISPATCH",
+      "node_dispatch_label": "Dispatch",
       "label_field": "Label",
       "output_schema": "Output Schema",
       "connector": "Connector",
@@ -3452,7 +3454,8 @@ export default {
       "description": "Description",
       "zoom_in": "Zoom in",
       "zoom_out": "Zoom out",
-      "fit_view": "Fit view"
+      "fit_view": "Fit view",
+      "node_dispatch_badge": "DISPATCH"
     },
     "SettingsGuardrailsView": {
       "title": "Guardrails",
@@ -4187,6 +4190,10 @@ export default {
     "queue": {
       "waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
       "starting_soon": "Queued — starting soon"
+    },
+    "execution_origin": {
+      "dispatched": "Dispatched",
+      "dispatched_hint": "This run's graph contains a dispatch node: part of the work ran outside Modulo rather than being executed by Modulo directly."
     }
   },
   "nav": {

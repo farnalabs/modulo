@@ -82,6 +82,14 @@
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
+          <!-- FAR-1141: dispatch nodes get their own canvas badge so they never
+               render as AGENT. Display only — no authoring controls. -->
+          <template #node-dispatch="nodeProps">
+            <div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm">
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-600 dark:text-cyan-300">{{ $t('views.CompositeEditorView.node_dispatch_badge') }}</div>
+              <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
+            </div>
+          </template>
         </VueFlow>
       </div>
 
@@ -194,13 +202,16 @@ const saveAsDescription = ref('')
 const saveAsError = ref<string | null>(null)
 const saving = ref(false)
 
-const nodeTypes = { agent: 'agent', manual: 'manual', composite: 'composite' }
+const nodeTypes = { agent: 'agent', manual: 'manual', composite: 'composite', dispatch: 'dispatch' }
 
 const flowNodeIds = computed(() => flowNodes.value.map((n: any) => n.id))
 
 function resolveNodeType(nodeType: string): string {
   if (nodeType === 'manual') return 'manual'
   if (nodeType === 'composite') return 'composite'
+  // FAR-1141: a dispatch node inside a composite keeps its own type — it must
+  // never collapse into the generic `agent` node.
+  if (nodeType === 'dispatch') return 'dispatch'
   return 'agent'
 }
 

@@ -102,6 +102,18 @@
                 :detail="((row as RunListItem).error_detail as string | null | undefined)?.slice(0, 200)"
                 :data-testid="`runs-list-error-${row.run_id}`"
               />
+              <!-- FAR-1141: run provenance. A dispatched run must never read
+                   indistinguishably from one Modulo executed itself, so the
+                   badge renders whenever execution_origin is 'dispatched'.
+                   Static label (the visible text IS the accessible name — no
+                   role/aria-live needed); the hover title carries the full
+                   explanation. -->
+              <span
+                v-if="isDispatchedRun((row as RunListItem).execution_origin)"
+                :data-testid="`runs-list-dispatched-${row.run_id}`"
+                :title="$t('common.execution_origin.dispatched_hint')"
+                class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300"
+              >{{ $t('common.execution_origin.dispatched') }}</span>
             </div>
           </template>
           <template #cell-trigger_type="{ value }">
@@ -248,7 +260,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { DataTable, type Column } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, queuedCapacityReason } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription, queuedCapacityReason, isDispatchedRun } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
