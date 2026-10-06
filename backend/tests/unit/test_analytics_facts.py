@@ -931,7 +931,7 @@ class TestBackfillFactsProvenanceColumns:
         await maintenance_mod.backfill_facts(session, date(2026, 8, 12))
 
         names = [c.name for c in captured["names"]]
-        for column in ("trigger_id", "dispatch_phase", "dispatch_phase_entered_at"):
+        for column in ("trigger_id", "dispatch_phase", "dispatch_phase_entered_at", "execution_origin"):
             assert column in names, f"{column} missing from the INSERT ... SELECT name list"
         # Positional alignment: from_select maps names onto the SELECT's
         # columns in order, so both lists must be identical, in the same order.

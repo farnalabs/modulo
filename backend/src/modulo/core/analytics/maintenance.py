@@ -370,6 +370,9 @@ async def backfill_facts(session: Any, day: date) -> int:
             # FAR-1463: node-deadline watchdog firings — straight from the run,
             # mirroring the live writer (no derived expression).
             Run.node_deadline_watchdog_fired_count.label("node_deadline_watchdog_fired_count"),
+            # FAR-1141: execution provenance — straight from the run, mirroring
+            # the live writer (backfilled rows must not lose dispatch origin).
+            Run.execution_origin.label("execution_origin"),
         )
         .select_from(Run)
         .outerjoin(Team, Team.id == Run.owner_team_id)
@@ -425,6 +428,7 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.dispatch_phase,
                 RunDailyFact.dispatch_phase_entered_at,
                 RunDailyFact.node_deadline_watchdog_fired_count,
+                RunDailyFact.execution_origin,
             ],
             select_stmt,
         )

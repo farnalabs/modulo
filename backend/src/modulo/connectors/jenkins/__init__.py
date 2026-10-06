@@ -132,7 +132,7 @@ class JenkinsConnector(ConnectorBase):
     async def trigger_run(
         self,
         pipeline_id: str,
-        _branch: str = "",
+        branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
         job_name = pipeline_id
