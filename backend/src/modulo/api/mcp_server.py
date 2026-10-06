@@ -1741,6 +1741,37 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
     return {"error": "auth_expired", "detail": msg}
 
 
+def _tool_session_contract_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any] | None:
+    """MCP payload form of the shared session-contract classifier (FAR-1482).
+
+    ``raise_session_contract_error`` is the ONE classifier for "is this a
+    client-side session-contract violation?"; its documented contract is to
+    RAISE ``HTTPException(500, MSG_SESSION_CONTRACT)`` for one and to RETURN
+    for every other exception. MCP tool results carry no status code — the
+    payload IS the response — so this adapter reads that verdict off the raise
+    and re-emits the classifier's own message as this surface's internal-error
+    payload::
+
+        {"error": "internal_error", "detail": MSG_SESSION_CONTRACT}
+
+    One classifier, two renderings: REST answers 500, MCP answers an
+    ``internal_error`` payload carrying the same ``MSG_SESSION_CONTRACT`` text,
+    so a caller reading either surface gets the same verdict. The detail is
+    taken from the exception the classifier raised rather than restated here,
+    so the two surfaces cannot drift apart.
+
+    Returns ``None`` for any exception the classifier does not flag, so the
+    caller's own database-unavailable handling runs unchanged — a genuine
+    transient ``OperationalError`` / ``PendingRollbackError`` still reports
+    ``database_unavailable``.
+    """
+    try:
+        raise_session_contract_error(exc, log_key)
+    except FastAPIHTTPException as http_exc:
+        return _tool_error(str(http_exc.detail))
+    return None
+
+
 def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
     """Parse a UUID tool param, returning ``(value, None)`` or ``(None, error_dict)``."""
     try:
@@ -1802,6 +1833,11 @@ def _tool_db_shell(
     def decorator(
         fn: Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     ) -> Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]:
+        # `fn.__name__` is the only per-tool identity available here —
+        # ``log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
+        # classifier appends ``.session_contract_error`` itself (FAR-1482).
+        log_key = f"mcp.{fn.__name__}"
+
         @functools.wraps(fn)
         async def wrapper(*args: _TOOL_SHELL_P.args, **kwargs: _TOOL_SHELL_P.kwargs) -> dict[str, Any]:
             try:
@@ -1825,7 +1861,12 @@ def _tool_db_shell(
             except ProgrammingError:
                 _log.exception(log_constant)
                 return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
+                # FAR-1482: the session-contract guard must run BEFORE the
+                # db_errors_to_fallback split — a programming bug is not the
+                # generic "failed to <tool>" fallback either.
+                if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+                    return contract_error
                 if db_errors_to_fallback:
                     _log.exception(log_constant)
                     return _tool_error(fallback)
@@ -7402,7 +7443,9 @@ async def create_api_key(
     except ProgrammingError:
         _log.exception(_MSG_CREATE_API_KEY_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_api_key")) is not None:
+            return contract_error
         _log.exception(_MSG_CREATE_API_KEY_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
@@ -7432,7 +7475,9 @@ async def list_api_keys() -> dict[str, Any]:
     except ProgrammingError:
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.list_api_keys")) is not None:
+            return contract_error
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
@@ -7494,7 +7539,9 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception(_MSG_REVOKE_API_KEY_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.revoke_api_key")) is not None:
+            return contract_error
         _log.exception(_MSG_REVOKE_API_KEY_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
@@ -8042,7 +8089,9 @@ async def create_schema(
     except ProgrammingError:
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_schema")) is not None:
+            return contract_error
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8282,7 +8331,9 @@ async def create_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("create_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("create_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8380,7 +8431,9 @@ async def update_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("update_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("update_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8432,7 +8485,9 @@ async def delete_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("delete_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.delete_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("delete_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8487,7 +8542,9 @@ async def restore_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("restore_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.restore_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("restore_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8678,7 +8735,9 @@ async def create_parameter_set(
     except ProgrammingError:
         _log_tool_failure("create_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("create_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8785,7 +8844,9 @@ async def update_parameter_set(
     except ProgrammingError:
         _log_tool_failure("update_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("update_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8844,7 +8905,9 @@ async def delete_parameter_set(
     except ProgrammingError:
         _log_tool_failure("delete_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.delete_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("delete_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8897,7 +8960,9 @@ async def restore_parameter_set(
     except ProgrammingError:
         _log_tool_failure("restore_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.restore_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("restore_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
