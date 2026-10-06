@@ -541,6 +541,7 @@ OWNED_PAGES = {
     "/pipelines/:id/editor": (
         "frontend/src/views/PipelineEditorView.vue",
         "frontend/src/components/pipeline/SandboxCommandsEditor.vue",
+        "frontend/src/components/pipeline/SnapshotLockCard.vue",
     ),
     "/runs": (
         "frontend/src/views/RunsListView.vue",
