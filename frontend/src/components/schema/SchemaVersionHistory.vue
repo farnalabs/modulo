@@ -1,8 +1,16 @@
 <template>
   <section class="rounded-lg border bg-card p-6 shadow-sm">
     <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.version_history') }}</h2>
-    <LoadingSpinner v-if="loading" />
-    <p v-else-if="versions.length === 0" class="text-sm text-muted-foreground">{{ $t('views.SchemaEditorView.no_version_history') }}</p>
+    <div
+      v-if="loading"
+      class="space-y-2"
+      role="status"
+      :aria-label="$t('common.loading')"
+      data-testid="schema-editor-versions-loading"
+    >
+      <SkeletonBlock v-for="n in 3" :key="'version-skeleton-' + n" height-class="h-10 w-full" />
+    </div>
+    <EmptyState v-else-if="versions.length === 0" :title="$t('views.SchemaEditorView.no_version_history')" />
     <div v-else class="space-y-2">
       <div
         v-for="version in versions"
@@ -30,7 +38,8 @@
 </template>
 
 <script setup lang="ts">
-import LoadingSpinner from '../shared/LoadingSpinner.vue'
+import EmptyState from '../shared/EmptyState.vue'
+import SkeletonBlock from '../shared/SkeletonBlock.vue'
 import { formatDateShort } from '../../lib/formatDate'
 
 export interface SchemaVersion {
