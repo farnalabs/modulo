@@ -91,10 +91,6 @@ env:
 
 permissions:
   contents: read
-  # The staleness job reads this workflow's run history via the Actions API
-  # with github.token (a token lacking this scope yields 404 - indistinguishable
-  # from an empty result, so declare it explicitly).
-  actions: read
 
 # Same shape as ci.yml: superseded PR pushes cancel; every other event gets a
 # unique group so it can never be cancelled.
@@ -173,11 +169,11 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: |
-          curl -fsSLo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
           chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
-          curl -fsSLo ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
-          curl -fsSLo helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
           tar -xzf helm.tgz
           sudo mv linux-amd64/helm /usr/local/bin/helm
           kind version
@@ -231,9 +227,11 @@ jobs:
         if: steps.detect.outputs.changed == 'true'
         shell: bash
         timeout-minutes: 10
-        # Deliberately WITHOUT --no-build: pytest-bdd is a pinned source
-        # archive and a cold cache must build its wheel (FAR-791).
-        run: uv sync --frozen
+        # Deliberately WITHOUT --no-build (NOSONAR githubactions:S8541):
+        # pytest-bdd is a pinned source archive with no wheel, so `--no-build`
+        # hard-fails the sync on a cold uv cache (FAR-791). `--frozen` locks the
+        # exact revisions, so the builds are deterministic and trusted.
+        run: uv sync --frozen  # NOSONAR
 
       - name: Run the runtime-provider conformance suite
         if: steps.detect.outputs.changed == 'true'
@@ -337,7 +335,7 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: |
-          curl -fsSLo ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
           kubectl version --client=true
 
@@ -371,7 +369,11 @@ jobs:
       - name: uv sync
         shell: bash
         timeout-minutes: 10
-        run: uv sync --frozen
+        # NOSONAR githubactions:S8541: pytest-bdd is a pinned source archive with
+        # no wheel, so `--no-build` hard-fails the sync on a cold uv cache
+        # (FAR-791). `--frozen` locks the exact revisions, so the builds are
+        # deterministic and trusted (no untrusted setup scripts execute).
+        run: uv sync --frozen  # NOSONAR
 
       - name: Run the runtime-provider conformance suite
         shell: bash
@@ -417,6 +419,15 @@ jobs:
 
   staleness:
     name: Last-green conformance staleness
+    # The staleness job reads this workflow's run history via the Actions API
+    # with github.token (a token lacking this scope yields 404 - indistinguishable
+    # from an empty result, so declare it explicitly). `actions: read` is scoped to
+    # THIS job only (githubactions:S8264) - no other job touches the Actions API. A
+    # job-level `permissions` block replaces the workflow-level one, so
+    # `contents: read` is restated here.
+    permissions:
+      contents: read
+      actions: read
     if: (github.event_name == 'schedule' && github.event.schedule == '17 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.job == 'staleness')
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
