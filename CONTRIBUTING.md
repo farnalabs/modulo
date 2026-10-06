@@ -432,7 +432,8 @@ in `.github/workflows/`:
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | Push to main, every PR, manual | Backend lint (ruff, ruff-format, mypy, bandit, vulture, semgrep, pip-audit, import-linter); backend unit tests with coverage + architecture tests + changed integration tests; frontend (lint, type-check, vitest, build, pnpm audit, WCAG contrast); schema freshness; product-map validation; manifest validation; gitleaks secret scan. Cost controls (FAR-1427): a newer push to a PR cancels that PR's in-flight run (push-to-main and manual runs are never cancelled); `Test (Backend)` and the Tier 1b job wait for `Lint (Backend)` so a lint failure does not burn the heavy jobs; on PRs a `Detect changed paths` job skips `Frontend and WCAG` when nothing frontend-related changed, `Tier 1b` for frontend/docs-only changes, and `SonarCloud` for docs-only changes (skips are step-level, so the checks still report success; every event other than `pull_request` runs everything) |
-| `bdd.yml` | Push to main, every PR, manual | Full BDD/E2E suite: Postgres + Redis, Alembic migrations, frontend build, backend + preview, pytest-bdd Playwright suite |
+| `bdd.yml` | Push to main, every PR, manual | Full BDD/E2E suite: Postgres + Redis, Alembic migrations, frontend build, backend + preview, pytest-bdd Playwright suite. Cost controls (FAR-1527): on `pull_request`, a checkout-free, fail-open, step-level changed-path detector (same pattern as `ci.yml`'s `Detect changed paths`, FAR-1427) skips the expensive steps — Playwright browser install and the E2E suite — unless the change touches backend/heavy paths (anything outside `frontend/` and `docs/`); any unreliable read fails open and runs the full suite. Every event other than `pull_request` (push to main, manual) runs everything. Coverage consequence: frontend-only PRs now skip the pre-merge E2E run — it still runs on push to main, and `Frontend and WCAG` (units, type-check, Vitest, WCAG, route coverage) is unaffected |
+| `changelog-classify.yml` | Every PR | Changelog-label gate: PRs touching user-facing paths (`backend/src/**`, `frontend/src/**`) must carry a `changelog:*` label or the check fails. Also hosts the fast-lane classifier merged in from its former standalone workflow (FAR-1527: identical PR triggers, so one runner per event instead of two), which publishes the synthetic `fast-lane-eligible` check run the merge queue reads. Applies path-derived labels (`db: migrations`, `risk: high`, `area: backend` / `frontend` / `ci` / `docs`) for human triage only — no automation reads these labels |
 | `deploy.yml` | Push to main, manual | Deploy pipeline: throttle check → pre-deploy full CI → staging deploy + staging E2E → production deploy + prod smoke tests |
 | `merge-queue.yml` | Cron every 15 min, manual | Merge queue: squash-merges approved PRs to main after CI + approval re-verification; closes Linear tickets; dispatches CI/deploy on main |
 | `pr-review.yml` | Manual dispatch | Automated PR review |
@@ -448,7 +449,7 @@ concurrency groups keyed on `${{ github.ref }}`.
 Modulo uses PR-based delivery. Push your branch, open a pull request, and CI
 (`ci.yml`) validates it automatically; merging is handled by the
 `merge-queue.yml` workflow once checks pass and review approves. For
-For farnalabs-internal delivery, additional automation helpers
+farnalabs-internal delivery, additional automation helpers
 exist in the internal tooling repo (not part of the public contribution flow).
 
 ---
