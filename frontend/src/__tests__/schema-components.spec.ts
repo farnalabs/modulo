@@ -228,16 +228,17 @@ describe('SchemaJsonPreview', () => {
 })
 
 describe('SchemaVersionHistory', () => {
-  it('shows loading spinner while loading', () => {
+  it('shows skeleton placeholders while loading', () => {
     const wrapper = mount(SchemaVersionHistory, {
       props: { versions: [], loading: true },
       global: {
         stubs: {
-          LoadingSpinner: { template: '<div data-testid="loading-spinner" />' },
+          SkeletonBlock: { template: '<div data-testid="skeleton-block" />' },
         },
       },
     })
-    expect(wrapper.find('[data-testid="loading-spinner"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="schema-editor-versions-loading"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="skeleton-block"]').length).toBeGreaterThan(0)
   })
 
   it('shows empty state when no versions', () => {
