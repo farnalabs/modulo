@@ -311,7 +311,64 @@ class TestCompleteModelBackendSetup:
         assert resp.status_code == 503
         assert "database" in resp.json()["detail"].lower()
 
+    def test_programming_error_returns_501_migration_required(self, client: TestClient) -> None:
+        """FAR-1540: an un-migrated database (42P01 undefined_table) is a
+        KNOWABLE failure mode — 501 ``migration_required``, the contract every
+        other surface already uses. Pre-fix this route-local arm shadowed
+        ``@handle_db_errors`` and reported it as ``503 database_error``, i.e.
+        'the database is down, retry', which cannot succeed until migrations run."""
+        from sqlalchemy.exc import ProgrammingError as ProgrammingError_
+
+        with (
+            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch(
+                "modulo.api.routes.mcp_setup.consume_handoff",
+                new_callable=AsyncMock,
+                side_effect=ProgrammingError_("mock", "mock", "mock"),
+            ),
+            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
+                json={"token": "token", "api_key": "sk-x"},
+            )
+
+        body = resp.json()
+        assert resp.status_code == 501
+        assert body["type"] == "urn:problem:modulo:migration_required"
+        assert "Run database migrations" in body["detail"]
+
+    def test_integrity_error_returns_409_conflict(self, client: TestClient) -> None:
+        """FAR-1540: a CHECK/FK/UNIQUE violation is a conflict, not an outage —
+        409 ``conflict`` matches the shared ``handle_db_errors`` contract."""
+        from sqlalchemy.exc import IntegrityError as IntegrityError_
+
+        with (
+            patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
+            patch(
+                "modulo.api.routes.mcp_setup.consume_handoff",
+                new_callable=AsyncMock,
+                side_effect=IntegrityError_("mock", "mock", "mock"),
+            ),
+            patch("modulo.api.routes.mcp_setup.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/model-backends/{_BACKEND_ID}/complete-setup",
+                json={"token": "token", "api_key": "sk-x"},
+            )
+
+        body = resp.json()
+        assert resp.status_code == 409
+        assert body["type"] == "urn:problem:modulo:conflict"
+        assert body["detail"] == "Resource conflict. The operation could not be completed."
+
     def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        """The route's LAST-RESORT arm: every knowable failure mode above it is
+        already classified (invalid_token, token_mismatch, backend_not_found,
+        already_configured, encryption_config_error, encryption_error,
+        update_failed, migration_required, conflict, database_error), so what
+        reaches this arm genuinely is unknown — ``internal_error`` is correct
+        here and is deliberately kept (FAR-1540)."""
         with (
             patch("modulo.api.routes.mcp_setup.get_settings", return_value=_make_settings()),
             patch(
@@ -328,6 +385,7 @@ class TestCompleteModelBackendSetup:
 
         assert resp.status_code == 500
         assert "unexpected" in resp.json()["detail"].lower()
+        assert resp.json()["type"] == "urn:problem:modulo:internal_error"
 
     def test_unauthenticated_returns_4xx(self) -> None:
         mock_session = _make_mock_session()

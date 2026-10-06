@@ -2566,7 +2566,11 @@ async def _list_runs_impl(
     from modulo.db.crud.run import list_runs as db_list_runs
 
     org_id = _ctx_org_id_val()
-    pid = uuid.UUID(pipeline_id) if pipeline_id else None
+    # FAR-1540: a malformed filter id is a client error (``invalid_id``), not a
+    # generic ``internal_error`` from the wrapper's ``except Exception`` arm.
+    pid, pid_err = _parse_optional_uuid(pipeline_id, "pipeline_id")
+    if pid_err is not None:
+        return pid_err
     async with _session(org_id) as s:
         if pid is not None:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
@@ -3988,7 +3992,10 @@ async def list_eval_definitions(
         _check_agent_tool_scope("list_eval_definitions")
 
         org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        # FAR-1540: malformed filter id -> ``invalid_id``, not ``internal_error``.
+        pid, pid_err = _parse_optional_uuid(pipeline_id, "pipeline_id")
+        if pid_err is not None:
+            return pid_err
         lim = max(1, min(limit, 100))
 
         from modulo.db.crud.pagination import CursorPaginator
@@ -5898,7 +5905,10 @@ async def list_triggers(
         from modulo.db.crud.trigger import list_triggers as db_list_triggers
 
         org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        # FAR-1540: malformed filter id -> ``invalid_id``, not ``internal_error``.
+        pid, pid_err = _parse_optional_uuid(pipeline_id, "pipeline_id")
+        if pid_err is not None:
+            return pid_err
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
@@ -7985,14 +7995,31 @@ async def create_agent(
         except GitContentRefError as exc:
             return {"error": "validation_failed", "detail": str(exc)}
 
-        from modulo.db.crud.agent import create_agent as db_create_agent
-
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else None
-        parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else None
-        parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else None
+        # FAR-1540: every id-shaped param here is parsed BEFORE any DB session
+        # is opened. A malformed id used to raise ``ValueError`` out of
+        # ``uuid.UUID(...)``, land in the generic ``except Exception`` arm and
+        # come back as ``internal_error`` — a code the consuming agent cannot
+        # branch on (and, for ``template_id``, the failure was worse: the CRUD
+        # layer's lenient ``coerce_uuid`` silently DROPPED it, so the agent was
+        # created with no template and no error at all). Same helper, same
+        # ``invalid_id`` payload, as every other tool on this surface.
+        parsed_model_backend_id, model_backend_err = _parse_optional_uuid(model_backend_id, "model_backend_id")
+        if model_backend_err is not None:
+            return model_backend_err
+        parsed_input_schema_id, input_schema_err = _parse_optional_uuid(input_schema_id, "input_schema_id")
+        if input_schema_err is not None:
+            return input_schema_err
+        parsed_output_schema_id, output_schema_err = _parse_optional_uuid(output_schema_id, "output_schema_id")
+        if output_schema_err is not None:
+            return output_schema_err
+        parsed_template_id, template_err = _parse_optional_uuid(template_id, "template_id")
+        if template_err is not None:
+            return template_err
+
+        from modulo.db.crud.agent import create_agent as db_create_agent
 
         async with _session(org_id) as s:
             agent = await db_create_agent(
@@ -8009,7 +8036,7 @@ async def create_agent(
                 model_backend_id=parsed_model_backend_id,
                 description=description,
                 connector_type_refs=connector_type_refs or [],
-                template_id=template_id,
+                template_id=str(parsed_template_id) if parsed_template_id is not None else None,
                 agent_commands=agent_commands,
                 required_environment_capabilities=required_environment_capabilities,
             )
