@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
+from modulo.connectors.base import connector_binding_operation
 from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.notifications import create_notification
@@ -1762,12 +1763,21 @@ async def _compensate_blocked_run_best_effort(
 
 
 def graph_contains_dispatch(graph_json: Any) -> bool:
-    """Whether a snapshot graph contains at least one ``dispatch`` node (FAR-1141).
+    """Whether a snapshot graph routes at least one node to the dispatch verb (FAR-1141).
 
     The predicate behind ``runs.execution_origin = 'dispatched'``: a True here
     means part of this run's work is executed OUTSIDE Modulo, so every
     claim-ready read surface must be able to tell it apart from a run Modulo
     executed itself (ADR-042).
+
+    FAR-1141 (CRITICAL 2): keyed on the SAME condition the engine routes on —
+    ``graph_validator.connector_binding_operation`` (the binding's
+    ``operation``, with the engine's own ``node_type`` fallback) — never on
+    ``node_type`` alone. Keying on the type both over-claimed (a ``dispatch``
+    node left at the API's ``operation="query"`` default ran a query yet
+    stamped ``dispatched``) and under-claimed (a ``connector`` / ``router`` /
+    ``hitl`` node carrying ``operation="dispatch"`` fired a real external job
+    yet stamped NULL, rendering as Modulo-executed).
 
     Pure and unit-testable. Fail-safe: ``None``, a non-dict, or a missing /
     non-list ``nodes`` returns ``False`` — an unreadable graph is never
@@ -1781,7 +1791,7 @@ def graph_contains_dispatch(graph_json: Any) -> bool:
     nodes = graph_json.get("nodes")
     if not isinstance(nodes, list):
         return False
-    return any(isinstance(node, dict) and node.get("node_type") == "dispatch" for node in nodes)
+    return any(isinstance(node, dict) and connector_binding_operation(node) == "dispatch" for node in nodes)
 
 
 async def create_run(

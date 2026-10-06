@@ -158,6 +158,63 @@ class TestGraphContainsDispatch:
     def test_a_dispatch_node_alone_is_enough(self) -> None:
         assert graph_contains_dispatch({"nodes": [{"id": "only", "node_type": "dispatch"}], "edges": []}) is True
 
+    # FAR-1141 (CRITICAL 2): the predicate is keyed on the BINDING the engine
+    # routes on, never on ``node_type`` alone. Both directions were wrong
+    # before: a connector node firing a real external job was stamped NULL
+    # (renders as Modulo-executed), and a dispatch node left on the API's
+    # ``operation="query"`` default was stamped ``dispatched`` although it
+    # fires nothing.
+
+    def test_connector_node_with_a_dispatch_binding_is_dispatched(self) -> None:
+        graph = {
+            "nodes": [
+                {
+                    "id": "c1",
+                    "node_type": "connector",
+                    "connector_binding": {
+                        "instance_id": str(uuid.uuid4()),
+                        "type": "github_actions_ci",
+                        "operation": "dispatch",
+                        "dispatch_action": "trigger_run",
+                    },
+                }
+            ],
+            "edges": [],
+        }
+        assert graph_contains_dispatch(graph) is True
+
+    def test_dispatch_node_left_on_the_query_verb_is_not_dispatched(self) -> None:
+        graph = {
+            "nodes": [
+                {
+                    "id": "d1",
+                    "node_type": "dispatch",
+                    "connector_binding": {
+                        "instance_id": str(uuid.uuid4()),
+                        "type": "github_actions_ci",
+                        "operation": "query",
+                    },
+                }
+            ],
+            "edges": [],
+        }
+        assert graph_contains_dispatch(graph) is False
+
+    def test_dispatch_node_whose_binding_omits_the_verb_is_dispatched(self) -> None:
+        """The engine falls back to the dispatch verb when the key is absent,
+        so the classifier must agree rather than reading a missing key."""
+        graph = {
+            "nodes": [
+                {
+                    "id": "d2",
+                    "node_type": "dispatch",
+                    "connector_binding": {"instance_id": str(uuid.uuid4()), "type": "github_actions_ci"},
+                }
+            ],
+            "edges": [],
+        }
+        assert graph_contains_dispatch(graph) is True
+
 
 # ---------------------------------------------------------------------------
 # create_run stamps and persists it
@@ -174,6 +231,57 @@ class TestCreateRunExecutionOrigin:
         assert run.execution_origin == EXECUTION_ORIGIN_DISPATCHED
         # the wire/DB value the API and the facts reader will see
         assert EXECUTION_ORIGIN_DISPATCHED == "dispatched"
+
+    async def test_connector_graph_with_a_dispatch_binding_stamps_dispatched(self, session: AsyncSession) -> None:
+        """CRITICAL 2: the run's frozen graph is scanned for the BINDING the
+        engine routes on, so a connector-typed node firing an external job is
+        stamped ``dispatched`` too (it used to be stamped NULL)."""
+        await _seed_org(session)
+        graph = {
+            "nodes": [
+                {"id": "n1", "node_type": "agent"},
+                {
+                    "id": "n2",
+                    "node_type": "connector",
+                    "connector_binding": {
+                        "instance_id": str(uuid.uuid4()),
+                        "type": "github_actions_ci",
+                        "operation": "dispatch",
+                        "dispatch_action": "trigger_run",
+                    },
+                },
+            ],
+            "edges": [{"source": "n1", "target": "n2"}],
+        }
+        await _seed_snapshot(session, _SNAPSHOT, graph)
+
+        run = await _create_run(session)
+
+        assert run.execution_origin == EXECUTION_ORIGIN_DISPATCHED
+
+    async def test_dispatch_graph_staying_on_the_query_verb_leaves_origin_null(self, session: AsyncSession) -> None:
+        """CRITICAL 2 (over-claim): a dispatch node that only runs a query fires
+        nothing, so the run is NOT stamped ``dispatched``."""
+        await _seed_org(session)
+        graph = {
+            "nodes": [
+                {
+                    "id": "n1",
+                    "node_type": "dispatch",
+                    "connector_binding": {
+                        "instance_id": str(uuid.uuid4()),
+                        "type": "github_actions_ci",
+                        "operation": "query",
+                    },
+                }
+            ],
+            "edges": [],
+        }
+        await _seed_snapshot(session, _SNAPSHOT, graph)
+
+        run = await _create_run(session)
+
+        assert run.execution_origin is None
 
     async def test_graph_without_dispatch_leaves_origin_null(self, session: AsyncSession) -> None:
         await _seed_org(session)

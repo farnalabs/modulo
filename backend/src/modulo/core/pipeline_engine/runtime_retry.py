@@ -13,7 +13,9 @@ execution by wrapping a node's raw callable so that:
 * **per-edge retry** (§C): when a target node's OWN retry budget is exhausted
   (or not applicable), an incoming edge that declares a transition ``retry``
   re-executes the SOURCE node (not the target) — the edge-level retry wraps
-  node-retry. Fail-closed when the source is ``idempotent=false``.
+  node-retry. Fail-closed when the source is ``idempotent=false`` or when either
+  node's binding fires an external job (``operation="dispatch"`` +
+  ``dispatch_action="trigger_run"``, FAR-1141).
 * **compensation edges** (§E): when a watched node reaches TERMINAL failure and
   an outgoing edge declares an ``on_failure_target``, the wrapper routes to the
   compensation node as a FORWARD execution (no history rewrite). If the
@@ -50,6 +52,7 @@ from typing import Any
 
 from langgraph.errors import NodeCancelledError
 
+from modulo.connectors.base import node_fires_dispatch_job
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
 from modulo.core.pipeline_engine.retry_compensation import NodeRetryPolicy
@@ -273,13 +276,27 @@ def make_retrying_node_fn(
     Returns an async callable with the same ``(state) -> dict`` contract.
     """
     effective_policy = rc.resolve_node_retry(node_def, pipeline_retry_policy)
+    # FAR-1141 (CRITICAL 1): a node whose binding FIRES an external job
+    # (``operation="dispatch"`` + ``dispatch_action="trigger_run"``) is never
+    # auto-retried — inline re-invocation would fire a SECOND job on the
+    # customer's substrate. Derived from the BINDING, not the stored
+    # ``idempotent`` flag, so an MCP-authored / hand-written graph that omits
+    # the flag still fails closed (mirrors ``resolve_node_retry``'s
+    # ``idempotent=false`` arm for graphs that DO carry the flag).
+    node_fires_job = node_fires_dispatch_job(node_def)
+    if node_fires_job and effective_policy.max_attempts > 1:
+        effective_policy = NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     outgoing_edges = outgoing_edges or []
     incoming_edges = incoming_edges or []
     node_defs = node_defs or {}
 
     def _source_fail_closed(edge: dict[str, Any]) -> bool:
         source_id = rc._string_or_default(edge.get("source", edge.get("source_node_id")))
-        return rc.node_is_fail_closed(node_defs.get(source_id))
+        source = node_defs.get(source_id)
+        # The SOURCE may not be re-executed when it is declared non-idempotent
+        # OR when its own binding fires an external job (same predicate, both
+        # spellings — the flag alone does not survive an MCP-authored graph).
+        return rc.node_is_fail_closed(source) or node_fires_dispatch_job(source)
 
     async def _invoke_with_key(
         fn: Callable[[dict[str, Any]], Any],
@@ -365,8 +382,18 @@ def make_retrying_node_fn(
         edge produces a result we return ``None`` so ``_wrapped`` proceeds to
         compensation (FAR-402 MAJOR-1 — the trailing fall-through must be live,
         not dead code behind a raised exception).
+
+        FAR-1141 (CRITICAL 1): the fail-closed check covers BOTH nodes the edge
+        retry would re-execute — the source (above) and THIS node, because
+        ``_execute_edge_retry_source`` re-invokes ``raw_fn`` (the failing node)
+        against the source's fresh output. A dispatch node that fires a job is
+        never that second re-invocation either: one failure, one fired job.
         """
         if failed_event is None:
+            return None
+        if node_fires_job:
+            # The watched node's own binding fires an external job — re-invoking
+            # it here would fire a second one, whatever the edge declares.
             return None
         for edge in incoming_edges:
             if not rc.edge_retry_reattempts_source(edge):

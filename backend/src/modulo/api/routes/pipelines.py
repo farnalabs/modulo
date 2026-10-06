@@ -63,6 +63,7 @@ from modulo.auth.permissions import (
     resolve_required,
 )
 from modulo.auth.team_rbac import org_role_level
+from modulo.connectors.base import connector_type_supports_dispatch, node_fires_dispatch_job
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
     ScopeViolationError,
@@ -1381,6 +1382,13 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             "dispatch": self._validate_dispatch_node,
         }
         node_validators[self.node_type]()
+        # FAR-1141 (CRITICAL 1): runs for EVERY node type, immediately after the
+        # type validator so a dispatch node's verb defaulting has already
+        # happened. Keyed on the BINDING's operation, not on ``node_type`` —
+        # a connector / router / hitl node carrying ``operation="dispatch"`` +
+        # ``trigger_run`` fires a real external job exactly like a dispatch node
+        # and must be persisted non-idempotent too.
+        self._validate_dispatch_binding_non_idempotent()
         self._validate_fan_out_cross_checks()
         self._validate_sandbox_only_fields()
         self._validate_stdout_retention()
@@ -1598,41 +1606,101 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         wait fields are rejected on every other node type by
         ``_validate_dispatch_only_fields``.
 
-        FAR-1141 slice 2:
-        * ``await_completion`` / ``wait_timeout`` are only read when the binding
-          actually routes the ``dispatch`` verb — declared on a dispatch node
-          whose binding queries instead would be a silent no-op, so it is
-          rejected here (the engine raises the same condition at graph build).
-        * A binding that can FIRE a job (``operation='dispatch'`` +
-          ``dispatch_action='trigger_run'``) is persisted
-          ``idempotent=false``. ``trigger_run`` creates a job on the customer's
-          own substrate, so re-running the graph would fire a SECOND job — the
-          executor's FAR-295 check suppresses BOTH retry paths (the run-level
-          ``retry_policy`` re-dispatch and the node-level transient retry) for
-          any graph containing a non-idempotent node. That is the structural
-          half of "a ``dispatch.wait_timeout`` failure is never retried into a
-          second external job"; the registry's ``retryable=False`` is the other.
-          An explicitly-passed ``idempotent=true`` is overridden (and logged) —
-          the value would be unsafe to persist, and a payload that round-trips
-          defaults must still save.
+        FAR-1141 slice 2 + the pre-PR QA defects (CRITICAL 1, MAJOR 3/4/8):
+
+        * **operation (MAJOR 3).** ``ConnectorBinding.operation`` defaults to
+          ``"query"`` (the generic default every other node type needs) and the
+          write path always serialises it — so a dispatch node saved without an
+          explicit verb used to PERSIST ``"query"`` and execute
+          ``connector.query()`` at run time: silently, with no job fired. A
+          payload that simply OMITS the key now inherits the engine's own
+          fallback (``"dispatch"``), and an explicit non-dispatch verb is
+          rejected outright.
+        * **CI-runner capability (MAJOR 8).** The bound connector's declared
+          type must implement the four CI-runner operations, or the dispatch
+          fails at run time with an ``AttributeError``-shaped error. Checked
+          here on the binding's ``type`` (this model runs for REST AND MCP
+          graph writes); the GraphValidator independently checks the bound
+          INSTANCE's ``connector_type_id`` for every node type on REST saves.
+        * **wait-coherence (MAJOR 4).** ``await_completion`` is only read for
+          ``dispatch_action='trigger_run'`` and ``wait_timeout`` only when
+          ``await_completion`` is true — both combinations were validated yet
+          never read, so they are rejected rather than silently no-opping.
+        * **idempotency (CRITICAL 1).** See
+          :meth:`_validate_dispatch_binding_non_idempotent` — the flag is now
+          set for EVERY node type by OPERATION, and the engine derives
+          non-idempotency from the binding itself, so the write-path flag is
+          the convenience rather than the only guard.
         """
         if self.connector_binding is None:
             raise ValueError("Dispatch nodes require a connector_binding")
         if self.agent_id is not None:
             raise ValueError("Dispatch nodes cannot reference an agent")
-        if self.connector_binding.operation != "dispatch" and (self.await_completion or self.wait_timeout is not None):
+        binding = self.connector_binding
+        if "operation" not in binding.model_fields_set:
+            # The field default ("query") exists for every OTHER node type.
+            # Inherit the engine's fallback instead of persisting a verb that
+            # would silently turn this node into a plain query (MAJOR 3).
+            binding.operation = "dispatch"
+        if binding.operation != "dispatch":
             raise ValueError(
-                "await_completion / wait_timeout require connector_binding.operation='dispatch'",
+                "Dispatch nodes require connector_binding.operation='dispatch' "
+                f"(got {binding.operation!r}) — a dispatch node that queries fires no job",
             )
-        if self.connector_binding.operation == "dispatch" and self.connector_binding.dispatch_action == "trigger_run":
-            if self.idempotent and "idempotent" in self.model_fields_set:
-                logger.warning(
-                    "dispatch_node.idempotent_forced_false",
-                    extra={"node_id": str(self.id)},
-                    # Firing a job on the customer's substrate is never safe to
-                    # re-run, so an explicit idempotent=true is overridden.
-                )
-            self.idempotent = False
+        if not connector_type_supports_dispatch(binding.type):
+            raise ValueError(
+                f"connector type {binding.type!r} does not implement the CI-runner operations "
+                "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch "
+                "binding requires — bind a CI connector instead",
+            )
+        if self.await_completion and binding.dispatch_action != "trigger_run":
+            raise ValueError(
+                "await_completion=True requires connector_binding.dispatch_action='trigger_run' "
+                f"(got {binding.dispatch_action!r}) — the wait only ever polls after a fired job",
+            )
+        if self.wait_timeout is not None and not self.await_completion:
+            raise ValueError("wait_timeout requires await_completion=True — the window is never read otherwise")
+
+    def _validate_dispatch_binding_non_idempotent(self) -> None:
+        """FAR-1141 (CRITICAL 1): any node whose binding FIRES a job is
+        persisted ``idempotent=false`` — decided by OPERATION, not ``node_type``.
+
+        ``trigger_run`` creates a job on the customer's own substrate, so
+        re-running the graph would fire a SECOND job. Keying this on
+        ``node_type == "dispatch"`` (as it was) left a ``connector`` /
+        ``router`` / ``hitl`` node carrying ``operation="dispatch"`` +
+        ``trigger_run`` persisted ``idempotent=true`` — a real external job
+        that every retry path considered safe to re-run.
+
+        This write-path flag is the CONVENIENCE, not the guarantee:
+        ``executor._graph_is_idempotent`` and ``runtime_retry`` derive
+        non-idempotency from the binding itself, so REST, MCP and hand-written
+        graphs all fail closed even if the flag is missing or overridden. An
+        explicitly-passed ``idempotent=true`` is overridden (and logged); the
+        value would be unsafe to persist, and a payload that round-trips
+        defaults must still save.
+
+        The decision itself is delegated to
+        ``graph_validator.node_fires_dispatch_job`` — the SAME predicate the
+        engine and the run classifier use — so the write path cannot grow its
+        own copy of the rule and drift from the run-time one.
+        """
+        if self.connector_binding is None:
+            return
+        probe = {
+            "node_type": self.node_type,
+            "connector_binding": self.connector_binding.model_dump(mode="json"),
+        }
+        if not node_fires_dispatch_job(probe):
+            return
+        if self.idempotent and "idempotent" in self.model_fields_set:
+            logger.warning(
+                "dispatch_node.idempotent_forced_false",
+                extra={"node_id": str(self.id)},
+                # Firing a job on the customer's substrate is never safe to
+                # re-run, so an explicit idempotent=true is overridden.
+            )
+        self.idempotent = False
 
     def _validate_sandbox_env_vars(self) -> None:
         if not self.env_vars:

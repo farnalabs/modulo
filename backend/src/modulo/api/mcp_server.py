@@ -3040,12 +3040,25 @@ async def _update_pipeline_graph_impl(
     from pydantic import ValidationError as _PydanticValidationError
 
     try:
-        PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+        graph_update = PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
     except _PydanticValidationError as exc:
         return {
             "error": "validation_failed",
             "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
         }
+
+    # FAR-1141 (CRITICAL 1): PERSIST THE VALIDATED node objects. The old call
+    # validated and then DISCARDED the result, keeping the raw dicts, so every
+    # model-side effect was thrown away — the forced ``idempotent=false`` on a
+    # job-firing dispatch binding never reached an MCP-authored graph, and MCP
+    # was the one write surface where "never retried into a second external job"
+    # did not hold. ``model_dump(mode="json")`` is exactly what REST's
+    # ``_prepare_graph_write`` serialises, so REST and MCP now land the SAME
+    # graph: declared fields take the validated value (defaults filled, side
+    # effects applied), undeclared keys are dropped on both paths rather than
+    # surviving on one (a field only one writer persists is plan drift, not
+    # configuration).
+    nodes = [node.model_dump(mode="json") for node in graph_update.nodes]
 
     # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
     # Pydantic model, node runner, and GraphValidator use, applied to the
@@ -3271,8 +3284,28 @@ def _apply_node_connector_binding(
     connector_instance_id: str,
     operation: str | None = None,
     dispatch_action: str | None = None,
+    *,
+    connector_supports_dispatch: bool | None = None,
 ) -> dict[str, Any] | None:
-    """Bind the connector onto the matching node. Returns an error dict, or None."""
+    """Bind the connector onto the matching node. Returns an error dict, or None.
+
+    FAR-1141 (MAJOR 9): the binding is PATCHED, never rebuilt. The old code
+    constructed ``{type, instance_id, operation?, dispatch_action?}`` from
+    scratch, so a bind that only carried ``operation`` silently DROPPED an
+    existing ``dispatch_action`` / ``input`` — a read-only node could become a
+    ``trigger_run`` job-firer (or lose its configured action) without anyone
+    asking. Keys the caller does not mention keep their stored value; the
+    caller's values win only for the keys it names.
+
+    Dispatch invariants are applied with the SAME single helpers the REST path
+    and the engine use (``graph_validator.connector_binding_operation`` /
+    ``node_fires_dispatch_job``): a ``dispatch`` node must route the dispatch
+    verb, a dispatch binding must target a connector whose type implements the
+    CI-runner contract (the caller resolves that from the instance row —
+    ``None`` means the caller did not resolve it and the check is skipped), and
+    a job-firing binding is persisted ``idempotent=false`` exactly as the REST
+    model forces it.
+    """
     if operation is not None and operation not in _BIND_OPERATIONS:
         return {
             "error": "validation_failed",
@@ -3294,14 +3327,44 @@ def _apply_node_connector_binding(
     if target is None:
         return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
 
-    binding: dict[str, Any] = {
-        "type": connector_type,
-        "instance_id": connector_instance_id,
-    }
+    from modulo.connectors.base import (
+        connector_binding_operation,
+        node_fires_dispatch_job,
+    )
+
+    existing = target.get("connector_binding")
+    binding: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    binding["type"] = connector_type
+    binding["instance_id"] = connector_instance_id
     if operation is not None:
         binding["operation"] = operation
     if dispatch_action is not None:
         binding["dispatch_action"] = dispatch_action
+    # Resolve the verb exactly as the engine will route it (explicit value wins,
+    # else the node-type fallback), then persist the resolution so the stored
+    # graph never relies on a reader-specific default.
+    probe = {**target, "connector_binding": binding}
+    effective_operation = connector_binding_operation(probe)
+    binding["operation"] = effective_operation
+    if str(target.get("node_type") or "") == "dispatch" and effective_operation != "dispatch":
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": "Dispatch nodes require connector_binding.operation='dispatch' "
+            f"(got {effective_operation!r}) — a dispatch node that queries fires no job",
+        }
+    if effective_operation == "dispatch" and connector_supports_dispatch is False:
+        return {
+            "error": "validation_failed",
+            "field": "connector_type",
+            "detail": f"connector type {connector_type!r} does not implement the CI-runner operations "
+            "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires",
+        }
+    if node_fires_dispatch_job(probe):
+        # Parity with the REST model's forced ``idempotent=false``: the binding
+        # fires a job on the customer's substrate, so the node is never safe to
+        # re-run (and the executor now derives this from the binding too).
+        target["idempotent"] = False
     target["connector_binding"] = binding
     pipeline.graph_nodes_json = nodes
     return None
@@ -3380,6 +3443,14 @@ async def bind_connector_to_node(
                     ),
                 }
 
+            # FAR-1141 (MAJOR 8/9): resolve the CI-runner capability from the
+            # INSTANCE row (the authoritative connector type) so a dispatch
+            # binding to a Linear/Slack connector is rejected here, at bind
+            # time, instead of failing at run time with an AttributeError-shaped
+            # error. Passed through so the same invariant the REST graph-save
+            # validator enforces also holds on this write path.
+            from modulo.connectors.base import connector_type_supports_dispatch
+
             bind_error = _apply_node_connector_binding(
                 pipeline,
                 nid,
@@ -3388,6 +3459,7 @@ async def bind_connector_to_node(
                 connector_instance_id,
                 operation=operation,
                 dispatch_action=dispatch_action,
+                connector_supports_dispatch=connector_type_supports_dispatch(connector.connector_type_id),
             )
             if bind_error is not None:
                 return bind_error

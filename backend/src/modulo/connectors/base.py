@@ -328,6 +328,114 @@ class ConnectorType(StrEnum):
                 return frozenset()
 
 
+# ---------------------------------------------------------------------------
+# FAR-1141: dispatch routing — the ONE predicate every consumer shares
+# ---------------------------------------------------------------------------
+#
+# A graph node executes its connector binding through ONE verb, and that verb
+# is decided by ``connector_binding.operation`` — NOT by ``node_type``. The
+# engine routes it that way (``node_runner.make_connector_fn``), so every other
+# reader of "does this node dispatch?" must ask the SAME question of the SAME
+# function, or the surfaces drift (the FAR-1141 defect: the run's
+# ``execution_origin`` was keyed on ``node_type`` while the engine keyed on the
+# binding, so a connector node firing a real external job was stamped NULL and
+# a dispatch-typed node running a query was stamped ``dispatched``).
+#
+# They live HERE — a stdlib-only leaf the API, the engine, the validator AND
+# the DB layer can all import without a cycle — so ``node_runner``,
+# ``executor``, ``runtime_retry``, ``graph_validator``, ``api.routes.pipelines``,
+# ``api.mcp_server`` and ``db.crud.run`` cannot grow separate copies of the
+# rule. (``modulo.db`` is forbidden from importing ``modulo.core`` by the
+# import-linter contract; this module is the seam that lets the run classifier
+# share the engine's predicate without an exemption.)
+
+#: The CI-runner capability contract a ``dispatch`` binding requires: the four
+#: ``CIRunnerBase`` methods (``trigger_run`` / ``get_run_status`` /
+#: ``get_run_logs`` / ``list_runs``). A connector type missing any of them
+#: cannot honour a dispatch binding and fails at run time with an
+#: ``AttributeError``-shaped error — so save time rejects it instead.
+CI_RUNNER_CAPABILITIES: frozenset[Capability] = frozenset(
+    {
+        Capability.TRIGGER_RUN,
+        Capability.GET_RUN_STATUS,
+        Capability.GET_RUN_LOGS,
+        Capability.LIST_RUNS,
+    }
+)
+
+#: Hub-native connector-type ids that build a CI runner but are NOT members of
+#: the ``ConnectorType`` enum (``connector_hub._build_connector`` matches them
+#: by literal), so ``ConnectorType(id)`` would raise. Keep in step with the
+#: hub's ``case`` arms for CI runners.
+_HUB_CI_RUNNER_TYPE_IDS: frozenset[str] = frozenset({"github_actions_ci", "gitlab_ci", "ci_runner"})
+
+
+def connector_type_supports_dispatch(connector_type_id: Any) -> bool:
+    """True when *connector_type_id* implements the CI-runner contract.
+
+    Fail-closed: an unknown / unparseable type id (including a plugin
+    connector type we cannot introspect) reports ``False`` — a dispatch binding
+    on a type we cannot prove implements the four operations must be rejected
+    at save time, never discovered as an ``AttributeError`` at run time.
+    """
+    type_id = str(connector_type_id or "").strip()
+    if not type_id:
+        return False
+    if type_id in _HUB_CI_RUNNER_TYPE_IDS:
+        return True
+    try:
+        capabilities = ConnectorType(type_id).capabilities
+    except ValueError:
+        return False
+    return capabilities >= CI_RUNNER_CAPABILITIES
+
+
+def connector_binding_operation(node: Any) -> str:
+    """The connector verb the ENGINE will route *node* to (``query`` default).
+
+    Mirrors ``node_runner.make_connector_fn`` EXACTLY: an explicit, non-empty
+    ``connector_binding.operation`` wins; otherwise a ``node_type="dispatch"``
+    node falls back to the dispatch verb and every other node type queries.
+    Returns ``"query"`` for a non-dict / binding-less / operation-less node so
+    a malformed input is never read as a dispatch.
+    """
+    if not isinstance(node, dict):
+        return "query"
+    binding = node.get("connector_binding")
+    if isinstance(binding, dict):
+        raw_operation = binding.get("operation")
+        if isinstance(raw_operation, str) and raw_operation:
+            return raw_operation
+    if str(node.get("node_type") or "") == "dispatch":
+        return "dispatch"
+    return "query"
+
+
+def node_fires_dispatch_job(node: Any) -> bool:
+    """True when executing *node* FIRES a NEW job on an external substrate.
+
+    The non-idempotency predicate (FAR-1141 / FAR-295): a binding that routes
+    the ``dispatch`` verb with ``dispatch_action="trigger_run"`` creates a job
+    the customer's substrate will run, so re-executing the graph would fire a
+    SECOND job. Keyed on the BINDING (operation + action), never on
+    ``node_type``, so it covers a ``connector`` / ``router`` / ``hitl`` node
+    carrying a dispatch binding exactly as it covers a ``dispatch`` node.
+
+    False for a node with no binding (the engine fails loud on that shape at
+    graph build, so it can never fire anything) and for every read-only
+    dispatch action (``get_run_status`` / ``get_run_logs`` / ``list_runs``),
+    which are safe to re-run.
+    """
+    if not isinstance(node, dict):
+        return False
+    binding = node.get("connector_binding")
+    if not isinstance(binding, dict) or not binding.get("instance_id"):
+        return False
+    if connector_binding_operation(node) != "dispatch":
+        return False
+    return str(binding.get("dispatch_action") or "trigger_run") == "trigger_run"
+
+
 class ConnectorPermissionError(ValueError):
     """Raised when a connector operation violates its ACL."""
 

@@ -356,6 +356,27 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         """Normalise absent/empty/null joiner to the runtime default (API twin)."""
         return v if isinstance(v, str) and v else " && "
 
+    @model_validator(mode="after")
+    def _default_dispatch_binding_operation(self) -> ApplyGraphNode:
+        """FAR-1141 (MAJOR 3): a dispatch node's binding routes the dispatch verb.
+
+        ``ApplyGraphConnectorBinding.operation`` defaults to ``"query"`` — the
+        generic default every other node type needs, mirrored from the API —
+        and ``api_node_payload`` always serialises it. A config that omitted
+        the key would therefore send an EXPLICIT ``"query"``, which the API now
+        rejects (and which pre-rejection persisted a node that silently ran a
+        query instead of firing a job). Inherit the engine's own fallback
+        (``node_type == "dispatch"`` -> ``"dispatch"``) so REST, MCP and the
+        CLI derive the same default from the same shape. An EXPLICIT
+        non-dispatch verb is left alone: the API model is the single authority
+        that rejects it, so the CLI fails at apply with the server's message.
+        """
+        if self.node_type != "dispatch" or self.connector_binding is None:
+            return self
+        if "operation" not in self.connector_binding.model_fields_set:
+            self.connector_binding.operation = "dispatch"
+        return self
+
     def api_node_payload(self) -> dict[str, Any]:
         """Config node -> API node dict (without agent resolution)."""
         payload = self.model_dump(mode="json")

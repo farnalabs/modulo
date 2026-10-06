@@ -72,7 +72,7 @@ from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
-from modulo.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES
+from modulo.connectors.base import DEFAULT_ON_UNKNOWN, ON_UNKNOWN_MODES, connector_binding_operation
 from modulo.core.runtime_provider import (
     ProviderCapabilityUnsupportedError,
     WorkspaceMetrics,
@@ -105,6 +105,7 @@ from modulo.core.eval_engine import EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
+    DISPATCH_PROVENANCE_FIELDS,
     SPLITTABLE_NODE_TYPES,
     resolve_node_contract_output,
 )
@@ -5923,6 +5924,17 @@ _DISPATCH_WAIT_TIMEOUT_MAX_SECONDS = 3600.0
 #: typed ``dispatch.wait_timeout``.
 _DISPATCH_WAIT_NODE_MARGIN_SECONDS = 1.0
 
+#: FAR-1141 (MAJOR 5): consecutive ``get_run_status`` failures tolerated inside
+#: one wait window before the LAST error is re-raised. A single transient poll
+#: failure (429 / 5xx / network blip) used to abort the whole wait through the
+#: generic connector-failure path, leaving the already-fired external job
+#: running while the run reported a misleading failure — so a poll error is now
+#: retried inside the window with a bounded backoff. The cap keeps a genuinely
+#: dead / permanently-broken status endpoint from spinning for the whole
+#: window: past it the fault surfaces AS ITSELF (a loud connector failure),
+#: not as a wait timeout that would blame the substrate.
+_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS = 8
+
 #: FAR-1141 / ADR-042 mapping-table artefact: substrate ``CIRunStatus`` code ->
 #: dispatch-node outcome.
 #:
@@ -5994,26 +6006,71 @@ async def _await_dispatch_terminal(
     """Poll ``get_run_status`` until the substrate reports a TERMINAL status.
 
     FAR-1141: the job is fired EXACTLY ONCE by the caller — this loop only
-    OBSERVES it. Bounded by *wait_timeout* on a monotonic clock: a non-terminal
-    status (``pending`` / ``queued`` / ``in_progress`` / ``unknown`` per
-    :data:`DISPATCH_STATUS_OUTCOME_MAP`) sleeps the module-level poll interval
-    and tries again. Raises :class:`DispatchWaitTimeoutError` when the window
-    elapses first — TERMINAL and never retried, because the external job already
-    exists and a retry would fire a second one.
+    OBSERVES it. Bounded by *wait_timeout* on a monotonic clock, and the window
+    is enforced on THREE sides so the typed :class:`DispatchWaitTimeoutError`
+    always wins the race against the node's own ``asyncio.wait_for``:
 
-    ``asyncio.CancelledError`` is re-raised untouched: a run cancel or the
-    node's own deadline stops the wait immediately and is never swallowed.
+    * the deadline is checked BEFORE every poll (checking only after a poll let
+      the loop fire one extra poll past the window);
+    * each poll call is bounded by ``min(poll_interval, remaining)``, so a slow
+      status endpoint cannot hand the remaining budget to an unbounded await;
+    * the inter-poll sleep is bounded by the remaining time too.
+
+    A transient poll failure (429 / 5xx / network blip) is RETRIED inside the
+    window with a bounded backoff — at most
+    :data:`_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS` consecutive failures —
+    instead of aborting the wait through the generic connector-failure path.
+    Aborting there left the already-fired external job running while the run
+    reported a misleading failure. A persistent fault surfaces AS ITSELF once
+    the cap is hit, never disguised as a wait timeout.
+
+    ``asyncio.CancelledError`` is a ``BaseException`` and is deliberately NOT
+    caught: a run cancel or the node's own deadline stops the wait immediately.
     """
     run_id = str(job_ref.get("id") or "") if isinstance(job_ref, dict) else ""
     if not run_id:
         raise ValueError("dispatch await_completion requires a run id in the trigger_run result")
     loop = asyncio.get_running_loop()
     deadline = loop.time() + wait_timeout
+    consecutive_errors = 0
+    last_status = "unknown"
+
+    def _timeout_error() -> DispatchWaitTimeoutError:
+        return DispatchWaitTimeoutError(
+            f"dispatch run {run_id} did not reach a terminal status within {wait_timeout:g}s "
+            f"(last status {last_status!r}) — terminal, never retried: a retry would fire a "
+            "second external job",
+        )
+
     while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise _timeout_error()
         try:
-            polled = await connector.get_run_status(run_id=run_id)
-        except asyncio.CancelledError:
-            raise
+            polled = await asyncio.wait_for(
+                connector.get_run_status(run_id=run_id),
+                timeout=min(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, remaining),
+            )
+        except Exception as exc:
+            # Poll faults (timeouts, 429/5xx, transport errors) are retried
+            # inside the window; a fault that lands after the window closed is
+            # reported as the typed wait timeout, which is what actually ended
+            # the wait.
+            if loop.time() >= deadline:
+                raise _timeout_error() from exc
+            consecutive_errors += 1
+            if consecutive_errors > _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS:
+                raise
+            _log.warning(
+                "dispatch.await_completion.poll_retry run=%s attempt=%s/%s error=%s",
+                run_id,
+                consecutive_errors,
+                _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS,
+                exc,
+            )
+            await asyncio.sleep(min(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, max(deadline - loop.time(), 0.0)))
+            continue
+        consecutive_errors = 0
         state = _dispatch_result_to_state(polled)
         if not isinstance(state, dict):
             # A CI runner's get_run_status contract is a CIRun (-> dict). Fail
@@ -6031,11 +6088,7 @@ async def _await_dispatch_terminal(
             return state
         remaining = deadline - loop.time()
         if remaining <= 0:
-            raise DispatchWaitTimeoutError(
-                f"dispatch run {run_id} did not reach a terminal status within {wait_timeout:g}s "
-                f"(last status {last_status!r}) — terminal, never retried: a retry would fire a "
-                "second external job",
-            )
+            raise _timeout_error()
         await asyncio.sleep(min(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, remaining))
 
 
@@ -6051,18 +6104,28 @@ def _stamp_dispatch_provenance(result: Any, instance_id: str) -> Any:
       did not run
     * ``substrate_status``       the substrate's own status code, verbatim
 
-    Non-dict results (``list_runs`` returns a list) pass through untouched.
-    Never raises.
+    EVERY result shape is stamped (FAR-1141 MAJOR 6): a dict is stamped in
+    place; anything else — ``list_runs`` returns a list — is wrapped in a typed
+    ``{"result": ...}`` envelope carrying the same keys. A bare list used to
+    pass through unstamped, so a witnessed run list read as an array Modulo
+    produced. The key set is the one
+    :data:`modulo.core.node_output_split.DISPATCH_PROVENANCE_FIELDS` lifts back
+    out on the failed-artifact path, so the two cannot drift. Never raises.
     """
-    if not isinstance(result, dict):
-        return result
-    stamped = dict(result)
-    stamped["witnessed_via"] = instance_id
-    stamped["execution_identity"] = "customer_substrate"
-    stamped["declared_external_cost"] = None
-    if "status" in stamped:
-        stamped["substrate_status"] = str(stamped["status"])
-    return stamped
+    if isinstance(result, dict):
+        stamped = dict(result)
+        stamped["witnessed_via"] = instance_id
+        stamped["execution_identity"] = "customer_substrate"
+        stamped["declared_external_cost"] = None
+        if "status" in stamped:
+            stamped["substrate_status"] = str(stamped["status"])
+        return stamped
+    return {
+        "result": result,
+        "witnessed_via": instance_id,
+        "execution_identity": "customer_substrate",
+        "declared_external_cost": None,
+    }
 
 
 def _dispatch_trigger_failure_envelope(node_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
@@ -6070,11 +6133,12 @@ def _dispatch_trigger_failure_envelope(node_id: str, result: dict[str, Any]) -> 
 
     FAR-1141 mapping table (``failure`` / ``cancelled`` / ``timed_out``): the
     artifact's ``error`` is the substrate's terminal code VERBATIM (e.g. the
-    literal ``"failure"``) and the stamped output — which carries
-    ``substrate_status`` — is preserved as ``output``. ``substrate_status`` is
-    ALSO lifted to the envelope top level because the failed-connector branch of
-    ``node_output_split._split_connector`` drops ``output``; without the
-    duplicate the verbatim status would never reach run state.
+    literal ``"failure"``) and the stamped output — which carries the witness
+    provenance — is preserved as ``output``. Every
+    :data:`modulo.core.node_output_split.DISPATCH_PROVENANCE_FIELDS` key is ALSO
+    lifted to the envelope top level because the failed-connector branch of
+    ``node_output_split._split_connector`` drops ``output``; without the lift the
+    provenance would never reach run state from this path.
 
     Returns ``None`` for any other status. Returned, never raised, so the
     graph's own error routing applies — consistent with every other
@@ -6083,11 +6147,20 @@ def _dispatch_trigger_failure_envelope(node_id: str, result: dict[str, Any]) -> 
     status = str(result.get("status") or "")
     if DISPATCH_STATUS_OUTCOME_MAP.get(status) != "failed":
         return None
-    return {
+    envelope: dict[str, Any] = {
         "artifacts": [{"node_id": node_id, "status": "failed", "error": status}],
         "output": result,
-        "substrate_status": status,
     }
+    # FAR-1141 (MAJOR 6): lift EVERY provenance key to the envelope top level,
+    # not just ``substrate_status`` — the failed-connector branch of
+    # ``node_output_split._split_connector`` drops ``output``, so a failure that
+    # carried only the one hand-duplicated key would reach failure inspection
+    # with no witness provenance at all. Key set shared with the splitter, so
+    # the two can never drift.
+    for key in DISPATCH_PROVENANCE_FIELDS:
+        if key in result and key not in envelope:
+            envelope[key] = result[key]
+    return envelope
 
 
 async def _run_connector_dispatch(
@@ -6456,11 +6529,13 @@ def make_connector_fn(
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
     node_type: str = str(node_def.get("node_type", "agent"))
-    raw_op: Any = binding.get("operation")
-    # FAR-1141: a dispatch node whose binding carries no explicit ``operation``
-    # defaults to the dispatch verb; everything else keeps the legacy 'query'
-    # default.
-    op: str = str(raw_op) if raw_op else ("dispatch" if node_type == "dispatch" else "query")
+    # FAR-1141: the verb comes from the ONE shared resolver
+    # (``graph_validator.connector_binding_operation``) — the engine's route,
+    # the run's ``execution_origin`` classification and the executor's
+    # non-idempotency gate all ask it the same question, so they cannot drift
+    # (an explicit binding operation wins; a ``dispatch``-typed node with none
+    # falls back to the dispatch verb, everything else queries).
+    op: str = connector_binding_operation(node_def)
     dispatch_action: str = str(binding.get("dispatch_action") or "trigger_run")
     if op == "dispatch" and dispatch_action not in _DISPATCH_ACTIONS:
         # Fail loud at graph-build time — never a silent fall-through to query.
@@ -6486,6 +6561,26 @@ def make_connector_fn(
         raise ValueError(
             f"await_completion / wait_timeout are only read by a dispatch node's dispatch "
             f"operation (node {node_id!r} uses op={op!r})",
+        )
+    if node_type == "dispatch" and op != "dispatch":
+        # FAR-1141 (MAJOR 3): a dispatch node that does not route the dispatch
+        # verb would silently run a QUERY — no job ever fired. The API model
+        # rejects that at save time; a hand-written / legacy graph fails LOUD
+        # here instead of silently doing nothing.
+        raise ValueError(
+            f"dispatch node {node_id!r} must route connector_binding.operation='dispatch' (got {op!r})",
+        )
+    if await_completion and dispatch_action != "trigger_run":
+        # FAR-1141 (MAJOR 4): the wait loop only ever runs for trigger_run, so
+        # await_completion on any other action is declared-but-unread.
+        raise ValueError(
+            f"await_completion=True requires dispatch_action='trigger_run' (node {node_id!r} uses {dispatch_action!r})",
+        )
+    if raw_wait_timeout is not None and not await_completion:
+        # FAR-1141 (MAJOR 4): the wait window is only read when await_completion
+        # is true — a wait_timeout with await_completion=false is never used.
+        raise ValueError(
+            f"wait_timeout requires await_completion=True for node {node_id!r}",
         )
     # FAR-418: node-level capability_scope. ``allowed_connectors`` narrows (never
     # widens) which connectors this node may resolve — deny-by-default within the

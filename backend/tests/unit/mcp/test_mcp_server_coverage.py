@@ -915,6 +915,91 @@ class TestApplyNodeConnectorBinding:
         result = _apply_node_connector_binding(pipeline, uuid.uuid4(), "missing", "github", "conn-1")
         assert result is not None
 
+    # FAR-1141 (MAJOR 9): the binding is PATCHED, never rebuilt from scratch.
+
+    def test_bind_preserves_an_existing_dispatch_action_and_input(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "connector",
+                "connector_binding": {
+                    "type": "github_actions_ci",
+                    "instance_id": "conn-0",
+                    "operation": "dispatch",
+                    "dispatch_action": "get_run_status",
+                    "input": {"run_id": "r-1"},
+                },
+            }
+        ]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        # only the instance changes: operation / dispatch_action are omitted
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1")
+        assert result is None
+        binding = nodes[0]["connector_binding"]
+        assert binding["instance_id"] == "conn-1"
+        assert binding["dispatch_action"] == "get_run_status"
+        assert binding["input"] == {"run_id": "r-1"}
+        assert binding["operation"] == "dispatch"
+
+    def test_bind_forces_non_idempotent_for_a_job_firing_binding(self) -> None:
+        """Parity with the REST model: a ``trigger_run`` binding is persisted
+        ``idempotent=false`` whatever the node's type."""
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "connector"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline,
+            nid,
+            str(nid),
+            "github_actions_ci",
+            "conn-1",
+            operation="dispatch",
+            dispatch_action="trigger_run",
+        )
+        assert result is None
+        assert nodes[0]["idempotent"] is False
+
+    def test_bind_rejects_a_query_verb_on_a_dispatch_node(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query"
+        )
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "operation"
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_rejects_a_non_ci_connector_for_a_dispatch_binding(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline,
+            nid,
+            str(nid),
+            "linear",
+            "conn-1",
+            operation="dispatch",
+            connector_supports_dispatch=False,
+        )
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "connector_type"
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_defaults_a_dispatch_node_verb_from_the_node_type(self) -> None:
+        """No explicit ``operation``: the stored graph records the verb the
+        engine will actually route, never an unstated default."""
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1")
+        assert result is None
+        assert nodes[0]["connector_binding"]["operation"] == "dispatch"
+
 
 # ─── Parse eval ref ids ────────────────────────────────────────────
 

@@ -13,6 +13,7 @@ import asyncio
 import base64
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1637,8 +1638,19 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         assert result["error"] == "validation_failed"
 
     async def test_sandbox_mode_gate(self) -> None:
+        # FAR-1141 (CRITICAL 1): update_pipeline_graph now persists the
+        # VALIDATED node objects instead of the raw dicts, so the stand-in
+        # model has to hand back nodes that serialise to themselves — otherwise
+        # the test fails on the dump rather than reaching the sandbox gate.
+        class _PassthroughNode(dict[str, Any]):
+            def model_dump(self, mode: str | None = None) -> dict[str, Any]:
+                return dict(self)
+
+        def _validate(payload: dict[str, Any]) -> Any:
+            return SimpleNamespace(nodes=[_PassthroughNode(node) for node in payload["nodes"]])
+
         bogus_model = MagicMock()
-        bogus_model.model_validate = MagicMock(return_value=None)
+        bogus_model.model_validate = MagicMock(side_effect=_validate)
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.pipelines.PipelineGraphUpdate", bogus_model),
@@ -1663,6 +1675,69 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         ):
             result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=edges)
         assert result["error"] == "pipeline_not_found"
+
+    async def test_dispatch_binding_persists_non_idempotent(self) -> None:
+        """FAR-1141 (CRITICAL 1): the MCP path validated the graph and then
+        DISCARDED the model result, persisting the raw node dicts — so the
+        forced ``idempotent=false`` never reached an MCP-authored graph and a
+        retry could fire a second external job. The validated objects are
+        persisted now."""
+        nodes = [
+            {
+                "id": str(uuid.uuid4()),
+                # a `router` node carrying a dispatch binding is exactly the
+                # shape CRITICAL 1 was about: it executes as a CONNECTOR node
+                # while keying its idempotency on node_type == "dispatch"
+                # (which it is not). ``node_type="connector"`` is not part of
+                # the API's Literal, so a router is the authorable spelling.
+                "node_type": "router",
+                "position": {"x": 0, "y": 0},
+                "router_config": {"rules": [{"target": str(uuid.uuid4())}]},
+                "connector_binding": {
+                    "type": "github_actions_ci",
+                    "instance_id": str(uuid.uuid4()),
+                    "operation": "dispatch",
+                    "dispatch_action": "trigger_run",
+                },
+            }
+        ]
+        pipeline = MagicMock()
+        pipeline.owner_team_id = None
+        pipeline.graph_nodes_json = []
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+            patch(
+                "modulo.db.crud.pipeline.replace_pipeline_graph",
+                new=AsyncMock(return_value=(nodes, [])),
+            ) as replace_graph,
+        ):
+            result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=[])
+        assert "error" not in result
+        written = replace_graph.call_args.kwargs["nodes"]
+        assert written[0]["idempotent"] is False
+        assert written[0]["connector_binding"]["operation"] == "dispatch"
+
+    async def test_mcp_graph_write_rejects_a_dispatch_node_on_the_query_verb(self) -> None:
+        """MAJOR 3 on the MCP path: the model's rules apply to MCP-authored
+        graphs (they used to be evaluated and then thrown away with the rest
+        of the validated result)."""
+        nodes = [
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "dispatch",
+                "position": {"x": 0, "y": 0},
+                "connector_binding": {
+                    "type": "github_actions_ci",
+                    "instance_id": str(uuid.uuid4()),
+                    "operation": "query",
+                },
+            }
+        ]
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=nodes, edges=[])
+        assert result["error"] == "validation_failed"
 
     async def test_error_envelopes(self) -> None:
         with patch.object(ms, "_update_pipeline_graph_impl", side_effect=MCPAuthorizationError("no")):

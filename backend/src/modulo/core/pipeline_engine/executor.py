@@ -46,6 +46,7 @@ from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
+from modulo.connectors.base import node_fires_dispatch_job
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import (
     SYSTEM_ACTOR,
@@ -879,6 +880,17 @@ def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
     treated as idempotent so old graphs keep their retry behaviour unchanged.
     Returns False when ANY node is non-idempotent — a retry re-executes the
     whole run, so a single side-effecting node makes re-running the run unsafe.
+
+    FAR-1141 (CRITICAL 1): the graph itself is also non-idempotent when it
+    contains a binding that FIRES an external job — ``operation="dispatch"`` +
+    ``dispatch_action="trigger_run"`` — regardless of the stored ``idempotent``
+    flag. The flag is a write-path side effect of the REST model, so an
+    MCP-authored or hand-written graph could carry ``idempotent=true`` (or omit
+    it) on a job-firing node and silently re-arm BOTH retry paths; the binding
+    is the durable, writer-independent truth, keyed on the same
+    ``connector_binding_operation`` the engine routes and the run classifier
+    reads. Read-only dispatch actions (``get_run_status`` / ``get_run_logs`` /
+    ``list_runs``) stay idempotent — re-running a read fires nothing.
     """
     if not isinstance(graph_json, dict):
         return True
@@ -886,6 +898,8 @@ def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
         if not isinstance(node, dict):
             continue
         if node.get("idempotent") is False:
+            return False
+        if node_fires_dispatch_job(node):
             return False
     return True
 

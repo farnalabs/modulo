@@ -35,6 +35,7 @@ _log = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_NODE_TYPE",
+    "DISPATCH_PROVENANCE_FIELDS",
     "NODE_TYPE_GATE",
     "SPLITTABLE_NODE_TYPES",
     "extend_node_type_map_from_edges",
@@ -122,6 +123,20 @@ _ARTIFACT_TELEMETRY_KEYS = (
     "autonomy",
     "condition",
     "condition_result",
+)
+
+#: FAR-1141: provenance fields stamped on every dispatch result by
+#: ``node_runner._stamp_dispatch_provenance``. Declared HERE (a leaf module
+#: node_runner already imports) so the stamper and the splitter's failed-artifact
+#: path cannot drift: the failure branch drops the envelope's ``output``, so it
+#: lifts these keys out of it explicitly — without a shared list the stamped
+#: provenance would silently vanish from failure inspection (the FAR-1141
+#: ``substrate_status`` hand-duplication was exactly that drift in slow motion).
+DISPATCH_PROVENANCE_FIELDS = (
+    "witnessed_via",
+    "execution_identity",
+    "declared_external_cost",
+    "substrate_status",
 )
 
 
@@ -388,7 +403,14 @@ def _split_connector(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     """Connector completed: return = ``artifacts[0].output`` (the result).
 
     connector failure (``artifacts[0].status == "failed"``): return = ``None``,
-    telemetry = ``{status: failed, error}``.
+    telemetry = ``{status, error}``.
+
+    FAR-1141: a FAILED dispatch envelope also carries the stamped ``output``
+    (``witnessed_via`` / ``execution_identity`` / ``declared_external_cost`` /
+    ``substrate_status``), and this branch drops ``output`` — so the provenance
+    fields are lifted out of it first. Otherwise a dispatch node that failed
+    after firing an external job would reach failure inspection reading like a
+    node Modulo executed itself.
     """
     a0 = _first_artifact(envelope)
     telemetry: dict[str, Any] = {}
@@ -397,6 +419,11 @@ def _split_connector(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         if "error" in a0:
             telemetry["error"] = a0["error"]
         _surface_artifact_fields(a0, telemetry)
+        failed_output = envelope.get("output")
+        if isinstance(failed_output, dict):
+            for key in DISPATCH_PROVENANCE_FIELDS:
+                if key in failed_output and key not in telemetry:
+                    telemetry[key] = failed_output[key]
         _add_lossless(envelope, telemetry, {"artifacts", "output"})
         return None, telemetry
     return_value = a0.get("output") if a0 is not None else envelope.get("output")
