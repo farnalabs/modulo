@@ -13,6 +13,10 @@ row-invisible resolver).
 A member of Team A CAN read the pipeline; an org admin bypasses the gate; and
 org-visible pipelines (``visibility='org'``, ``owner_team_id=None``) are NOT
 team-gated even for a non-member.
+
+A second section (FAR-1515) covers the WRITE direction: the REST graph-save
+team gate must refuse a team pipeline that pins an org-only connector, while
+leaving the org-pipeline rule alone.
 """
 
 import uuid
@@ -219,3 +223,87 @@ class TestCrossTeamPipelineVisibility:
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
         assert resp.status_code == 200
         assert resp.json()["visibility"] == "org"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1515: the SAVE-side team gate — a team pipeline must not pin an
+# org-only connector. The GET tests above cover the read direction; this
+# covers the write direction, through the exact helper the REST graph-save
+# endpoints call (``_enforce_connector_team_bindings``).
+# ---------------------------------------------------------------------------
+
+_TEAM_B = uuid.UUID("00000000-0000-0000-0000-000000000005")
+
+
+def _connector_row(*, visibility: str, owner_team_id: uuid.UUID | None) -> MagicMock:
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.name = "shared-ci"
+    row.visibility = visibility
+    row.owner_team_id = owner_team_id
+    return row
+
+
+def _binding_for(connector: MagicMock) -> list[dict[str, str]]:
+    return [{"node_id": "node-1", "connector_instance_id": str(connector.id)}]
+
+
+def _enforcement_session(connector: MagicMock) -> AsyncMock:
+    """Session double answering the one query the connector team gate issues."""
+    session = AsyncMock()
+    result = MagicMock()
+    scalars = MagicMock()
+    scalars.all.return_value = [connector]
+    result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+class TestOrgOnlyConnectorRejectedAtGraphSave:
+    """FAR-1515: save must mirror what the run actually enforces.
+
+    Every run of a team-owned pipeline is team-scoped, and the ConnectorHub
+    ACL fails closed on team-scoped access to an org-only connector — so a
+    save accepted here produced a graph whose runs could never execute.
+    """
+
+    async def test_team_pipeline_pinning_an_org_only_connector_is_409(self) -> None:
+        """FAILS without the new check: the rule returned False for org connectors."""
+        from fastapi import HTTPException
+
+        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+
+        connector = _connector_row(visibility="org", owner_team_id=None)
+        session = _enforcement_session(connector)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _enforce_connector_team_bindings(session, _ORG_ID, _TEAM_A, _binding_for(connector))
+
+        assert excinfo.value.status_code == 409
+        detail = str(excinfo.value.detail)
+        assert detail.startswith("connector_team_mismatch"), detail
+        assert "shared-ci" in detail
+        assert "is org-only" in detail
+        assert "flip the connector to `team`" in detail
+
+    async def test_org_pipeline_pinning_an_org_only_connector_still_saves(self) -> None:
+        """Regression guard: the ORG-pipeline rule must not change (FAR-1515)."""
+        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+
+        connector = _connector_row(visibility="org", owner_team_id=None)
+        session = _enforcement_session(connector)
+
+        await _enforce_connector_team_bindings(session, _ORG_ID, None, _binding_for(connector))
+
+        session.execute.assert_awaited_once()
+
+    async def test_team_pipeline_pinning_its_own_team_connector_still_saves(self) -> None:
+        """Regression guard: the existing valid binding must not start failing."""
+        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+
+        connector = _connector_row(visibility="team", owner_team_id=_TEAM_A)
+        session = _enforcement_session(connector)
+
+        await _enforce_connector_team_bindings(session, _ORG_ID, _TEAM_A, _binding_for(connector))
+
+        session.execute.assert_awaited_once()

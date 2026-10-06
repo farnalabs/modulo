@@ -1,12 +1,33 @@
-"""Cross-team resource binding enforcement (PRD §9.3).
+"""Cross-team resource binding enforcement (PRD §9.3, FAR-1515).
 
-A connector instance (or model backend) with ``visibility: team`` is only usable
-within pipelines owned by the same team. Binding a team-private connector to a
-pipeline owned by a different team is blocked at the pipeline-save command layer
-with the named error ``connector_team_mismatch``.
+Two rules are enforced at the pipeline-save command layer, each with its own
+named error:
 
-Org-wide resources (``visibility: org``) are usable by any pipeline in the
-organisation, so they never produce a mismatch.
+``connector_team_mismatch``
+    A connector instance with ``visibility: team`` is only usable within
+    pipelines owned by the same team. Binding one to a pipeline owned by a
+    different team (or to an org pipeline) is blocked.
+
+    The reverse direction is blocked too (FAR-1515): a TEAM pipeline
+    (``owner_team_id`` set) pinning an ORG-ONLY connector (``visibility:
+    org``). That asymmetry existed only at save time — every run of such a
+    graph is dead on arrival, because the executor sets
+    ``request_visibility="team"`` for a run with an owner team
+    (``pipeline_engine/executor.py``) and the ConnectorHub ACL rejects
+    team-scoped access to an org-only connector (FAR-516,
+    ``connectors/base.py``). Rejecting the save means an operator can no
+    longer persist a graph whose every run fails. Org pipelines (no owner
+    team) keep the previous behaviour: an org-wide connector is usable by any
+    pipeline in the organisation and never produces a mismatch.
+
+``model_backend_team_mismatch``
+    A model backend with ``visibility: team`` is only usable by a pipeline
+    owned by the same team. Deliberately NOT extended to the org-only case:
+    ModelBackendHub has no invocation-time visibility gate (the run resolves a
+    pin with ``hub.get(backend_id)`` and never consults ``visibility``), so a
+    save-time rejection would refuse a graph the run would happily execute —
+    an unenforceable rule. See the parity note on
+    :func:`model_backend_team_mismatch`.
 """
 
 from __future__ import annotations
@@ -29,12 +50,18 @@ MODEL_BACKEND_TEAM_MISMATCH = "model_backend_team_mismatch"
 
 @dataclass(frozen=True)
 class ConnectorTeamMismatch:
-    """A team-private connector bound to a pipeline owned by a different team."""
+    """A connector binding that the team-scope rule refuses.
+
+    ``connector_visibility`` is carried so the detail builder can distinguish
+    the two directions (a team-private connector reaching outside its team vs
+    an org-only connector pinned by a team pipeline) and name the right fix.
+    """
 
     connector_id: uuid.UUID
     connector_name: str
     connector_owner_team_id: uuid.UUID | None
     pipeline_owner_team_id: uuid.UUID | None
+    connector_visibility: str | None
     node_id: str | None = None
 
 
@@ -45,12 +72,19 @@ def connector_team_mismatch(
 ) -> bool:
     """Return True when a connector binding crosses team boundaries.
 
-    A team-private connector is only usable by a pipeline owned by the *same*
-    team. A pipeline without an owning team (``owner_team_id=None``) or owned by
-    a different team is a mismatch. Org-wide connectors never mismatch.
+    Team-private connector: only usable by a pipeline owned by the *same*
+    team. A pipeline without an owning team (``pipeline_owner_team_id=None``)
+    or owned by a different team is a mismatch.
+
+    Org-only connector: usable by an org pipeline, but NOT by a team pipeline
+    (FAR-1515). A run whose ``owner_team_id`` is set is team-scoped, and
+    ``ConnectorACL.check`` fails closed on team-scoped access to an
+    org-only connector — so the save must refuse a graph the run would reject.
     """
     if (connector_visibility or "org") != "team":
-        return False
+        # Org-only connector: the ONLY thing that can go wrong is that the
+        # pipeline is team-scoped (the invocation would be rejected).
+        return pipeline_owner_team_id is not None
     if connector_owner_team_id is None:
         return True
     return connector_owner_team_id != pipeline_owner_team_id
@@ -60,16 +94,24 @@ def connector_team_mismatch_detail(mismatches: list[ConnectorTeamMismatch]) -> s
     """Build the HTTP error detail for a set of mismatches.
 
     The message always starts with the machine-readable named error
-    ``connector_team_mismatch`` so clients can branch on it.
+    ``connector_team_mismatch`` so clients can branch on it, and always names
+    the connector plus the fix, so the operator can act on it directly.
     """
-    parts = [
-        (
-            f"connector '{m.connector_name}' (id={m.connector_id}) is team-private "
-            f"(owner team {m.connector_owner_team_id}) but pipeline is owned by team "
-            f"{m.pipeline_owner_team_id}"
-        )
-        for m in mismatches
-    ]
+    parts = []
+    for m in mismatches:
+        if (m.connector_visibility or "org") == "team":
+            parts.append(
+                f"connector '{m.connector_name}' (id={m.connector_id}) is team-private "
+                f"(owner team {m.connector_owner_team_id}) but pipeline is owned by team "
+                f"{m.pipeline_owner_team_id}"
+            )
+        else:
+            parts.append(
+                f"connector '{m.connector_name}' (id={m.connector_id}) is org-only "
+                f"(visibility=org) but pipeline is owned by team {m.pipeline_owner_team_id}: "
+                f"every run of this pipeline is team-scoped and would be rejected at the "
+                f"connector gate - flip the connector to `team`, or duplicate it"
+            )
     return f"{CONNECTOR_TEAM_MISMATCH}: {'; '.join(parts)}"
 
 
@@ -106,6 +148,18 @@ def model_backend_team_mismatch(
     PRD §9.3: a model backend with ``visibility: team`` is only usable by a
     pipeline owned by the *same* team, mirroring the connector rule. Org-wide
     model backends never mismatch.
+
+    PARITY NOTE (FAR-1515): unlike the connector rule, this is deliberately
+    NOT extended to reject an org-only backend on a team pipeline. The
+    connector rule is a save-time mirror of an INVOCATION gate — the executor
+    sets ``request_visibility="team"`` for a run with an owner team and
+    ``ConnectorACL.check`` fails closed on it. ModelBackendHub has no such
+    gate: ``_init_model_backend_hub`` loads every active backend in the org,
+    and ``node_runner`` resolves a pin with ``hub.get(backend_id)`` without
+    consulting ``visibility``. A save-time rejection here would refuse a graph
+    the run would happily execute. Closing the gap needs the invocation-side
+    gate first (thread ``request_visibility`` into ModelBackendHub), then this
+    predicate can mirror it.
     """
     if (model_backend_visibility or "org") != "team":
         return False
@@ -267,5 +321,6 @@ def _build_connector_mismatch(
         connector_name=instance.name,
         connector_owner_team_id=instance.owner_team_id,
         pipeline_owner_team_id=pipeline_owner_team_id,
+        connector_visibility=instance.visibility,
         node_id=node_id,
     )

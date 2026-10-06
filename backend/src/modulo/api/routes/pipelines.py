@@ -2051,11 +2051,13 @@ async def _enforce_connector_team_bindings(
     pipeline_owner_team_id: uuid.UUID | None,
     connector_bindings: list[dict[str, Any]],
 ) -> None:
-    """Block graph saves that bind a team-private connector to a different team's pipeline.
+    """Block graph saves whose connector binding crosses a team boundary.
 
-    PRD §9.3: a connector with ``visibility: team`` is only usable within pipelines
-    owned by the same team. Violations raise 409 ``connector_team_mismatch`` at the
-    pipeline-save command layer.
+    PRD §9.3 + FAR-1515: a team-private connector may only bind to a pipeline
+    owned by the same team, and a team pipeline may not pin an org-only
+    connector (every run of that graph would be team-scoped and rejected at
+    the connector gate). Violations raise 409 ``connector_team_mismatch`` at
+    the pipeline-save command layer.
     """
     mismatches = await find_connector_team_mismatches(
         session,
@@ -2285,9 +2287,13 @@ async def _resolve_graph_references(
     Whenever the graph resolves model-backend pins, they are checked against
     the pipeline's team: a team-private model backend pinned by a pipeline owned
     by a different team (or by no team at all) raises 409
-    ``model_backend_team_mismatch`` (PRD §9.3), mirroring the connector rule
-    which is also enforced unconditionally. The mismatch rule itself decides
-    whether an org-owned pipeline (``owner_team_id=None``) may pin a team-private
+    ``model_backend_team_mismatch`` (PRD §9.3), alongside the connector rule
+    enforced just before this. The two predicates are NOT identical: the
+    connector rule also refuses an org-only connector on a team pipeline
+    (FAR-1515), while this one stays team-private-only because ModelBackendHub
+    has no invocation-time visibility gate to mirror — see the parity note on
+    ``model_backend_team_mismatch``. The mismatch rule itself decides whether
+    an org-owned pipeline (``owner_team_id=None``) may pin a team-private
     backend.
     """
     agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
@@ -4412,7 +4418,8 @@ async def _save_locked_graph(
     ``_apply_graph_update``), in the same order, around the same write:
 
     1. ``_enforce_connector_team_bindings`` - 409 ``connector_team_mismatch``
-       for a team-private connector bound from outside its team,
+       for a team-private connector bound from outside its team, or an
+       org-only connector pinned by a team pipeline (FAR-1515),
     2. ``_resolve_graph_references`` - the FAR-418 capability-scope widening
        guard (422), unknown agent/schema ids (422) and the model-backend team
        check (409),

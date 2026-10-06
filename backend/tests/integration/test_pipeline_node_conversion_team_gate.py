@@ -44,6 +44,21 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.auth.jwt import create_access_token
+from tests.integration.test_pipeline_conversion_connector_team_gate import (
+    _auth_headers as _conv_auth_headers,
+)
+from tests.integration.test_pipeline_conversion_connector_team_gate import (
+    _cleanup as _cleanup_conv_scenario,
+)
+from tests.integration.test_pipeline_conversion_connector_team_gate import (
+    _convert_body as _conv_body,
+)
+from tests.integration.test_pipeline_conversion_connector_team_gate import (
+    _seed_org_connector,
+)
+from tests.integration.test_pipeline_conversion_connector_team_gate import (
+    _seed_scenario as _seed_conv_scenario,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -292,3 +307,60 @@ async def test_revert_member_reaches_the_handler(
         assert resp.json()["detail"] == "Node not found"
     finally:
         await _cleanup(db_engine, pipeline_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1515: the connector team gate on the same conversion path
+# ---------------------------------------------------------------------------
+
+
+async def test_convert_member_binds_an_org_only_connector_and_is_rejected_409(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """A team MEMBER (not an admin) hitting the FAR-1515 gate on convert-to-agent.
+
+    Every other case in the sibling conversion file drives an org admin. This
+    one puts a plain member of the PIPELINE's own team behind the request, so
+    the rejection is shown to be about the binding — not about the admin
+    bypass, and not about the membership gate, which the member passes first.
+
+    It also pins the parity half: the same request carries an ORG model
+    backend, and that must NOT be rejected (ModelBackendHub has no
+    invocation-time visibility gate to mirror), so the only named error in the
+    detail is ``connector_team_mismatch``.
+
+    Uses the sibling module's seeding machinery — those helpers build the team
+    pipeline + agent + backend + node this path needs, and re-implementing
+    them here would drift.
+    """
+    from modulo.db.crud.team_membership import add_team_member
+
+    member = await _seed_operator_account(db_engine, test_org, "conv-gate-member")
+    scenario = await _seed_conv_scenario(db_engine, test_org, test_user)
+
+    # The member joins Team A, which owns the pipeline - enough to clear
+    # ``require_team_membership_or_admin``.
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)})
+        await add_team_member(session, org_id=test_org, team_id=scenario.team_a, account_id=member, role="operator")
+
+    org_connector = await _seed_org_connector(db_engine, test_org, test_user)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{scenario.pipeline_id}/nodes/{scenario.node_id}/convert-to-agent",
+            json=_conv_body(scenario, connector_id=org_connector),
+            headers=_conv_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 409, resp.text
+        detail = str(resp.json()["detail"])
+        assert "connector_team_mismatch" in detail, resp.text
+        assert "is org-only" in detail, resp.text
+        assert "model_backend_team_mismatch" not in detail, resp.text
+    finally:
+        # Removes the teams, their memberships (including the one added above)
+        # and every other row this scenario created.
+        await _cleanup_conv_scenario(db_engine, test_org, scenario, org_connector)
