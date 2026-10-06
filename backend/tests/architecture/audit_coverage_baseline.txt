@@ -1,7 +1,7 @@
-# Audit-coverage baseline: mutating REST routes deliberately left WITHOUT an
-# audited(...) dependency (FAR-1472). Generated, never hand-edited —
+# Audit-coverage baseline: mutating REST routes / MCP tools deliberately left
+# WITHOUT an audited(...) dependency (FAR-1472). Generated, never hand-edited —
 # regenerate with:  uv run python scripts/audit_coverage.py --update
-# Delete a route's line as soon as it is annotated; the architecture test
+# Delete a line as soon as the route/tool is annotated; the architecture test
 # fails on a stale entry so this list can only shrink.
 admin.py:release_pipeline_snapshot_lock
 admin_email.py:admin_test_email_settings
@@ -29,6 +29,9 @@ evals.py:compare_evals
 library.py:analyse_import_bundle_endpoint
 library.py:export_pipeline_endpoint
 library.py:upload_zip_and_analyse_endpoint
+mcp_server.py:create_api_key
+mcp_server.py:revoke_api_key
+mcp_server.py:set_org_triggers_paused
 observability.py:test_otel_connection
 parameter_schemas.py:validate_parameter_values_endpoint
 pipelines.py:diff_snapshot_endpoint
