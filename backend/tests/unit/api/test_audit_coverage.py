@@ -22,6 +22,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core import audit_coverage
 from modulo.core.audit_coverage import audit_session, audited, audited_system, bind_audit_actor_source, bind_audit_org
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -504,3 +505,104 @@ def test_bind_audit_org_never_clobbers_a_published_org_with_an_empty_value() -> 
     bind_audit_org(request, None)
     bind_audit_org(request, "")
     assert request.state.audit_org_id == str(_ORG_ID)
+
+
+# ---------------------------------------------------------------------------
+# Provenance binding + resolution helpers (FAR-1516)
+# ---------------------------------------------------------------------------
+
+
+def _bare_request() -> Request:
+    """A minimal real ``Request`` whose ``state`` the helpers can publish onto."""
+    return Request({"type": "http", "method": "POST", "path": "/", "headers": [], "query_string": b""})
+
+
+def test_bind_audit_actor_source_rejects_a_blank_or_non_string_source() -> None:
+    """An empty/missing provenance basis is a programming error, not a silent no-op."""
+    request = _bare_request()
+    with pytest.raises(ValueError, match="actor_source"):
+        bind_audit_actor_source(request, "")
+    with pytest.raises(ValueError, match="actor_source"):
+        bind_audit_actor_source(request, "   ")
+    with pytest.raises(ValueError, match="actor_source"):
+        bind_audit_actor_source(request, None)  # type: ignore[arg-type]
+
+
+def test_resolve_audit_org_reads_only_a_honest_org(caplog: pytest.LogCaptureFixture) -> None:
+    """Every published spelling is resolved; anything else is refused, never coerced."""
+    request = _bare_request()
+    # Nothing published -> unattributed; never invent an org.
+    assert audit_coverage._resolve_audit_org(request) is None
+    # A raw uuid.UUID is accepted directly.
+    request.state.audit_org_id = _ORG_ID
+    assert audit_coverage._resolve_audit_org(request) == _ORG_ID
+    # A UUID string round-trips.
+    request.state.audit_org_id = str(_ORG_ID)
+    assert audit_coverage._resolve_audit_org(request) == _ORG_ID
+    # A non-string, non-UUID value is refused.
+    request.state.audit_org_id = 12345
+    assert audit_coverage._resolve_audit_org(request) is None
+    # A malformed UUID string is logged and refused.
+    request.state.audit_org_id = "not-a-uuid"
+    assert audit_coverage._resolve_audit_org(request) is None
+    assert any("not a UUID" in record.getMessage() for record in caplog.records)
+
+
+def test_resolve_actor_source_falls_back_on_a_blank_or_non_string_value() -> None:
+    """Only a non-empty string is a real promotion; everything else is the default."""
+    request = _bare_request()
+    assert audit_coverage._resolve_actor_source(request, "declared") == "declared"
+    request.state.audit_actor_source = "signature_verified"
+    assert audit_coverage._resolve_actor_source(request, "declared") == "signature_verified"
+    request.state.audit_actor_source = "   "
+    assert audit_coverage._resolve_actor_source(request, "declared") == "declared"
+    request.state.audit_actor_source = 123
+    assert audit_coverage._resolve_actor_source(request, "declared") == "declared"
+
+
+async def test_emit_system_propagates_a_cancelled_append() -> None:
+    """A cancellation is never swallowed by the audit failure policy."""
+    session = _make_mock_session()
+    with (
+        patch(
+            "modulo.core.audit_coverage._append_system_or_raise",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await audit_coverage._emit_system(
+            session=session,
+            org_id=_ORG_ID,
+            event_type="login_attempted",
+            resource_type="session",
+            payload={"outcome": "success"},
+            fail_closed=False,
+        )
+
+
+async def test_emit_system_fail_open_logs_and_swallows(caplog: pytest.LogCaptureFixture) -> None:
+    """Default policy: an append failure is logged under its stable key, not raised."""
+    session = _make_mock_session()
+    with patch(
+        "modulo.core.audit_coverage._append_system_or_raise",
+        new=AsyncMock(side_effect=RuntimeError("audit store is down")),
+    ):
+        await audit_coverage._emit_system(
+            session=session,
+            org_id=_ORG_ID,
+            event_type="login_attempted",
+            resource_type="session",
+            payload={"outcome": "success"},
+            fail_closed=False,
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert "audit_coverage.login_attempted.append_failed" in messages, messages
+
+
+async def test_audited_system_dependency_rethrows_cancellation_at_yield() -> None:
+    """A cancelled request re-raises at the yield — no system event after cancel."""
+    dep = audited_system("login_attempted", "session", actor_source="unauthenticated")
+    gen = dep(_bare_request(), _make_mock_session())
+    assert await gen.asend(None) is None
+    with pytest.raises(asyncio.CancelledError):
+        await gen.athrow(asyncio.CancelledError())

@@ -4,6 +4,8 @@ All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 Verifies that the background task is properly enqueued but no real webhook fires.
 """
 
+import hashlib
+import hmac
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -295,6 +297,56 @@ def test_receive_webhook_hmac_failure_returns_401(client: TestClient) -> None:
         app.dependency_overrides.pop(get_system_db_session, None)
 
     assert resp.status_code == 401
+
+
+def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClient) -> None:
+    """FAR-1516: a delivery that passes the route-level HMAC check records
+    ``signature_verified`` provenance instead of the default ``unauthenticated``."""
+    hmac_secret = "test-hmac-secret"
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": hmac_secret})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+
+    captured = AsyncMock()
+    ts = int(time.time())
+    body = b'{"event": "test"}'
+    signature = "sha256=" + hmac.new(hmac_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    try:
+        with (
+            patch(
+                "modulo.api.routes.webhooks.decode_stored_secret_scoped",
+                new=AsyncMock(return_value=hmac_secret),
+            ),
+            patch("modulo.core.audit_coverage.append_audit_event", new=captured),
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Modulo-Timestamp": str(ts),
+                    "X-Modulo-Webhook-Secret": signature,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 202, resp.text
+    assert captured.call_count == 1, f"expected exactly one audit event, got {captured.call_count}"
+    assert captured.call_args.kwargs["payload_json"]["actor_source"] == "signature_verified"
 
 
 def test_receive_webhook_paused_org_returns_202_paused(client: TestClient) -> None:
