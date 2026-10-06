@@ -104,6 +104,7 @@ from modulo.core.node_output_split import (
 from modulo.core.run_outputs_dualwrite import guard_dual_write
 from modulo.core.spend_ceiling import (
     ORG_CEILING_EXCEEDED,
+    SpendCeilingDecision,
     cents_from_usd,
     evaluate_spend_ceilings,
 )
@@ -943,6 +944,30 @@ _CANONICAL_TOKEN_FALLBACK: tuple[tuple[str, str], ...] = (
 )
 
 
+def _entry_unmeasured(entry: dict[str, Any]) -> bool:
+    """True when the server measured NOTHING for this node (FAR-1033).
+
+    A node is "server-measured" iff any of its three canonical counters holds a
+    non-zero number; only an unmeasured node's counters may be folded from the
+    agent-reported values.
+    """
+    return all(entry.get(key) in (None, 0) for key in ("input_tokens", "output_tokens", "total_tokens"))
+
+
+def _fold_reported_tokens_into_entry(entry: dict[str, Any]) -> None:
+    """Fold valid ``reported_*`` values into one unmeasured node entry, in place.
+
+    Each reported value is re-validated tri-state through
+    ``coerce_reported_token`` — absent / non-numeric / bool / negative /
+    above-ceiling values are NOT folded.
+    """
+    for dst, src in _CANONICAL_TOKEN_FALLBACK:
+        if src in entry:
+            coerced = coerce_reported_token(entry[src])
+            if coerced is not None:
+                entry[dst] = coerced
+
+
 def _fold_reported_token_fallback(
     enriched: dict[str, dict[str, Any]] | None,
 ) -> dict[str, dict[str, Any]]:
@@ -973,13 +998,9 @@ def _fold_reported_token_fallback(
     for entry in enriched.values():
         if not isinstance(entry, dict):
             continue
-        if any(entry.get(key) not in (None, 0) for key in ("input_tokens", "output_tokens", "total_tokens")):
+        if not _entry_unmeasured(entry):
             continue
-        for dst, src in _CANONICAL_TOKEN_FALLBACK:
-            if src in entry:
-                coerced = coerce_reported_token(entry[src])
-                if coerced is not None:
-                    entry[dst] = coerced
+        _fold_reported_tokens_into_entry(entry)
     return enriched
 
 
@@ -1344,6 +1365,116 @@ async def _reduced_escape(
         _log.exception("cost_ledger.reduced_escape_failed", extra={"run_id": str(ctx.run_id)})
 
 
+async def _ceiling_auto_pause_if_org_crossing(
+    session: AsyncSession,
+    *,
+    org_row: Organisation,
+    decision: SpendCeilingDecision,
+    run_id: uuid.UUID,
+) -> None:
+    """FAR-1183 — engage the org-wide trigger pause on an org-ceiling crossing.
+
+    The org's cost-controls "Auto-stop on budget exceeded" toggle: when ON, an
+    org-ceiling crossing auto-engages the org-wide trigger pause on the run
+    that trips it (per-run ceiling refusals are a single-run cap and never
+    pause the org). Fail-open: a pause failure must not fail the terminal
+    write.
+    """
+    if decision.reason != ORG_CEILING_EXCEEDED:
+        return
+    try:
+        await _auto_pause_org_triggers(
+            session,
+            org=org_row,
+            reason=AUTO_PAUSE_REASON_SPEND_CEILING,
+            spend_cents=decision.projected_org_cumulative_cents,
+            limit_cents=org_row.spend_ceiling_cents,
+            run_id=run_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("cost_ledger.org_auto_pause_failed", extra={"run_id": str(run_id)})
+
+
+async def _apply_spend_ceiling_gate(
+    session: AsyncSession,
+    locked: Run,
+    *,
+    org_id: uuid.UUID,
+    total: Decimal,
+    run_id: uuid.UUID,
+) -> bool:
+    """FAR-391: hard spend-ceiling gate (per-run + per-org).
+
+    Runs BEFORE the daily-ledger write so a ceiling breach refuses the ledger
+    (the run is never billed beyond its ceiling) AND terminalizes the run as
+    ``cost_ceiling_exceeded`` — a run that exceeds its per-run ceiling is
+    halted (never resumed to spawn further billable steps), and an org at its
+    lifetime budget stops spawning new runs. On the success path the org's
+    consumed total is incremented by this run's cost.
+
+    FAR-1025: opt out of the global soft-delete filter — a pending-deletion
+    org (deleted_at stamped at initiate, before confirm) is still
+    operationally live.  Skipping the ceiling check and accrual here means
+    runs bill past the org's ceiling and lifetime spend under-counts.
+
+    Returns True when the ledger write must be SKIPPED (the run was refused
+    at its ceiling); returns False to proceed with the ledger write.
+    """
+    from modulo.db.soft_delete import include_soft_deleted
+
+    org_row = (
+        await session.execute(
+            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+        )
+    ).scalar_one_or_none()
+    if org_row is None:
+        return False
+    # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
+    # gate value and the persisted org cumulative never diverge on sub-cent
+    # run costs (the accrual below also uses ``cents_from_usd``).
+    total_cents = cents_from_usd(total) or 0
+    decision = evaluate_spend_ceilings(
+        run_cost_so_far_cents=total_cents,
+        estimated_next_step_cents=0,
+        max_run_cost_cents=org_row.max_run_cost_cents,
+        org_cumulative_spend_cents=org_row.org_cumulative_spend_cents or 0,
+        spend_ceiling_cents=org_row.spend_ceiling_cents,
+    )
+    if decision.allowed:
+        # Success: accrue this run's cost into the org's lifetime consumed total.
+        org_row.org_cumulative_spend_cents = (org_row.org_cumulative_spend_cents or 0) + total_cents
+        await session.flush()
+        return False
+    # Preserve an explicit terminal CANCEL (B6 / user-requested halt) so
+    # the ceiling refuse does NOT overwrite it and feed the wrong status
+    # to journey advancement. The ledger is still refused (the run is not
+    # billed beyond its ceiling) — only the status is left untouched.
+    if locked.status == "cancelled":
+        locked.ledger_refused_at = datetime.now(UTC)
+        record_limit_refused("spend_ceiling")
+        await session.flush()
+        return True
+    locked.ledger_refused_at = datetime.now(UTC)
+    locked.status = "cost_ceiling_exceeded"
+    locked.error_code = decision.reason
+    locked.error_detail = decision.message
+    _log.info(
+        "cost_ledger.ceiling_exceeded",
+        extra={
+            "run_id": str(run_id),
+            "org_id": str(org_id),
+            "reason": decision.reason,
+            "total_cents": total_cents,
+        },
+    )
+    record_limit_refused("spend_ceiling")
+    await _ceiling_auto_pause_if_org_crossing(session, org_row=org_row, decision=decision, run_id=run_id)
+    await session.flush()
+    return True
+
+
 async def _ledger_block(
     session: AsyncSession,
     *,
@@ -1373,83 +1504,10 @@ async def _ledger_block(
         await _record_duplicate_terminal_event(session, run_id)
         return
 
-    # --- FAR-391: hard spend-ceiling gate (per-run + per-org) ---
-    # Runs BEFORE the daily-ledger write so a ceiling breach refuses the ledger
-    # (the run is never billed beyond its ceiling) AND terminalizes the run as
-    # ``cost_ceiling_exceeded`` — a run that exceeds its per-run ceiling is
-    # halted (never resumed to spawn further billable steps), and an org at its
-    # lifetime budget stops spawning new runs. On the success path the org's
-    # consumed total is incremented by this run's cost.
-    # FAR-1025: opt out of the global soft-delete filter — a pending-deletion
-    # org (deleted_at stamped at initiate, before confirm) is still
-    # operationally live.  Skipping the ceiling check and accrual here means
-    # runs bill past the org's ceiling and lifetime spend under-counts.
-    from modulo.db.soft_delete import include_soft_deleted
-
-    org_row = (
-        await session.execute(
-            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
-        )
-    ).scalar_one_or_none()
-    if org_row is not None:
-        # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
-        # gate value and the persisted org cumulative never diverge on sub-cent
-        # run costs (the accrual below also uses ``cents_from_usd``).
-        total_cents = cents_from_usd(total) or 0
-        decision = evaluate_spend_ceilings(
-            run_cost_so_far_cents=total_cents,
-            estimated_next_step_cents=0,
-            max_run_cost_cents=org_row.max_run_cost_cents,
-            org_cumulative_spend_cents=org_row.org_cumulative_spend_cents or 0,
-            spend_ceiling_cents=org_row.spend_ceiling_cents,
-        )
-        if not decision.allowed:
-            # Preserve an explicit terminal CANCEL (B6 / user-requested halt) so
-            # the ceiling refuse does NOT overwrite it and feed the wrong status
-            # to journey advancement. The ledger is still refused (the run is not
-            # billed beyond its ceiling) — only the status is left untouched.
-            if locked.status == "cancelled":
-                locked.ledger_refused_at = datetime.now(UTC)
-                record_limit_refused("spend_ceiling")
-                await session.flush()
-                return
-            locked.ledger_refused_at = datetime.now(UTC)
-            locked.status = "cost_ceiling_exceeded"
-            locked.error_code = decision.reason
-            locked.error_detail = decision.message
-            _log.info(
-                "cost_ledger.ceiling_exceeded",
-                extra={
-                    "run_id": str(run_id),
-                    "org_id": str(org_id),
-                    "reason": decision.reason,
-                    "total_cents": total_cents,
-                },
-            )
-            record_limit_refused("spend_ceiling")
-            # FAR-1183 — the org's cost-controls "Auto-stop on budget exceeded"
-            # toggle: when ON, an org-ceiling crossing auto-engages the
-            # org-wide trigger pause on the run that trips it (per-run ceiling
-            # refusals are a single-run cap and never pause the org).
-            if decision.reason == ORG_CEILING_EXCEEDED:
-                try:
-                    await _auto_pause_org_triggers(
-                        session,
-                        org=org_row,
-                        reason=AUTO_PAUSE_REASON_SPEND_CEILING,
-                        spend_cents=decision.projected_org_cumulative_cents,
-                        limit_cents=org_row.spend_ceiling_cents,
-                        run_id=run_id,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("cost_ledger.org_auto_pause_failed", extra={"run_id": str(run_id)})
-            await session.flush()
-            return
-        # Success: accrue this run's cost into the org's lifetime consumed total.
-        org_row.org_cumulative_spend_cents = (org_row.org_cumulative_spend_cents or 0) + total_cents
-        await session.flush()
+    # --- FAR-391: hard spend-ceiling gate (per-run + per-org), see
+    # ``_apply_spend_ceiling_gate`` — it runs BEFORE the daily-ledger write.
+    if await _apply_spend_ceiling_gate(session, locked, org_id=org_id, total=total, run_id=run_id):
+        return
 
     try:
         ok, reason = await _record_ledger_with_retry(
@@ -1801,6 +1859,46 @@ async def _record_journey_fact(
         )
 
 
+def _node_emission_refs(node_entry: Any) -> list[Any] | None:
+    """The top-level ``work_item_refs`` list of one node entry, else None.
+
+    Accepts only the node-keyed placement ``{node_id: {"output":
+    {"work_item_refs": [...]}}}``; anything not shaped exactly like that
+    (non-dict node entry, non-dict ``output``, non-list refs) yields None so
+    the caller skips the node.
+    """
+    if not isinstance(node_entry, dict):
+        return None
+    node_output = node_entry.get("output")
+    if not isinstance(node_output, dict):
+        return None
+    raw_refs = node_output.get("work_item_refs")
+    if not isinstance(raw_refs, list):
+        return None
+    return raw_refs
+
+
+def _canonical_emission(raw: Any) -> tuple[str, str] | None:
+    """Canonical ``(kind, ref)`` for one raw emission, else None if malformed.
+
+    Malformed emissions (non-dict, missing ``kind``/``ref``, values that fail
+    canonicalisation) yield None — the shared parser already counts them as
+    ``malformed``.
+    """
+    if not isinstance(raw, dict):
+        return None
+    raw_kind = raw.get("kind")
+    raw_ref = raw.get("ref")
+    if raw_kind is None or raw_ref is None:
+        return None
+    try:
+        kind = canonicalise_kind(raw_kind)
+        ref = canonicalise_ref(kind, raw_ref)
+    except ValueError:
+        return None
+    return kind, ref
+
+
 def _collect_node_emission_sources(
     merged_outputs: dict[str, Any],
 ) -> list[tuple[str, str, str]]:
@@ -1815,27 +1913,14 @@ def _collect_node_emission_sources(
     """
     attributed: list[tuple[str, str, str]] = []
     for node_id, node_entry in merged_outputs.items():
-        if not isinstance(node_entry, dict):
-            continue
-        node_output = node_entry.get("output")
-        if not isinstance(node_output, dict):
-            continue
-        raw_refs = node_output.get("work_item_refs")
-        if not isinstance(raw_refs, list):
+        raw_refs = _node_emission_refs(node_entry)
+        if raw_refs is None:
             continue
         for raw in raw_refs:
-            if not isinstance(raw, dict):
+            emission = _canonical_emission(raw)
+            if emission is None:
                 continue
-            raw_kind = raw.get("kind")
-            raw_ref = raw.get("ref")
-            if raw_kind is None or raw_ref is None:
-                continue
-            try:
-                kind = canonicalise_kind(raw_kind)
-                ref = canonicalise_ref(kind, raw_ref)
-            except ValueError:
-                continue
-            attributed.append((kind, ref, str(node_id)))
+            attributed.append((emission[0], emission[1], str(node_id)))
     return attributed
 
 

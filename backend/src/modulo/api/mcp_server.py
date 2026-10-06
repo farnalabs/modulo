@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ParamSpec, cast
+from typing import Any, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
 from fastapi import HTTPException as FastAPIHTTPException
@@ -189,10 +189,16 @@ from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
 
-if TYPE_CHECKING:
-    pass
+# NOTE: a `if TYPE_CHECKING:` block used to sit here as an empty placeholder;
+# it held no imports and was removed as a deliberate no-op (S108). Re-add it
+# together with the first type-only import it is meant to guard.
 
 _log = logging.getLogger(__name__)
+
+# S1192: hoisted duplicated literals (rate-limit bucket fallback + tool error
+# detail shared by the parameter-schema restore/restore-set paths).
+_CLIENT_USER_UNKNOWN = "user:unknown"
+_MSG_PARAM_SCHEMA_NOT_FOUND = "Parameter schema not found or not deleted"
 
 _CT_APPLICATION_JSON = "application/json"
 _MSG_TOKEN_REVOKED = "Token revoked or expired - re-authenticate"  # nosec B105 -- user-facing error message string, NOT a secret credential
@@ -635,13 +641,13 @@ def _trigger_pipeline_client_key() -> str:
             # FAR-620: a user-scoped key acts as its creator — rate it per
             # account, mirroring the OAuth/JWT identity bucket.
             uid = _ctx_user_id.get(None)
-            client = f"user:{uid}" if uid is not None else "user:unknown"
+            client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
         else:
             key_id = _ctx_key_id.get(None)
             client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
     else:
         uid = _ctx_user_id.get(None)
-        client = f"user:{uid}" if uid is not None else "user:unknown"
+        client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
     return f"trigger_pipeline:{org_s}:{auth_type}:{client}"
 
 
@@ -679,13 +685,13 @@ def _hitl_decision_client_key() -> str:
     if auth_type == "api_key":
         if _ctx_key_scope.get(None) == "user":
             uid = _ctx_user_id.get(None)
-            client = f"user:{uid}" if uid is not None else "user:unknown"
+            client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
         else:
             key_id = _ctx_key_id.get(None)
             client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
     else:
         uid = _ctx_user_id.get(None)
-        client = f"user:{uid}" if uid is not None else "user:unknown"
+        client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
     return f"hitl_decision:{org_s}:{auth_type}:{client}"
 
 
@@ -8521,12 +8527,12 @@ async def restore_parameter_schema(
         async with _session(org_id) as s:
             existing = await db_get_ps(s, sid)
             if existing is None or existing.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found or not deleted"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             schema = await db_restore_ps(s, sid)
 
         if schema is None:
-            return {"error": "not_found", "detail": "Parameter schema not found or not deleted"}
+            return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
         return {
             "data": {
@@ -8944,7 +8950,7 @@ async def restore_parameter_set(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found or not deleted"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             existing = await db_get_set(s, setid)
             if existing is None or existing.parameter_schema_id != sid or existing.organisation_id != org_id:
