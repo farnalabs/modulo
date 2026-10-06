@@ -5,10 +5,18 @@
 # names all four labels so the fix is one click. PRs touching none of those
 # paths pass with a ::notice::.
 #
-# Label state comes from the event payload (github.event.pull_request.labels),
-# not an API call: the labeled/unlabeled trigger types re-run this workflow
-# with the updated label set already in the payload, so no `gh` round-trip is
-# needed and `github.token` stays a read-only checkout credential.
+# Label state is read LIVE from the issue labels endpoint, with the event
+# payload (github.event.pull_request.labels) as a fallback. The changelog:*
+# label is applied by the PR-creation flow a few seconds AFTER the `opened` /
+# `agent-generated` events fire; a queued run can therefore execute after the
+# label exists while its event payload still pre-dates it. Using the payload
+# alone produced a false red on those early runs, leaving FAILED superseded
+# check-runs on the head SHA that the PR Reviewer and the merge queue count as
+# failures — permanently blocking an otherwise-green PR (observed 2026-10-05
+# on PR #1285: `changelog: none` applied at 07:57:56, but the `opened` run,
+# started at 07:58:10, still saw only `agent-generated` and failed). Reading
+# the live labels removes that race. The payload is only a fallback for when
+# the labels API call fails.
 
 name: "Check: Changelog classification"
 
@@ -18,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
 
 # NO workflow-level concurrency (deliberate; mirrors fast-lane-classify.yml).
 # Opening a PR fires `opened`, and the auto-applied `agent-generated` label
@@ -47,7 +56,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
 
@@ -67,13 +76,32 @@ jobs:
             exit 0
           fi
 
-          # Exactly one of the four labels (any label starting with
-          # "changelog:") satisfies the gate. Labels arrive as a JSON array
-          # (toJSON) so no separator character can split or merge a label name.
+          # Prefer the CURRENT label set over the event snapshot (see the
+          # header comment). A changelog label applied moments after the
+          # triggering event may not be live yet, so re-check with a short
+          # bounded grace window before declaring the gate violated.
+          #
+          # A successful labels API call is authoritative even when it returns
+          # an empty set: that is how the gate notices a REMOVED changelog
+          # label. The event payload is the fallback only while every API call
+          # fails, so distinguish success from failure by exit status rather
+          # than treating an empty response as an empty label set.
+          LABELS_JSON="$EVENT_LABELS_JSON"
           HAS_LABEL="false"
-          if jq -e 'any(.[]; startswith("changelog:"))' >/dev/null 2>&1 <<< "$PR_LABELS_JSON"; then
-            HAS_LABEL="true"
-          fi
+          for attempt in 1 2 3; do
+            if LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '[.[].name]' 2>/dev/null)"; then
+              LABELS_JSON="$LIVE_LABELS_JSON"
+            fi
+            # Exactly one of the four labels (any label starting with
+            # "changelog:") satisfies the gate. Labels arrive as a JSON array
+            # (toJSON / the labels endpoint) so no separator character can
+            # split or merge a label name.
+            if jq -e 'any(.[]; startswith("changelog:"))' >/dev/null 2>&1 <<< "$LABELS_JSON"; then
+              HAS_LABEL="true"
+              break
+            fi
+            [ "$attempt" = "3" ] || sleep 4
+          done
 
           if [ "$HAS_LABEL" = "true" ]; then
             echo "PR #${PR_NUMBER} changes user-facing paths and carries a changelog:* label."
