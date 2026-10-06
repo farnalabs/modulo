@@ -152,6 +152,25 @@ async def test_initialise_missing_credentials_is_typed_and_actionable(
 
 
 @pytest.mark.anyio
+async def test_initialise_missing_credentials_without_provider_omits_provider_detail(
+    hub: ModelBackendHub,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1526: a row with no provider still gets the typed, actionable error —
+    the provider clause is simply omitted when there is nothing to name."""
+    row = _row(provider="", credentials_ciphertext=b"")
+    await hub.initialise(
+        [row],
+        secrets_backend=_secrets(error=KeyError(str(row.id))),
+    )
+
+    assert row.id not in hub.backend_ids
+    assert "has no stored credentials" in caplog.text
+    assert "set its API key" in caplog.text
+    assert "(provider" not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_initialise_logs_repeated_failure_without_traceback_flood(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
