@@ -677,6 +677,20 @@ export default {
       "you_must_set_a_new_password_before_continuing": "Your password was reset by an administrator. Set a new password to continue to the app.",
       "password_changed_sign_in_again": "Password changed. Taking you to the sign-in screen…"
     },
+    "ModelBackendSetupView": {
+      "complete_setup_title": "Complete Model Backend Setup",
+      "complete_setup_subtitle": "A model backend was created via MCP. Paste the API key below to complete setup.",
+      "backend_active": "Backend \"{name}\" is now active.",
+      "view_model_backends": "View Model Backends",
+      "missing_token": "This setup link is missing its one-time token. Re-run the MCP command to generate a fresh setup URL.",
+      "api_key": "API Key",
+      "api_key_placeholder": "sk-...",
+      "saving": "Saving...",
+      "complete_setup_action": "Complete Setup",
+      "setup_failed_generic": "Setup failed. Please try again.",
+      "setup_failed_expired_token": "Setup link expired or already used. Re-run the MCP command to generate a new setup URL.",
+      "setup_failed_backend_not_found": "Model backend not found. It may have been deleted."
+    },
     "AdminModelBackendsView": {
       "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",
       "preview_badge": "Preview",

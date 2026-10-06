@@ -1,39 +1,40 @@
 <template>
   <div class="flex min-h-screen items-center justify-center bg-background p-4">
     <div class="w-full max-w-md rounded-lg border p-6 shadow-sm">
-      <PageHeader title="Complete Model Backend Setup" subtitle="A model backend was created via MCP. Paste the API key below to complete setup." />
+      <PageHeader :title="t('views.ModelBackendSetupView.complete_setup_title')" :subtitle="t('views.ModelBackendSetupView.complete_setup_subtitle')" />
 
       <div v-if="success" class="space-y-4">
         <div class="rounded-md bg-green-50 p-3 text-sm text-green-800">
-          Backend "{{ backendName }}" is now active.
+          {{ t('views.ModelBackendSetupView.backend_active', { name: backendName }) }}
         </div>
-        <Button severity="secondary" outlined class="w-full" @click="router.push('/admin/model-backends')">
-          View Model Backends
+        <Button severity="secondary" outlined class="w-full" data-testid="model-backend-setup-view-backends" @click="router.push('/admin/model-backends')">
+          {{ t('views.ModelBackendSetupView.view_model_backends') }}
         </Button>
       </div>
 
       <div v-else-if="!token" class="space-y-4">
         <div class="rounded-md bg-amber-50 p-3 text-sm text-amber-800">
-          This setup link is missing its one-time token. Re-run the MCP command to generate a fresh setup URL.
+          {{ t('views.ModelBackendSetupView.missing_token') }}
         </div>
       </div>
 
-      <form v-else @submit.prevent="() => submit()" class="space-y-4">
+      <form v-else data-testid="model-backend-setup-form" @submit.prevent="() => submit()" class="space-y-4">
         <div>
-          <span class="mb-1 block text-sm font-medium">API Key</span>
-          <InputText aria-label="Form control"
+          <label for="model-backend-setup-api-key" class="mb-1 block text-sm font-medium">{{ t('views.ModelBackendSetupView.api_key') }}</label>
+          <InputText id="model-backend-setup-api-key"
             v-model="apiKey"
             type="password"
-            placeholder="sk-..."
+            :placeholder="t('views.ModelBackendSetupView.api_key_placeholder')"
             :disabled="loading"
+            data-testid="model-backend-setup-api-key"
             class="w-full"
           />
         </div>
 
         <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
 
-        <Button type="submit" :disabled="loading || !apiKey.trim()" class="w-full">
-          {{ loading ? 'Saving...' : 'Complete Setup' }}
+        <Button type="submit" :disabled="loading || !apiKey.trim()" class="w-full" data-testid="model-backend-setup-submit">
+          {{ loading ? t('views.ModelBackendSetupView.saving') : t('views.ModelBackendSetupView.complete_setup_action') }}
         </Button>
       </form>
     </div>
@@ -42,6 +43,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import { useApi } from '../../composables/useApi'
@@ -49,6 +51,7 @@ import { useMutation } from '../../composables/useMutation'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const { post } = useApi()
@@ -82,11 +85,11 @@ const { loading, error, mutate: submit } = useMutation(async () => {
       ? String((e as Record<string, unknown>).detail ?? (e as Record<string, unknown>).message ?? '')
       : ''
     if (detail.includes('invalid_token')) {
-      throw new Error('Setup link expired or already used. Re-run the MCP command to generate a new setup URL.')
+      throw new Error(t('views.ModelBackendSetupView.setup_failed_expired_token'))
     } else if (detail.includes('backend_not_found')) {
-      throw new Error('Model backend not found. It may have been deleted.')
+      throw new Error(t('views.ModelBackendSetupView.setup_failed_backend_not_found'))
     }
-    throw new Error('Setup failed. Please try again.')
+    throw new Error(t('views.ModelBackendSetupView.setup_failed_generic'))
   }
 })
 
