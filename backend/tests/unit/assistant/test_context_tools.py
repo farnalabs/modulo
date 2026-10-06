@@ -135,13 +135,13 @@ class TestSearchDocumentationTool:
             result = await search_documentation("pipeline")
         assert result["error"] == "auth_expired"
 
-    async def test_returns_internal_error_on_failure(self) -> None:
+    async def test_returns_server_error_on_failure(self) -> None:
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._get_doc_index", side_effect=RuntimeError("boom")),
         ):
             result = await search_documentation("pipeline")
-        assert result == {"error": "internal_error", "detail": "Failed to search documentation"}
+        assert result == {"error": "server_error", "detail": "Failed to search documentation"}
 
 
 class TestGetIntegrationStatus:
