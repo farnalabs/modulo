@@ -10,6 +10,7 @@ from modulo.db.models.organisation import Organisation
 
 
 async def get_otel_config(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+    """Return the stored OTel config for an organisation, or {} when unset."""
     # FAR-1025: opt out of the global soft-delete filter — a pending-deletion
     # org is still operationally live; its OTel config must remain readable.
     from modulo.db.soft_delete import include_soft_deleted
@@ -26,6 +27,7 @@ async def update_otel_config(
     org_id: uuid.UUID,
     config: dict[str, Any],
 ) -> dict[str, Any]:
+    """Merge ``config`` into the stored OTel config and return the result."""
     # FAR-1025: opt out of the global soft-delete filter — a pending-deletion
     # org is still operationally live; its OTel config must remain writable.
     from modulo.db.soft_delete import include_soft_deleted
