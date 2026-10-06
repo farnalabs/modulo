@@ -36,6 +36,10 @@ describe('runnerTiers', () => {
     expect(runnerTierForProvider('e2b')).toBe('external_e2b')
   })
 
+  it('maps kubernetes to the External Runner (Kubernetes) tier', () => {
+    expect(runnerTierForProvider('kubernetes')).toBe('external_kubernetes')
+  })
+
   it('maps local to the Local tier', () => {
     expect(runnerTierForProvider('local')).toBe('local')
   })
@@ -49,11 +53,12 @@ describe('runnerTiers', () => {
   it('builds locale keys inside the components.RunnerTier namespace', () => {
     expect(runnerTierLabelKey('bundled_docker')).toBe('components.RunnerTier.bundled_docker')
     expect(runnerTierLabelKey('external_e2b')).toBe('components.RunnerTier.external_e2b')
+    expect(runnerTierLabelKey('external_kubernetes')).toBe('components.RunnerTier.external_kubernetes')
     expect(runnerTierLabelKey('local')).toBe('components.RunnerTier.local')
   })
 
   it('resolves every tier label key to a non-empty locale message', () => {
-    for (const tier of ['bundled_docker', 'external_e2b', 'local'] as const) {
+    for (const tier of ['bundled_docker', 'external_e2b', 'external_kubernetes', 'local'] as const) {
       const label = i18n.global.t(runnerTierLabelKey(tier))
       expect(label.length).toBeGreaterThan(0)
       expect(label).not.toContain('components.RunnerTier')
@@ -62,6 +67,7 @@ describe('runnerTiers', () => {
 
   it('resolves label keys straight from a provider type', () => {
     expect(runnerTierLabelKeyForProvider('e2b')).toBe('components.RunnerTier.external_e2b')
+    expect(runnerTierLabelKeyForProvider('kubernetes')).toBe('components.RunnerTier.external_kubernetes')
     expect(runnerTierLabelKeyForProvider('nope')).toBeNull()
   })
 
@@ -73,6 +79,11 @@ describe('runnerTiers', () => {
   it('renders the External Runner (E2B) badge for an e2b profile', () => {
     const wrapper = mount(BadgeHarness, { props: { providerType: 'e2b' }, global: { plugins: [i18n] } })
     expect(wrapper.text()).toBe('External Runner (E2B)')
+  })
+
+  it('renders the External Runner (Kubernetes) badge for a kubernetes profile', () => {
+    const wrapper = mount(BadgeHarness, { props: { providerType: 'kubernetes' }, global: { plugins: [i18n] } })
+    expect(wrapper.text()).toBe('External Runner (Kubernetes)')
   })
 
   it('renders the Local badge for a local profile', () => {

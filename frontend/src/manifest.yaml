@@ -4495,6 +4495,18 @@ elements:
       - testid: settings-mcp-create-key-role
         type: select
         dynamic_testid: false
+      - testid: api-key-grants-selector
+        type: element
+        dynamic_testid: false
+      - testid: api-key-grants-restrict
+        type: checkbox
+        dynamic_testid: false
+      - testid: api-key-grants-list
+        type: element
+        dynamic_testid: false
+      - testid: api-key-grants-empty-error
+        type: element
+        dynamic_testid: false
       - testid: settings-mcp-copy-key-value
         type: button
         dynamic_testid: false
@@ -4503,6 +4515,15 @@ elements:
         dynamic_testid: false
       - testid: settings-mcp-org-scope-note
         type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-loading
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-load-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-retry
+        type: button
         dynamic_testid: false
       - testid: settings-mcp-key-created-done
         type: button
@@ -5572,6 +5593,7 @@ features:
             - "[x] MCP library browse (2026-09-25): the `search_library` tool is the read-only library-browse surface, on the read-only allowlist (`resource.read_only` viewer floor) in the centralized scope gate and gated at the handler by the real `_check_agent_tool_scope` chokepoint — an authenticated caller at or above viewer browses, and a node-level `capability_scope.allowed_tools` that excludes the tool is denied `insufficient_scope` before any DB read; the four `mcp/library_browse.feature` scenarios execute in CI against the real handler + scope-gate seams (auth re-validation + list/session seams patched), closing the last legacy `/mcp/tools/call` `@awaiting-implementation` draft"
             - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI tokenised on ANY whitespace (so two URIs pasted on one line separate correctly and match the backend's space-joined storage round-trip) where every entry must be an absolute http:// or https:// URI (localhost / 127.0.0.1 stay valid for local development) with duplicates de-duplicated and invalid entries named in an inline error, plus at least one of the three valid scopes (trigger:run, hitl:review, library:browse); the confirm button is never validity-disabled, so a submit always reaches the guard and surfaces every touched-field error; success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, both values are wiped from component state when the dialog closes (the footer Done handler and the Dialog hide event), and a rejected clipboard write (insecure plain-HTTP context, no navigator.clipboard) renders a visible copy-failed message telling the user to select the value and copy manually instead of console-only; the section is gated to org role admin/operator with a restricted state driven by the list call's 403, a fetch rejection or a non-array list body renders the inline section error rather than the 'no clients registered yet' empty state, and the API keys card degrades the same way - a 403 from GET /api/v1/api-keys (the identical admin|operator gate) renders a restricted API-keys card instead of failing the whole page, while non-403 API key failures stay fatal (SettingsMcpView.spec.ts)"
             - "[x] The MCP API-keys card distinguishes a REVOKED key from an EXPIRED one by the observed facts instead of the derived is_active flag (FAR-1296/FAR-1299): the key serializer emits revoked_at (ISO-8601 when set, else null — the revocation FACT, not an inference from is_active) alongside lookup_prefix/role/scope/last_used_at/expires_at, revocation is a DELETE /api/v1/api-keys/{key_id} (the earlier PUT was silently dropped — FAR-1291), and the /settings/mcp table renders a per-key status badge (settings-mcp-key-status) computed as revoked (revoked_at set, checked first) / expired (revoked_at null and the expiry elapsed) / active (revoked_at null, expiry not elapsed), with the revoke button shown only for active keys (api/routes/api_keys.py + auth/api_key._serialize_key; SettingsMcpView.vue, SettingsMcpView.spec.ts, test_api_keys_endpoint.py)"
+            - "[x] API key grant-sets can be set at creation from REST and MCP (FAR-1477): POST /api/v1/api-keys and the MCP create_api_key tool both accept an optional grants list (omitted = legacy role bundle, [] = explicit deny-all, otherwise exactly those permissions) behind the per-org api_key_grants flag (OFF => 422, never a silent widen) and both run the same mint cap (unknown key 422, non-delegable 403, above the caller's live capability 403); the Settings > MCP create-key dialog shows a grant picker only when GET /api/v1/api-keys/grantable-permissions reports the flag ON, lists only backend-supplied delegable permissions (grouped by prefix, filtered to the caller's role level), defaults to off (role bundle), omits grants rather than sending [] and blocks Create while restriction is on with nothing ticked (ApiKeyGrantsSelector.vue, SettingsMcpView.vue, ApiKeyGrantsSelector.spec.ts, test_api_key_grants.py, test_api_key_mgmt_tools.py)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered
