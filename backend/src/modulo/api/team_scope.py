@@ -47,6 +47,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
+from modulo.db.models.trigger import Trigger
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,46 @@ async def resolve_trigger_run_team_scope(
     stmt = select(Pipeline.owner_team_id, Pipeline.visibility).where(Pipeline.id == obj_id)
     if hasattr(Pipeline, "deleted_at"):
         stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        return None
+    return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
+
+
+async def resolve_trigger_team_scope(
+    request: Request,
+    session: AsyncSession,
+) -> TeamScopedResource | None:
+    """Resolve team scope from a ``trigger_id`` path param via its owning pipeline.
+
+    FAR-1513: trigger rows carry no team columns of their own, so a trigger's
+    access derives from its parent pipeline (same derivation as ``runs``,
+    ADR 038). The INNER JOIN to ``pipelines`` gives RLS parity for free: when
+    the caller cannot see the pipeline (team-private, non-member), the SELECT
+    returns no row and the dependency raises 404 — the documented runs-gate
+    behaviour. Runs inside the dependency's ``set_rls_org`` transaction, so
+    cross-org rows are already filtered.
+
+    A soft-deleted PIPELINE denies (row filtered → 404); a soft-deleted
+    TRIGGER still resolves so ``POST /triggers/{id}/restore`` reaches the
+    gate (a team-private trigger must not become restorable by being deleted).
+    """
+    raw = request.path_params.get("trigger_id")
+    if raw is None:
+        return None
+    try:
+        trigger_id = uuid.UUID(str(raw))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid trigger_id path parameter",
+        ) from None
+    stmt = (
+        select(Pipeline.owner_team_id, Pipeline.visibility)
+        .join(Trigger, Trigger.pipeline_id == Pipeline.id)
+        .where(Trigger.id == trigger_id, Pipeline.deleted_at.is_(None))
+    )
     result = await session.execute(stmt)
     row = result.first()
     if row is None:

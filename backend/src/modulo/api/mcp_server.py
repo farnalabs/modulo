@@ -200,6 +200,7 @@ _MSG_ERROR_TOKEN_REVOKED = "error: Token revoked or expired - re-authenticate"  
 _MSG_DB_MIGRATION_REQUIRED = "Database migration required. Run `alembic upgrade head`."
 _MSG_DB_MIGRATION_REQUIRED_HEADS = "Database migration required. Run alembic upgrade heads."
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
+_MSG_USER_NOT_TEAM_MEMBER = "You are not a member of the team that owns this pipeline"
 _MSG_UUID_PARSE_FAILED = "UUID parse failed"
 _MSG_EVAL_DEF_CREATE_FAILED = "create_eval_definition failed"
 _MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
@@ -599,6 +600,48 @@ async def _run_owner_team_id(session: AsyncSession, run: Run) -> uuid.UUID | Non
     if run.owner_team_id is not None:
         return run.owner_team_id
     return await _pipeline_owner_team_id(session, run.pipeline_id)
+
+
+async def _user_team_private_denial(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    owner_team_id: uuid.UUID | None,
+) -> dict[str, Any] | None:
+    """FAR-1513: denial dict when a USER principal may not mutate triggers of a
+    team-private pipeline, else None.
+
+    MCP parity of the REST ``require_team_membership_or_admin`` gate: org-admins
+    bypass; org-visible (``visibility='org'``/NULL) and team-less pipelines
+    pass; a user principal must hold a membership row in the owning team.
+    Team-scoped API keys are bounded separately by ``_team_scoped_key_mismatch``
+    (the caller keeps that check) — the key owner's memberships are irrelevant.
+    Fail-closed: an unknown visibility value is treated as team-private, and an
+    unset user context denies (it cannot prove membership).
+    """
+    if owner_team_id is None:
+        return None
+    if _ctx_role_val() == "admin":
+        return None
+    if _ctx_team_id_val() is not None:
+        return None
+    account_id = _ctx_user_id.get(None)
+    if account_id is None:
+        return {"error": "team_boundary_violation", "detail": _MSG_USER_NOT_TEAM_MEMBER}
+    from modulo.api.team_scope import team_membership_exists
+
+    visibility = await _pipeline_visibility(session, pipeline_id)
+    if visibility in ("org", None):
+        return None
+    if await team_membership_exists(session, account_id=account_id, team_id=owner_team_id):
+        return None
+    return {"error": "team_boundary_violation", "detail": _MSG_USER_NOT_TEAM_MEMBER}
+
+
+async def _pipeline_visibility(session: AsyncSession, pipeline_id: uuid.UUID) -> str | None:
+    """Resolve a pipeline's visibility ('org' | 'team' | None); None also for a missing row."""
+    from modulo.db.crud.team_scope import pipeline_visibility
+
+    return await pipeline_visibility(session, pipeline_id)
 
 
 # PRD §7.18: MCP trigger_pipeline is limited to 60 calls/min per client. All
@@ -6076,6 +6119,11 @@ async def _create_trigger_impl(
         owner_team_id = await _pipeline_owner_team_id(s, pid)
         if _team_scoped_key_mismatch(owner_team_id):
             return _team_scope_error("pipeline", pipeline_id)
+        # FAR-1513: user principals must also hold membership in the owning
+        # team when the pipeline is team-private (REST create-trigger parity).
+        user_denial = await _user_team_private_denial(s, pid, owner_team_id)
+        if user_denial:
+            return user_denial
         next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
             s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
         )
@@ -6424,6 +6472,13 @@ async def update_trigger(
                 return _team_scope_error("pipeline", str(tid))
             if trigger is None:
                 return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
+            # FAR-1513: user principals must hold membership in the owning
+            # team when the pipeline is team-private (REST update parity).
+            user_denial = await _user_team_private_denial(
+                s, trigger.pipeline_id, await _pipeline_owner_team_id(s, trigger.pipeline_id)
+            )
+            if user_denial:
+                return user_denial
 
             cron_config_requested = cron_expression is not None or cron_timezone is not None
             if cron_config_requested and trigger.trigger_type != "cron":
@@ -6529,8 +6584,14 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
             ).scalar_one_or_none()
             if trigger is None:
                 return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
+            owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
+            if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", str(trigger.pipeline_id))
+            # FAR-1513: user principals must hold membership in the owning
+            # team when the pipeline is team-private (REST delete parity).
+            user_denial = await _user_team_private_denial(s, trigger.pipeline_id, owner_team_id)
+            if user_denial:
+                return user_denial
             deleted = await soft_delete_trigger(s, tid)
 
         if deleted is None:

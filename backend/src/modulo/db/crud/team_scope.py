@@ -34,3 +34,13 @@ async def pipeline_owner_team_id(session: AsyncSession, pipeline_id: uuid.UUID) 
     """Resolve a pipeline's ``owner_team_id`` (None for org-level pipelines)."""
     result = await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
     return result.scalar_one_or_none()
+
+
+async def pipeline_visibility(session: AsyncSession, pipeline_id: uuid.UUID) -> str | None:
+    """Resolve a pipeline's ``visibility`` (``'org'``, ``'team'``, or NULL).
+
+    None is ALSO returned when the row is absent — callers that must
+    distinguish "org-level" from "missing" resolve the row themselves.
+    """
+    result = await session.execute(select(Pipeline.visibility).where(Pipeline.id == pipeline_id))
+    return result.scalar_one_or_none()

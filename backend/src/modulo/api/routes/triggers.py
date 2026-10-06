@@ -35,11 +35,17 @@ from modulo.api.dependencies import (
     get_db_session,
     require_permission,
     require_permission_any_credential,
+    require_team_membership_or_admin,
+    require_team_membership_or_admin_any_credential,
 )
 from modulo.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
     mask_config_json,
     merge_masked_config_json,
+)
+from modulo.api.team_scope import (
+    resolve_pipeline_team_scope,
+    resolve_trigger_team_scope,
 )
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
@@ -591,6 +597,8 @@ async def update_cron_config(
     req: CronConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — cron config is a trigger mutation (FAR-946 class).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Update cron configuration for a trigger.
 
@@ -743,6 +751,8 @@ async def update_polling_config(
     req: PollingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — polling config is a trigger mutation (FAR-946 class).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Update polling configuration for a trigger.
 
@@ -845,6 +855,8 @@ async def update_ongoing_config(
     req: OngoingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — ongoing config is a trigger mutation (FAR-946 class).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Update the ongoing configuration for an ``ongoing`` trigger.
 
@@ -938,6 +950,9 @@ async def test_polling_condition(
     req: PollingTestRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — testing runs the connector against the trigger's
+    # pipeline context, a read of team-private pipeline configuration.
+    team_gate: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Test a polling trigger's query and condition expression without firing a run.
 
@@ -1030,6 +1045,9 @@ async def create_trigger(
     # any_credential: declarative apply (FAR-681) creates triggers with mk_
     # org API keys; roles are clamped to the key's live membership.
     principal: TenantPrincipal = require_permission_any_credential("trigger.create"),
+    # FAR-1513: the automation leg must not bypass the pipeline team gate —
+    # same resolver the JWT leg uses, any-credential principal variant.
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
@@ -1203,6 +1221,9 @@ async def update_trigger(
     # any_credential: declarative apply (FAR-681) updates triggers with mk_
     # org API keys; roles are clamped to the key's live membership.
     principal: TenantPrincipal = require_permission_any_credential(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: same automation-leg team gate as create (resolved via the
+    # trigger's owning pipeline).
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_trigger_team_scope),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
@@ -1260,6 +1281,8 @@ async def delete_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("trigger.delete"),
+    # FAR-1513: team gate — deletion must not bypass the pipeline team boundary.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> None:
     """Soft-delete a trigger."""
     try:
@@ -1306,6 +1329,9 @@ async def restore_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — restore resolves the soft-deleted trigger's
+    # pipeline (the resolver deliberately does not filter trigger.deleted_at).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Restore a soft-deleted trigger."""
     try:
@@ -1368,6 +1394,8 @@ async def toggle_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — toggling fires/stops a trigger on a team's pipeline.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Toggle a trigger's active state."""
     try:
@@ -1476,6 +1504,8 @@ async def test_trigger(
     req: TestTriggerRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — a test event creates a Run on the pipeline.
+    team_gate: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Fire a test event for a trigger.
 

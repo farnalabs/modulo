@@ -52,3 +52,40 @@ Feature: Team Pipeline Visibility
     When I update pipeline "shared-pipeline" visibility to "org"
     Then the response status is 200
     And the pipeline visibility is "org"
+
+  Scenario: Non-member cannot create a trigger on a team-private pipeline
+    Given a team "engineering" exists
+    And a pipeline "secret-pipeline" is owned by team "engineering" with visibility "team"
+    And user "bob" is not a member of team "engineering"
+    When user "bob" creates a trigger on pipeline "secret-pipeline"
+    Then the response status is 404
+
+  Scenario: Team member can create a trigger on a team-private pipeline
+    Given a team "engineering" exists
+    And a pipeline "secret-pipeline" is owned by team "engineering" with visibility "team"
+    And user "alice" is a member of team "engineering"
+    When user "alice" creates a trigger on pipeline "secret-pipeline"
+    Then the response status is 201
+
+  Scenario: Non-member cannot delete a trigger on a team-private pipeline
+    Given a team "engineering" exists
+    And a pipeline "secret-pipeline" is owned by team "engineering" with visibility "team"
+    And a trigger "nightly" exists on pipeline "secret-pipeline"
+    And user "bob" is not a member of team "engineering"
+    When user "bob" deletes the trigger "nightly"
+    Then the response status is 404
+
+  Scenario: Team member can delete a trigger on a team-private pipeline
+    Given a team "engineering" exists
+    And a pipeline "secret-pipeline" is owned by team "engineering" with visibility "team"
+    And a trigger "nightly" exists on pipeline "secret-pipeline"
+    And user "alice" is a member of team "engineering"
+    When user "alice" deletes the trigger "nightly"
+    Then the response status is 204
+
+  Scenario: Admin can create a trigger on a team-private pipeline
+    Given I am authenticated as an admin in org "acme"
+    And a team "engineering" exists
+    And a pipeline "secret-pipeline" is owned by team "engineering" with visibility "team"
+    When I create a trigger on pipeline "secret-pipeline"
+    Then the response status is 201

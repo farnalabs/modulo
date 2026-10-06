@@ -470,3 +470,309 @@ class TestTriggerRunTeamGateWiring:
         assert "team.membership_or_admin" in tagged, (
             "trigger_run is missing the team.membership_or_admin gate dependency"
         )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1513: trigger mutation team gate (REST parity)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_trigger(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    account_id: uuid.UUID,
+    name: str,
+) -> uuid.UUID:
+    """Raw-INSERT a manual trigger on the pipeline.
+
+    ``triggers.config_json`` is NOT NULL with a Python-side ``default=dict``
+    (no SQL server default), so the raw INSERT must supply it;
+    ``trigger_type`` and ``pipeline_id`` are NOT NULL without defaults. All
+    other NOT NULL columns carry SQL server defaults.
+    """
+    trigger_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO triggers (id, organisation_id, pipeline_id, name, "
+                "trigger_type, account_id, config_json) "
+                "VALUES (:id, :oid, :pid, :name, 'manual', :uid, '{}'::json)"
+            ),
+            {
+                "id": str(trigger_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "name": name,
+                "uid": str(account_id),
+            },
+        )
+    return trigger_id
+
+
+@pytest_asyncio.fixture(scope="module")
+async def trigger_member_user(db_engine: AsyncEngine, org: uuid.UUID) -> uuid.UUID:
+    """Operator org member IN the owning team (satisfies the trigger.* floors)."""
+    return await _seed_user(db_engine, org, "trigger-member@teamgate.test", role="operator")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def trigger_non_member_user(db_engine: AsyncEngine, org: uuid.UUID) -> uuid.UUID:
+    """Operator org member NOT in the owning team (satisfies the trigger.* floors)."""
+    return await _seed_user(db_engine, org, "trigger-outsider@teamgate.test", role="operator")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def _add_trigger_member_to_team(
+    db_engine: AsyncEngine,
+    org: uuid.UUID,
+    team: uuid.UUID,
+    trigger_member_user: uuid.UUID,
+) -> None:
+    await _seed_team_membership(db_engine, org, team, trigger_member_user)
+
+
+@pytest_asyncio.fixture(scope="module")
+async def team_private_trigger(
+    db_engine: AsyncEngine,
+    org: uuid.UUID,
+    admin_user: uuid.UUID,
+    team_private_pipeline: uuid.UUID,
+) -> uuid.UUID:
+    return await _seed_trigger(db_engine, org, team_private_pipeline, admin_user, "ci-trigger-team")
+
+
+class TestTriggerTeamGate:
+    """Denial-path integration coverage for the trigger mutation team gate (FAR-1513).
+
+    These tests exercise the REAL dependency chain:
+      HTTP request -> trigger route -> require_permission[_any_credential]
+      -> require_team_membership_or_admin[_any_credential]
+         (with resolve_trigger_team_scope) -> real DB membership check.
+
+    Under Postgres RLS a non-member never sees a team-private pipeline row,
+    so the end-to-end denial is a 404 raised by ``resolve_trigger_team_scope``
+    (the trigger INNER-JOINs its pipeline) before the membership check. The
+    membership gate's own 403 branch is covered by the MCP unit tests
+    (``test_team_scope_enforcement.py``) and asserted at the wiring level
+    below — mirroring the established pattern for ``trigger_run`` (FAR-946).
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_member_denied_creating_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_non_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        token = _token(org, trigger_non_member_user, "operator")
+        resp = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.asyncio
+    async def test_non_member_denial_body_no_leak(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_non_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        """The denial body must NOT leak pipeline/trigger/team details."""
+        token = _token(org, trigger_non_member_user, "operator")
+        resp = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404
+        detail = resp.json().get("detail", "")
+        assert "ci-pipeline-team" not in detail.lower()
+        assert "ci-trigger-team" not in detail.lower()
+        assert "ci-team" not in detail.lower()
+        assert "team" not in detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_non_member_denied_updating_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_non_member_user: uuid.UUID,
+        team_private_trigger: uuid.UUID,
+    ) -> None:
+        token = _token(org, trigger_non_member_user, "operator")
+        resp = await team_gate_client.put(
+            f"/api/v1/triggers/{team_private_trigger}",
+            json={"active": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.asyncio
+    async def test_non_member_denied_deleting_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_non_member_user: uuid.UUID,
+        team_private_trigger: uuid.UUID,
+    ) -> None:
+        token = _token(org, trigger_non_member_user, "operator")
+        resp = await team_gate_client.delete(
+            f"/api/v1/triggers/{team_private_trigger}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.usefixtures("_add_trigger_member_to_team")
+    @pytest.mark.asyncio
+    async def test_member_can_create_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        token = _token(org, trigger_member_user, "operator")
+        resp = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.usefixtures("_add_trigger_member_to_team")
+    @pytest.mark.asyncio
+    async def test_member_can_update_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        token = _token(org, trigger_member_user, "operator")
+        created = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
+        trigger_id = created.json()["id"]
+
+        resp = await team_gate_client.put(
+            f"/api/v1/triggers/{trigger_id}",
+            json={"active": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.usefixtures("_add_trigger_member_to_team")
+    @pytest.mark.asyncio
+    async def test_member_can_delete_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        token = _token(org, trigger_member_user, "operator")
+        created = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
+        trigger_id = created.json()["id"]
+
+        resp = await team_gate_client.delete(
+            f"/api/v1/triggers/{trigger_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 204, f"Expected 204, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.asyncio
+    async def test_admin_bypasses_team_gate_on_trigger_create(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        admin_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        token = _token(org, admin_user, "admin")
+        resp = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.asyncio
+    async def test_org_visible_pipeline_allows_non_member_trigger_create(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_non_member_user: uuid.UUID,
+        org_visible_pipeline: uuid.UUID,
+    ) -> None:
+        token = _token(org, trigger_non_member_user, "operator")
+        resp = await team_gate_client.post(
+            f"/api/v1/pipelines/{org_visible_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+
+
+class TestTriggerTeamGateWiring:
+    """Wiring-level proof that all ten trigger mutations declare the team gate.
+
+    Mirrors ``TestTriggerRunTeamGateWiring``: under Postgres RLS the 403
+    branch is unreachable end-to-end (``resolve_trigger_team_scope``'s SELECT
+    is RLS-filtered, so non-members 404 first), so the gate's presence is
+    asserted by introspecting each route signature for the
+    ``team.membership_or_admin`` dependency tag. Removing a
+    ``require_team_membership_or_admin...(...)`` line makes the matching test
+    fail. Read routes stay on their org-level permission floor.
+    """
+
+    _MUTATION_ROUTES = (
+        "create_trigger",
+        "update_trigger",
+        "update_cron_config",
+        "update_polling_config",
+        "update_ongoing_config",
+        "test_polling_condition",
+        "delete_trigger",
+        "restore_trigger",
+        "toggle_trigger",
+        "test_trigger",
+    )
+
+    _READ_ROUTES = ("list_triggers", "list_pipeline_triggers", "preview_cron_schedule")
+
+    @pytest.mark.parametrize("route_name", _MUTATION_ROUTES)
+    def test_team_gate_dependency_declared(self, route_name: str) -> None:
+        from modulo.api.routes import triggers as triggers_routes
+
+        route_fn = getattr(triggers_routes, route_name)
+        tagged = [
+            getattr(param.default, "permission", None) for param in inspect.signature(route_fn).parameters.values()
+        ]
+        assert "team.membership_or_admin" in tagged, (
+            f"{route_name} is missing the team.membership_or_admin gate dependency"
+        )
+
+    @pytest.mark.parametrize("route_name", _READ_ROUTES)
+    def test_read_routes_not_team_gated(self, route_name: str) -> None:
+        from modulo.api.routes import triggers as triggers_routes
+
+        route_fn = getattr(triggers_routes, route_name)
+        tagged = [
+            getattr(param.default, "permission", None) for param in inspect.signature(route_fn).parameters.values()
+        ]
+        assert "team.membership_or_admin" not in tagged, (
+            f"{route_name} is a read route and must not carry the mutation gate"
+        )

@@ -397,3 +397,75 @@ class TestTriggerRunTeamScopeResolver:
 
         resource = await resolve_trigger_run_team_scope(request, mock_session)
         assert resource is None
+
+
+class TestResolveTriggerTeamScope:
+    """Direct unit tests for the trigger resolver (FAR-1513).
+
+    ``resolve_trigger_team_scope`` INNER-JOINs triggers to pipelines, so a
+    trigger whose pipeline row is missing (or soft-deleted) resolves to None
+    and the gate dependency raises 404 — the same RLS-parity behaviour the
+    integration suite asserts end-to-end for ``resolve_trigger_run_team_scope``.
+    """
+
+    @staticmethod
+    def _request(trigger_id: str | None) -> MagicMock:
+        request = MagicMock()
+        request.path_params = {} if trigger_id is None else {"trigger_id": trigger_id}
+        return request
+
+    @staticmethod
+    def _session(row: tuple[uuid.UUID, str] | None) -> AsyncMock:
+        session = AsyncMock(spec=AsyncSession)
+        result = MagicMock()
+        result.first.return_value = row
+        session.execute = AsyncMock(return_value=result)
+        return session
+
+    @pytest.mark.asyncio
+    async def test_team_private_trigger_resolves_owner_and_visibility(self) -> None:
+        from modulo.api.team_scope import resolve_trigger_team_scope
+
+        row = (_TEAM_ID, "team")
+        resource = await resolve_trigger_team_scope(self._request(str(uuid.uuid4())), self._session(row))
+        assert resource is not None
+        assert resource.owner_team_id == _TEAM_ID
+        assert resource.visibility == "team"
+
+    @pytest.mark.asyncio
+    async def test_org_visible_trigger_resolves_without_team(self) -> None:
+        from modulo.api.team_scope import resolve_trigger_team_scope
+
+        row = (None, "org")
+        resource = await resolve_trigger_team_scope(self._request(str(uuid.uuid4())), self._session(row))
+        assert resource is not None
+        assert resource.owner_team_id is None
+        assert resource.visibility == "org"
+
+    @pytest.mark.asyncio
+    async def test_trigger_with_missing_pipeline_resolves_none(self) -> None:
+        """A trigger whose pipeline row is absent resolves to None (dependency 404s)."""
+        from modulo.api.team_scope import resolve_trigger_team_scope
+
+        resource = await resolve_trigger_team_scope(self._request(str(uuid.uuid4())), self._session(None))
+        assert resource is None
+
+    @pytest.mark.asyncio
+    async def test_missing_path_param_resolves_none(self) -> None:
+        from modulo.api.team_scope import resolve_trigger_team_scope
+
+        resource = await resolve_trigger_team_scope(self._request(None), self._session(None))
+        assert resource is None
+
+    @pytest.mark.asyncio
+    async def test_non_uuid_path_param_is_rejected_400(self) -> None:
+        """A malformed trigger_id fails closed with 400 instead of skipping the gate."""
+        from fastapi import HTTPException
+
+        from modulo.api.team_scope import resolve_trigger_team_scope
+
+        session = self._session(None)
+        with pytest.raises(HTTPException) as excinfo:
+            await resolve_trigger_team_scope(self._request("not-a-uuid"), session)
+        assert excinfo.value.status_code == 400
+        session.execute.assert_not_awaited()

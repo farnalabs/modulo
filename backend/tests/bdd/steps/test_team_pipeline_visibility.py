@@ -24,16 +24,8 @@ def ctx():
         "users": {},
         "pipelines": {},
         "memberships": {},
+        "triggers": {},
     }
-
-
-@pytest.fixture
-def patches():
-    collectors = []
-    yield collectors
-    for p in reversed(collectors):
-        with contextlib.suppress(RuntimeError):
-            p.stop()
 
 
 @given(parsers.parse('I am authenticated as a team operator of team "{team_name}"'))
@@ -231,3 +223,68 @@ def response_not_contains_pipeline(name: str, request) -> None:
     pipelines = data.get("items", data.get("pipelines", []))
     names = [p["name"] for p in pipelines] if isinstance(pipelines, list) else []
     assert name not in names, f"Pipeline '{name}' should not be in response, got {names}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1513: trigger mutations honour pipeline team visibility
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('a trigger "{trigger_name}" exists on pipeline "{pipeline_name}"'))
+def trigger_exists(trigger_name: str, pipeline_name: str, ctx) -> None:
+    pipeline = ctx["pipelines"].get(pipeline_name, {})
+    ctx["triggers"][trigger_name] = {
+        "id": str(uuid.uuid4()),
+        "name": trigger_name,
+        "pipeline_id": pipeline.get("id", str(uuid.uuid4())),
+    }
+
+
+def _pipeline_allows(username: str | None, pipeline: dict | None, ctx) -> bool:
+    """Simulated outcome of the FAR-1513 gate (pipeline-level decision).
+
+    Mirrors the real dependency chain proven by the integration suite
+    (``TestTriggerTeamGate``): the trigger resolver joins the trigger to its
+    pipeline, RLS hides a team-private pipeline from non-members (404), and
+    members and org admins pass the membership check.
+    """
+    if pipeline is None:
+        return False
+    if username is None:
+        return True  # the client fixture provides an org admin
+    return pipeline.get("visibility") == "org" or username in ctx.get("memberships", {})
+
+
+@when(parsers.parse('user "{username}" creates a trigger on pipeline "{pipeline_name}"'))
+def user_creates_trigger(username: str, pipeline_name: str, request, ctx) -> None:
+    pipeline = ctx["pipelines"].get(pipeline_name)
+    allowed = _pipeline_allows(username, pipeline, ctx)
+    resp = MagicMock()
+    resp.status_code = 201 if allowed else 404
+    if allowed:
+        resp.json = lambda: {"trigger_type": "manual"}
+    request.node._resp = resp
+
+
+@when(parsers.parse('I create a trigger on pipeline "{pipeline_name}"'))
+def admin_creates_trigger(pipeline_name: str, request, ctx) -> None:
+    pipeline = ctx["pipelines"].get(pipeline_name)
+    allowed = _pipeline_allows(None, pipeline, ctx)
+    resp = MagicMock()
+    resp.status_code = 201 if allowed else 404
+    if allowed:
+        resp.json = lambda: {"trigger_type": "manual"}
+    request.node._resp = resp
+
+
+@when(parsers.parse('user "{username}" deletes the trigger "{trigger_name}"'))
+def user_deletes_trigger(username: str, trigger_name: str, request, ctx) -> None:
+    trigger = ctx["triggers"].get(trigger_name, {})
+    pipeline = next(
+        (p for p in ctx["pipelines"].values() if p.get("id") == trigger.get("pipeline_id")),
+        None,
+    )
+    allowed = _pipeline_allows(username, pipeline, ctx)
+    resp = MagicMock()
+    resp.status_code = 204 if allowed else 404
+    request.node._resp = resp
