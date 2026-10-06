@@ -62,6 +62,23 @@ run-name: "K8s conformance - ${{ github.event_name == 'schedule' && format('cron
 on:
   pull_request:
     branches: [main]
+    # FAR-1527: trigger-level filter so the kind leg's runner does not even
+    # START on PRs that cannot touch the conformance surface. The list mirrors
+    # the step-level `Detect changed paths` PATHS below exactly (a path in one
+    # but not the other either wastes a runner or silently never runs). Safe
+    # because branch protection has NO required status checks - verified at
+    # implementation time: `gh api repos/farnalabs/modulo/branches/main/
+    # protection --jq '.required_status_checks'` returns null/absent (a
+    # path-filtered REQUIRED check would hang unrelated PRs forever).
+    # push-to-main and workflow_dispatch are deliberately NOT filtered.
+    paths:
+      - "backend/src/modulo/core/runtime_provider/**"
+      - "backend/src/modulo/core/bundled_runner/**"
+      - "backend/src/modulo/core/pipeline_engine/**"
+      - "backend/tests/conformance/**"
+      - "backend/pyproject.toml"
+      - "backend/uv.lock"
+      - ".github/workflows/k8s-conformance.yml"
   push:
     branches: [main]
   schedule:
