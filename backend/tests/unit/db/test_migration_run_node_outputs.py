@@ -79,7 +79,7 @@ def test_terminal_literal_equals_sorted_app_constant() -> None:
     module = _load_migration()
     migration_literal = module._TERMINAL_RUN_STATUSES
     # HISTORICAL literal: ``rejected`` (FAR-1487) joined TERMINAL_STATUSES after
-    # this backfill shipped and no pre-0281 row can carry it.
+    # this backfill shipped and no pre-0283 row can carry it.
     assert migration_literal == tuple(sorted(TERMINAL_STATUSES - {"rejected"}))
 
 

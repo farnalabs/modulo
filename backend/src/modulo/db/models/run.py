@@ -268,7 +268,7 @@ class Run(OrgScoped):
         # ordered scan stopping at LIMIT 200. Migration 0278; parity with the
         # sweep predicate is guarded by
         # tests/unit/db/test_migration_0278_runs_workspace_drift_sweep_index.py.
-        # FAR-1487 (migration 0281) re-created it with ``rejected`` in the IN
+        # FAR-1487 (migration 0283) re-created it with ``rejected`` in the IN
         # list so the widened TERMINAL_STATUSES sweep still matches the predicate.
         Index(
             "ix_runs_workspace_drift_sweep",
