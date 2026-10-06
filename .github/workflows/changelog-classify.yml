@@ -81,6 +81,9 @@ jobs:
           # Prefer the CURRENT label set over the event snapshot (see the
           # header comment). A changelog label applied moments after the
           # triggering event may not be live yet, so re-check with a short
+          # Prefer the CURRENT label set over the event snapshot (see the
+          # header comment). A changelog label applied moments after the
+          # triggering event may not be live yet, so re-check with a short
           # bounded grace window before declaring the gate violated.
           #
           # A successful labels API call is authoritative even when it returns
