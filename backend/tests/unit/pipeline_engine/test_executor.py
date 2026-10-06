@@ -1296,6 +1296,35 @@ async def test_execute_downgraded_run_publishes_final_status_not_complete():
     assert order.index("finalize_cost") < order.index("publish:run_completed")
 
 
+def test_publish_run_completed_reraises_cancelled_error():
+    """FAR-1534: cancellation during the best-effort publish must propagate so a
+    torn-down run is not reported as a silent success."""
+    registry = _mock_registry()
+    registry.get_or_create.return_value.publish.side_effect = asyncio.CancelledError()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        PipelineExecutor._publish_run_completed(uuid.uuid4(), "complete")
+
+
+def test_publish_run_completed_logs_and_swallows_publish_failure():
+    """FAR-1534: a broker that fails to publish must not abort finalization - the
+    failure is logged best-effort, never surfaced as a run failure."""
+    run_id = uuid.uuid4()
+    registry = _mock_registry()
+    registry.get_or_create.return_value.publish.side_effect = RuntimeError("broker down")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor._log") as log_mock,
+    ):
+        PipelineExecutor._publish_run_completed(run_id, "failed")
+
+    log_mock.exception.assert_called_once_with("pipeline.run_completed_publish_failed", extra={"run_id": str(run_id)})
+
+
 async def test_execute_publishes_run_stalled_when_node_output_carries_stall_reason():
     """A sandbox-agent node output carrying stall_reason publishes run_stalled
     so the run.stalled notification advertised by FAR-98 is actually reachable."""
