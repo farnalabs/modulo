@@ -99,12 +99,49 @@ firing after the response has been sent).
 When the *handler* itself fails, the attempt is still recorded (outcome
 ``"error"``) but the append is always best-effort: an audit failure must never
 replace the error the caller is about to see.
+
+Actor-less routes: ``audited_system()``
+---------------------------------------
+``audited()`` needs a request principal, which makes it unusable on the routes
+whose identity is established INSIDE the handler or which never have a tenant
+at all — sign-in/out and token refresh, the SAML ACS POST, the public error
+ingest, and inbound webhooks. Those are exactly the security events worth
+recording, so they use ``audited_system()`` instead::
+
+    dependencies=[
+        Depends(audited_system("login_attempted", "session", actor_source="pre_auth", fail_closed=True))
+    ]
+
+Same isolated-append path, with two differences that keep provenance honest:
+
+* **no actor is ever fabricated.** The event is written with
+  ``actor_user_id=NULL`` plus the ``payload["actor"] = SYSTEM_ACTOR`` marker
+  and a ``payload["actor_source"]`` string (``pre_auth``,
+  ``signature_verified``, ``unauthenticated``, ...) saying HOW the request was
+  admitted — never WHO, because there is no who.
+* **the organisation is published by the route, not resolved here.** An audit
+  event is org-scoped (``audit_events.organisation_id`` is NOT NULL), so the
+  handler calls ``bind_audit_org(request, org_id)`` at the point the tenant
+  becomes known — and, for ingress that admits no tenant yet, with the
+  unattributed sentinel org
+  (``modulo.db.models.organisation.SYSTEM_ORG_ID``) so the attempt is still
+  recorded; rebind the real org the moment it resolves. With no org published
+  there is nowhere honest to record the event, so it is logged
+  (``audit_coverage.<event_type>.no_org_context``) and skipped — the wrapper
+  never invents a tenant to write into.
+
+``bind_audit_actor_source()`` lets a route STRENGTHEN its declared
+``actor_source`` once a stronger basis is established (a verified signature,
+an authenticated principal), so the recorded provenance is always the
+strongest TRUE statement about admission: a route passes its pre-admission
+value (e.g. ``"unauthenticated"``) and promotes it after the check passes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any, Literal
 
@@ -113,11 +150,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
+from modulo.core.audit_logger.labels import SYSTEM_ACTOR
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
 
-__all__ = ["audit_session", "audited"]
+__all__ = [
+    "SYSTEM_ACTOR",
+    "audit_session",
+    "audited",
+    "audited_system",
+    "bind_audit_actor_source",
+    "bind_audit_org",
+]
 
 #: How the request finished, as recorded in the coarse default payload:
 #: ``"success"`` when the handler returned, ``"error"`` when it raised.
@@ -321,6 +366,240 @@ def audited(
                 event_type=event_type,
                 resource_type=resource_type,
                 payload=_coarse_payload(request, "success"),
+                fail_closed=fail_closed,
+            )
+
+    return dependency
+
+
+# ---------------------------------------------------------------------------
+# Actor-less (system) variant — FAR-1516
+# ---------------------------------------------------------------------------
+
+
+def bind_audit_org(request: Request, org_id: uuid.UUID | str | None) -> None:
+    """Publish the organisation an ``audited_system`` event belongs to (FAR-1516).
+
+    Call it from the route handler: with the tenant org once it is known, or
+    with the unattributed sentinel org (``SYSTEM_ORG_ID``) for ingress that has
+    no tenant yet — rebinding the real org as soon as it resolves. ``None``
+    leaves whatever was published earlier untouched, so a "try the tenant, fall
+    back to nothing" call site cannot silently unpublish a good org.
+    """
+    if org_id is None or (isinstance(org_id, str) and not org_id.strip()):
+        # None / "" both mean "no organisation published yet" — leave any
+        # previously published org untouched rather than clobber it.
+        return
+    request.state.audit_org_id = str(org_id)
+
+
+def bind_audit_actor_source(request: Request, actor_source: str) -> None:
+    """Strengthen the ``actor_source`` an ``audited_system`` event records.
+
+    The route declares its PRE-admission value on ``audited_system(...)`` and
+    calls this once a stronger basis is established, so the recorded provenance
+    is always the strongest true statement about how the request was admitted
+    (``"unauthenticated"`` -> ``"signature_verified"`` / ``"authenticated"``).
+    """
+    if not isinstance(actor_source, str) or not actor_source.strip():
+        raise ValueError("bind_audit_actor_source() requires a non-empty actor_source")
+    request.state.audit_actor_source = actor_source
+
+
+def _resolve_audit_org(request: Request) -> uuid.UUID | None:
+    """The org the route published, or ``None`` when it published none.
+
+    Attribute access + an ``isinstance`` gate, so a test double's
+    auto-generated attributes can never masquerade as a published org.
+    """
+    try:
+        raw = request.state.audit_org_id
+    except AttributeError:
+        return None
+    if isinstance(raw, uuid.UUID):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        _log.warning(
+            "audit_coverage: published audit org is not a UUID: %r",
+            raw,
+        )
+        return None
+
+
+def _resolve_actor_source(request: Request, default: str) -> str:
+    """The route's promoted ``actor_source``, else the declared default."""
+    try:
+        raw = request.state.audit_actor_source
+    except AttributeError:
+        return default
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    return default
+
+
+def _system_payload(request: Request, outcome: AuditOutcome, actor_source: str) -> dict[str, Any]:
+    """Coarse payload plus the honest provenance markers for a system event."""
+    payload = _coarse_payload(request, outcome)
+    payload["actor"] = SYSTEM_ACTOR
+    payload["actor_source"] = actor_source
+    return payload
+
+
+async def _append_system_or_raise(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    event_type: str,
+    resource_type: str,
+    payload: dict[str, Any],
+) -> None:
+    """Append one actor-less audit event in a fresh transaction, errors propagate.
+
+    The actor-less twin of ``_append_isolated_or_raise``: same fresh
+    transaction and ``SET LOCAL`` org context, but ``actor_user_id=NULL`` —
+    there is no principal to attribute and one must never be invented. The
+    ``SYSTEM_ACTOR`` marker plus ``actor_source`` in the payload carry the
+    provenance instead.
+    """
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        # No set_rls_user_context(): audit_events carries an org-only RLS
+        # policy, and there is no user identity to set context for.
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type=event_type,
+            actor_user_id=None,
+            resource_type=resource_type,
+            payload_json=payload,
+        )
+
+
+async def _emit_system(
+    *,
+    session: AsyncSession,
+    org_id: uuid.UUID | None,
+    event_type: str,
+    resource_type: str,
+    payload: dict[str, Any],
+    fail_closed: bool,
+) -> None:
+    """Record an actor-less event under the caller's failure policy.
+
+    ``org_id is None`` means the route published no organisation: an audit
+    event is org-scoped, so there is nowhere to record it. That is logged and
+    skipped rather than raised — a missing attribution must not fail the
+    request — and never "fixed" by inventing a tenant.
+    """
+    log_key = _log_key(event_type)
+    if org_id is None:
+        _log.warning(
+            f"{_LOG_KEY_PREFIX}.{event_type}.no_org_context",
+            extra={"event_type": event_type, "resource_type": resource_type},
+        )
+        return
+    try:
+        await _append_system_or_raise(
+            session,
+            org_id=org_id,
+            event_type=event_type,
+            resource_type=resource_type,
+            payload=payload,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        if fail_closed:
+            raise
+        _log.warning(
+            log_key,
+            extra={
+                "org_id": str(org_id),
+                "event_type": event_type,
+                "resource_type": resource_type,
+            },
+            exc_info=True,
+        )
+
+
+def audited_system(
+    event_type: str,
+    resource_type: str,
+    *,
+    actor_source: str,
+    fail_closed: bool = False,
+) -> Callable[..., AsyncGenerator[None, None]]:
+    """Dependency factory: record one actor-less audit event after the handler.
+
+    Use it where no request principal exists — pre-auth, unauthenticated and
+    signature-verified ingress (the route must publish its org with
+    ``bind_audit_org`` — see the module docstring)::
+
+        dependencies=[
+            Depends(audited_system("login_attempted", "session", actor_source="pre_auth", fail_closed=True))
+        ]
+
+    Args:
+        event_type: Chained-audit event type (``audit_events.event_type``).
+        resource_type: Coarse resource kind the event is about.
+        actor_source: How the request was admitted, from the route's
+            perspective at dispatch (``pre_auth`` / ``unauthenticated`` /
+            ``signature_verified`` / ...). A route may strengthen it later via
+            ``bind_audit_actor_source``. REQUIRED — provenance must be stated.
+        fail_closed: Re-raise an append failure instead of logging it.
+
+    Returns:
+        An async-generator dependency suitable for ``Depends(...)`` or a
+        route's ``dependencies=[...]`` list.
+    """
+    if not event_type.strip():
+        raise ValueError("audited_system() requires a non-empty event_type")
+    if not resource_type.strip():
+        raise ValueError("audited_system() requires a non-empty resource_type")
+    if not actor_source.strip():
+        raise ValueError("audited_system() requires a non-empty actor_source")
+
+    async def dependency(
+        request: Request,
+        session: AsyncSession = Depends(audit_session),
+    ) -> AsyncGenerator[None, None]:
+        """Record ``event_type`` once the route handler has finished."""
+
+        def _teardown(outcome: AuditOutcome) -> tuple[uuid.UUID | None, dict[str, Any]]:
+            # Resolved at TEARDOWN (post-handler), not on entry, so the org and
+            # actor_source the handler published during the request are what the
+            # event carries.
+            return _resolve_audit_org(request), _system_payload(
+                request, outcome, _resolve_actor_source(request, actor_source)
+            )
+
+        try:
+            yield
+        except (GeneratorExit, asyncio.CancelledError):
+            raise
+        except BaseException:
+            org_id, payload = _teardown("error")
+            await _emit_system(
+                session=session,
+                org_id=org_id,
+                event_type=event_type,
+                resource_type=resource_type,
+                payload=payload,
+                fail_closed=False,
+            )
+            raise
+        else:
+            org_id, payload = _teardown("success")
+            await _emit_system(
+                session=session,
+                org_id=org_id,
+                event_type=event_type,
+                resource_type=resource_type,
+                payload=payload,
                 fail_closed=fail_closed,
             )
 

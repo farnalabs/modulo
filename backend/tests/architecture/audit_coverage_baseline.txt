@@ -21,13 +21,8 @@ api_keys.py:create_api_key_endpoint
 api_keys.py:revoke_api_key_endpoint
 audit.py:batch_detail_endpoint
 auth.py:accept_invite
-auth.py:demo_login
-auth.py:login
-auth.py:logout
-auth.py:refresh
 composite_templates.py:detect_params_endpoint
 environment_profiles.py:test_profile
-errors.py:ingest_errors_public
 evals.py:compare_evals
 library.py:analyse_import_bundle_endpoint
 library.py:export_pipeline_endpoint
@@ -46,10 +41,4 @@ schemas.py:infer_schema_endpoint
 schemas.py:migrate_data_endpoint
 schemas.py:migration_plan_endpoint
 schemas.py:validate_schema_endpoint
-slack.py:receive_slack_event
-sso.py:saml_acs
-sso.py:saml_acs_provider
-stripe_webhook.py:stripe_webhook
 triggers.py:test_polling_condition
-webhooks.py:receive_webhook
-webhooks.py:replay_webhook
