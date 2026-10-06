@@ -49,6 +49,13 @@ name: "K8s conformance (kind + managed)"
 # excludes its own cron's runs from the last-green computation (a
 # self-referencing measurement would keep itself fresh forever - the
 # deploy-throttle lesson), and identifies the weekly managed leg by name.
+#
+# CROSS-LINK (staleness coupling): the template below must produce exactly the
+# two names the `staleness` job matches on - its env `STALENESS_RUN_NAME` and
+# `MANAGED_RUN_NAME`. Changing this template without updating those two
+# constants stops the managed leg being tracked; the staleness job now WARNS
+# loudly when a scheduled run matches neither name, so the drift is visible
+# rather than silent.
 
 run-name: "K8s conformance - ${{ github.event_name == 'schedule' && format('cron {0}', github.event.schedule) || github.event_name }}"
 
@@ -440,7 +447,9 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           WORKFLOW_FILE: k8s-conformance.yml
           # The two run names produced by this workflow's run-name template
-          # (kept in sync with the template above - a rename must update both).
+          # (kept in sync with the template at the top of this file - a rename
+          # must update all three, or scheduled legs classify as unrecognised;
+          # the scan below WARNS loudly when that happens).
           STALENESS_RUN_NAME: "K8s conformance - cron 17 5 * * *"
           MANAGED_RUN_NAME: "K8s conformance - cron 0 4 * * 1"
           # Grace windows (days), overridable via repo variables:
@@ -480,6 +489,10 @@ jobs:
           MANAGED_CONCLUSION=""
           MANAGED_GREEN_TS=0
           MANAGED_GREEN_DATE=""
+          # First scheduled run whose name matches neither known leg name. A
+          # run-name template rename would otherwise classify every scheduled
+          # leg as "other" and silently stop tracking the managed leg.
+          SCHEDULE_NAME_DRIFT=""
           while IFS=$'\t' read -r NAME EVENT CONCLUSION CREATED; do
             [ -z "${CREATED}" ] && continue
             # Self-reference guard: the staleness cron's own runs never count
@@ -503,8 +516,18 @@ jobs:
                 MANAGED_GREEN_TS="${TS}"
                 MANAGED_GREEN_DATE="${CREATED}"
               fi
+            elif [ "${EVENT}" = "schedule" ] && [ -z "${SCHEDULE_NAME_DRIFT}" ]; then
+              # A scheduled run must be one of the two known legs; anything
+              # else means the run-name template drifted from the constants
+              # above (or a third schedule was added). Record it so the check
+              # fails loud below instead of silently under-reporting.
+              SCHEDULE_NAME_DRIFT="${NAME}"
             fi
           done <<< "${RUNS_TSV}"
+
+          if [ -n "${SCHEDULE_NAME_DRIFT}" ]; then
+            echo "::warning::a scheduled run named '${SCHEDULE_NAME_DRIFT}' matches neither '${STALENESS_RUN_NAME}' nor '${MANAGED_RUN_NAME}' - the run-name template has drifted from the names this job tracks (or a new schedule was added). Update STALENESS_RUN_NAME / MANAGED_RUN_NAME to match - see the run-name template comment at the top of this workflow. Until then the managed-leg staleness signal is incomplete."
+          fi
 
           ANY_AGE=""
           [ "${ANY_GREEN_TS}" -gt 0 ] && ANY_AGE=$(( (NOW_TS - ANY_GREEN_TS) / 86400 ))
