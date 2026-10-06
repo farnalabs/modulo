@@ -109,19 +109,33 @@ async def seed_cost_components(factory: async_sessionmaker[AsyncSession]) -> int
 
     Org enumeration runs in SYSTEM CONTEXT (NO set_rls_org) — the app role owns
     ``organisations`` so a plain query sees all rows. ``set_rls_org`` applies
-    ONLY to the per-org seed inserts.
+    ONLY to the per-org seed inserts. Each per-org tick additionally binds
+    ``org_id_var`` (FAR-1539) so a ``seed_org_failed`` ERROR is attributed to
+    that org by ``ErrorTrackingLogHandler`` instead of dropped as
+    ``no_org_context``; the enumeration itself stays unbound — it has no org.
     """
+    # FAR-1539: lazy import — ``cron_helpers`` is a heavyweight module and this
+    # seeder runs at API boot; the same seam the FAR-1501 call sites outside
+    # the cron family use (``cost_controller.probe``, ``auth.api_key``).
+    from modulo.core.cron_helpers import _bound_org
+
     async with factory() as session, session.begin():
         org_result = await session.execute(select(Organisation.id).order_by(Organisation.created_at))
         org_ids = [row[0] for row in org_result.all()]
 
     seeded = 0
     for org_id in org_ids:
-        try:
-            async with factory() as session, session.begin():
-                await seed_cost_components_for_org(session, org_id)
-            seeded += 1
-        except Exception:
-            _log.exception("cost_components.seed_org_failed", extra={"org_id": str(org_id)})
+        # FAR-1539: bind THIS org for the whole per-org tick so
+        # ``cost_components.seed_org_failed`` is attributed by
+        # ErrorTrackingLogHandler instead of dropped as no_org_context.
+        # ``_bound_org`` resets in finally, so the org enumeration (org-less)
+        # and the next org's tick never inherit the binding.
+        async with _bound_org(org_id):
+            try:
+                async with factory() as session, session.begin():
+                    await seed_cost_components_for_org(session, org_id)
+                seeded += 1
+            except Exception:
+                _log.exception("cost_components.seed_org_failed", extra={"org_id": str(org_id)})
     _log.info("cost_components.seed_complete", extra={"orgs": seeded})
     return seeded

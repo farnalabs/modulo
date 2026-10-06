@@ -16,6 +16,7 @@ entities get seeded — ignored for now).
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypedDict
 
@@ -252,6 +253,30 @@ async def seed_demo_org(
         await session.flush()
 
 
+async def _resolve_demo_org_id(factory: async_sessionmaker[AsyncSession], slug: str | None) -> uuid.UUID | None:
+    """Resolve *slug*'s org id AFTER the failed per-spec transaction rolled back.
+
+    FAR-1539: ``seed_demo_orgs`` logs its per-org ERROR once the spec's
+    transaction has already unwound, so the id held inside ``seed_demo_org`` is
+    gone. Re-read it by slug: an idempotent re-run finds the row an earlier
+    boot committed (the caller then binds and attributes), while a first-run
+    failure has rolled back its own insert and returns ``None`` — the caller
+    keeps the announced ``no_org_context`` drop instead of binding an id the
+    ``error_events.organisation_id`` FK would reject. A failure to resolve
+    degrades to ``None`` with a log: resolving must never mask the original
+    seed failure.
+    """
+    if not slug:
+        return None
+    try:
+        async with factory() as session, session.begin():
+            result = await session.execute(select(Organisation.id).where(Organisation.slug == slug))
+            return result.scalar_one_or_none()
+    except Exception:
+        _log.warning("demo_org.failure_org_resolution_failed", extra={"slug": slug}, exc_info=True)
+        return None
+
+
 async def seed_demo_orgs(factory: async_sessionmaker[AsyncSession]) -> None:
     """Seed every demo org listed in ``DEMO_ORGS`` (gated by the caller).
 
@@ -263,7 +288,13 @@ async def seed_demo_orgs(factory: async_sessionmaker[AsyncSession]) -> None:
         _log.info("demo_orgs.empty")
         return
 
+    # FAR-1539: lazy import — ``cron_helpers`` is a heavyweight module and this
+    # seeder runs at API boot; the same seam the FAR-1501 call sites outside
+    # the cron family use (``cost_controller.probe``, ``auth.api_key``).
+    from modulo.core.cron_helpers import _bound_org
+
     for spec in DEMO_ORGS:
+        slug = spec.get("slug")
         try:
             async with factory() as session, session.begin():
                 await seed_demo_org(
@@ -275,5 +306,16 @@ async def seed_demo_orgs(factory: async_sessionmaker[AsyncSession]) -> None:
                     admin_password=spec["password"],
                 )
         except (ValueError, LicenseSigningError, IntegrityError):
-            _log.exception("demo_org.seed_failed", extra={"slug": spec.get("slug")})
-            continue
+            # FAR-1539: attribute ``demo_org.seed_failed`` to the demo org when
+            # a row survives the rollback (idempotent re-run), so
+            # ErrorTrackingLogHandler persists it instead of dropping it as
+            # no_org_context. ``_bound_org`` resets in finally, so the next
+            # spec's tick and the caller's context never inherit the binding.
+            org_id = await _resolve_demo_org_id(factory, slug)
+            if org_id is None:
+                # No surviving organisation to attribute — keep the announced
+                # drop rather than fabricate a binding the FK would reject.
+                _log.exception("demo_org.seed_failed", extra={"slug": slug})
+                continue
+            async with _bound_org(org_id):
+                _log.exception("demo_org.seed_failed", extra={"slug": slug})
