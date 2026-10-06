@@ -3449,4 +3449,123 @@ describe('PipelineEditorView - system-admin snapshot lock (FAR-1287)', () => {
     expect(error.text()).not.toContain('Failed to release the snapshot lock')
     wrapper.unmount()
   })
+
+  // -------------------------------------------------------------------------
+  // Branch-completion cases: the arms the "happy path" cases above cannot
+  // reach. Without them the changed-lines coverage gate fails on the card's
+  // error/fallback copy (observed 91.6% line / 86.0% branch at head 1d6efcad).
+  // -------------------------------------------------------------------------
+
+  it('surfaces a non-403 release failure with the generic copy', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    // A problem detail whose status is NOT 403: isProblemDetail() is true but
+    // neither the typed-403 arm nor a transport 403 selects the refusal copy.
+    snapshotLockState.releaseError = {
+      type: 'urn:problem:modulo:internal_error',
+      title: 'Internal Error',
+      status: 500,
+      detail: 'release exploded',
+    }
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('Failed to release the snapshot lock')
+    expect(error.text()).toContain('release exploded')
+    expect(error.text()).not.toContain('Release refused:')
+    wrapper.unmount()
+  })
+
+  it('reports nothing-to-release when the server omits the release result', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    // A 2xx with no body: `data ?? { released: 0, pids: [] }` must manufacture
+    // the empty result, and releaseResultText must take the `released === 0` arm.
+    snapshotLockState.releaseResult = undefined
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.text()).toContain('Nothing to release')
+    wrapper.unmount()
+  })
+
+  it('renders neither held nor not-held when the status payload is absent', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    // A 200 with a null body: `status.value = data ?? null` must keep status
+    // null, so the card knows nothing yet rather than asserting "Not held".
+    snapshotLockState.status = null
+    const wrapper = await mountEditorSettled()
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.exists()).toBe(true)
+    expect(status.text()).not.toContain('Not held')
+    expect(status.text()).not.toContain('Held by')
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('falls back to the unknown label for a holder with no application or state', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = {
+      held: true,
+      holders: [{ ...HOLDER, application_name: null, state: null }],
+    }
+    const wrapper = await mountEditorSettled()
+
+    const holders = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]')
+    expect(holders.exists()).toBe(true)
+    // Both `application_name || unknown` and `state || unknown` take their
+    // fallback arm here.
+    expect(holders.text()).toContain('unknown')
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown load error (transport failure) in the error region', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (String(url).includes('/snapshot-lock')) return Promise.reject(new Error('network down'))
+      return routeGet(url)
+    })
+    const wrapper = await mountEditorSettled()
+
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('network down')
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown release error (transport failure) in the error region', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    ;(api.POST as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (String(url).includes('/snapshot-lock/release')) {
+        return Promise.reject(new Error('socket reset'))
+      }
+      return routePost(url)
+    })
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('Failed to release the snapshot lock')
+    expect(error.text()).toContain('socket reset')
+    wrapper.unmount()
+  })
 })
