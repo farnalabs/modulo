@@ -372,6 +372,14 @@ serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
 supported state where monitoring still runs and only the emails are skipped.
 See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
 
+The same SMTP setup also sends the **error-tracking** alert emails, which identify the deployment environment:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown on error-tracking alert emails as `Environment: <value>`; an empty value renders as `N/A`. The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
+
+The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails below do not carry an environment line.
+
 ### Readiness health alerts
 
 The same SMTP configuration also drives the system worker's in-app readiness alerting: when **both** `SMTP_HOST` and `ALERT_EMAIL_TO` are set, the `health_readiness_alert` cron (every 5 minutes) evaluates health through the same checks as `/healthz/ready` and emails `ALERT_EMAIL_TO`:
