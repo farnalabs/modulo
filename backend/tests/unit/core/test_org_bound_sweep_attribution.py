@@ -33,6 +33,7 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
@@ -95,10 +96,14 @@ class _OrgSweepSession:
         *,
         entries: list[tuple[Any, str]] | None = None,
         stale_rows: list[Any] | None = None,
+        fail_org_index: bool = False,
+        fail_join: bool = False,
     ) -> None:
         self._org_ids = org_ids
         self._entries = entries or []
         self._stale = stale_rows or []
+        self._fail_org_index = fail_org_index
+        self._fail_join = fail_join
 
     async def __aenter__(self) -> Self:
         return self
@@ -129,12 +134,16 @@ class _OrgSweepSession:
             result.scalar_one.return_value = True
             return result
         if "FROM organisations" in rendered:
+            if self._fail_org_index:
+                raise SQLAlchemyError("org collection down")
             result = MagicMock()
             result.scalars.return_value = _Rows(self._org_ids)
             return result
         if "UPDATE" in rendered:
             return MagicMock()
         if "JOIN" in rendered:
+            if self._fail_join:
+                raise SQLAlchemyError("per-org scan down")
             result = MagicMock()
             result.all.return_value = _Rows(self._entries)
             return result
@@ -261,7 +270,7 @@ async def test_hitl_deadline_failures_are_attributed_to_their_own_orgs(
 
 @pytest.mark.parametrize(
     "site",
-    ["expiry_audit", "cost_probe", "trigger_streak"],
+    ["expiry_audit", "cost_probe", "trigger_streak", "api_key_sweep"],
 )
 async def test_additional_bound_sites_attribute_their_per_org_errors(
     site: str,
@@ -277,7 +286,10 @@ async def test_additional_bound_sites_attribute_their_per_org_errors(
     - ``trigger_streak``: a failure emitted inside a real
       ``_run_sweep_orgs`` tick (the per-org worker is stubbed — what is under
       test is the bind around the tick, since the production CRITICAL sites
-      live deep in the notify chain).
+      live deep in the notify chain);
+    - ``api_key_sweep``: the real ``revoke_run_api_key_sweep`` loop (the
+      dispatcher_reconcile compensating sweep) — a per-org key-scan failure
+      must be attributed to that org.
     """
     assert org_id_var.get() is None
 
@@ -302,6 +314,15 @@ async def test_additional_bound_sites_attribute_their_per_org_errors(
         await _drain()
         assert summary["orgs_failed"] == 2
         expected = "cost_probe.org_failed"
+    elif site == "api_key_sweep":
+        from modulo.auth.api_key import revoke_run_api_key_sweep
+
+        session = _OrgSweepSession([ORG1, ORG2], fail_join=True)
+        factory = MagicMock(return_value=session)
+        result = await revoke_run_api_key_sweep(factory)
+        await _drain()
+        assert result["errors"] == 2
+        expected = "api_key.revoke_run_sweep_org_failed"
     else:
         from modulo.core import trigger_streak as ts
 
@@ -325,4 +346,31 @@ async def test_additional_bound_sites_attribute_their_per_org_errors(
     assert len(sink.messages) == 2
     assert all(expected in message for message in sink.messages)
     assert sink.orgs == [str(ORG1), str(ORG2)]
+    assert org_id_var.get() is None
+
+
+async def test_api_key_sweep_job_level_failure_keeps_the_announced_drop(
+    capture: None,
+    sink: _RecordingSink,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The job-level sweep failure runs BEFORE any org tick — no org exists.
+
+    ``api_key.revoke_run_api_key_sweep_failed`` (the org-collection failure)
+    must stay the announced drop: never attributed to a fabricated org, never
+    silently forwarded — pinning that the FAR-1501 bind covers only the
+    per-org loop body.
+    """
+    from modulo.auth.api_key import revoke_run_api_key_sweep
+
+    assert org_id_var.get() is None
+    session = _OrgSweepSession([ORG1, ORG2], fail_org_index=True)
+    factory = MagicMock(return_value=session)
+
+    result = await revoke_run_api_key_sweep(factory)
+    await _drain()
+
+    assert result == {"scanned": 0, "revoked": 0, "errors": 1}
+    assert not sink.messages
+    assert any("no_org_context" in record.getMessage() for record in caplog.records)
     assert org_id_var.get() is None
