@@ -11,7 +11,7 @@ from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 # (modulo.api.routes.environment_profiles), and the vocabulary scanner test
 # (tests/unit/core/runtime_provider/test_provider_type_coverage.py) all
 # derive from this constant — never hardcode the list elsewhere.
-PROVIDER_TYPES: Final[frozenset[str]] = frozenset({"local_docker", "e2b", "local", "runner_docker"})
+PROVIDER_TYPES: Final[frozenset[str]] = frozenset({"local_docker", "e2b", "local", "runner_docker", "kubernetes"})
 
 # Single source of truth for the initialisation_strategy vocabulary (FAR-802).
 # The model CHECK below and the migration 0227 CHECK constraint derive from

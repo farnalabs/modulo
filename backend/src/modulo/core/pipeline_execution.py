@@ -1660,8 +1660,9 @@ async def run_executor_with_watchdog(
     actually reached ``complete``; a generic executor exception is
     terminal-failed with ``executor_failed`` (token-guarded) and returns
     ``{"status": "failed"}``; an ``awaiting_human`` pause returns
-    ``{"status": "awaiting_human"}``. The caller only runs ``mark_complete`` on
-    a genuine ``complete``.
+    ``{"status": "awaiting_human"}``; a HITL rejection that ended the run
+    (FAR-1487) returns ``{"status": "rejected"}``. The caller only runs
+    ``mark_complete`` on a genuine ``complete``.
     """
     rid = uuid.UUID(run_id)
 
@@ -1836,6 +1837,11 @@ async def run_executor_with_watchdog(
         return {"status": "complete"}
     if result_status == "awaiting_human":
         return {"status": "awaiting_human"}
+    if result_status == "rejected":
+        # FAR-1487: a HITL rejection ended the run - a terminal, NON-failure
+        # outcome (the run row already carries ``rejected`` + ``hitl.*``); never
+        # report it as ``failed``.
+        return {"status": "rejected"}
     return {"status": "failed"}
 
 

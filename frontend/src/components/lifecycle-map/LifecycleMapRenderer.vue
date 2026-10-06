@@ -19,7 +19,7 @@
       @node-drag-stop="emitPositions"
     >
       <Background :gap="24" :size="1" />
-      <Controls :show-interactive="false" position="bottom-right" />
+      <FlowControls :show-interactive="false" position="bottom-right" />
       <template #node-stage="nodeProps">
         <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           @keydown="onStageKeydown(nodeProps, $event)"
@@ -101,7 +101,6 @@ export const NODE_NUDGE_STEP = 16
 import { computed, ref, watch } from 'vue'
 import { MarkerType, VueFlow, type DefaultEdgeOptions, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
-import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapTransition } from '../../stores/lifecycleMaps'
@@ -109,6 +108,7 @@ import type { JourneySummary } from '../../types/lifecycleMap'
 import { computeLifecycleMapLayout } from '../../stores/lifecycleMaps'
 import { CANVAS_EDGE_STROKE } from '../../constants/canvas'
 import JourneyCard from './JourneyCard.vue'
+import FlowControls from '../shared/FlowControls.vue'
 
 const props = defineProps<{
   mapData: LifecycleMap | null

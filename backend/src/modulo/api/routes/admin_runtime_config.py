@@ -7,11 +7,13 @@ import os
 from dataclasses import asdict
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from modulo.api.dependencies import require_feature, require_system_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.runtime_config.key_bridge import APPLY_HOOKS
 from modulo.core.runtime_config.store import (
     BOOT_ONLY_REASONS,
@@ -109,7 +111,13 @@ def get_runtime_config(
         ) from exc
 
 
-@router.put("", dependencies=[require_feature("runtime_config")])
+@router.put(
+    "",
+    dependencies=[
+        Depends(audited("runtime_config_overrides_updated", "runtime_config", principal_dep=get_current_tenant_user)),
+        require_feature("runtime_config"),
+    ],
+)
 def set_runtime_config_overrides(
     req: dict[str, Any],
     _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
@@ -183,7 +191,13 @@ def set_runtime_config_overrides(
         ) from exc
 
 
-@router.post("/reload", dependencies=[require_feature("runtime_config")])
+@router.post(
+    "/reload",
+    dependencies=[
+        Depends(audited("runtime_config_reloaded", "runtime_config", principal_dep=get_current_tenant_user)),
+        require_feature("runtime_config"),
+    ],
+)
 def reload_runtime_config(
     _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
 ) -> dict[str, Any]:

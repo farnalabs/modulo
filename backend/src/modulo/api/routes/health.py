@@ -48,7 +48,8 @@ import redis.asyncio as aioredis
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi import APIRouter, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
@@ -177,6 +178,17 @@ class CheckResult(BaseModel):
     status: Literal["ok", "degraded", "unavailable"]
     latency_ms: float | None = None
     detail: str | None = None
+    # FAR-1510: internal classification — "this result must not gate the
+    # aggregate". Only the db_hygiene probe sets it, and only when the probe
+    # did NOT complete (timeout / crash): a failure to INSPECT hygiene is not
+    # a hygiene reading, and `database` already owns the reachability verdict.
+    # Deliberately off the wire (``SkipJsonSchema`` keeps it out of the OpenAPI
+    # document — so the generated frontend/src/lib/api/schema.ts is unchanged —
+    # and ``exclude=True`` keeps it out of the response body): the readiness
+    # payload contract predates this flag, advisory-ness is already conveyed by
+    # the aggregate status staying `ok`, and the other advisory checks
+    # (event_loop_lag, break_glass, ...) carry no such flag either.
+    advisory: SkipJsonSchema[bool] = Field(default=False, exclude=True)
 
 
 class ReadinessResponse(BaseModel):
@@ -452,6 +464,17 @@ async def _check_db_hygiene() -> CheckResult:
     the Fly service check and every deploy gate key on; the finding reaches
     operators through the readiness body and the uptime monitor's sub-check
     scan instead of by taking the deployment out of rotation.
+
+    FAR-1510 — an outcome that produced NO READING (the probe timed out, or
+    raised) reports ``degraded`` together with ``advisory=True``. That result
+    is a statement about the PROBE, not about hygiene: it stays visible in the
+    readiness body, but ``evaluate_readiness`` excludes it from the aggregate
+    gate, so it can no longer fire the ``health_readiness_alert`` email on its
+    own. This is the exact misattribution seen on production — a 0.6-1.2s
+    event-loop stall blew the 1s budget and the alert email claimed "database
+    hygiene ... timed out" while live hygiene was clean (the stall itself is
+    what the advisory ``event_loop_lag`` check reports). Only a COMPLETED
+    reading graded over a threshold by :func:`_grade_db_hygiene` gates.
     """
     settings = get_settings()
     timeout = _per_check_timeout(settings, "modulo_health_db_hygiene_timeout_seconds")
@@ -493,16 +516,33 @@ async def _check_db_hygiene() -> CheckResult:
             detail=detail,
         )
     except TimeoutError:
+        # FAR-1510: a timeout is not a hygiene READING — it reports that the
+        # probe did not finish inside its budget, which on production meant a
+        # stalled event loop (see the advisory event_loop_lag check), not
+        # bloat. Keep it visible as degraded (never "clean", never
+        # unavailable) but advisory, so it cannot gate the aggregate or fire
+        # the readiness email on its own.
         _log.warning("health._check_db_hygiene", exc_info=True)
-        return _timeout_result("degraded", "database hygiene", timeout, start)
+        return CheckResult(
+            status="degraded",
+            advisory=True,
+            latency_ms=round((time.monotonic() - start) * 1000, 1),
+            detail=(
+                f"database-hygiene probe did not complete within {timeout:g}s "
+                "(likely an event-loop stall; see event_loop_lag) — hygiene not measured"
+            ),
+        )
     except Exception:
         # The check could not run — degraded, never "clean" (a crashed check
         # must not read as an ok one) and never unavailable: a failure to
         # INSPECT hygiene says nothing about the deployment's ability to
         # serve, and `database` already owns the reachability verdict.
+        # Advisory for the same reason as the timeout above (FAR-1510): no
+        # reading was taken, so it must not be presented or gated as one.
         _log.warning("health._check_db_hygiene", exc_info=True)
         return CheckResult(
             status="degraded",
+            advisory=True,
             latency_ms=round((time.monotonic() - start) * 1000, 1),
             detail="database-hygiene check could not run (see logs)",
         )
@@ -1406,6 +1446,9 @@ async def evaluate_readiness() -> ReadinessResponse:
         # degrades the overall status while the endpoint stays HTTP 200 — the
         # Fly service check and every deploy gate key on the status CODE and
         # tolerate degraded, and the uptime monitor alerts on the sub-check.
+        # FAR-1510: a probe that did NOT complete (timeout/crash) comes back
+        # advisory=True, is still listed here so the body shows it, and is
+        # excluded from the aggregate below.
         "db_hygiene": hyg_check,
         "saq_workers": saq_check,
         "system_crons": cron_check,
@@ -1455,14 +1498,21 @@ async def evaluate_readiness() -> ReadinessResponse:
         redis_check.status,
         cp_check.status,
         mig_check.status,
-        # FAR-1445: hygiene gates at degraded only — every path through
-        # _check_db_hygiene (graded, timed out, or crashed) returns degraded
-        # rather than unavailable, so this entry can move the overall status
-        # to degraded but can never 503 the endpoint on its own.
-        hyg_check.status,
         saq_check.status,
         cron_check.status,
     ]
+    # FAR-1445 / FAR-1510: hygiene gates only when the probe actually
+    # MEASURED it. A completed reading graded over a threshold (the normal
+    # _grade_db_hygiene path) contributes exactly as before — degraded, never
+    # unavailable, so it can move the aggregate to degraded but can never 503
+    # the endpoint on its own. A probe that timed out or crashed returns
+    # advisory=True (see _check_db_hygiene): that result says "hygiene not
+    # measured", which is a statement about the probe — historically an
+    # event-loop stall — not about the database, so it is reported in the
+    # body but excluded here instead of flipping the aggregate (and the
+    # health_readiness_alert email) to degraded.
+    if not hyg_check.advisory:
+        statuses.append(hyg_check.status)
     # FAR-199: dispatcher_reconcile gates readiness ONLY at its "unavailable"
     # tier — reconcile stale past _RECONCILE_UNAVAILABLE_SECONDS means the
     # system worker's cron is silently dead (a wedged worker fleet that would

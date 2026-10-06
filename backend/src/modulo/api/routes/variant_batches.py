@@ -53,7 +53,9 @@ MSG_BATCH_NOT_FOUND = "Variant batch not found"
 # Statuses treated as terminal for batch completion calculation.
 _COMPLETE = {"complete"}
 _FAILED = {"failed", "eval_failed"}
-_CANCELLED = {"cancelled"}
+# FAR-1487: a HITL-rejected run is a terminal "stopped, not failed" outcome
+# exactly like cancelled for batch aggregation.
+_CANCELLED = {"cancelled", "rejected"}
 
 
 def _compute_batch_status(run_statuses: list[str]) -> str:

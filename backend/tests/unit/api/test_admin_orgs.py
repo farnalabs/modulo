@@ -6,10 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.admin_orgs import resolve_audit_principal
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.organisation import Organisation
@@ -634,3 +637,44 @@ class TestOrgLicenseLockedRmw:
         exit_idx = min(e for e in exits if e > last_begin)
         writes = [i for i, e in enumerate(events) if e.startswith("update(")]
         assert writes == [exit_idx - 1], f"write not inside the transaction: {events}"
+
+
+class TestResolveAuditPrincipal:
+    """The cross-org audit principal derives the org from the path, then the claim."""
+
+    @staticmethod
+    def _request(path_params: dict[str, str]) -> Request:
+        return Request({"type": "http", "path_params": path_params})
+
+    @staticmethod
+    def _system_admin(*, organisation_id: UUID | None, org_role: str | None) -> AuthenticatedPrincipal:
+        return AuthenticatedPrincipal(
+            username="sysadmin",
+            organisation_id=organisation_id,
+            account_id=USER_ID,
+            org_role=org_role,
+            is_system_admin=True,
+        )
+
+    async def test_path_org_param_wins_over_the_claim(self) -> None:
+        path_org = uuid4()
+        resolved = await resolve_audit_principal(
+            self._request({"org_id": str(path_org)}),
+            self._system_admin(organisation_id=ORG_ID, org_role="admin"),
+        )
+        assert resolved.organisation_id == path_org
+
+    async def test_invalid_path_org_falls_back_to_the_claim(self) -> None:
+        resolved = await resolve_audit_principal(
+            self._request({"org_id": "not-a-uuid"}),
+            self._system_admin(organisation_id=ORG_ID, org_role="admin"),
+        )
+        assert resolved.organisation_id == ORG_ID
+
+    async def test_no_org_anywhere_raises_403(self) -> None:
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_audit_principal(
+                self._request({}),
+                self._system_admin(organisation_id=None, org_role=None),
+            )
+        assert exc_info.value.status_code == 403

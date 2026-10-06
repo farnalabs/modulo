@@ -109,7 +109,8 @@ __all__ = [
 ]
 
 # Advancing terminal statuses — the ONLY statuses that move evidence. Mirrors
-# ``advancement._ADVANCING_TERMINAL_STATUSES``; defined here so the drift rule
+# ``advancement._ADVANCING_TERMINAL_STATUSES`` (``rejected`` is deliberately absent, FAR-1487);
+# defined here so the drift rule
 # ("stale" only applies to advancing runs) stays local and explicit.
 _ADVANCING_STATUSES: frozenset[str] = frozenset(
     {

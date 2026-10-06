@@ -55,7 +55,13 @@ from modulo.api.team_scope import (
     validate_owner_team_for_create,
 )
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+from modulo.auth.permissions import (
+    PermissionDenied,
+    assert_org_role,
+    grants_and_role,
+    grants_permit,
+    resolve_required,
+)
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
@@ -168,20 +174,27 @@ _MAX_GRAPH_EDGES = 1000
 
 # ADR 047 service-layer backstop: operator+ is "privileged" (privilege is
 # required to weaken/remove an existing HITL gate via a graph write).
+_CODE_GUARDRAIL_MANAGE = "guardrail.manage"  # nosec B105 — permission key, not a credential
 _OPERATOR_LEVEL = org_role_level("operator")
 _ADMIN_LEVEL = org_role_level("admin")
 
 
-def _is_privileged(role: str | None) -> bool:
+def _is_privileged(role: str | None, key_grants: frozenset[str] | None = None) -> bool:
     """Resolve the is_privileged flag from an org role (operator+ -> True).
+
+    FAR-1477: an API key carrying a grant-set (``key_grants is not None``) is
+    privileged only if it ALSO holds ``pipeline.graph.update`` (effective =
+    grants INTERSECT live-role bundle). ``None`` = no grant-set, unchanged.
 
     Uses the flag-independent numeric hierarchy (team_rbac), NOT the
     kill-switched assert_org_role path, so the HITL guard stays live even
     when authz.enforce is disabled.
     """
-    if role is None:
-        return False
-    return org_role_level(role) >= _OPERATOR_LEVEL
+    return grants_and_role(
+        key_grants,
+        _CODE_PIPELINE_GRAPH_UPDATE,
+        lambda: role is not None and org_role_level(role) >= _OPERATOR_LEVEL,
+    )
 
 
 def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
@@ -198,9 +211,25 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     ``rollback_to_snapshot``) re-reads the live role under the row lock for
     REST callers, so a stale role claim cannot slip a strip past the guard.
     """
-    if principal.org_role is None:
-        return False
-    return org_role_level(principal.org_role) >= _ADMIN_LEVEL
+    role = principal.org_role
+    return grants_and_role(
+        principal.key_grants,
+        _CODE_GUARDRAIL_MANAGE,
+        lambda: role is not None and org_role_level(role) >= _ADMIN_LEVEL,
+    )
+
+
+def _grants_deny_privilege(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``pipeline.graph.update``.
+
+    Passed to the service layer where it can only NARROW the live-role result.
+    """
+    return not grants_permit(principal.key_grants, _CODE_PIPELINE_GRAPH_UPDATE)
+
+
+def _grants_deny_guardrail_admin(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``guardrail.manage``."""
+    return not grants_permit(principal.key_grants, _CODE_GUARDRAIL_MANAGE)
 
 
 def _may_manage_cost(principal: TenantPrincipal) -> bool:
@@ -211,11 +240,15 @@ def _may_manage_cost(principal: TenantPrincipal) -> bool:
     (``assert_org_role``) — never an ad-hoc role comparison. Fail-closed: a
     missing/unknown role raises ``PermissionDenied`` and resolves to False.
     """
-    try:
-        assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
-    except PermissionDenied:
-        return False
-    return True
+
+    def _role_ok() -> bool:
+        try:
+            assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+        except PermissionDenied:
+            return False
+        return True
+
+    return grants_and_role(principal.key_grants, _CODE_COST_MANAGE, _role_ok)
 
 
 async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:
@@ -1210,7 +1243,8 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     )
     hitl_config: dict[str, Any] | None = Field(
         default=None,
-        description="HITL node config (mode, form_schema_ref, reject_target, claim_team_id, claim_expiry_min, "
+        description="HITL node config (mode, form_schema_ref, reject_target, on_reject, claim_team_id, "
+        "claim_expiry_min, "
         "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
         "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
     )
@@ -1576,7 +1610,18 @@ class HitlReviewConfig(BaseModel):
         description="Node ID routed to on HITL rejection for the FAR-210 single-node "
         "correction path. Accepted and persisted through the graph contract; the "
         "reject→correction dispatch seam is tracked as a follow-up (the graph "
-        "compiler currently kicks a rejection back to reject_target).",
+        "compiler currently kicks a rejection back to reject_target). FAR-1487: a "
+        "correction_target WINS over terminating - a gate with one never ends the run "
+        "on reject.",
+    )
+    on_reject: Literal["terminate", "proceed"] | None = Field(
+        default=None,
+        description="FAR-1487: what a rejection does when the gate has NO reject "
+        "destination (no reject_target / reject edge). Absent or 'terminate' (the "
+        "DEFAULT) ENDS the run with the terminal 'rejected' status. 'proceed' "
+        "explicitly continues down the approve path (the pre-FAR-1487 behaviour) - "
+        "continuing is never the silent fallback. A reject destination always wins "
+        "('route'), as does a correction_target.",
     )
     claim_expiry_minutes: int = Field(gt=0, le=1440)
     # FAR-609: every HITL gate defaults to human_only — a graph save that
@@ -2672,10 +2717,12 @@ async def replace_pipeline_graph_endpoint(
                 org_id=principal.organisation_id,
                 nodes=node_data,
                 edges=[_edge_data_to_dict(edge) for edge in edge_data],
-                is_privileged=_is_privileged(principal.org_role),
+                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
                 caller_type="rest",
                 account_id=principal.account_id,
                 is_guardrail_admin=_is_guardrail_admin(principal),
+                grants_deny_privilege=_grants_deny_privilege(principal),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
             if graph is not None:
                 # FAR-488a: keep the bound Agent rows in step with node-level
@@ -3021,10 +3068,12 @@ async def _apply_graph_update(
         org_id=org_id,
         nodes=node_data,
         edges=[_edge_data_to_dict(edge) for edge in edge_data],
-        is_privileged=_is_privileged(principal.org_role),
+        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
+        grants_deny_privilege=_grants_deny_privilege(principal),
+        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -4089,9 +4138,11 @@ async def rollback_snapshot_endpoint(
                 pipeline_id,
                 snapshot_id,
                 account_id=principal.account_id,
-                is_privileged=_is_privileged(principal.org_role),
+                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
                 caller_type="rest",
                 is_guardrail_admin=_is_guardrail_admin(principal),
+                grants_deny_privilege=_grants_deny_privilege(principal),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -4396,10 +4447,12 @@ async def _save_locked_graph(
         org_id,
         nodes,
         edges,
-        is_privileged=_is_privileged(principal.org_role),
+        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
+        grants_deny_privilege=_grants_deny_privilege(principal),
+        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
     )
     if graph is None:
         return None
@@ -4740,6 +4793,8 @@ async def _save_graph(
     caller_type: Literal["rest", "mcp"],
     account_id: uuid.UUID | None = None,
     is_guardrail_admin: bool = False,
+    grants_deny_privilege: bool = False,
+    grants_deny_guardrail_admin: bool = False,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
@@ -4759,6 +4814,8 @@ async def _save_graph(
         caller_type=caller_type,
         account_id=account_id,
         is_guardrail_admin=is_guardrail_admin,
+        grants_deny_privilege=grants_deny_privilege,
+        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
     )
     if graph is not None:
         # FAR-488a: node-conversion saves go through here too — keep the same

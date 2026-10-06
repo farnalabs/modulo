@@ -22,7 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.library import LibraryPrimitiveResponse
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.library_service.community import (
     get_community_entry,
     install_community_entry,
@@ -153,6 +155,9 @@ async def get_entry(
 @router.post(
     "/{entry_id}/install",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("community_entry_installed", "community_entry", principal_dep=get_current_tenant_user))
+    ],
 )
 async def install(
     entry_id: str,

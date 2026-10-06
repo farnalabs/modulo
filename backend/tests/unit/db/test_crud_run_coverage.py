@@ -783,6 +783,7 @@ class TestRunStatusWhitelist:
             "router_no_match",
             "cost_ceiling_exceeded",
             "compensation_failed",
+            "rejected",
         }
         assert expected == RUN_STATUS_WHITELIST
 

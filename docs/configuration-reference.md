@@ -284,6 +284,9 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider (read directly from env, not via Settings) |
+| `MODULO_KUBERNETES_ENABLED` | For Kubernetes | – | Registers the `kubernetes`/`k8s` runtime provider when set to any value except an explicit negative (`0`, `false`, `no`, `off`); unset/falsy leaves it unregistered. In-cluster auth is used when `KUBERNETES_SERVICE_HOST` is set, otherwise the standard kubeconfig chain (`KUBECONFIG` / default path). |
+| `MODULO_KUBERNETES_NAMESPACE` | No | `modulo` | Namespace the provider creates workspace pods in. |
+| `MODULO_KUBERNETES_SERVICE_ACCOUNT` | No | `default` | ServiceAccount the workspace pods run under. |
 | `MODULO_MAX_LOCAL_CONCURRENCY` | No | `2` | Max concurrent local agents (LocalRuntimeProvider) |
 | `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate. |
 | `RUN_API_KEY_DEFAULT_TTL_SECONDS` | No | `900` | Per-run agent runtime API key TTL floor (min 300, max 86400) |
@@ -371,6 +374,14 @@ serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
 `EMAIL_FROM` and `ALERT_EMAIL_TO` are all set; leaving them unset is a
 supported state where monitoring still runs and only the emails are skipped.
 See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
+
+The same SMTP setup also sends the **error-tracking** alert emails, which identify the deployment environment:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown on error-tracking alert emails as `Environment: <value>`; an empty value renders as `N/A`. The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
+
+The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails below do not carry an environment line.
 
 ### Readiness health alerts
 
@@ -523,15 +534,26 @@ per-check override is set to a positive value.
 | `MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES` | No | `10000` | Database-hygiene: absolute dead-tuple floor - a table's dead-tuple ratio is only acted on once it carries at least this many dead rows (minimum `0`; `0` considers every table, including zero-size relations) |
 | `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO` | No | `0.60` | Database-hygiene: worst-table dead-tuple ratio at/above which a table over the floor grades `degraded` (`0`–`1`) |
 
-A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations/
-db_hygiene) or `unavailable` (database) with a "timed out after Ns" detail message
-instead of blocking readiness indefinitely.
+A check that exceeds its limit reports `degraded` (redis/checkpointer/migrations) or
+`unavailable` (database) with a "timed out after Ns" detail message instead of blocking
+readiness indefinitely.
+
+The database-hygiene probe is the exception to that wording (FAR-1510). When it does not
+complete within `MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS` it reports `degraded` with the
+detail "database-hygiene probe did not complete within Ns (likely an event-loop stall; see
+event_loop_lag) — hygiene not measured", and that result is ADVISORY: it stays visible in
+the readiness body but is excluded from the aggregate gate, so on its own it neither flips
+`/healthz/ready` to `degraded` nor fires the `health_readiness_alert` email. Nothing was
+measured, so there is no hygiene verdict to act on — the stall itself is what the advisory
+`event_loop_lag` check reports.
 
 The database-hygiene sub-check's two thresholds (`MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES`,
 `MODULO_HEALTH_DB_HYGIENE_DEAD_RATIO`) are grading settings, not timeouts: the check
 reports the worst table from `pg_stat_user_tables` plus this database's freeze age
 against `autovacuum_freeze_max_age`, and grades `degraded` (never `unavailable`, so it
-never 503s readiness on its own) when either threshold is breached.
+never 503s readiness on its own) when either threshold is breached. A completed reading
+that grades `degraded` DOES gate the aggregate — only a probe that never finished is
+advisory.
 
 ---
 

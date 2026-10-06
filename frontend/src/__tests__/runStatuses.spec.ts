@@ -19,6 +19,13 @@ describe('isTerminalStatus', () => {
   })
 })
 
+describe('rejected status (FAR-1487)', () => {
+  it('is a terminal status, so polling stops and Cancel/Stop is hidden', () => {
+    expect(isTerminalStatus('rejected')).toBe(true)
+    expect(isNonTerminalStatus('rejected')).toBe(false)
+  })
+})
+
 describe('isNonTerminalStatus', () => {
   it('does not classify budget_exceeded as non-terminal', () => {
     expect(isNonTerminalStatus('budget_exceeded')).toBe(false)

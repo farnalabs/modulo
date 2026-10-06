@@ -73,7 +73,9 @@ class TestStructure:
         literal = re.search(r"_TERMINAL_RUN_STATUSES = \((.*?)\)", code, re.DOTALL)
         assert literal is not None
         statuses = re.findall(r'"([a-z_]+)"', literal.group(1))
-        assert statuses == sorted(TERMINAL_STATUSES)
+        # The 0215 backfill literal is HISTORICAL: ``rejected`` (FAR-1487) joined
+        # TERMINAL_STATUSES after it shipped and no pre-0284 row can carry it.
+        assert statuses == sorted(TERMINAL_STATUSES - {"rejected"})
 
     def test_drain_covers_inflight_statuses(self) -> None:
         # qa gate fix 1: pending + hitl_parked added — a pre-B1 parked run's
