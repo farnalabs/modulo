@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_FOLDER_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.pipeline_folder import (
     create_folder,
     delete_folder,
@@ -73,7 +75,13 @@ async def list_folders_endpoint(
     return [FolderResponse.model_validate(f) for f in folders]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("pipeline_folder_created", "pipeline_folder", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("pipeline_folders.create")
 async def create_folder_endpoint(
     req: FolderCreate,
@@ -105,7 +113,12 @@ async def create_folder_endpoint(
     return FolderResponse.model_validate(folder)
 
 
-@router.patch("/{folder_id}")
+@router.patch(
+    "/{folder_id}",
+    dependencies=[
+        Depends(audited("pipeline_folder_updated", "pipeline_folder", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("pipeline_folders.update")
 async def update_folder_endpoint(
     folder_id: uuid.UUID,
@@ -137,7 +150,17 @@ async def update_folder_endpoint(
     return response
 
 
-@router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{folder_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "pipeline_folder_deleted", "pipeline_folder", principal_dep=get_current_tenant_user, fail_closed=True
+            )
+        )
+    ],
+)
 @handle_db_errors("pipeline_folders.delete")
 async def delete_folder_endpoint(
     folder_id: uuid.UUID,
@@ -159,7 +182,12 @@ async def delete_folder_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_FOLDER_NOT_FOUND)
 
 
-@router.patch("/{folder_id}/move")
+@router.patch(
+    "/{folder_id}/move",
+    dependencies=[
+        Depends(audited("pipeline_folder_reordered", "pipeline_folder", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("pipeline_folders.move")
 async def reorder_folder_endpoint(
     folder_id: uuid.UUID,

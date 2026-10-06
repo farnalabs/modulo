@@ -21,7 +21,7 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
-from tests.audit_session_double import patch_isolated_audit_session
+from tests.helpers.audit_session import install_audit_session_double
 from tests.unit.api.conftest import make_system_session_mock
 
 _VALID_32 = "a" * 32
@@ -31,19 +31,27 @@ ALT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Route the ``audited(...)`` fresh-session write to an in-memory double.
 
-    The BDD suite drives the real routes through ``TestClient`` with a mocked
-    route session, but the ``audited()`` dependency writes on its OWN session
-    from the process-shared engine. Under the BDD env that engine is sqlite
-    (``MODULO_DB=sqlite`` rewrites the postgres ``DATABASE_URL``), which has no
-    ``audit_chain_heads`` table - so every annotated mutating request 500s.
-    Sharing the unit suite's double (``tests.audit_session_double``) keeps the
-    BDD suite observing the route's own behaviour; the integration suite still
-    exercises the genuine append against real Postgres.
+    The BDD API steps drive the app with a mocked request session, but the
+    ``audited(...)`` route dependency opens its OWN session from the
+    process-shared engine. Left unpatched it dials the BDD SQLite ``test.db``
+    (which never ran the audit migrations), so every ``fail_closed=True``
+    destruction route 500s on ``no such table: audit_chain_heads``.
+
+    See ``tests.helpers.audit_session`` for the double and why integration
+    tests are deliberately left to exercise the genuine append.
+
+    Installs the double through a scoped ``monkeypatch.context()`` and yields
+    from inside it, so the unpatch of ``_shared_session_factory`` runs as this
+    fixture's teardown - after the test body - rather than during ordinary
+    finalization while in-flight ``fail_closed=True`` destroy routes are still
+    finalizing.
     """
-    patch_isolated_audit_session(monkeypatch)
+    with monkeypatch.context() as scoped:
+        install_audit_session_double(scoped)
+        yield
 
 
 # ---------------------------------------------------------------------------
