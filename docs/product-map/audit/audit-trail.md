@@ -10,6 +10,9 @@ code:
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/models/audit_event.py
+  - backend/src/modulo/core/system_audit_logger.py
+  - backend/src/modulo/db/models/system_audit_event.py
+  - backend/src/modulo/db/migrations/versions/0285_system_audit_events.py
   - frontend/src/views/AdminAuditView.vue
 unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py
@@ -18,8 +21,10 @@ unit-tests:
   - backend/tests/unit/api/test_audit_bdd.py
   - backend/tests/unit/api/test_audit_gating.py
   - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
+  - backend/tests/unit/core/test_system_audit_logger.py
   - backend/tests/integration/test_audit_append_only.py
   - backend/tests/integration/test_audit_immutability.py
+  - backend/tests/integration/test_system_audit_org_deletion.py
 bdd:
   - backend/tests/bdd/features/audit/event_recording.feature
   - backend/tests/bdd/features/audit/append_only.feature
@@ -96,14 +101,55 @@ guarded against tampering at both the ORM and the database layer.
       (`db/crud/pipeline.py` `graph_update_audit_payload` + `GRAPH_UPDATED_EVENT`,
       `db/crud/pipeline_snapshot_versioning.py`, `api/mcp_server.py`,
       `test_pipeline_graph_updated_audit.py`)
+- [x] Org-lifecycle audit records survive a hard delete via an org-independent
+      durable ledger (FAR-1517). `audit_events.organisation_id` FKs
+      `organisations.id` with `ON DELETE CASCADE`, so a hard-deleted org took
+      its ENTIRE chain with it — including the `org_deletion_requested` row
+      written moments earlier — and a post-commit append could never satisfy
+      the FK on an org that no longer exists. The four org-lifecycle writers
+      (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-confirm`,
+      `POST /api/v1/admin/org/deletion-cancel`, and the system-admin
+      `DELETE /api/v1/admin/orgs/{org_id}`) now mirror the same evidence
+      (`org_deletion_requested` / `org_deletion_completed` /
+      `org_deletion_cancelled`) into `system_audit_events` **inside the
+      deleting transaction, before the org row is removed**: the record commits
+      only if the delete commits, and a failed append aborts the destructive
+      act (fail-closed — the writer deliberately has no try/except; route
+      handlers map the raised `SQLAlchemyError` family to 5xx). The table
+      deliberately has **no `organisation_id` tenant column and no FK**: the
+      org id is a plain `org_id` value, so no cascade reaches it and no RLS
+      scope excludes it — the record stays readable by an operator long after
+      the org is gone. UPDATE/DELETE are rejected by database append-only
+      triggers, the same structural guard `audit_events` carries (the ledger is
+      deliberately **not** hash-chained: the tamper-evident chain is
+      per-organisation and its head cascades away, so immutability here comes
+      from the triggers). The three routes are recorded in
+      `tests/architecture/audit_coverage_baseline.txt` because `audited()`'s
+      post-commit org-scoped append cannot record anything after a hard delete
+      (`core/system_audit_logger.py`, `db/models/system_audit_event.py`,
+      migration 0285, `tests/integration/test_system_audit_org_deletion.py`,
+      `tests/unit/core/test_system_audit_logger.py`)
 
 ## Known Gaps
 
 - **Chain is per-organisation** — the hash chain, verification, and export are
   scoped to one org (multi-tenant RLS); there is no system-wide cross-org
-  chain.
+  chain. The org-independent `system_audit_events` ledger (FAR-1517) survives a
+  hard delete but is deliberately **not** chained and has no read API/UI — it
+  is durable evidence storage, not a browsable or verifiable cross-org trail.
 
 ## QA History
+- 2026-10-06: **Improve Architecture product-map walk** — closed the untracked
+  FAR-1517 surface. Org-lifecycle events (`org_deletion_requested`,
+  `org_deletion_completed`, `org_deletion_cancelled`) previously lived only in
+  the org-scoped `audit_events` chain, which cascades away with a hard-deleted
+  organisation; they are now mirrored IN the deleting transaction into the
+  org-independent, append-only `system_audit_events` ledger
+  (`core/system_audit_logger.py`, `db/models/system_audit_event.py`, migration
+  0285). Added the checked behaviour line, the code and integration/unit test
+  citations, and clarified the existing "per-organisation chain" Known Gap (the
+  ledger is durable but not chained and has no read surface). `_ORPHANED_BDD_FEATURES`
+  stays empty.
 - 2026-10-05: **Improve Architecture product-map walk** — closed the untracked
   FAR-1471 surface: every pipeline graph mutation (the `replace_pipeline_graph`
   write path and `rollback_to_snapshot`) now appends a `pipeline.graph_updated`
