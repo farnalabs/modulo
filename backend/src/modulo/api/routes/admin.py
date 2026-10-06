@@ -37,6 +37,7 @@ from modulo.api.dependencies import (
     require_system_or_org_admin,
     require_system_permission,
 )
+from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -70,6 +71,11 @@ from modulo.db.crud.last_admin_guard import (
 )
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_organisation
+from modulo.db.crud.pipeline_snapshot import (
+    SnapshotLockTerminateDeniedError,
+    inspect_snapshot_lock,
+    terminate_snapshot_lock_holders,
+)
 from modulo.db.crud.publisher import (
     create_publisher,
     get_publisher_by_key,
@@ -4693,3 +4699,138 @@ async def set_telemetry_status(
     )
 
     return TelemetryStatusResponse(enabled=is_telemetry_enabled())
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 Part 2 — pipeline snapshot advisory-lock operator clear path
+# ---------------------------------------------------------------------------
+# A snapshot advisory lock (two int4 keys derived from the pipeline id) is
+# SESSION-scoped and owned by the connection that acquired it, so a backend that
+# dies — or wedges — while holding one cannot be cleared from elsewhere:
+# ``pg_advisory_unlock`` only works on the holding connection itself. The only
+# primitive that clears it is terminating the holding backend, which requires
+# superuser or ``pg_signal_backend``. Both routes are therefore STRICT
+# system-admin (``require_system_permission``: fail-closed ``is_system_admin``
+# gate, no org-role fall-through) and derive the keys with the SAME
+# ``_pipeline_lock_keys`` the acquirer uses — never caller-supplied keys, so a
+# backend outside this pipeline's keys can never be touched.
+
+_AUDIT_EVENT_SNAPSHOT_LOCK_RELEASED = "pipeline_snapshot_lock_released"
+_AUDIT_LOG_SNAPSHOT_LOCK_RELEASE = "admin.snapshot_lock.release_audit_failed"
+
+
+class SnapshotLockHolder(BaseModel):
+    """One backend holding the pipeline's snapshot advisory lock.
+
+    Every field except ``pid`` may be NULL: ``pg_locks`` is readable by any
+    role, but ``pg_stat_activity`` redacts the detail columns of backends the
+    viewer does not own unless it holds ``pg_read_all_stats``. ``pid`` and
+    ``granted`` are always present, which is what the diagnostic is for.
+    """
+
+    pid: int
+    application_name: str | None = None
+    state: str | None = None
+    backend_start: datetime | None = None
+    query_start: datetime | None = None
+    granted: bool = False
+
+
+class SnapshotLockStatusResponse(BaseModel):
+    held: bool
+    holders: list[SnapshotLockHolder]
+
+
+class SnapshotLockReleaseResponse(BaseModel):
+    released: int
+    pids: list[int]
+
+
+@router.get("/pipelines/{pipeline_id}/snapshot-lock", response_model=SnapshotLockStatusResponse)
+@handle_db_errors("admin.snapshot_lock.status")
+async def get_pipeline_snapshot_lock(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
+) -> SnapshotLockStatusResponse:
+    """Report whether this pipeline's snapshot advisory lock is held, and by whom.
+
+    Read-only — it neither acquires nor releases anything. Run it before the
+    release endpoint to see WHICH backend is wedged (pid, application, state,
+    how long it has been there) instead of terminating blind.
+    """
+    async with session.begin():
+        payload = await inspect_snapshot_lock(session, pipeline_id)
+    return SnapshotLockStatusResponse.model_validate(payload)
+
+
+@router.post("/pipelines/{pipeline_id}/snapshot-lock/release", response_model=SnapshotLockReleaseResponse)
+@handle_db_errors("admin.snapshot_lock.release")
+async def release_pipeline_snapshot_lock(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
+) -> SnapshotLockReleaseResponse:
+    """Terminate the backend(s) holding this pipeline's snapshot advisory lock.
+
+    Idempotent: no holder means ``{"released": 0, "pids": []}`` and HTTP 200, so
+    an operator can re-issue it after a crash without checking first. Only
+    backends holding THIS pipeline's derived keys are terminated, never this
+    session and never an unrelated backend.
+
+    Two deliberate refusal arms, both fail-closed:
+
+    * no organisation context on the principal → 403. Terminating a backend is a
+      destructive operator action and must land on an audit chain; one that
+      cannot be recorded is not performed.
+    * the database role lacks the signal right (SQLSTATE 42501) → 403 problem
+      detail naming the grant (``GRANT pg_signal_backend TO "<app role>";``).
+      ``pg_terminate_backend`` requires superuser or ``pg_signal_backend``, and
+      a self-hosted deployment's runtime role normally has neither.
+
+    The audit event is written AFTER the termination through
+    ``append_audit_event_isolated`` (fail-open with a loud log): the backends are
+    already gone and a failed audit write must never resurrect them.
+    """
+    org_id = current_user.organisation_id
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Snapshot-lock release requires an organisation context so the terminated "
+                "backends can be recorded on that organisation's audit chain."
+            ),
+        )
+
+    try:
+        async with session.begin():
+            payload = await terminate_snapshot_lock_holders(session, pipeline_id)
+    except SnapshotLockTerminateDeniedError as exc:
+        raise ProblemException(ProblemType.FORBIDDEN, str(exc)) from exc
+
+    await _audit_logger.append_audit_event_isolated(
+        session,
+        TenantPrincipal(
+            username=current_user.username,
+            organisation_id=org_id,
+            account_id=current_user.account_id,
+            org_role=current_user.org_role or "",
+            is_system_admin=current_user.is_system_admin,
+            via_api_key=current_user.via_api_key,
+            client_kind=current_user.client_kind,
+        ),
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        event_type=_AUDIT_EVENT_SNAPSHOT_LOCK_RELEASED,
+        payload={
+            "pipeline_id": str(pipeline_id),
+            "released": int(payload["released"]),
+            "pids": [int(pid) for pid in payload["pids"]],
+            "summary": (
+                f"Terminated {payload['released']} backend(s) holding the snapshot advisory "
+                f"lock for pipeline {pipeline_id}"
+            ),
+        },
+        log_key=_AUDIT_LOG_SNAPSHOT_LOCK_RELEASE,
+    )
+    return SnapshotLockReleaseResponse.model_validate(payload)

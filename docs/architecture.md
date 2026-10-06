@@ -620,6 +620,61 @@ account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
 surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
+**Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
+`org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,
+tri-state: `NULL` = legacy role-bundle behaviour (unchanged), empty = explicit
+deny-all, a list = the exact set. Enforcement is
+`effective = grants ∩ bundle(live_role)` on both the REST resolver
+(`_assert_tenant_permission`) and the MCP chokepoint (`resolve_tool_access`);
+the grant leg only ever narrows and is not lifted by the authz kill switch.
+Minting (`POST /api/v1/api-keys` with `grants`) caps requested grants to the
+caller's LIVE capability and rejects non-delegable keys. Delegability is a
+single registry-level flag, `modulo.auth.permissions.is_delegable`, read live
+at enforcement and mint time (never-grantable: human_only HITL, `api_key.*`,
+`oauth.client.*`, `system.*`, `org.delete`, break-glass controls); OAuth
+scopes and principals must consume it rather than keep a second list. With the
+flag OFF a grant-bearing key is denied (401), never widened to its role, and
+`grants` on mint is rejected (422). With the flag ON, user-scoped keys default
+to and are capped at 90 days. Grants are immutable after mint. The MCP
+`create_api_key` tool accepts the same optional `grants` (always an org-scoped
+key, so no 90-day user-key TTL) and runs the same mint cap and flag gate as
+REST. The Settings > MCP create-key dialog offers a grant picker, sourced from
+`GET /api/v1/api-keys/grantable-permissions` (delegable permissions only,
+empty with the flag OFF); it omits `grants` unless the user restricts the key.
+Privilege helpers that gate admin/operator-only extras inside a route (cost
+breaker, guardrail strip, HITL weakening, In-Dev reveal) also require the
+matching permission (`cost.manage`, `guardrail.manage`, `pipeline.graph.update`,
+`*.list.in_dev`) in the grant-set when the key carries one; a malformed
+grant value is denied, never read as unrestricted. The grant decision is carried
+into the service layer: for REST callers `replace_pipeline_graph` and
+`rollback_to_snapshot` compute the final HITL-privilege and guardrail-admin
+flags exactly as before (the live role re-read under the row lock stays
+authoritative for REST callers, including upgrading a stale-low flag), then
+apply the explicit `grants_deny_privilege` / `grants_deny_guardrail_admin`
+parameters, which can only NARROW the result and so a live admin role never
+overrides a grants denial (an admin-owned key holding only
+`pipeline.graph.update` cannot strip a guardrail binding). The grant flag and
+grant-set are resolved after the key-validation DB session closes (never nested
+inside it, to avoid holding two pooled connections per request). A transient
+failure reading the flag for a grant-bearing key (the strict read propagates the
+registry's org-override read error instead of treating it as OFF) answers 503
+(not 401) on REST and a retryable denial on MCP; NULL-grants keys never read the
+flag. Long-lived MCP connections re-run the grant resolver on every
+re-validation. **Rollback caveat:** a key minted with grants (non-NULL
+`grants`, including the empty deny-all) becomes a full-role key if code older
+than this change ignores the column or if the column is dropped. Migration
+0281's downgrade therefore refuses to run while any grant-bearing key exists.
+Before rolling code back below this change, turn the `api_key_grants` flag off
+and revoke every grant-bearing key. Minting reads the flag strictly: a transient
+read failure answers a retryable 503 instead of silently skipping the grants
+gate or the 90-day user-key cap. A grant above the key's own minted/live role has no effect,
+since `effective = grants ∩ bundle(role)`; the mint cap checks the minter's
+capability, not the new key's role. **Known REST/MCP asymmetry (open design question):** over MCP
+every read-only tool is gated by the single coarse `resource.read_only` key,
+not the fine-grained REST read keys (`pipeline.list`, `pipeline.graph.read`,
+...), so MCP reads are all-or-nothing per grant-set; REST enforces the fine keys.
+
+
 ### Row-Level Security
 
 All tenant isolation is at the database layer via `SET LOCAL app.organisation_id` inside transactions. Every query runs within the org scope. This prevents cross-tenant leaks even if application-level scoping is bypassed. Team-visibility resources return 404 (not 403) for non-members – no existence enumeration.
