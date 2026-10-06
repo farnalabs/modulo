@@ -58,6 +58,7 @@ from modulo.api.hitl_answer_validation import (
 from modulo.api.hitl_answer_validation import (
     validate_hitl_answer,
 )
+from modulo.api.mcp_audit import mcp_audited
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.api.middleware.sensitive_mask import (
     is_sensitive_key as _shared_is_sensitive_key,
@@ -1985,6 +1986,7 @@ async def list_pipelines_tool(
     "Optional hitl_review_window_seconds (60-604800) sets the per-pipeline HITL review window "
     "override. Omit or pass null to inherit the org default, then the instance default."
 )
+@mcp_audited("pipeline_created", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def create_pipeline(
     name: str,
@@ -2201,6 +2203,7 @@ async def _append_mcp_threshold_denial_audit(
     "otherwise (FAR-1184). Every change is audited (pipeline.circuit_breaker_threshold_changed); "
     "refusals are audited as pipeline.circuit_breaker_threshold_change_denied. Available on every plan."
 )
+@mcp_audited("pipeline_circuit_breaker_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def set_pipeline_circuit_breaker(
     pipeline_id: str,
@@ -2295,6 +2298,7 @@ async def set_pipeline_circuit_breaker(
         "Every change is audited (pipeline.business_owner_changed / pipeline.reliability_owner_changed)."
     ),
 )
+@mcp_audited("pipeline_owners_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def set_pipeline_owners(
     pipeline_id: str,
@@ -3208,6 +3212,7 @@ async def _update_pipeline_graph_impl(
     "gates lack one is rejected with validation_failed (FAR-613: the MCP path enforces "
     "the HITL description rule specifically). Returns the updated graph."
 )
+@mcp_audited("pipeline_graph_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def update_pipeline_graph(
     pipeline_id: str,
@@ -3286,6 +3291,7 @@ def _apply_node_connector_binding(
     "Updates the node's connector_binding in the pipeline graph. "
     "The connector must already exist in the organisation."
 )
+@mcp_audited("pipeline_node_connector_bound", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def bind_connector_to_node(
     pipeline_id: str,
@@ -3472,6 +3478,7 @@ async def _trigger_pipeline_impl(
         "work_item_refs_required error when none are supplied."
     )
 )
+@mcp_audited("run_triggered", "run", fail_closed=False)
 @_RETRY_DB
 async def trigger_pipeline(
     pipeline_id: str,
@@ -4030,6 +4037,7 @@ async def _create_eval_definition_impl(
     "EvalDefinition row scoped to the caller's org and returns its details. "
     "Requires an admin caller; non-admins receive an insufficient_scope error.",
 )
+@mcp_audited("eval_definition_created", "eval_definition", fail_closed=False)
 @_RETRY_DB
 @_tool_db_shell(
     log_constant=_MSG_EVAL_DEF_CREATE_FAILED,
@@ -4223,6 +4231,7 @@ async def _update_eval_definition_impl(
     "fields (node_id, pass_threshold, suite_id) cannot be cleared to NULL via "
     "this tool - the REST PUT route must be used to unset them.",
 )
+@mcp_audited("eval_definition_updated", "eval_definition", fail_closed=False)
 @_RETRY_DB
 @_tool_db_shell(
     log_constant=_MSG_EVAL_DEF_UPDATE_FAILED,
@@ -4358,6 +4367,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     "admin-only hard purge (hard=True) removes the row outright. Non-admins "
     "receive an insufficient_scope error.",
 )
+@mcp_audited("eval_definition_deleted", "eval_definition", fail_closed=True)
 @_RETRY_DB
 @_tool_db_shell(
     log_constant=_MSG_EVAL_DEF_DELETE_FAILED,
@@ -4372,6 +4382,7 @@ async def delete_eval_definition(
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
+@mcp_audited("run_cancelled", "run", fail_closed=False)
 @_RETRY_DB
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
@@ -5243,6 +5254,7 @@ async def _review_hitl_impl(
         "intervention (intended policy)."
     ),
 )
+@mcp_audited("hitl_review_actioned", "hitl_review", fail_closed=False)
 @_RETRY_DB
 async def review_hitl(
     run_id: str,
@@ -5269,6 +5281,7 @@ async def review_hitl(
         "Note: community primitives are maintained by the Modulo team; your copy diverges from upstream on first edit."
     ),
 )
+@mcp_audited("library_primitive_copied", "library_primitive", fail_closed=False)
 @_RETRY_DB
 async def copy_library_primitive(
     primitive_id: str,
@@ -5689,6 +5702,7 @@ def _assert_create_model_backend_provider(provider: str) -> dict[str, Any] | Non
     "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode. "
     "The built-in 'stub' provider is a test double and cannot be created via MCP."
 )
+@mcp_audited("model_backend_created", "model_backend", fail_closed=False)
 @_RETRY_DB
 async def create_model_backend(
     name: str,
@@ -5865,6 +5879,7 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
     description="Create a new connector instance (provider configuration). "
     "Credentials are encrypted at rest. Returns the created connector details."
 )
+@mcp_audited("connector_created", "connector", fail_closed=True)
 @_RETRY_DB
 async def create_connector(
     name: str,
@@ -6074,6 +6089,7 @@ async def _create_trigger_impl(
 
 
 @mcp.tool(description="Create a new trigger for a pipeline.")
+@mcp_audited("trigger_created", "trigger", fail_closed=False)
 @_RETRY_DB
 async def create_trigger(
     pipeline_id: str,
@@ -6353,6 +6369,7 @@ def _recompute_ongoing_next_fire(
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
     "cron_timezone is only valid for cron triggers.",
 )
+@mcp_audited("trigger_updated", "trigger", fail_closed=False)
 @_RETRY_DB
 async def update_trigger(
     trigger_id: str,
@@ -6457,6 +6474,7 @@ async def update_trigger(
 
 
 @mcp.tool(description="Soft-delete a trigger by ID.")
+@mcp_audited("trigger_deleted", "trigger", fail_closed=True)
 @_RETRY_DB
 async def delete_trigger(trigger_id: str) -> dict[str, Any]:
     try:
@@ -6572,6 +6590,7 @@ async def set_org_triggers_paused(paused: bool) -> dict[str, Any]:
 
 
 @mcp.tool(description="Delete a pipeline by ID.")
+@mcp_audited("pipeline_deleted", "pipeline", fail_closed=True)
 @_RETRY_DB
 async def delete_pipeline(
     pipeline_id: str,
@@ -6610,6 +6629,7 @@ async def delete_pipeline(
 
 
 @mcp.tool(description="Delete a connector instance by ID.")
+@mcp_audited("connector_deleted", "connector", fail_closed=True)
 @_RETRY_DB
 async def delete_connector(
     connector_id: str,
@@ -6826,6 +6846,7 @@ async def list_connector_types() -> dict[str, Any]:
     "Secrets are encrypted at rest and scoped to the organisation. "
     "Returns the created secret details."
 )
+@mcp_audited("secret_created", "secret", fail_closed=True)
 @_RETRY_DB
 async def create_secret(
     key: str,
@@ -6925,6 +6946,7 @@ async def list_secrets(
 
 
 @mcp.tool(description="Delete a secret from the organisation vault by key.")
+@mcp_audited("secret_deleted", "secret", fail_closed=True)
 @_RETRY_DB
 async def delete_secret(
     key: str,
@@ -7212,6 +7234,7 @@ async def get_hitl_email_alerts() -> dict[str, Any]:
         "enabled=true); omitted, the stored overrides are untouched."
     ),
 )
+@mcp_audited("hitl_email_alerts_updated", "hitl_email_preference", fail_closed=False)
 @_RETRY_DB
 async def set_hitl_email_alerts(
     enabled: bool,
@@ -7503,6 +7526,7 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
+@mcp_audited("agent_created", "agent", fail_closed=False)
 @_RETRY_DB
 async def create_agent(
     name: str,
@@ -7990,6 +8014,7 @@ async def get_available_features() -> dict[str, Any]:
     "'latest' version placeholder so agents can reference the schema "
     "immediately. Returns the created schema details.",
 )
+@mcp_audited("schema_created", "schema", fail_closed=False)
 @_RETRY_DB
 async def create_schema(
     name: str,
@@ -8247,6 +8272,7 @@ def _set_to_dict(ps: Any, *, include_updated: bool = True) -> dict[str, Any]:
 @mcp.tool(
     description="Create a new parameter schema. Returns the created schema details.",
 )
+@mcp_audited("parameter_schema_created", "parameter_schema", fail_closed=False)
 @_RETRY_DB
 async def create_parameter_schema(
     name: str,
@@ -8331,6 +8357,7 @@ async def get_parameter_schema(
 @mcp.tool(
     description="Update a parameter schema. Requires the current version for optimistic concurrency.",
 )
+@mcp_audited("parameter_schema_updated", "parameter_schema", fail_closed=False)
 @_RETRY_DB
 async def update_parameter_schema(
     schema_id: str,
@@ -8391,6 +8418,7 @@ async def update_parameter_schema(
 @mcp.tool(
     description="Soft-delete a parameter schema by ID.",
 )
+@mcp_audited("parameter_schema_deleted", "parameter_schema", fail_closed=True)
 @_RETRY_DB
 async def delete_parameter_schema(
     schema_id: str,
@@ -8443,6 +8471,7 @@ async def delete_parameter_schema(
 @mcp.tool(
     description="Restore a soft-deleted parameter schema by ID.",
 )
+@mcp_audited("parameter_schema_restored", "parameter_schema", fail_closed=False)
 @_RETRY_DB
 async def restore_parameter_schema(
     schema_id: str,
@@ -8630,6 +8659,7 @@ async def list_parameter_sets(
 @mcp.tool(
     description="Create a new parameter set under a parameter schema. Returns the created set details.",
 )
+@mcp_audited("parameter_set_created", "parameter_set", fail_closed=False)
 @_RETRY_DB
 async def create_parameter_set(
     schema_id: str,
@@ -8729,6 +8759,7 @@ async def get_parameter_set(
 @mcp.tool(
     description="Update a parameter set. Requires the current version for optimistic concurrency.",
 )
+@mcp_audited("parameter_set_updated", "parameter_set", fail_closed=False)
 @_RETRY_DB
 async def update_parameter_set(
     schema_id: str,
@@ -8796,6 +8827,7 @@ async def update_parameter_set(
 @mcp.tool(
     description="Soft-delete a parameter set by ID under a parameter schema.",
 )
+@mcp_audited("parameter_set_deleted", "parameter_set", fail_closed=True)
 @_RETRY_DB
 async def delete_parameter_set(
     schema_id: str,
@@ -8855,6 +8887,7 @@ async def delete_parameter_set(
 @mcp.tool(
     description="Restore a soft-deleted parameter set by ID under a parameter schema.",
 )
+@mcp_audited("parameter_set_restored", "parameter_set", fail_closed=False)
 @_RETRY_DB
 async def restore_parameter_set(
     schema_id: str,
@@ -9181,6 +9214,7 @@ async def _delete_housekeeping_groups(
     "org_api_key, sso_provider, team, parameter_schema, schema, lifecycle_map. "
     "Deletions are grouped by entity type with per-group savepoints.",
 )
+@mcp_audited("housekeeping_performed", "housekeeping", fail_closed=True)
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
