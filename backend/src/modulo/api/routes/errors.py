@@ -169,6 +169,10 @@ async def create_session_key(
     return {"key": key, "expires_in_seconds": 3600}
 
 
+# FAR-1538 ingest-volume decision: ACCEPT the audit event, do not baseline-exempt.
+# One event per REQUEST: the browser batches on a 5s flush timer AND is
+# rate-limited to 10 requests/minute per authenticated session, so a quiet client
+# writes nothing. Exempting would drop coverage and need a baseline edit.
 @router.post(
     "/ingest",
     response_model=ErrorIngestResponse,

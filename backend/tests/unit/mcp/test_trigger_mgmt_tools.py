@@ -342,6 +342,25 @@ class TestListTriggersErrors(_AuthContext):
         assert result["error"] == "server_error"
         assert result["detail"] == "Failed to list triggers"
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_malformed_pipeline_filter_returns_invalid_id(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-1540: a malformed ``pipeline_id`` filter is a client error the
+        caller can branch on. Pre-fix it raised ``ValueError`` out of
+        ``uuid.UUID(...)``, hit the generic ``except Exception`` arm and came
+        back as ``internal_error``; no DB session is opened for it."""
+        mock_session.return_value = _make_session_context(AsyncMock())
+
+        result = await list_triggers(pipeline_id="not-a-uuid")
+
+        assert result["error"] == "invalid_id"
+        assert result["field"] == "pipeline_id"
+        mock_session.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # list_triggers — success + filtering

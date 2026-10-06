@@ -8,6 +8,7 @@ code:
   - backend/src/modulo/db/crud/organisation.py
   - backend/src/modulo/db/crud/org_membership.py
   - backend/src/modulo/db/crud/org_deletion.py
+  - backend/src/modulo/core/system_audit_logger.py
   - backend/src/modulo/db/rls.py
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/admin.py
@@ -20,6 +21,7 @@ unit-tests:
   - backend/tests/unit/api/test_viewmodel_error_paths.py
   - backend/tests/unit/db/test_multi_backend_bdd.py
   - backend/tests/integration/crud/test_org_deletion.py
+  - backend/tests/integration/test_system_audit_org_deletion.py
   - frontend/src/__tests__/AdminOrgSettingsView.spec.ts
 bdd:
   - backend/tests/bdd/features/organisation/rls_isolation.feature
@@ -61,6 +63,14 @@ authorization cleanup.
 - [x] Org deletion workflow: `deletion-request` (202 + token + export bundle),
       `deletion-confirm` (within 24h), `deletion-cancel`, `export`, immediate `DELETE` —
       token single-use, audit event on request, terminal runs batch-deleted before FK cascade
+- [x] Org-lifecycle evidence survives the hard delete (FAR-1517): because the
+      `audit_events` chain is FK-cascaded from the org, request / confirm /
+      cancel / immediate-delete mirror their events into the org-independent
+      `system_audit_events` ledger inside the deleting transaction (plain
+      `org_id`, no FK, no RLS tenant column, append-only triggers), so a failed
+      append aborts the destructive act and the record outlives the org
+      (`core/system_audit_logger.py`,
+      `tests/integration/test_system_audit_org_deletion.py`)
 - [x] RLS tenant isolation: org-scoped tables carry `organisation_id`, `SET LOCAL
       app.organisation_id` in transactions, pool-checkout org reset, ORM tenant filter
       for non-Postgres backends, `organisations` table itself excluded (root tenant)
@@ -78,6 +88,13 @@ authorization cleanup.
 
 ## QA History
 
+- 2026-10-06: **Improve Architecture product-map walk** — tracked the FAR-1517
+  org-lifecycle durable audit ledger: the deletion workflow now mirrors its
+  events into the org-independent `system_audit_events` table before the org
+  row is removed, so the evidence is not destroyed by the `audit_events`
+  cascade. Added the checked behaviour line, the
+  `core/system_audit_logger.py` code citation and the
+  `test_system_audit_org_deletion.py` integration citation.
 - 2026-09-21: **product-map walk** — closed the "No org-CRUD BDD feature
   file" gap. `system_admin_orgs.feature` gained org-listing coverage (system-admin
   list success, the reserved infrastructure orgs — nil-UUID error-ingest and
