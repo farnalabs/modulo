@@ -5162,6 +5162,139 @@ async def _validate_mcp_choice_answer(
     return None, validated
 
 
+async def _dispatch_hitl_claim(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    actor_account_id: uuid.UUID | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The ``claim`` branch of ``_dispatch_hitl_action`` (fails closed without an actor)."""
+    if actor_account_id is None:
+        return {
+            "error": "no_user_context",
+            "detail": "A gate claim requires an authenticated user context; this MCP session has none",
+        }
+    gate = await mgr.claim(
+        s, run_id=rid, review_id=review_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
+    )
+    return {
+        "status": "claimed",
+        "claim_token": gate.claim_token,
+        "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
+    }
+
+
+async def _dispatch_hitl_approve(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    claim_token: str | None,
+    actor_account_id: uuid.UUID | None,
+    answer: dict[str, Any] | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The ``approve`` branch of ``_dispatch_hitl_action`` (FAR-860 answer validation)."""
+    # FAR-860: validate choice answer before the manager call. The error is
+    # returned out-of-band so a legit answer carrying an "error" key is
+    # never misread as an MCP error dict.
+    answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
+    if answer_error is not None:
+        return answer_error
+    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+    approve_payload: dict[str, Any] = {"action": "approved", "review_id": review_id}
+    if validated_answer is not None:
+        approve_payload["answer"] = validated_answer
+    await mgr.approve(
+        s,
+        run_id=rid,
+        review_id=review_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        actor_id=actor_account_id,
+        decision_payload=approve_payload,
+        client_type=client_type,
+        answer=validated_answer,
+    )
+    return {"status": "approved", "review_id": review_id}
+
+
+async def _dispatch_hitl_deliver_manual(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    claim_token: str | None,
+    actor_account_id: uuid.UUID | None,
+    output: dict[str, Any] | None,
+    answer: dict[str, Any] | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The ``deliver_manual`` branch of ``_dispatch_hitl_action`` (FAR-860 answer validation)."""
+    # FAR-860: validate choice answer before the manager call. The error is
+    # returned out-of-band so a legit answer carrying an "error" key is
+    # never misread as an MCP error dict.
+    answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
+    if answer_error is not None:
+        return answer_error
+    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+    manual_payload: dict[str, Any] = {"action": "deliver_manual", "review_id": review_id, "output": output or {}}
+    if validated_answer is not None:
+        manual_payload["answer"] = validated_answer
+    await mgr.deliver_manual(
+        s,
+        run_id=rid,
+        review_id=review_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        output=output or {},
+        actor_id=actor_account_id,
+        decision_payload=manual_payload,
+        client_type=client_type,
+        answer=validated_answer,
+    )
+    return {"status": "delivered_manual", "review_id": review_id}
+
+
+async def _dispatch_hitl_reject(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    claim_token: str | None,
+    actor_account_id: uuid.UUID | None,
+    reason: str | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The default (``reject``) branch of ``_dispatch_hitl_action``."""
+    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+    reject_payload: dict[str, Any] = {"action": "rejected", "review_id": review_id}
+    if reason is not None:
+        reject_payload["reason"] = reason
+    await mgr.reject(
+        s,
+        run_id=rid,
+        review_id=review_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        actor_id=actor_account_id,
+        reason=reason,
+        decision_payload=reject_payload,
+        client_type=client_type,
+    )
+    return {"status": "rejected", "review_id": review_id}
+
+
 async def _dispatch_hitl_action(
     mgr: HITLManager,
     s: AsyncSession,
@@ -5217,82 +5350,51 @@ async def _dispatch_hitl_action(
         )
         return _hitl_decision_rate_limited_response()
     if action == "claim":
-        if actor_account_id is None:
-            return {
-                "error": "no_user_context",
-                "detail": "A gate claim requires an authenticated user context; this MCP session has none",
-            }
-        gate = await mgr.claim(
-            s, run_id=rid, review_id=review_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
+        return await _dispatch_hitl_claim(
+            mgr,
+            s,
+            rid=rid,
+            review_id=review_id,
+            org_id=org_id,
+            actor_account_id=actor_account_id,
+            client_type=client_type,
         )
-        return {
-            "status": "claimed",
-            "claim_token": gate.claim_token,
-            "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
-        }
     if action == "approve":
-        # FAR-860: validate choice answer before the manager call. The error is
-        # returned out-of-band so a legit answer carrying an "error" key is
-        # never misread as an MCP error dict.
-        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
-        if answer_error is not None:
-            return answer_error
-        # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-        approve_payload: dict[str, Any] = {"action": "approved", "review_id": review_id}
-        if validated_answer is not None:
-            approve_payload["answer"] = validated_answer
-        await mgr.approve(
+        return await _dispatch_hitl_approve(
+            mgr,
             s,
-            run_id=rid,
+            rid=rid,
             review_id=review_id,
             org_id=org_id,
-            claim_token=claim_token or "",
-            actor_id=actor_account_id,
-            decision_payload=approve_payload,
+            claim_token=claim_token,
+            actor_account_id=actor_account_id,
+            answer=answer,
             client_type=client_type,
-            answer=validated_answer,
         )
-        return {"status": "approved", "review_id": review_id}
     if action == "deliver_manual":
-        # FAR-860: validate choice answer before the manager call. The error is
-        # returned out-of-band so a legit answer carrying an "error" key is
-        # never misread as an MCP error dict.
-        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
-        if answer_error is not None:
-            return answer_error
-        # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-        manual_payload: dict[str, Any] = {"action": "deliver_manual", "review_id": review_id, "output": output or {}}
-        if validated_answer is not None:
-            manual_payload["answer"] = validated_answer
-        await mgr.deliver_manual(
+        return await _dispatch_hitl_deliver_manual(
+            mgr,
             s,
-            run_id=rid,
+            rid=rid,
             review_id=review_id,
             org_id=org_id,
-            claim_token=claim_token or "",
-            output=output or {},
-            actor_id=actor_account_id,
-            decision_payload=manual_payload,
+            claim_token=claim_token,
+            actor_account_id=actor_account_id,
+            output=output,
+            answer=answer,
             client_type=client_type,
-            answer=validated_answer,
         )
-        return {"status": "delivered_manual", "review_id": review_id}
-    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-    reject_payload: dict[str, Any] = {"action": "rejected", "review_id": review_id}
-    if reason is not None:
-        reject_payload["reason"] = reason
-    await mgr.reject(
+    return await _dispatch_hitl_reject(
+        mgr,
         s,
-        run_id=rid,
+        rid=rid,
         review_id=review_id,
         org_id=org_id,
-        claim_token=claim_token or "",
-        actor_id=actor_account_id,
+        claim_token=claim_token,
+        actor_account_id=actor_account_id,
         reason=reason,
-        decision_payload=reject_payload,
         client_type=client_type,
     )
-    return {"status": "rejected", "review_id": review_id}
 
 
 def _hitl_error_response(exc: BaseException, run_id: str, review_id: str) -> dict[str, Any]:
