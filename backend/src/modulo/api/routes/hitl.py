@@ -55,7 +55,9 @@ from modulo.api.hitl_answer_validation import (
     validate_hitl_answer,
 )
 from modulo.api.models.problem import ProblemException, ProblemType
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -310,12 +312,15 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
     capacity limit.
 
     That exemption is a POLICY choice, not a "no sandbox work follows"
-    argument. A rejection always resumes downstream execution: it routes the
-    run to its reject route (``reject_target`` config or a reject edge) when
-    one exists, and with no reject route it continues the run along the
-    normal path — and continuing DOES resume downstream (including sandbox)
-    execution. The resulting approve(409-gated)/reject(not gated) asymmetry
-    is a known point of this design, flagged here rather than justified.
+    argument. A rejection resumes the graph: it routes the run to its reject
+    route (``reject_target`` config or a reject edge) when one exists — and
+    that route DOES resume downstream (including sandbox) execution. With no
+    reject route (FAR-1487) the run ENDS ``rejected`` by default (no
+    downstream work), unless the gate is set to ``on_reject: proceed`` (or has
+    a ``correction_target``), in which case it continues along the normal
+    path. The approve(409-gated)/reject(not gated) asymmetry for the routed /
+    proceed cases is a known point of this design, flagged here rather than
+    justified.
     """
     if not await org_sandbox_capacity_free(session, org_id, run_id):
         raise HTTPException(
@@ -616,6 +621,12 @@ def _raise_pending_rollback_error(exc: PendingRollbackError, log_key: str) -> No
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/claim",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_claimed", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors(_CODE_HITL_CLAIM_REVIEW)
 async def claim_review(
@@ -883,6 +894,12 @@ async def _run_hitl_manager(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/approve",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_approved", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("hitl.approve_review")
 async def approve_review(
@@ -958,6 +975,17 @@ async def approve_review(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/approve-with-modification",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_approved_with_modification",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("hitl.approve_review_with_modification")
 async def approve_review_with_modification(
@@ -1041,6 +1069,12 @@ async def approve_review_with_modification(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/reject",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("hitl_review_rejected", "hitl_review", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("hitl.reject_review")
 async def reject_review(
@@ -1055,16 +1089,18 @@ async def reject_review(
 
     The reject route is the gate's reject_target config or a reject-typed
     edge, when one exists. With no reject route configured on the gate, the
-    run continues along the normal path.
+    run ENDS with the terminal ``rejected`` status (FAR-1487) - unless the
+    gate sets ``on_reject: proceed`` (or declares a ``correction_target``),
+    which continues the run along the normal path.
     """
     # FAR-541: the payload is stamped with the gate it resolves (see approve_review).
     # No require_sandbox guard here (unlike the resume actions): the capacity
     # exemption is POLICY — a human rejection already committed must not be
     # bounced off the gate by a transient capacity limit — and NOT a claim
-    # that rejection avoids sandbox work. It does not: a rejection routes to
-    # the gate's reject route when one is configured, and with no reject route
-    # the run continues along the normal path; either way downstream execution
-    # resumes.
+    # that rejection avoids sandbox work. A rejection routes to the gate's
+    # reject route when one is configured (downstream execution resumes); with
+    # no reject route the run ENDS ``rejected`` (FAR-1487) unless the gate is
+    # explicitly ``on_reject: proceed``.
     #
     # The human_only guard is not applied mechanically, but it IS effectively
     # in force: reject requires a claim_token and non-browser principals can
@@ -1088,8 +1124,9 @@ async def reject_review(
 
     # Resume the graph with rejection data: when a reject route is wired
     # (reject_target config or a reject edge) the gate's router picks that
-    # branch; when unwired there is no router and the run simply continues
-    # along the normal edge.
+    # branch; when unwired the gate's terminate router ENDS the run (finalized
+    # ``rejected``, FAR-1487) unless ``on_reject: proceed`` keeps the plain
+    # edge to the normal target.
     try:
         executor = _build_resume_executor(engine)
         await executor.resume(
@@ -1116,6 +1153,17 @@ async def reject_review(
 @router.post(
     "/runs/{run_id}/hitl/{review_id}/deliver-manual",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_manual_output_delivered",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("hitl.deliver_manual_output")
 async def deliver_manual_output(
@@ -1183,6 +1231,17 @@ async def deliver_manual_output(
 @router.post(
     "/runs/{run_id}/manual/{review_id}/submit",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "hitl_review_manual_output_submitted",
+                "hitl_review",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("hitl.submit_manual_output")
 async def submit_manual_output(

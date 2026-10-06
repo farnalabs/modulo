@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.cost_controller import (
     build_cost_report_buckets,
@@ -374,7 +376,10 @@ async def get_spend_limits(
     )
 
 
-@router.put("/limits/org")
+@router.put(
+    "/limits/org",
+    dependencies=[Depends(audited("org_spend_limit_set", "cost_control", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.set_org_spend_limit")
 async def set_org_spend_limit(
     req: SetSpendLimitRequest,
@@ -422,7 +427,10 @@ async def set_org_spend_limit(
     }
 
 
-@router.put("/limits/teams/{team_id}")
+@router.put(
+    "/limits/teams/{team_id}",
+    dependencies=[Depends(audited("team_spend_limit_set", "cost_control", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.set_team_spend_limit")
 async def set_team_spend_limit(
     team_id: uuid.UUID,
@@ -572,7 +580,10 @@ async def get_cost_controls(
     )
 
 
-@router.put("/controls")
+@router.put(
+    "/controls",
+    dependencies=[Depends(audited("cost_controls_updated", "cost_control", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.update_cost_controls")
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
@@ -712,7 +723,10 @@ async def get_spend_ceiling(
     )
 
 
-@router.put("/ceiling")
+@router.put(
+    "/ceiling",
+    dependencies=[Depends(audited("spend_ceiling_set", "cost_control", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.set_spend_ceiling")
 async def set_spend_ceiling(
     req: SetSpendCeilingRequest,
@@ -780,7 +794,10 @@ class CircuitBreakerResetResponse(BaseModel):
     triggers_reactivated: int
 
 
-@router.post("/circuit-breaker/{pipeline_id}/reset")
+@router.post(
+    "/circuit-breaker/{pipeline_id}/reset",
+    dependencies=[Depends(audited("circuit_breaker_reset", "cost_control", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.reset_circuit_breaker")
 async def reset_circuit_breaker(
     pipeline_id: uuid.UUID,
@@ -963,7 +980,11 @@ def _report_response(report: ScheduledReport) -> ReportResponse:
     )
 
 
-@router.post("/reports", status_code=201)
+@router.post(
+    "/reports",
+    status_code=201,
+    dependencies=[Depends(audited("cost_report_created", "cost_report", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.create_report")
 async def create_report(
     req: CreateReportRequest,
@@ -1054,7 +1075,16 @@ async def list_reports(
     return [_report_response(report) for report in reports]
 
 
-@router.delete("/reports/{report_id}", status_code=204)
+@router.delete(
+    "/reports/{report_id}",
+    status_code=204,
+    dependencies=[
+        Depends(
+            audited("cost_report_deleted", "cost_report", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("costs.delete_report")
 async def delete_report(
     report_id: uuid.UUID,
@@ -1253,7 +1283,11 @@ async def get_anomalies(
         ) from None
 
 
-@router.post("/anomalies/dismiss/{anomaly_id}", status_code=204)
+@router.post(
+    "/anomalies/dismiss/{anomaly_id}",
+    status_code=204,
+    dependencies=[Depends(audited("cost_anomaly_dismissed", "cost_anomaly", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.dismiss_anomaly_endpoint")
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,

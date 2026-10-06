@@ -7,6 +7,7 @@ import { usePlanStore } from '../stores/planStore'
 import { resetHitlReviewState } from '../composables/useHitlReviewState'
 
 let mockRunStatus = 'complete'
+let mockErrorCode: string | null = null
 let mockModelBackends: { items: Array<{ has_credentials: boolean }> } | null = null
 let mockInputPayload: Record<string, unknown> | null = null
 let mockTriggerActor: string | null = null
@@ -71,6 +72,7 @@ vi.mock('../lib/api/client', () => {
               run_id: 'test-run-id',
               pipeline_id: 'test-pipeline',
               status: mockRunStatus,
+              error_code: mockErrorCode,
               total_cost_usd: 1.23,
               token_consumption: null,
               node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
@@ -180,6 +182,7 @@ describe('RunDetailView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockRunStatus = 'complete'
+    mockErrorCode = null
     mockModelBackends = null
     mockInputPayload = null
     mockTriggerActor = null
@@ -229,6 +232,33 @@ describe('RunDetailView', () => {
     await flushPromises()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Run Detail')
+    wrapper.unmount()
+  })
+
+  it('renders the superseded status badge for a coalesced-supersede run', async () => {
+    mockRunStatus = 'rejected'
+    mockErrorCode = 'hitl.superseded'
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    const badge = wrapper.find('[data-testid="run-detail-status-superseded"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('Superseded by a newer version')
+    wrapper.unmount()
+  })
+
+  it('renders the plain rejected status badge for a human rejection', async () => {
+    mockRunStatus = 'rejected'
+    mockErrorCode = 'hitl.rejected'
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="run-detail-status-superseded"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('rejected')
     wrapper.unmount()
   })
 

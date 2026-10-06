@@ -124,7 +124,7 @@ Same isolated-append path, with two differences that keep provenance honest:
   handler calls ``bind_audit_org(request, org_id)`` at the point the tenant
   becomes known — and, for ingress that admits no tenant yet, with the
   unattributed sentinel org
-  (``modulo.db.models.organisation.ORPHAN_ORG_ID``) so the attempt is still
+  (``modulo.db.models.organisation.SYSTEM_ORG_ID``) so the attempt is still
   recorded; rebind the real org the moment it resolves. With no org published
   there is nowhere honest to record the event, so it is logged
   (``audit_coverage.<event_type>.no_org_context``) and skipped — the wrapper
@@ -381,7 +381,7 @@ def bind_audit_org(request: Request, org_id: uuid.UUID | str | None) -> None:
     """Publish the organisation an ``audited_system`` event belongs to (FAR-1516).
 
     Call it from the route handler: with the tenant org once it is known, or
-    with the unattributed sentinel org (``ORPHAN_ORG_ID``) for ingress that has
+    with the unattributed sentinel org (``SYSTEM_ORG_ID``) for ingress that has
     no tenant yet — rebinding the real org as soon as it resolves. ``None``
     leaves whatever was published earlier untouched, so a "try the tenant, fall
     back to nothing" call site cannot silently unpublish a good org.

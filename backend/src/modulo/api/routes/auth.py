@@ -73,7 +73,7 @@ from modulo.db.crud.token_family import (
 from modulo.db.models.account import Account
 from modulo.db.models.invitation import Invitation
 from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import ORPHAN_ORG_ID, Organisation
+from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.db.models.token_family import TokenFamily
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -512,7 +512,7 @@ async def login(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
-    bind_audit_org(request, ORPHAN_ORG_ID)
+    bind_audit_org(request, SYSTEM_ORG_ID)
     ip = _client_ip(request)
     limiter = get_auth_rate_limiter(settings)
 
@@ -624,7 +624,7 @@ async def demo_login(
     """
     # FAR-1516: no tenant exists until the demo org resolves — start with the
     # unattributed sentinel so the attempt is still recorded.
-    bind_audit_org(request, ORPHAN_ORG_ID)
+    bind_audit_org(request, SYSTEM_ORG_ID)
     config = demo_login_config(settings)
     if config is None:
         raise _demo_not_found()
@@ -1174,7 +1174,7 @@ async def refresh(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
-    bind_audit_org(request, ORPHAN_ORG_ID)
+    bind_audit_org(request, SYSTEM_ORG_ID)
     cookie_token = request.cookies.get(REFRESH_COOKIE)
     if not cookie_token:
         # The SPA cannot read the httpOnly cookie, so it cannot send the token;
@@ -1316,7 +1316,7 @@ async def logout(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
-    bind_audit_org(request, ORPHAN_ORG_ID)
+    bind_audit_org(request, SYSTEM_ORG_ID)
     cookie_token = request.cookies.get(REFRESH_COOKIE)
     if not cookie_token:
         _log.warning("auth.logout_cookie_missing")

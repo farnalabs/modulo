@@ -54,7 +54,9 @@ from modulo.api.team_scope import (
     resolve_eval_suite_team_scope,
     validate_owner_team_for_create,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.author_warnings import check_author_warnings
 from modulo.core.eval_engine.coverage_gap import (
@@ -519,7 +521,10 @@ async def _collect_author_warnings(
 @router.post(
     "/evals/{eval_id}/policy-gate",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("policy_gate_created", "policy_gate", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
     responses={
         400: {"description": "Bad Request — binding validation failed"},
         404: {"description": "Eval not found"},
@@ -681,7 +686,10 @@ async def create_policy_gate(
 
 @router.put(
     "/evals/{eval_id}/policy-gate",
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("policy_gate_updated", "policy_gate", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
     responses={
         400: {"description": "Bad Request — binding validation failed"},
         404: {"description": "Policy gate not found"},
@@ -830,7 +838,13 @@ async def update_policy_gate(
 @router.delete(
     "/evals/{eval_id}/policy-gate",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(
+            audited("policy_gate_deleted", "policy_gate", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        ),
+        Depends(deny_break_glass_mint),
+    ],
     responses={
         404: {"description": "Policy gate not found"},
         409: {"description": "Conflict — gate has decision records"},
@@ -946,7 +960,13 @@ _MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION = (
     # FAR-967 F2: a break-glass principal must not be able to flip
     # enforcement — the toggle carries the same mint deny as create /
     # update / delete.
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(
+            audited("policy_gate_toggled", "policy_gate", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        ),
+        Depends(deny_break_glass_mint),
+    ],
     responses={
         404: {"description": "Policy gate not found"},
         503: {"description": "Service Unavailable — lock timeout"},
@@ -1170,7 +1190,10 @@ async def get_policy_gate(
 @router.post(
     "/evals",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("eval_definition_created", "eval_definition", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
     responses={
         403: {"description": "Forbidden"},
         404: {"description": "Not Found"},
@@ -1801,6 +1824,7 @@ async def eval_coverage_gap(
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
+    dependencies=[Depends(audited("eval_suite_alerting_updated", "eval_suite", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_EVALS_SUITE_ALERTING)
 async def update_suite_alerting(
@@ -1946,6 +1970,7 @@ _MSG_EVAL_DATASET_NOT_FOUND = "Eval dataset not found"
 @router.post(
     "/eval-datasets",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("eval_dataset_created", "eval_dataset", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_EVAL_DATASETS_CREATE)
 async def create_eval_dataset(
@@ -2072,7 +2097,10 @@ async def get_eval_dataset(
     return _eval_dataset_response(dataset)
 
 
-@router.patch("/eval-datasets/{dataset_id}")
+@router.patch(
+    "/eval-datasets/{dataset_id}",
+    dependencies=[Depends(audited("eval_dataset_updated", "eval_dataset", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_EVAL_DATASETS_UPDATE)
 async def update_eval_dataset(
     dataset_id: uuid.UUID,
@@ -2127,6 +2155,12 @@ async def update_eval_dataset(
 @router.delete(
     "/eval-datasets/{dataset_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("eval_dataset_deleted", "eval_dataset", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors(_CODE_EVAL_DATASETS_DELETE)
 async def delete_eval_dataset(
@@ -2233,6 +2267,7 @@ _MSG_EVAL_SUITE_NOT_FOUND_DETAIL = "Eval suite not found"
 @router.post(
     "/eval-suites",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("eval_suite_created", "eval_suite", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_EVAL_SUITES_CREATE)
 async def create_eval_suite(
@@ -2355,7 +2390,10 @@ async def get_eval_suite(
     return _eval_suite_response(suite)
 
 
-@router.patch("/eval-suites/{suite_id}")
+@router.patch(
+    "/eval-suites/{suite_id}",
+    dependencies=[Depends(audited("eval_suite_updated", "eval_suite", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_EVAL_SUITES_UPDATE)
 async def update_eval_suite(
     suite_id: uuid.UUID,
@@ -2409,6 +2447,12 @@ async def update_eval_suite(
 @router.delete(
     "/eval-suites/{suite_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("eval_suite_deleted", "eval_suite", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors(_CODE_EVAL_SUITES_DELETE)
 async def delete_eval_suite(
@@ -2525,7 +2569,13 @@ async def get_eval_definition(
     return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
 
 
-@router.put("/evals/{eval_id}", dependencies=[Depends(deny_break_glass_mint)])
+@router.put(
+    "/evals/{eval_id}",
+    dependencies=[
+        Depends(audited("eval_definition_updated", "eval_definition", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors(_CODE_EVALS_UPDATE_EVAL_DEFINITION)
 async def update_eval_definition(
     eval_id: uuid.UUID,
@@ -2649,7 +2699,15 @@ async def update_eval_definition(
 @router.delete(
     "/evals/{eval_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(
+            audited(
+                "eval_definition_deleted", "eval_definition", principal_dep=get_current_tenant_user, fail_closed=True
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        ),
+        Depends(deny_break_glass_mint),
+    ],
 )
 @handle_db_errors(_CODE_EVALS_DELETE_EVAL_DEFINITION)
 async def delete_eval_definition(
@@ -2901,6 +2959,9 @@ class CreateEvalFromRunRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# FAR-1472 exemption (read-only POST): compares two runs' stored eval results
+# side by side and writes nothing. Deliberately left in
+# audit_coverage_baseline.txt.
 @router.post(
     "/evals/compare",
     status_code=status.HTTP_200_OK,
@@ -3330,7 +3391,10 @@ async def _insert_eval_definition(
 @router.post(
     "/evals/from-run",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("eval_definition_created", "eval_definition", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
     responses={
         403: {"description": "Forbidden"},
         404: {"description": "Not Found"},

@@ -38,7 +38,7 @@ from modulo.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_oidc_providers,
 )
-from modulo.db.models.organisation import ORPHAN_ORG_ID
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.settings import Settings, get_settings
 
@@ -479,7 +479,7 @@ async def saml_acs_provider(
     (FAR-1010), NOT from RelayState. RelayState is an additional integrity
     signal, not the control.
     """
-    bind_audit_org(request, ORPHAN_ORG_ID)
+    bind_audit_org(request, SYSTEM_ORG_ID)
     provider = await _resolve_saml_for_route(provider_id, system_session, session)
     # FAR-1516: the provider names its org — record the ACS attempt there (an
     # unknown slug 404s above and keeps the sentinel).
@@ -698,7 +698,7 @@ async def saml_acs(
     On success, redirects the browser to the frontend callback URL with
     access and refresh tokens as query parameters.
     """
-    bind_audit_org(request, ORPHAN_ORG_ID)
+    bind_audit_org(request, SYSTEM_ORG_ID)
     # This legacy route has no provider slug in its path (saml_process_response
     # resolves the first enabled provider internally), so read it once here on
     # the SYSTEM session — the same instance-global leg that helper uses — to

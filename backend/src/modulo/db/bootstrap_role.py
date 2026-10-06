@@ -3,7 +3,13 @@
 Connects as the migration/owner user (DATABASE_ADMIN_URL, superuser) to
 (re)create the roles, then grants DML on existing and future tables/sequences,
 plus USAGE on the public schema. Safe to run multiple times — checks pg_roles
-before creating and updates passwords on each run for consistency.
+before creating. Passwords are reconciled from each role's URL when that URL is
+configured (ALTER ... PASSWORD with the URL's password — the same value every
+run, so re-running never changes a working credential); when the URL is NOT
+configured the existing role's password is left untouched (FAR-1519: a
+warm-boot re-run must never reset a working password), and a role that does
+not exist yet is created with a random placeholder that a later
+URL-configured boot reconciles.
 
 Deliverable (A) of the break-glass admin recovery plan adds:
   * ``modulo_breakglass`` (LOGIN, BYPASSRLS) — the dedicated operator role used
@@ -166,10 +172,18 @@ async def _create_role(conn: asyncpg.Connection, name: str, *, login: bool, pass
     _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
 
 
-async def _alter_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str, bypassrls: bool) -> None:
+async def _alter_role(
+    conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool
+) -> None:
+    """Bring an existing role's attributes (and password, when given) to spec.
+
+    ``password=None`` means no password is configured for this role (its URL
+    is unset): the attribute clause is applied WITHOUT a PASSWORD clause so an
+    existing, working credential is never reset by a re-run (FAR-1519).
+    """
     _validate_identifier(name)
     attrs = _role_attributes(login=login, bypassrls=bypassrls)
-    if login:
+    if login and password is not None:
         # nosemgrep: raw-sql-fstring (id validated; password escaped via _escape_pg_string_literal)
         await conn.execute(f"ALTER ROLE \"{name}\" WITH {attrs} PASSWORD '{_escape_pg_string_literal(password)}'")
     else:
@@ -186,6 +200,12 @@ async def _create_or_update_role(
     ``modulo_app`` must NEVER have BYPASSRLS — RLS policies enforce tenant
     isolation. Only ``modulo_breakglass`` and ``modulo_migrate`` (cross-org
     system roles) receive BYPASSRLS.
+
+    ``password=None`` means the role's URL is not configured (FAR-1519): an
+    EXISTING role keeps its current password (only the attributes are
+    re-asserted) so a re-run never resets a working credential; a MISSING role
+    is created with a random placeholder password that a later boot — once the
+    URL is configured — reconciles to the URL's value.
     """
     # Fail closed before the existence probe (FAR-915/FAR-918 merge): the
     # callers below interpolate *name* into role DDL, and ``_create_role`` /
@@ -194,9 +214,9 @@ async def _create_or_update_role(
     _validate_identifier(name)
     exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
     if exists:
-        await _alter_role(conn, name, login=login, password=password or "", bypassrls=bypassrls)
+        await _alter_role(conn, name, login=login, password=password, bypassrls=bypassrls)
     else:
-        await _create_role(conn, name, login=login, password=password or "", bypassrls=bypassrls)
+        await _create_role(conn, name, login=login, password=password or secrets.token_urlsafe(24), bypassrls=bypassrls)
 
 
 async def _table_exists(conn: asyncpg.Connection, table: str) -> bool:
@@ -416,9 +436,9 @@ async def _apply_role_ddl(
     app_user: str,
     app_pass: str,
     bg_user: str,
-    bg_pass: str,
+    bg_pass: str | None,
     sys_user: str,
-    sys_pass: str,
+    sys_pass: str | None,
 ) -> None:
     """Idempotent role/grant/posture body of the bootstrap.
 
@@ -519,9 +539,9 @@ async def _apply_role_ddl_with_retry(
     app_user: str,
     app_pass: str,
     bg_user: str,
-    bg_pass: str,
+    bg_pass: str | None,
     sys_user: str,
-    sys_pass: str,
+    sys_pass: str | None,
 ) -> None:
     """Apply the idempotent DDL body, retrying the FAR-1200 concurrent race.
 
@@ -573,11 +593,15 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
 
     bg_url = os.environ.get("MODULO_BREAK_GLASS_DATABASE_URL", "")
     bg_user = _parse_role(bg_url) or _BREAK_GLASS_ROLE
-    bg_pass = _parse_password(bg_url) or secrets.token_urlsafe(24)
+    # None = URL unconfigured (or passwordless): an existing role KEEPS its
+    # password; a missing role gets a random placeholder below. Reconciling a
+    # working credential to a fresh random value on every boot is exactly the
+    # drift FAR-1519 fixes — only a configured URL may set a password.
+    bg_pass = _parse_password(bg_url) or None
 
     sys_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL", "")
     sys_user = _parse_role(sys_url) or _SYSTEM_ROLE
-    sys_pass = _parse_password(sys_url) or secrets.token_urlsafe(24)
+    sys_pass = _parse_password(sys_url) or None
 
     # Fail CLOSED: every role name parsed from env-config URLs is validated
     # BEFORE any session is opened or DDL is built — the GRANT/ROLE DDL below

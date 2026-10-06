@@ -205,7 +205,7 @@ class TestPublicIngestEndpoint:
         the INSERTs fail the WITH CHECK when ``app.organisation_id`` is unset —
         and ``ingest_batch`` swallows per-event errors, silently returning 201
         with nothing persisted. The route must call ``set_rls_org`` with
-        ``ORPHAN_ORG_ID`` inside its transaction.
+        ``SYSTEM_ORG_ID`` inside its transaction.
         """
         ingest_mock = AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}])
         with (

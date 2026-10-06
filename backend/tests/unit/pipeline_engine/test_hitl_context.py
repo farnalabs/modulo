@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langgraph.graph import END
 
 from modulo.core.pipeline_engine import graph_cache
 from modulo.core.pipeline_engine.hitl_context import (
@@ -693,7 +694,9 @@ class TestConsequences:
         consequences = context["consequences"]
         assert consequences is not None
         assert "approve" in consequences
-        assert "reject" not in consequences
+        # No route to name (FAR-1487): the reject consequence is the default
+        # terminate disposition with no phantom node_id.
+        assert consequences["reject"] == {"disposition": "terminate"}
 
     async def test_reject_target_resolved_from_reject_edge_when_config_has_none(self):
         """FAR-1486: an edge-wired reject route must resolve a reject
@@ -777,7 +780,9 @@ class TestConsequences:
         consequences = context["consequences"]
         assert consequences is not None
         assert "approve" in consequences
-        assert "reject" not in consequences
+        # FAR-1487: a foreign/phantom reject edge names no route -> the default
+        # terminate disposition, never an adopted node_id.
+        assert consequences["reject"] == {"disposition": "terminate"}
 
     async def test_no_consequences_when_no_graph(self):
         context = await _build(None)
@@ -880,7 +885,10 @@ def _compile_gate(edges: list[dict[str, Any]], config: dict[str, Any]) -> tuple[
         return None, graph
     _node_id, router = graph.conditional[0]
     decision = {"review_id": make_review_id(_UUID_SRC, _UUID_TGT), "action": "rejected"}
-    return str(router({"_hitl_decision": decision})), graph
+    routed = router({"_hitl_decision": decision})
+    # FAR-1487: no reject route -> the terminate router returns LangGraph END
+    # (the run ends ``rejected``): report that as "no reject target".
+    return (None if routed == END else str(routed)), graph
 
 
 def _resolved_reject(graph: dict[str, Any], config: dict[str, Any] | None) -> str | None:
@@ -888,7 +896,9 @@ def _resolved_reject(graph: dict[str, Any], config: dict[str, Any] | None) -> st
     if consequences is None:
         return None
     reject = consequences.get("reject")
-    return None if reject is None else str(reject["node_id"])
+    if reject is None or reject.get("node_id") is None:
+        return None
+    return str(reject["node_id"])
 
 
 def _gate_edge(config: dict[str, Any]) -> dict[str, Any]:
@@ -976,10 +986,11 @@ class TestRejectConsequenceAgreement:
         assert resolved == expected
         assert compiled == expected
         if expected is None:
-            # No reject route wired at all: the gate falls through to the
-            # plain normal edge (run continues), there is NO router.
-            assert not compiled_graph.conditional
-            assert compiled_graph.plain_edges == [(_UUID_SRC, _REVIEW_ID), (_REVIEW_ID, _UUID_TGT)]
+            # No reject route wired at all (FAR-1487): the gate hangs off a
+            # CONDITIONAL edge whose router ENDs the run on a rejection - there
+            # is no plain gate->target edge any more.
+            assert compiled_graph.conditional
+            assert compiled_graph.plain_edges == [(_UUID_SRC, _REVIEW_ID)]
         else:
             assert compiled_graph.conditional
 
@@ -1005,7 +1016,8 @@ class TestRejectConsequenceAgreement:
 
         compiled, compiled_graph = _compile_gate(reject_edges, {"reject_target": ""})
         assert compiled is None
-        assert not compiled_graph.conditional
+        # FAR-1487: no reject route -> the terminate router (END branch).
+        assert compiled_graph.plain_edges == [(_UUID_SRC, _REVIEW_ID)]
 
     def test_source_node_id_fallback_when_approve_edge_is_not_matched(self) -> None:
         """No edge carries this review_id (node gate / snapshot drift): the
@@ -1017,7 +1029,10 @@ class TestRejectConsequenceAgreement:
         assert consequences is not None
         assert "approve" not in consequences
         assert consequences["reject"]["node_id"] == _EDGE_A
-        assert _resolve_consequences(graph, _REVIEW_ID, {}, None) is None
+        # No gate edge and no source node resolvable: nothing routes, but the
+        # (config-derived) reject disposition is still stated - the default.
+        assert _resolve_consequences(graph, _REVIEW_ID, {}, None) == {"reject": {"disposition": "terminate"}}
+        assert _resolve_consequences(graph, _REVIEW_ID, None, None) is None
 
     def test_non_dict_edge_is_skipped_when_resolving_reject_route(self) -> None:
         """A malformed (non-dict) entry in the snapshot ``edges`` list must be
@@ -1044,7 +1059,9 @@ class TestRejectConsequenceAgreement:
         consequences = _resolve_consequences(graph, _REVIEW_ID, {"description": "Approve."}, _UUID_SRC)
         assert consequences is not None
         assert "approve" in consequences
-        assert "reject" not in consequences
+        # FAR-1487: a foreign/phantom reject edge names no route -> the default
+        # terminate disposition, never an adopted node_id.
+        assert consequences["reject"] == {"disposition": "terminate"}
 
     def test_legacy_edge_keys_resolve_like_canonical_ones(self) -> None:
         """Legacy persisted edge shapes (``edge_type`` +

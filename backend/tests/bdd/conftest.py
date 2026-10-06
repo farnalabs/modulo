@@ -21,7 +21,7 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
-from tests.helpers.audit_session import patch_audit_session_factory
+from tests.helpers.audit_session import install_audit_session_double
 from tests.unit.api.conftest import make_system_session_mock
 
 _VALID_32 = "a" * 32
@@ -31,18 +31,27 @@ ALT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Route the ``audited(...)`` fresh-session write to an in-memory double.
 
-    The API-level BDD suite overrides ``get_db_session`` with a mock and never
-    builds the real schema, but ``audited(...)`` opens its own session from
-    ``audit_coverage._shared_session_factory``. Without this patch that session
-    dials the SQLite ``test.db`` (no ``audit_chain_heads`` / ``accounts``
-    tables), so annotated routes fail with a spurious ``OperationalError`` -
-    and the ``fail_closed=True`` destruction routes turn it into a real
-    traceback. Integration tests run against real Postgres and are untouched.
+    The BDD API steps drive the app with a mocked request session, but the
+    ``audited(...)`` route dependency opens its OWN session from the
+    process-shared engine. Left unpatched it dials the BDD SQLite ``test.db``
+    (which never ran the audit migrations), so every ``fail_closed=True``
+    destruction route 500s on ``no such table: audit_chain_heads``.
+
+    See ``tests.helpers.audit_session`` for the double and why integration
+    tests are deliberately left to exercise the genuine append.
+
+    Installs the double through a scoped ``monkeypatch.context()`` and yields
+    from inside it, so the unpatch of ``_shared_session_factory`` runs as this
+    fixture's teardown - after the test body - rather than during ordinary
+    finalization while in-flight ``fail_closed=True`` destroy routes are still
+    finalizing.
     """
-    patch_audit_session_factory(monkeypatch)
+    with monkeypatch.context() as scoped:
+        install_audit_session_double(scoped)
+        yield
 
 
 # ---------------------------------------------------------------------------

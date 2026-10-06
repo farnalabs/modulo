@@ -118,9 +118,10 @@ class TestChain:
         # 0280_runs_node_deadline_watchdog_fired_count (FAR-1463), then
         # 0281_org_api_keys_grants (FAR-1477), then
         # 0282_env_profiles_kubernetes (FAR-1051), then
-        # 0283_runs_drop_unused_indexes (FAR-1443),
-        # now chain onto this migration, so the single head moved up eleven.
-        assert heads == ["0283_runs_drop_unused_indexes"], f"expected a single head, got {heads}"
+        # 0283_runs_drop_unused_indexes (FAR-1443), then
+        # 0284_add_rejected_run_status (FAR-1487),
+        # now chain onto this migration, so the single head moved up twelve.
+        assert heads == ["0284_add_rejected_run_status"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

@@ -41,7 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import EvalDefinition
 from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
@@ -512,7 +514,13 @@ async def get_guardrail_config_elevated(
         )
 
 
-@router.post("/propose", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/propose",
+    dependencies=[
+        Depends(audited("guardrail_config_proposed", "guardrail_config", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("guardrail_config.propose")
 async def propose_guardrail_config(
     req: ProposeGuardrailConfigRequest,
@@ -571,7 +579,18 @@ async def propose_guardrail_config(
     )
 
 
-@router.post("/apply", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/apply",
+    dependencies=[
+        Depends(
+            audited(
+                "guardrail_config_applied", "guardrail_config", principal_dep=get_current_tenant_user, fail_closed=True
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        ),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("guardrail_config.apply")
 async def apply_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
@@ -660,7 +679,13 @@ async def apply_guardrail_config(
     return GuardrailApplyResponse(applied=True, hash=applied_hash, applied_at=now, status="clean")
 
 
-@router.post("/reject", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/reject",
+    dependencies=[
+        Depends(audited("guardrail_config_rejected", "guardrail_config", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("guardrail_config.reject")
 async def reject_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
@@ -702,7 +727,13 @@ async def reject_guardrail_config(
     return GuardrailRejectResponse(rejected=True, status="clean")
 
 
-@router.post("/import", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/import",
+    dependencies=[
+        Depends(audited("guardrail_config_imported", "guardrail_config", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("guardrail_config.import")
 async def import_guardrail_config(
     req: ProposeGuardrailConfigRequest,
@@ -839,7 +870,13 @@ async def get_guardrail_drift(
     return GuardrailDriftResponse(status=current_status, current_hash=current_hash, applied_hash=applied_hash)
 
 
-@router.post("/drift/check", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/drift/check",
+    dependencies=[
+        Depends(audited("guardrail_drift_checked", "guardrail_config", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("guardrail_config.drift_check")
 async def post_guardrail_drift_check(
     session: AsyncSession = Depends(get_db_session),

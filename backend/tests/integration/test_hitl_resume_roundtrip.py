@@ -186,6 +186,13 @@ async def _seed_run(
     return run_id
 
 
+async def _run_error_code(engine: AsyncEngine, run_id: uuid.UUID) -> str | None:
+    async with engine.connect() as conn:
+        row = (await conn.execute(text("SELECT error_code FROM runs WHERE id=:rid"), {"rid": str(run_id)})).fetchone()
+    assert row is not None
+    return row[0]
+
+
 async def _run_status(engine: AsyncEngine, run_id: uuid.UUID) -> tuple[str, Any]:
     async with engine.connect() as conn:
         row = (
@@ -299,8 +306,10 @@ async def _resume_and_complete(
     backend_id: uuid.UUID,
     fixtures: dict[str, str],
     resume_data: dict[str, Any],
+    *,
+    expected_status: str = "complete",
 ) -> None:
-    """Dispatch resume_run with the reconstructed payload; the run must complete."""
+    """Dispatch resume_run with the reconstructed payload; the run must end ``expected_status``."""
     setup_hub = _run_executor_hub(backend_id, fixtures)
     hub = await setup_hub()
     try:
@@ -314,7 +323,14 @@ async def _resume_and_complete(
         set_model_backend_hub(None)
         await hub.__aexit__(None, None, None)
 
-    assert outcome.get("status") == "complete", f"resume_run outcome: {outcome}"
+    if outcome.get("status") != expected_status:
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT status, error_code, error_detail FROM runs WHERE id=:rid"), {"rid": str(run_id)}
+                )
+            ).fetchone()
+        raise AssertionError(f"resume_run outcome: {outcome}; run row: {tuple(row) if row else None}")
 
 
 async def test_hitl_resume_roundtrip_approve_with_modification(
@@ -436,13 +452,108 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
         reconstructed = await _committed_decision_resume_data(session, org_id, run_id)
     assert reconstructed == payload, f"resume data must be the exact rejection, got {reconstructed}"
 
-    await _resume_and_complete(db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures, reconstructed)
+    # FAR-1487: the gate has no reject route and no ``on_reject: proceed``, so a
+    # committed human rejection ENDS the run ``rejected`` (error_code
+    # ``hitl.rejected``) - NOT ``complete`` (the graph END is a normal stream
+    # exit that finalize must downgrade) and NOT ``failed``/``cancelled``.
+    await _resume_and_complete(
+        db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures, reconstructed, expected_status="rejected"
+    )
 
     status, completed_at = await _run_status(db_engine, run_id)
-    assert status == "complete"
+    assert status == "rejected"
     assert completed_at is not None
+    assert await _run_error_code(db_engine, run_id) == "hitl.rejected"
 
     # A committed rejection routes the gate to REJECTED — never an approval.
     gate_result = await _gate_result(gate_config, payload)
     assert gate_result["result"] == "rejected"
     assert gate_result["human_data"] == payload
+
+
+async def _reject_roundtrip(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    label: str,
+    gate_extra: dict[str, Any],
+    *,
+    reason: str,
+    expected_status: str,
+) -> tuple[str, str | None]:
+    """Run a gate to a committed rejection and resume it; return ``(status, error_code)``."""
+    from modulo.core.cron_helpers import _committed_decision_resume_data
+
+    org_id = await _seed_org(db_engine, f"HitlReject{label}")
+    account_id = await _seed_account(db_engine, org_id, f"hitl-reject-{label}@test.local")
+    pipe = await _seed_pipeline(db_engine, org_id, f"PipeHitlReject{label}", account_id)
+    backend_id = uuid.uuid4()
+    gate_config: dict[str, Any] = {
+        "review_id": "hitl_review_a_b",
+        "human_only": True,
+        "overdue_threshold_minutes": 60,
+        "required_team_id": None,
+        **gate_extra,
+    }
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _hitl_graph("a", "b", str(backend_id), gate_config))
+    run_id = await _seed_run(db_engine, org_id, pipe, snap)
+    fixtures = {"Hello World": json.dumps({"greeting": "hi"}), "Bye World": json.dumps({"farewell": "bye"})}
+    await _interrupt_run(db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures)
+
+    review_id = await _read_review_id(db_engine, org_id, run_id)
+    payload = {"action": "rejected", "review_id": review_id, "reason": reason}
+    await _commit_decision(db_engine, org_id, run_id, review_id, decision="rejected", decision_payload=payload)
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        from modulo.db.rls import set_rls_org
+
+        await set_rls_org(session, org_id)
+        reconstructed = await _committed_decision_resume_data(session, org_id, run_id)
+
+    await _resume_and_complete(
+        db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures, reconstructed, expected_status=expected_status
+    )
+    status, _ = await _run_status(db_engine, run_id)
+    return status, await _run_error_code(db_engine, run_id)
+
+
+async def test_hitl_reject_supersede_ends_rejected_with_superseded_code(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1487 (Roddy): a coalesced-supersede system rejection with no reject
+    route ends ``rejected`` / ``hitl.superseded`` - never ``hitl.rejected`` (it
+    must not look like a human said no). The committed claim carries the system
+    reason and NO deciding account."""
+    from modulo.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON
+
+    status, error_code = await _reject_roundtrip(
+        db_engine,
+        migrated_db_url,
+        "Superseded",
+        {},
+        reason=SUPERSEDE_REASON,
+        expected_status="rejected",
+    )
+    assert status == "rejected"
+    assert error_code == "hitl.superseded"
+
+
+async def test_hitl_reject_on_reject_proceed_still_completes(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1487: an explicit ``on_reject: proceed`` keeps the pre-FAR-1487
+    behaviour - the rejection is recorded but the run continues and completes."""
+    status, error_code = await _reject_roundtrip(
+        db_engine,
+        migrated_db_url,
+        "Proceed",
+        {"on_reject": "proceed"},
+        reason="not good",
+        expected_status="complete",
+    )
+    assert status == "complete"
+    assert error_code is None

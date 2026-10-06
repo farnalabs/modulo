@@ -168,6 +168,29 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
+  it('renders the superseded label for a coalesced-supersede run', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'rejected', error_code: 'hitl.superseded' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Superseded by a newer version')
+    wrapper.unmount()
+  })
+
+  it('renders a human rejection as the raw rejected status', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'rejected', error_code: 'hitl.rejected' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).not.toContain('Superseded by a newer version')
+    expect(wrapper.text()).toContain('rejected')
+    wrapper.unmount()
+  })
+
   it('renders empty state when no runs exist', async () => {
     const wrapper = mountView()
     await flushPromises()

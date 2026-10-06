@@ -28,6 +28,7 @@ from modulo.core.assistant.context_source_service import (
     AssistantContextSourceService,
     ContextSourceResponseItem,
 )
+from modulo.core.audit_coverage import audited
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
 from modulo.db.crud.account import (
     AccountNotFoundError,
@@ -78,7 +79,11 @@ async def get_user_settings(
     return account.preferences
 
 
-@router.put("/me/settings", response_model=SettingsResponse)
+@router.put(
+    "/me/settings",
+    response_model=SettingsResponse,
+    dependencies=[Depends(audited("user_settings_updated", "user_settings", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("me.update_user_settings")
 async def update_user_settings(
     req: SettingsUpdate | None = None,
@@ -173,7 +178,13 @@ async def get_hitl_email_preferences(
     return _hitl_email_pref_payload(account.preferences)
 
 
-@router.put("/me/hitl-email-preferences", response_model=HitlEmailPreferenceResponse)
+@router.put(
+    "/me/hitl-email-preferences",
+    response_model=HitlEmailPreferenceResponse,
+    dependencies=[
+        Depends(audited("hitl_email_preferences_updated", "user_settings", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("me.update_hitl_email_preferences")
 async def update_hitl_email_preferences(
     req: HitlEmailPreferenceUpdate,
@@ -212,7 +223,16 @@ async def update_hitl_email_preferences(
     return _hitl_email_pref_payload(merged)
 
 
-@router.put("/me/password", status_code=status.HTTP_200_OK)
+@router.put(
+    "/me/password",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("password_changed", "user_credential", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("me.change_password")
 async def change_password(
     req: PasswordChangeRequest,
@@ -325,7 +345,11 @@ async def list_user_skills(
     return [_skill_to_response(s) for s in skills]
 
 
-@router.post("/me/assistant/skills", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/me/assistant/skills",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("user_skill_created", "user_skill", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("me.create_user_skill")
 async def create_user_skill(
     req: SkillCreate,
@@ -357,7 +381,10 @@ async def create_user_skill(
     return _skill_to_response(skill)
 
 
-@router.put("/me/assistant/skills/{skill_id}")
+@router.put(
+    "/me/assistant/skills/{skill_id}",
+    dependencies=[Depends(audited("user_skill_updated", "user_skill", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("me.update_user_skill")
 async def update_user_skill(
     skill_id: uuid.UUID,
@@ -390,7 +417,16 @@ async def update_user_skill(
     return _skill_to_response(skill)
 
 
-@router.delete("/me/assistant/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/me/assistant/skills/{skill_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("user_skill_deleted", "user_skill", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("me.delete_user_skill")
 async def delete_user_skill(
     skill_id: uuid.UUID,
@@ -438,7 +474,12 @@ async def get_user_context_sources(
     return service.build_effective_items(config.context_sources, user_overrides)
 
 
-@router.put("/me/assistant/context-sources/{source_key}")
+@router.put(
+    "/me/assistant/context-sources/{source_key}",
+    dependencies=[
+        Depends(audited("user_context_source_set", "user_context_source", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("me.set_user_context_source")
 async def set_user_context_source(
     source_key: str,
@@ -467,7 +508,21 @@ async def set_user_context_source(
     return service.build_effective_items(config.context_sources, user_overrides)
 
 
-@router.delete("/me/assistant/context-sources", status_code=status.HTTP_200_OK)
+@router.delete(
+    "/me/assistant/context-sources",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "user_context_sources_reset",
+                "user_context_source",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("me.reset_user_context_sources")
 async def reset_user_context_sources(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
