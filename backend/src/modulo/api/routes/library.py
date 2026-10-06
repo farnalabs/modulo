@@ -23,6 +23,7 @@ from modulo.api.routes.lifecycle_maps import LifecycleMapResponse
 from modulo.api.team_scope import validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import get_registry
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
@@ -777,7 +778,13 @@ async def get_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("library_primitive_created", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("library.create_library_primitive_endpoint")
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
@@ -849,7 +856,12 @@ async def create_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
-@router.patch("/{primitive_id}")
+@router.patch(
+    "/{primitive_id}",
+    dependencies=[
+        Depends(audited("library_primitive_updated", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("library.update_library_primitive_endpoint")
 async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -903,7 +915,12 @@ async def update_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
-@router.delete("/{primitive_id}")
+@router.delete(
+    "/{primitive_id}",
+    dependencies=[
+        Depends(audited("library_primitive_deleted", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("library.delete_library_primitive_endpoint")
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -931,7 +948,12 @@ async def delete_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
-@router.post("/{primitive_id}/restore")
+@router.post(
+    "/{primitive_id}/restore",
+    dependencies=[
+        Depends(audited("library_primitive_restored", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("library.restore_library_primitive_endpoint")
 async def restore_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -961,7 +983,12 @@ async def restore_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{primitive_id}/adapt")
+@router.post(
+    "/{primitive_id}/adapt",
+    dependencies=[
+        Depends(audited("library_primitive_adapted", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("library.copy_to_adapt_endpoint")
 async def copy_to_adapt_endpoint(
     primitive_id: uuid.UUID,
@@ -1010,6 +1037,9 @@ async def copy_to_adapt_endpoint(
 # ---------------------------------------------------------------------------
 
 
+# FAR-1472 audit-coverage exemption (audit_coverage_baseline.txt): read-only
+# POST - serialises the pipeline to a downloadable bundle and returns it; the
+# export path only runs SELECTs (core.workflow_import_export.export_pipeline_bundle).
 @router.post("/export/{pipeline_id}")
 @handle_db_errors("library.export_pipeline_endpoint")
 async def export_pipeline_endpoint(
@@ -1364,6 +1394,9 @@ async def _read_zip_upload(file: UploadFile) -> bytes:
     return zip_bytes
 
 
+# FAR-1472 audit-coverage exemption (audit_coverage_baseline.txt): read-only
+# POST - parses the uploaded zip and returns the bundle analysis; it persists
+# nothing (the actual write happens on /import/confirm, which IS audited).
 @router.post("/import/upload-zip")
 @handle_db_errors("library.upload_zip_and_analyse_endpoint")
 async def upload_zip_and_analyse_endpoint(
@@ -1387,6 +1420,9 @@ async def upload_zip_and_analyse_endpoint(
     return await _analyse_bundle(session, principal, bundle)
 
 
+# FAR-1472 audit-coverage exemption (audit_coverage_baseline.txt): read-only
+# POST - resolves bundle references and returns warnings/conflicts; it persists
+# nothing (the actual write happens on /import/confirm, which IS audited).
 @router.post("/import/analyse")
 @handle_db_errors("library.analyse_import_bundle_endpoint")
 async def analyse_import_bundle_endpoint(
@@ -1407,7 +1443,10 @@ async def analyse_import_bundle_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/import/confirm")
+@router.post(
+    "/import/confirm",
+    dependencies=[Depends(audited("library_import_confirmed", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("library.confirm_import_endpoint")
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
@@ -1541,6 +1580,7 @@ async def get_rating_aggregate_endpoint(
 @router.post(
     "/{primitive_id}/ratings",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("rating_submitted", "rating", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.submit_rating_endpoint")
 async def submit_rating_endpoint(
@@ -1587,6 +1627,7 @@ async def submit_rating_endpoint(
 @router.post(
     "/{primitive_id}/ratings/abuse",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("abuse_report_submitted", "abuse_report", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.submit_abuse_report_endpoint")
 async def submit_abuse_report_endpoint(
@@ -1786,6 +1827,9 @@ def _pipeline_from_template_response(
 @router.post(
     "/{primitive_id}/create-pipeline",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("pipeline_created_from_template", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
 async def create_pipeline_from_template_endpoint(
@@ -1849,6 +1893,7 @@ async def create_pipeline_from_template_endpoint(
 @router.post(
     "/{primitive_id}/create-lifecycle-map",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("lifecycle_map_created", "lifecycle_map", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.create_lifecycle_map_from_primitive_endpoint")
 async def create_lifecycle_map_from_primitive_endpoint(
@@ -1924,7 +1969,11 @@ class CommunityContributionListResponse(BaseModel):
     page_size: int
 
 
-@router.post("/community/contribute", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/community/contribute",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("contribution_created", "contribution", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("library.community_contribute_endpoint")
 async def community_contribute_endpoint(
     req: CommunityContributeRequest,
@@ -2022,6 +2071,7 @@ async def list_community_contributions_endpoint(
 @router.post(
     "/admin/library/community/publish/{primitive_id}",
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("contribution_published", "contribution", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("library.admin_publish_contribution_endpoint")
 async def admin_publish_contribution_endpoint(
@@ -2065,7 +2115,13 @@ async def admin_publish_contribution_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/collections", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/collections",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("library_collection_created", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("library.create_collection_endpoint")
 async def create_collection_endpoint(
     req: CollectionCreateRequest,
@@ -2128,7 +2184,12 @@ async def create_collection_endpoint(
     return _collection_response(prim)
 
 
-@router.patch("/collections/{primitive_id}")
+@router.patch(
+    "/collections/{primitive_id}",
+    dependencies=[
+        Depends(audited("library_collection_updated", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("library.update_collection_endpoint")
 async def update_collection_endpoint(
     primitive_id: uuid.UUID,
@@ -2160,6 +2221,9 @@ async def update_collection_endpoint(
 @router.post(
     "/collections/{primitive_id}/publish",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("library_collection_published", "library_collection", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("library.publish_collection_endpoint")
 async def publish_collection_endpoint(
@@ -2237,6 +2301,9 @@ class CollectionUninstallResponse(BaseModel):
 @router.post(
     "/collections/{primitive_id}/install",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("library_collection_installed", "library_collection", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("library.install_collection_endpoint")
 async def install_collection_endpoint(
@@ -2313,6 +2380,9 @@ async def install_collection_endpoint(
 @router.post(
     "/collections/{primitive_id}/uninstall",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("library_collection_uninstalled", "library_collection", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("library.uninstall_collection_endpoint")
 async def uninstall_collection_endpoint(
@@ -2428,6 +2498,9 @@ async def list_collection_installs_endpoint(
 @router.post(
     "/collections/{primitive_id}/installs/{install_id}/grant",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("collection_agents_granted", "library_collection", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("library.grant_collection_agents_endpoint")
 async def grant_collection_agents_endpoint(
