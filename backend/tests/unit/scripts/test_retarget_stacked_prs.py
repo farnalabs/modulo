@@ -233,7 +233,8 @@ def test_empty_diff_note_added_to_retarget_comment(tmp_path):
     mod.run(["prog", "feat/base", "main"], run_gh=fake, github_output=str(out))
 
     bodies = [c[4] for c in fake.calls if c[:2] == ("pr", "comment")]
-    assert bodies and "adds no commits" in bodies[0]
+    assert bodies
+    assert "adds no commits" in bodies[0]
 
 
 def test_compare_failure_does_not_fail_guard(tmp_path):

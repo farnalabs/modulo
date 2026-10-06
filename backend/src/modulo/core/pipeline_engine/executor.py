@@ -64,7 +64,7 @@ from modulo.core.eval_engine import (
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
-from modulo.core.hitl_manager.gate_coalescing import evaluate_gate_coalescing
+from modulo.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON, evaluate_gate_coalescing
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -140,6 +140,7 @@ from modulo.db.crud.run import (
 )
 from modulo.db.crud.run_node_outputs import read_run_blobs, read_run_markers
 from modulo.db.models.eval import Eval
+from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -1350,6 +1351,40 @@ def _compute_otel_run_context(
     return run_trace_id, run_root_span
 
 
+def _is_supersede_rejection(claim: Any) -> bool:
+    """True for a coalesced-supersede SYSTEM rejection (FAR-1487).
+
+    The committed ``decision_payload.reason`` is the supersede marker AND no
+    account decided it (``decided_by`` is NULL - the supersede close-out never
+    stamps one), so a human-typed reason can never spoof the label.
+    """
+    payload = claim.decision_payload
+    reason = payload.get("reason") if isinstance(payload, dict) else None
+    return reason == SUPERSEDE_REASON and claim.decided_by is None and claim.account_id is None
+
+
+def _is_terminating_rejection_output(name: str, output: Any) -> bool:
+    """True when a gate node's chain-end output is a stamped terminate-rejection.
+
+    FAR-1487: the gate's artifact must be for THIS gate (``node_id == name``),
+    carry ``result == "rejected"`` and the compile-time
+    ``reject_disposition == "terminate"`` stamp. (A rejected gate that routes or
+    proceeds carries a different disposition and never ends the run.)
+    """
+    if not isinstance(output, dict):
+        return False
+    artifacts = output.get("artifacts")
+    if not isinstance(artifacts, list):
+        return False
+    return any(
+        isinstance(a, dict)
+        and a.get("node_id") == name
+        and a.get("result") == "rejected"
+        and a.get("reject_disposition") == "terminate"
+        for a in artifacts
+    )
+
+
 def _record_chain_end_output(
     completed_node_outputs: dict[str, Any] | None,
     name: str,
@@ -1557,6 +1592,12 @@ class _StreamState:
     # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
     # opencode session). Routes to retryable ``sandbox.no_output_json``.
     session_lost_reason: str | None = None
+    # FAR-1487: ids of HITL gates whose REJECTED artifact was stamped
+    # ``reject_disposition == "terminate"`` in this stream. The gate's router
+    # ENDs the graph on such a rejection, which is a NORMAL stream exit, so
+    # ``_finalize_run_after_stream`` needs this (plus the committed claim row)
+    # to downgrade the would-be ``complete`` to ``rejected``.
+    terminating_rejected_gates: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -1829,6 +1870,10 @@ class PipelineExecutor:
         # write out from under a successor. Seeded into LangGraph state as
         # ``_claim_lease`` for the sandbox dispatch marker.
         self._claim_token: str | None = None
+        # FAR-1487: gate ids whose stamped terminate-rejection ended the last
+        # stream (set by ``_stream_graph``, consumed by
+        # ``_finalize_run_after_stream``). Per-executor, like ``_claim_token``.
+        self._terminating_rejected_gates: set[str] = set()
         # FAR-435: the run-level connector fetch scope (``allowed_connectors``),
         # computed once at run start from the graph (node capability_scope union
         # Agent connector_type_refs grants) and reused by the compensation hub
@@ -3944,6 +3989,69 @@ class PipelineExecutor:
             return {}, {}
         return outputs_json, telemetry_json
 
+    async def _downgrade_hitl_terminate_rejection(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+    ) -> tuple[str, str | None, str | None]:
+        """Downgrade ``complete`` to ``rejected`` for a HITL terminate-rejection (FAR-1487).
+
+        Keyed on BOTH signals - never the agent's/graph's echo alone:
+
+        1. the gate artifact (``result == "rejected"`` + ``reject_disposition ==
+           "terminate"``, for the gate ids latched by the stream), AND
+        2. the COMMITTED ``hitl_claims`` row for (this run, that gate) with
+           ``decision == "rejected"``.
+
+        A coalesced-supersede system rejection (committed
+        ``decision_payload.reason == SUPERSEDE_REASON`` with NO deciding
+        account) lands as ``hitl.superseded`` - bookkeeping on an outdated work
+        item, never a human "no" - so it is not counted as a human reject.
+        Fail-safe: a lookup failure leaves the status untouched.
+        """
+        gate_ids = sorted(self._terminating_rejected_gates)
+        if not gate_ids or self._session_factory is None:
+            return final_status, error_code, error_detail
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await set_rls_execution_context(session)
+                claims = (
+                    (
+                        await session.execute(
+                            select(HitlClaim).where(
+                                HitlClaim.run_id == run_id,
+                                HitlClaim.organisation_id == org_id,
+                                HitlClaim.review_id.in_(gate_ids),
+                                HitlClaim.decision == "rejected",
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("pipeline.hitl_reject_downgrade_lookup_failed", extra={"run_id": str(run_id)})
+            return final_status, error_code, error_detail
+        if not claims:
+            return final_status, error_code, error_detail
+        # Prefer a human rejection when several gates rejected (a human said
+        # "no" somewhere); only an all-system supersede is labelled superseded.
+        superseded_only = all(_is_supersede_rejection(c) for c in claims)
+        _log.info(
+            "pipeline.hitl_rejected",
+            extra={"run_id": str(run_id), "gates": gate_ids, "superseded": superseded_only},
+        )
+        if superseded_only:
+            return "rejected", "hitl.superseded", "Superseded by a newer version of the work item."
+        return "rejected", "hitl.rejected", "Rejected by a reviewer at a HITL gate; the run ended."
+
     async def _finalize_run_after_stream(
         self,
         *,
@@ -3978,6 +4086,17 @@ class PipelineExecutor:
         # happens on the complete path ONLY — failed/awaiting_human skip it.
         stored_node_outputs: dict[str, Any] = {}
         stored_node_telemetry: dict[str, Any] = {}
+        if final_status == "complete":
+            # FAR-1487: a stamped terminate-rejection ENDs the graph, which is
+            # a NORMAL stream exit - without this downgrade the run would be
+            # finalized ``complete`` (the same bug one layer up).
+            final_status, error_code, error_detail = await self._downgrade_hitl_terminate_rejection(
+                run_id=run_id,
+                org_id=org_id,
+                final_status=final_status,
+                error_code=error_code,
+                error_detail=error_detail,
+            )
         if final_status == "complete":
             stored_node_outputs, stored_node_telemetry = await self._load_stored_node_columns(
                 run_id=run_id, org_id=org_id
@@ -5995,6 +6114,10 @@ class PipelineExecutor:
         """
         name = lg_event.get("name", "")
         if name not in ctx.node_ids:
+            # HITL gate nodes are synthetic (not in ``node_ids``); latch a
+            # stamped terminate-rejection so finalize can downgrade the run.
+            if _is_terminating_rejection_output(name, (lg_event.get("data") or {}).get("output")):
+                state.terminating_rejected_gates.add(name)
             return
         state.segments_completed += 1
         if ctx.guard is not None:
@@ -6314,6 +6437,7 @@ class PipelineExecutor:
         Returns (final_status, error_code, error_detail, node_token_usage).
         """
         state = _StreamState()
+        self._terminating_rejected_gates = set()
         ctx = _StreamContext(
             node_ids=node_ids,
             guard=guard,
@@ -6348,6 +6472,7 @@ class PipelineExecutor:
                 if outcome is not None:
                     return outcome
 
+            self._terminating_rejected_gates = set(state.terminating_rejected_gates)
             terminal = _stream_terminal_reason(state, broker, run_id)
             if terminal is not None:
                 return terminal

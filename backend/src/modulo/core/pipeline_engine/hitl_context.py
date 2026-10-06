@@ -569,6 +569,39 @@ async def _build_context_inner(
     }
 
 
+# FAR-1487: what a HITL rejection does. ``route`` = divert to a reject
+# destination, ``terminate`` = END the run ``rejected`` (the DEFAULT when no
+# route exists), ``proceed`` = continue down the approve path (explicit only).
+REJECT_DISPOSITION_ROUTE = "route"
+REJECT_DISPOSITION_TERMINATE = "terminate"
+REJECT_DISPOSITION_PROCEED = "proceed"
+ON_REJECT_PROCEED = "proceed"
+ON_REJECT_TERMINATE = "terminate"
+
+
+def resolve_reject_disposition(config: dict[str, Any] | None, *, has_reject_route: bool) -> str:
+    """The single source of truth for what a HITL rejection does (FAR-1487).
+
+    Shared by the graph compiler (which wires the edge) and the reviewer
+    briefing (which states the consequence) so they can never disagree.
+
+    Precedence: a reject destination (``reject_target`` config or reject edge)
+    ROUTES; otherwise an automated ``correction_target`` WINS over terminating
+    (an explicit correction chooses "rework" - the rejection dispatches the
+    correction and the run continues as before); otherwise an explicit
+    ``on_reject: proceed`` continues; otherwise the run TERMINATES. Continuing
+    is never the silent fallback.
+    """
+    if has_reject_route:
+        return REJECT_DISPOSITION_ROUTE
+    cfg = config if isinstance(config, dict) else {}
+    if cfg.get("correction_target"):
+        return REJECT_DISPOSITION_PROCEED
+    if cfg.get("on_reject") == ON_REJECT_PROCEED:
+        return REJECT_DISPOSITION_PROCEED
+    return REJECT_DISPOSITION_TERMINATE
+
+
 def _resolve_consequences(
     graph_json: dict[str, Any],
     review_id: str,
@@ -635,7 +668,7 @@ def _resolve_consequences(
     elif raw_reject:
         reject_target = str(raw_reject)
 
-    if approve_target is None and reject_target is None:
+    if approve_target is None and reject_target is None and not isinstance(config, dict):
         return None
 
     result: dict[str, Any] = {}
@@ -644,11 +677,18 @@ def _resolve_consequences(
             "node_id": approve_target,
             "label": _snapshot_node_label(graph_json, approve_target),
         }
+    # FAR-1487: the reject consequence is ALWAYS stated, in all three
+    # dispositions — route (a reject destination exists), terminate (the
+    # default: the run ENDS ``rejected``) and proceed (explicit
+    # ``on_reject: proceed`` / an automated ``correction_target``: the run
+    # continues down the approve path). A reviewer must never have to guess
+    # what "reject" does.
+    disposition = resolve_reject_disposition(config, has_reject_route=bool(reject_target))
+    reject: dict[str, Any] = {"disposition": disposition}
     if reject_target is not None:
-        result["reject"] = {
-            "node_id": reject_target,
-            "label": _snapshot_node_label(graph_json, reject_target),
-        }
+        reject["node_id"] = reject_target
+        reject["label"] = _snapshot_node_label(graph_json, reject_target)
+    result["reject"] = reject
     return result
 
 
@@ -678,6 +718,9 @@ def _snapshot_node_label(graph_json: dict[str, Any] | None, node_id: str | None)
 __all__ = (
     "ARTIFACTS_BUDGET_CHARS",
     "REASON_ABSENT",
+    "REJECT_DISPOSITION_PROCEED",
+    "REJECT_DISPOSITION_ROUTE",
+    "REJECT_DISPOSITION_TERMINATE",
     "TRIGGER_CONDITION",
     "TRIGGER_NODE",
     "TRIGGER_UNKNOWN",
@@ -686,6 +729,7 @@ __all__ = (
     "HitlReviewContext",
     "build_hitl_review_context",
     "extract_condition_node_ids",
+    "resolve_reject_disposition",
     "serialize_value",
     "slice_with_marker",
 )

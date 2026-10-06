@@ -1697,6 +1697,35 @@ class TestRunExecutorWithWatchdog:
         assert callable(executor.on_first_progress)
 
     @pytest.mark.asyncio
+    async def test_returns_rejected_when_executor_reports_rejected(self) -> None:
+        """FAR-1487: a HITL rejection that ended the run is a terminal,
+        NON-failure outcome - never reported as ``failed``."""
+        executor = MagicMock()
+
+        async def _execute() -> object:
+            return SimpleNamespace(status="rejected")
+
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=0.05, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock),
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_execute,
+            )
+        assert result == {"status": "rejected"}
+
+    @pytest.mark.asyncio
     async def test_watchdog_cancels_hung_executor_and_fails_run(self) -> None:
         executor = MagicMock()
         started: list[str] = []

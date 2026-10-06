@@ -36,7 +36,7 @@ from modulo.db.models.environment_profile import PROVIDER_TYPES
 
 scenarios("provider_matrix.feature")
 
-_ENV_SIGNALS = ("MODULO_E2B_API_KEY", "MODULO_DOCKER_HOST", "DOCKER_HOST")
+_ENV_SIGNALS = ("MODULO_E2B_API_KEY", "MODULO_DOCKER_HOST", "DOCKER_HOST", "MODULO_KUBERNETES_ENABLED")
 
 
 def _clean_env(monkeypatch) -> None:

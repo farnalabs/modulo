@@ -1744,6 +1744,9 @@ elements:
         type: element
         dynamic_testid: false
     /admin/notification-delivery:
+      - testid: admin-notification-log-title
+        type: element
+        dynamic_testid: false
       - testid: admin-notification-log-status
         type: select
         dynamic_testid: false
@@ -2641,6 +2644,54 @@ elements:
       - testid: eval-editor-cancel-delete
         type: button
         dynamic_testid: false
+      - testid: policy-gate-heading
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-action-warn
+        type: input
+        dynamic_testid: false
+      - testid: policy-gate-action-block
+        type: input
+        dynamic_testid: false
+      - testid: policy-gate-toggle
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-toggle-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-confirm-toggle-disable
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-cancel-toggle-disable
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-confirm-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-error
+        type: element
+        dynamic_testid: false
+      - testid: policy-gate-retry
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-badge
+        type: element
+        dynamic_testid: false
+      - testid: dirty-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: dirty-confirm-proceed
+        type: button
+        dynamic_testid: false
+      - testid: dirty-confirm-stay
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -3532,6 +3583,9 @@ elements:
         type: element
         dynamic_testid: false
     /runs:
+      - testid: runs-list-loading
+        type: element
+        dynamic_testid: false
       - testid: runs-list-aggregate-cost
         type: element
         dynamic_testid: false
@@ -4395,6 +4449,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/license:
+      - testid: license-title
+        type: element
+        dynamic_testid: false
       - testid: license-key-input
         type: textarea
         dynamic_testid: false
@@ -4438,6 +4495,18 @@ elements:
       - testid: settings-mcp-create-key-role
         type: select
         dynamic_testid: false
+      - testid: api-key-grants-selector
+        type: element
+        dynamic_testid: false
+      - testid: api-key-grants-restrict
+        type: checkbox
+        dynamic_testid: false
+      - testid: api-key-grants-list
+        type: element
+        dynamic_testid: false
+      - testid: api-key-grants-empty-error
+        type: element
+        dynamic_testid: false
       - testid: settings-mcp-copy-key-value
         type: button
         dynamic_testid: false
@@ -4446,6 +4515,15 @@ elements:
         dynamic_testid: false
       - testid: settings-mcp-org-scope-note
         type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-loading
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-load-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-retry
+        type: button
         dynamic_testid: false
       - testid: settings-mcp-key-created-done
         type: button
@@ -4602,6 +4680,9 @@ elements:
         type: element
         dynamic_testid: false
     /settings/rate-limits:
+      - testid: rate-limits-title
+        type: element
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -5180,6 +5261,8 @@ features:
             - "[x] GET /api/v1/analytics/query returns the bucketed run-facts series (day/hour/week, auto_granularity, zero-filled) scoped to the caller's org; a repeated pipeline_id composes an A/B comparison and a dimension (trigger_type/trigger_id/status/pipeline/folder/team/error_code) keys the buckets"
             - "[x] The response carries the group_by/dimension/date_from/date_to envelope plus the facts-freshness indicators (facts_freshness_hours / facts_stale) and per-bucket count/cost/token/duration/success/capacity/queue metrics"
             - "[x] FAR-1421 claim-to-dispatch latency: every bucket carries avg_dispatch_latency_ms = dispatch_phase_entered_at - created_at, falling back to started_at - created_at when the phase timestamp is NULL (pre-migration rows / no durable phase / purged-run backfills), groupable per trigger with dimension=trigger_type or dimension=trigger_id - both provenance fields are copied onto run_daily_facts at finalize so the read never joins runs (ADR 020) and the metric survives the run purge; NULL when the bucket has no sample, never 0"
+            # Node-deadline watchdog firings (FAR-1463)
+            - "[x] Every query bucket carries node_deadline_watchdog_fired_count, the SUM of the per-run RunDailyFact column (COALESCEd to 0 - count semantics, never NULL for an empty bucket), and each export item carries the raw per-run node_deadline_watchdog_fired_count; this is the observability signal the error_code dimension cannot show, because a firing is recorded whether the kill re-dispatched (which nulls error_code) or terminal-failed (backend/src/modulo/core/analytics/builder.py, backend/src/modulo/api/routes/analytics.py, test_analytics_facts.py)"
             - "[x] Bounds validation is typed: an inverted or over-365-day range and an explicit hour granularity beyond 14 days are AnalyticsValidationError -> 422; FastAPI-level param validation rejects a malformed date_from and a limit outside 1..1000 with 422"
             - "[x] The route maps the service's typed errors to HTTP (rate limit -> 429, statement timeout -> 503, migration required -> 501, database failure -> 503) and never leaks internals"
             - "[x] Access is gated: authenticated org principals need the analytics.query role floor (viewer), a principal without an organisation context is 403, an unauthenticated caller is 401, and the analytics_page feature flag (disabled -> 402) gates the whole surface"
@@ -5237,6 +5320,9 @@ features:
             - "[x] GET /export returns paginated JSON (page / page_size clamped to 1..1000, ordered created_at ASC) with the same filters and a total, driving the admin CSV/JSONL export"
             - "[x] /batch-detail and /export additionally require the audit_viewer feature (no view without the flag); every audit endpoint needs audit.manage"
             - "[x] GET /scan is the server-side scan export companion to /export (same filters, audit_viewer + audit.manage gates, org-scoped RLS): it streams the WHOLE matching event set in ONE response (NDJSON by default, or a Content-Disposition CSV attachment with the scan columns) with no offset/limit pagination — the server keyset-paginates over the stable (created_at ASC, id ASC) order in fixed page-size batches so memory stays bounded for any org size, and an invalid user_id is 422 while pre-stream DB errors surface as a proper status (backend/src/modulo/core/audit_logger/__init__.py stream_export_chain, backend/src/modulo/api/routes/audit.py scan_chain_endpoint, test_audit_scan_route.py, TestScanChain in test_audit.py)"
+
+            # Pipeline graph mutation audit (FAR-1471)
+            - "[x] Every pipeline graph mutation is ALWAYS audited: each successful replace_pipeline_graph write and each rollback_to_snapshot appends one pipeline.graph_updated event in the SAME transaction as the write (a graph write can never commit without its event), carrying a concise before/after summary — node/edge counts plus the added/removed/agent_commands-changed node IDS ONLY, never node payloads, env_vars, context_files or parameter values, so no masked secret enters the chain; MCP graph writes attribute the event to the caller's account id as changed_by (a session without one records null, never a bogus id), replacing the prior HITL-only audit that left plain writes such as an agent_commands edit unattributable (backend/src/modulo/db/crud/pipeline.py graph_update_audit_payload + GRAPH_UPDATED_EVENT, backend/src/modulo/db/crud/pipeline_snapshot_versioning.py, backend/src/modulo/api/mcp_server.py, test_pipeline_graph_updated_audit.py)"
 
             # Frontend (AdminAuditLogView, /admin/audit)
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
@@ -5390,6 +5476,8 @@ features:
             - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
+            # FAR-967 chunk 10: pin integrity + operator enable/disable control
+            - "[x] The policy-gate operator control and pin-set integrity surface (FAR-967 chunk 10): PATCH /api/v1/evals/{eval_id}/policy-gate/toggle (admin-only eval.definition.update, break-glass mint denied) flips enabled and atomically stamps enabled_at/disabled_at so the symmetric ck_policy_gates_enabled_timestamps CHECK always holds, emits a policy_gate.toggled audit event (best-effort) under the same transaction-scoped advisory lock as create/replace, and the /evals/editor policy-gate panel exposes it as a role=switch policy-gate-toggle with a disable-confirmation dialog; at run start the executor re-verifies the snapshot's policy_gate_pins_fingerprint (a tampered/drifted pin set terminalizes as a mechanism error) and pin membership governs the run's evaluation universe (a live action edit cannot re-score a pinned run) while an operator-disabled live gate is removed from evaluation even when pinned (backend/src/modulo/core/eval_engine/policy_gate.py fingerprint_policy_gate_pins, backend/src/modulo/core/pipeline_engine/executor.py _resolve_governed_gate, backend/src/modulo/db/models/policy_gate.py, backend/src/modulo/db/migrations/versions/0274_policy_gate_pin_fingerprint_operator_control.py, backend/src/modulo/api/routes/evals.py, frontend/src/__tests__/EvalEditorViewPolicyGate.spec.ts)"
         deferrals:
             - "Per-token eval breakdown comparison is the remaining deferred comparison sub-surface, tracked under feat-variants"
     feat-feedback:
@@ -5430,6 +5518,10 @@ features:
             # FAR-1257 + FAR-1269: the configurable review window
             - "[x] The HITL review window is configurable at three levels (FAR-1257): a per-pipeline override, an org default (GET/PUT /api/v1/admin/org/hitl-review-window - whole seconds, 60 to 604800, explicit null clears back to inheritance) and the instance default (HITL_REVIEW_CANCEL_GRACE_SECONDS); the resolved window is stamped ONCE at gate fire time as an absolute hitl_claims.terminalize_at, so stamped rows ignore the env knob while legacy rows keep it verbatim"
             - "[x] The org review window is editable on EVERY plan tier (FAR-1269): the org-hitl-review-window-* card on /admin/org renders OUTSIDE the team_rbac FeatureGate (the endpoint is not plan-gated) and the /admin/org route itself is community-tier with an explicit [admin] role (FAR-462 pattern), so a community admin reaches the control while every other section of the page stays behind the gate's disabled overlay"
+            # FAR-1487: reject terminates by default
+            - "[x] A HITL rejection with no reject destination ENDS the run with the terminal `rejected` status (not `failed`, not `cancelled`) and error_code `hitl.rejected`: the gate compiles to a conditional edge whose router returns LangGraph END on a stamped rejection (the FAR-541 gate-identity check), and the executor finalize downgrades the would-be `complete` to `rejected` only when BOTH the gate artifact and the committed hitl_claims rejected row agree (backend/tests/integration/test_hitl_resume_roundtrip.py, backend/tests/unit/pipeline_engine/test_hitl_reject_terminate.py)"
+            - "[x] Three reject dispositions share one resolver (resolve_reject_disposition): `route` when a reject target/edge exists, `terminate` (the default) otherwise, and `proceed` only when the gate explicitly sets `on_reject: proceed` (validated at graph save, edge-level and node-level); an automated correction_target wins over terminate, and the reviewer briefing (HitlBriefing, HitlReviewCard banners) states the reject consequence in all three states"
+            - "[x] A coalesced-supersede system rejection (a newer version of the work item replaced a still-waiting review) with no reject route ends `rejected` with error_code `hitl.superseded` (detected from the committed claim's system reason with no deciding account): silent (no failure alert), excluded from failure analytics and the human-reject count, never advances a lifecycle journey, and labelled 'Superseded by a newer version' on the run list and run detail - never 'Rejected by reviewer'"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
         status: covered
@@ -5445,6 +5537,7 @@ features:
             - "[x] Library items can be copied into the org with the CopyToAdaptWizard"
             - "[x] Library collections authoring and publishing ship behind the library_collection feature flag: a collection is created as a draft, its manifest pins are updated while draft, and it is published — invalid/duplicate pins, an empty manifest and more than MAX_COLLECTION_PINS are rejected 422, a duplicate slug is 409, and every collection endpoint 404s when the flag is off (docs/product-map/library/library.md, backend/tests/unit/api/test_library_collection.py)"
             - "[x] Workflow bundle export writes a .modulo.zip / signed YAML bundle with org-private fields (owner_team_id, visibility, credentials/ciphertexts, env secrets) stripped, and workflow import runs a two-phase REST contract — /import/analyse resolves connector/schema(abstract_name)/model-backend references and detects pipeline-name conflicts with a disambiguation suffix, /import/confirm materialises the pipeline (200 imported); a tampered non-JSON bundle is rejected 400 without creating entities (backend/tests/bdd/features/workflows/import.feature, workflows/export.feature, steps/test_workflows.py)"
+            - "[x] Composite library-primitive content is masked on every read surface (FAR-1380): the shared LibraryPrimitiveResponse._mask_composite_graph_credentials validator masks credential-bearing node fields inside a composite primitive's content_json for the library list/get/create/patch/delete/restore/adapt responses, community contribute + contributions list + admin publish responses, the community install response and the fixture contributions list, and the MCP modulo://library/{type}/{slug} resource masks composite nodes before rendering; non-composite primitives pass through byte-identical. The FAR-1374 sentinel rule applies on write: POST /api/v1/libraries, PATCH /api/v1/libraries/{id} and POST /api/v1/libraries/community/contribute resolve a submitted mask echo against the stored sub-graph (resolve_and_reject_mask_sentinels) and refuse an unmappable sentinel with 422 COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL, and a masked-read -> patch round-trip preserves the stored secret (backend/tests/unit/api/test_library_primitive_masking.py, api/routes/library.py, api/mcp_server.py; control statement docs/deployment-security.md 2.6)"
         deferrals:
             - "Collections authoring is gated behind the default-off library_collection feature flag per org (FAR-760); collection install/uninstall + community trust gates are tracked under feat-library-collections"
     feat-library-collections:
@@ -5504,6 +5597,7 @@ features:
             - "[x] MCP library browse (2026-09-25): the `search_library` tool is the read-only library-browse surface, on the read-only allowlist (`resource.read_only` viewer floor) in the centralized scope gate and gated at the handler by the real `_check_agent_tool_scope` chokepoint — an authenticated caller at or above viewer browses, and a node-level `capability_scope.allowed_tools` that excludes the tool is denied `insufficient_scope` before any DB read; the four `mcp/library_browse.feature` scenarios execute in CI against the real handler + scope-gate seams (auth re-validation + list/session seams patched), closing the last legacy `/mcp/tools/call` `@awaiting-implementation` draft"
             - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI tokenised on ANY whitespace (so two URIs pasted on one line separate correctly and match the backend's space-joined storage round-trip) where every entry must be an absolute http:// or https:// URI (localhost / 127.0.0.1 stay valid for local development) with duplicates de-duplicated and invalid entries named in an inline error, plus at least one of the three valid scopes (trigger:run, hitl:review, library:browse); the confirm button is never validity-disabled, so a submit always reaches the guard and surfaces every touched-field error; success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, both values are wiped from component state when the dialog closes (the footer Done handler and the Dialog hide event), and a rejected clipboard write (insecure plain-HTTP context, no navigator.clipboard) renders a visible copy-failed message telling the user to select the value and copy manually instead of console-only; the section is gated to org role admin/operator with a restricted state driven by the list call's 403, a fetch rejection or a non-array list body renders the inline section error rather than the 'no clients registered yet' empty state, and the API keys card degrades the same way - a 403 from GET /api/v1/api-keys (the identical admin|operator gate) renders a restricted API-keys card instead of failing the whole page, while non-403 API key failures stay fatal (SettingsMcpView.spec.ts)"
             - "[x] The MCP API-keys card distinguishes a REVOKED key from an EXPIRED one by the observed facts instead of the derived is_active flag (FAR-1296/FAR-1299): the key serializer emits revoked_at (ISO-8601 when set, else null — the revocation FACT, not an inference from is_active) alongside lookup_prefix/role/scope/last_used_at/expires_at, revocation is a DELETE /api/v1/api-keys/{key_id} (the earlier PUT was silently dropped — FAR-1291), and the /settings/mcp table renders a per-key status badge (settings-mcp-key-status) computed as revoked (revoked_at set, checked first) / expired (revoked_at null and the expiry elapsed) / active (revoked_at null, expiry not elapsed), with the revoke button shown only for active keys (api/routes/api_keys.py + auth/api_key._serialize_key; SettingsMcpView.vue, SettingsMcpView.spec.ts, test_api_keys_endpoint.py)"
+            - "[x] API key grant-sets can be set at creation from REST and MCP (FAR-1477): POST /api/v1/api-keys and the MCP create_api_key tool both accept an optional grants list (omitted = legacy role bundle, [] = explicit deny-all, otherwise exactly those permissions) behind the per-org api_key_grants flag (OFF => 422, never a silent widen) and both run the same mint cap (unknown key 422, non-delegable 403, above the caller's live capability 403); the Settings > MCP create-key dialog shows a grant picker only when GET /api/v1/api-keys/grantable-permissions reports the flag ON, lists only backend-supplied delegable permissions (grouped by prefix, filtered to the caller's role level), defaults to off (role bundle), omits grants rather than sending [] and blocks Create while restriction is on with nothing ticked (ApiKeyGrantsSelector.vue, SettingsMcpView.vue, ApiKeyGrantsSelector.spec.ts, test_api_key_grants.py, test_api_key_mgmt_tools.py)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered
@@ -5597,7 +5691,6 @@ features:
             - "[x] The read-mask sentinel never reaches storage or a run (FAR-1374): every composite-template write entry (POST /api/v1/composite-templates, PATCH, the editor PUT, and save-as-composite) resolves masked echoes against the stored graph FIRST, then refuses any surviving or unresolvable sentinel with 422 (COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL) naming the sub-node, field, and key; composite expansion fails closed with the same code for pre-fix or direct-DB-written sentinel rows so a mask literal can never land in a run snapshot or clobber a host-injected credential (core/composite_engine/expander.py MaskedCredentialExpansionError); graph-save validation surfaces the same condition, and the admin housekeeping sweep reports pre-existing degraded templates detection-only - repair is manual credential re-entry in the composite editor, never an automatic rewrite (core/housekeeping.py)"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
-            - "The library-primitive credential surface (composite/pipeline primitives installed from the Library) is excluded from the plaintext-at-rest + mask-on-read control statement pending FAR-1380"
     feat-plugins:
         description: Plugin registry
         status: partial
@@ -5639,7 +5732,8 @@ features:
             - "[x] The run detail page shows a Re-run button for terminal runs; when every node in the pipeline's graph is flagged idempotent the click fires the request directly, otherwise the button requires a second confirm click with a warning that a non-idempotent re-run may repeat side effects; an unreadable or empty graph falls back to the confirm path; success navigates to the new run's detail page"
             - "[x] The runs list shows a per-row Re-run button for terminal runs with a two-click confirm (the list never fetches per-row pipeline idempotency); success navigates to the new run's detail page and failures render inline"
             # Analyze action: root-cause analysis handoff to the Assistant (FAR-1235)
-            - "[x] The run detail page shows an Analyze button for failed runs - every terminal failure status (failed, eval_failed, stalled, budget_exceeded, cost_ceiling_exceeded, router_no_match, compensation_failed) but never complete or cancelled - and only when the assistant feature flag is active and dev mode is on (the only environment where an Assistant conversation surface exists); with the assistant enabled but no model backend holding credentials the button stays visible but aria-disabled, focusable, with a hover/focus tooltip explaining that the Assistant is not configured"
+            - "[x] The terminal `rejected` run status (FAR-1487: a HITL reject with no reject route ended the run) is part of the closed run-status vocabulary everywhere (TERMINAL_STATUSES, ck_runs_status via migration 0284, run status filters, analytics status enum, badge/label with locale keys): it is not a failure, so the Analyze action excludes it like cancelled, failure analytics and the cost probe's failure paths ignore it, and it never advances a lifecycle journey"
+            - "[x] The run detail page shows an Analyze button for failed runs - every terminal failure status (failed, eval_failed, stalled, budget_exceeded, cost_ceiling_exceeded, router_no_match, compensation_failed) but never complete, cancelled or rejected - and only when the assistant feature flag is active and dev mode is on (the only environment where an Assistant conversation surface exists); with the assistant enabled but no model backend holding credentials the button stays visible but aria-disabled, focusable, with a hover/focus tooltip explaining that the Assistant is not configured"
             - "[x] Pressing Analyze creates a NEW assistant session titled with the run label, seeds it with the run identity (run, pipeline, status), the error (code, detail capped at 4000 chars, failing node when per-node telemetry recorded one) and a root-cause-analysis request, opens the Assistant panel, and streams the reply through the existing POST /api/v1/assistant/sessions/{session_id}/stream path - no new backend endpoint; a busy Assistant (stream already running) blocks a second press with its own tooltip and an aria-live status line reports starting/started/failed"
             # Run-level cost warnings (missing self-report surfacing)
             - "[x] A self_reported cost component with at least one eligible sandbox node but no agent report is a CLEAR non-billing state: its breakdown entry stays visible (source self_reported, missing_self_report true) but never renders as a normal $0.000000 money line in the run detail breakdown (no numeric basis, no phantom reported=0/node_count=0)"
@@ -5655,6 +5749,8 @@ features:
             # Run-outcome delivery signal (FAR-189 / FAR-228 / FAR-1336)
             - "[x] A terminal run carries a run-outcome classification record (value delivered / no_delivery / excluded / unclassified plus a stored reason and delivered_pr_urls), written atomically with terminalization and fail-closed: a classifier/persist failure writes an unclassified marker (SAVEPOINT-fenced, bounded) so the record is never NULL, and the periodic reconciliation sweep (reconcile_missing_classifications, wired into dispatcher_reconcile) backfills raw-SQL terminalizers within a minute; run detail serializes the record (defensive-coerced, never a 500) and the derived gate_fired flag (backend/src/modulo/core/pipeline_engine/classify.py, backend/src/modulo/db/crud/run.py, test_run_classification.py, test_runs_endpoint.py)"
             - "[x] The delivery signal is agent-reported and honestly labelled (FAR-1336, renamed by FAR-1388): delivered_pr_urls are harvested from the run's own output (node structured return / telemetry value / FAR-188 raw-output markers) with a per-URL pr_url_provenance (declared vs matched, declared wins) and a delivery_confidence of agent_reported on every record today (verified reserved); rows stored before the FAR-1388 rename carry the deprecated self_reported alias, are never backfilled, and readers tolerate either spelling — additive metadata that never changes the verdict, forward-only over legacy six-key rows (readers treat an absent key as legacy/unknown)"
+            # Node-deadline watchdog firing record (FAR-1463)
+            - "[x] The node-deadline watchdog records each firing distinctly from terminal failures (FAR-1463): pipeline_execution._fail_overdue_node durably increments runs.node_deadline_watchdog_fired_count on its own connection BEFORE the shared retry consult, so BOTH the re-dispatch (which nulls error_code via the fenced pending-reset) and the terminal fail count; the marker survives the re-dispatch (neither the atomic claim nor the pending-reset names the column), a run that never dispatched a node reads 0, and error_code separates a genuine terminal failure from a firing — internal/analytics-only (never on RunResponse or the MCP run payloads), migration 0280 adds the NOT NULL DEFAULT 0 column and it is copied onto run_daily_facts at finalize so the analytics read never joins runs (ADR 020) (backend/src/modulo/core/pipeline_execution.py, backend/src/modulo/db/models/run.py, test_watchdog_firing_record_writer.py, test_pipeline_execution_watchdog_retry.py)"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered
@@ -5669,10 +5765,10 @@ features:
             - "[x] The Runners page (route-per-tab under /admin/runners/profiles + /admin/runners/concurrency) renders a persistent status strip (60s auto-refetch, worst-of across machines, loading/unknown/unavailable states never render confident green, probe error surfaced with remediation copy pointing at docs/security/bundled-runner-operator-guide.md), the Profiles tab (health badges, per-row template-apply, sandbox-agent style test-connection events), and the Concurrency tab (the D3b org sandbox-concurrency cap with the ge=0 le=100 clamp, effective-cap display refetched after a successful save, preflight warnings); every legacy route (/environment-profiles, /environment-profiles/new, /environment-profiles/:id, /admin/sandbox-concurrency) redirects"
             - "[x] A hung socket-proxy cannot stall the probe: the aiodocker client carries a bounded timeout (total 10s, connect 5s), so the hang becomes a recorded unreachable with a real transition alert well under the 120s job timeout, and any Docker URL userinfo in engine error strings is scrubbed to ***@ before persisting or logging (credential-bearing MODULO_DOCKER_HOST)"
         deferrals:
-            - The node-editor sandbox-agent panel slices its runner-health display against this cache (D5 node-editor slice — follow-up: pipeline editor consume)
-            - Housekeeping is NOT exempt from the concurrency cap (dispatch gate unchanged); the Runners page surfaces the cap only (follow-up: housekeeping exemption decision)
-            - The strip does not surface the org-wide ACTIVE workspace count (probe cache carries engine state only; follow-up: extend the cache row)
-            - Compose-file e2e coverage of the probe is deferred (unit + integration crud tests pin the contract; follow-up: compose e2e)
+            - "The node-editor sandbox-agent panel slices its runner-health display against this cache (D5 node-editor slice — follow-up: pipeline editor consume)"
+            - "Housekeeping is NOT exempt from the concurrency cap (dispatch gate unchanged); the Runners page surfaces the cap only (follow-up: housekeeping exemption decision)"
+            - "The strip does not surface the org-wide ACTIVE workspace count (probe cache carries engine state only; follow-up: extend the cache row)"
+            - "Compose-file e2e coverage of the probe is deferred (unit + integration crud tests pin the contract; follow-up: compose e2e)"
     feat-schemas:
         description: Typed JSON schemas, schema editor, inference, parameter schemas, and schema enforcement
         status: covered
@@ -5844,7 +5940,6 @@ features:
             - "[x] The no-delivery streak engine covers cron triggers as well as ongoing (FAR-1387): the sweep walks cron triggers' terminal classifications with the SAME streak walk and GREATEST(last_delivery_at, streak_epoch) boundary, streak_status returns real values for a covered cron (no longer the unconfigured base), and a cron trip NOTIFIES and SURFACES (append-only cron_trigger.no_delivery_streak_alert record + sweep 'tripped' count) without auto-deactivating — deactivation is opt-in per cron via config_json no_delivery_auto_deactivate (default OFF), cron applies its own 48h minimum wall-clock window (MODULO_CRON_STREAK_MIN_WINDOW_HOURS override), and cron audit records use cron_trigger.* event types, never the ongoing_trigger.* stream (backend/src/modulo/core/trigger_streak.py, backend/tests/unit/core/test_trigger_streak_engine.py)"
             - "[x] The streak badge in SettingsTriggersView renders for every trigger type the engine covers — ongoing AND cron — via ONE mirrored constant (STREAK_COVERED_TRIGGER_TYPES, pointing at the backend STREAK_TRIGGER_TYPES in core/trigger_streak.py), and the 'Deactivated' badge + re-enable action are driven by streak_status.state === 'deactivated' (deactivated_reason), NEVER by the trigger type: a notify-only cron trip (state 'ok', deactivated_reason null) shows only 'No-delivery streak x/N' with role=status/aria-live, while 'Deactivated' wording appears only when the backend reports the deactivated state (frontend/src/views/SettingsTriggersView.vue, frontend/src/__tests__/SettingsTriggersView.spec.ts; FAR-1405)"
         deferrals:
-            - Slack app-mention triggers register as a trigger type and are endpoint-tested, but are an alpha/community surface without a BDD feature file
             - Route-level webhook validation failures (HMAC/timestamp) roll back with the request and do not persist a TriggerEvent for those typed errors in that path (documented pre-existing limitation)
     feat-variants:
         description: Variant comparison and AB test models

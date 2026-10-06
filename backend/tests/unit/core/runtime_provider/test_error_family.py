@@ -122,7 +122,7 @@ def test_config_errors_are_not_caught_by_new_family_handlers() -> None:
     untouched hierarchy — existing handlers keep owning those errors."""
     config_errors: tuple[BaseException, ...] = (
         ProviderNotConfiguredError("e2b", "MODULO_E2B_API_KEY"),
-        UnknownProviderTypeError("kubernetes", frozenset({"local", "e2b"})),
+        UnknownProviderTypeError("nomad", frozenset({"local", "e2b"})),
     )
     for exc in config_errors:
         with pytest.raises(type(exc)), suppress(RuntimeProviderError):
@@ -139,15 +139,17 @@ def test_config_error_hierarchy_handlers_behave_exactly_as_before() -> None:
     with pytest.raises(ProviderNotConfiguredError, match="MODULO_E2B_API_KEY"):
         hub.resolve(SimpleNamespace(provider_type="e2b"))
 
+    # FAR-1051: "kubernetes" is a VOCABULARY member now, so the unknown-type
+    # example must be a type that stays outside PROVIDER_TYPES.
     with pytest.raises(ProviderNotConfiguredError) as exc_info:
-        hub.resolve(SimpleNamespace(provider_type="kubernetes"))
+        hub.resolve(SimpleNamespace(provider_type="nomad"))
     assert isinstance(exc_info.value, UnknownProviderTypeError)
-    assert exc_info.value.provider_type == "kubernetes"
+    assert exc_info.value.provider_type == "nomad"
 
     # The new-family handler must NOT catch the untouched errors either —
     # if it did, nothing would propagate and pytest.raises would fail.
     with pytest.raises(UnknownProviderTypeError), suppress(RuntimeProviderError):
-        hub.resolve(SimpleNamespace(provider_type="kubernetes"))
+        hub.resolve(SimpleNamespace(provider_type="nomad"))
 
 
 # ---------------------------------------------------------------------------

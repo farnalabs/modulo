@@ -1336,6 +1336,8 @@ async def replace_pipeline_graph(
     caller_type: Literal["rest", "mcp"],
     account_id: uuid.UUID | None = None,
     is_guardrail_admin: bool = False,
+    grants_deny_privilege: bool = False,
+    grants_deny_guardrail_admin: bool = False,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges.
@@ -1377,6 +1379,7 @@ async def replace_pipeline_graph(
         account_id=account_id,
         is_privileged=is_privileged,
         caller_type=caller_type,
+        grants_deny_privilege=grants_deny_privilege,
     )
 
     # Snapshot current edges into plain data BEFORE any write (defense in depth).
@@ -1412,6 +1415,7 @@ async def replace_pipeline_graph(
         is_guardrail_admin=is_guardrail_admin,
         caller_type=caller_type,
         account_id=account_id,
+        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
     )
 
     diff = await apply_gated_edge_diff(

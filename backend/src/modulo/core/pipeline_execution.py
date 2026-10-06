@@ -1660,8 +1660,9 @@ async def run_executor_with_watchdog(
     actually reached ``complete``; a generic executor exception is
     terminal-failed with ``executor_failed`` (token-guarded) and returns
     ``{"status": "failed"}``; an ``awaiting_human`` pause returns
-    ``{"status": "awaiting_human"}``. The caller only runs ``mark_complete`` on
-    a genuine ``complete``.
+    ``{"status": "awaiting_human"}``; a HITL rejection that ended the run
+    (FAR-1487) returns ``{"status": "rejected"}``. The caller only runs
+    ``mark_complete`` on a genuine ``complete``.
     """
     rid = uuid.UUID(run_id)
 
@@ -1836,6 +1837,11 @@ async def run_executor_with_watchdog(
         return {"status": "complete"}
     if result_status == "awaiting_human":
         return {"status": "awaiting_human"}
+    if result_status == "rejected":
+        # FAR-1487: a HITL rejection ended the run - a terminal, NON-failure
+        # outcome (the run row already carries ``rejected`` + ``hitl.*``); never
+        # report it as ``failed``.
+        return {"status": "rejected"}
     return {"status": "failed"}
 
 
@@ -2283,9 +2289,15 @@ async def _redispatch_stranded_rows(stranded_rows: list[Any]) -> dict[str, int]:
     sessions (and the row lock the UPDATE held) never overlap a live
     transaction.
     """
+    from modulo.core.cron_helpers import _bound_org
+
     redispatch_outcomes: dict[str, int] = {}
     for row in stranded_rows:
-        outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
+        # FAR-1501: each stranded row belongs to one org — bind it so the
+        # failure logged by the re-dispatch (and by dispatch_run below) is
+        # attributed by ErrorTrackingLogHandler instead of dropped.
+        async with _bound_org(row.organisation_id):
+            outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
         redispatch_outcomes[outcome] = redispatch_outcomes.get(outcome, 0) + 1
     return redispatch_outcomes
 

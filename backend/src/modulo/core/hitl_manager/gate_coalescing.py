@@ -23,8 +23,10 @@ every 15 minutes, so the pile grows fast).
   ``hitl.gate_superseded``) and the old run — if it was parked — is un-parked
   to ``awaiting_human`` so the existing committed-decision resume machinery
   (dispatcher_reconcile F6a) resumes it, routing it through the gate's reject
-  route when one is configured and, with no reject route, continuing it along
-  the normal path (it does NOT terminate; terminate-by-default is FAR-1487).
+  route when one is configured. With no reject route the old run now ENDS
+  ``rejected`` with ``error_code='hitl.superseded'`` (FAR-1487 - labelled
+  "Superseded by a newer version", never as a human "no"), unless the gate is
+  set to ``on_reject: proceed`` (then it continues down the approve path).
   The new run raises its gate fresh.
 * **raise** — no open gate for the key (or the run carries no coalesce key,
   e.g. non-webhook triggers): normal gate creation.
@@ -78,6 +80,10 @@ _GATE_COALESCE_CANDIDATE_LIMIT = COALESCE_CANDIDATE_LIMIT
 CoalesceOutcome = Literal["raise", "reuse"]
 
 _SUPERSEDE_REASON = "superseded_by_newer_payload (FAR-604 D4 gate coalescing)"
+# Public alias: the executor finalize (FAR-1487) matches a committed
+# ``hitl_claims.decision_payload.reason`` against it to label supersede-driven
+# system rejections ``hitl.superseded`` instead of ``hitl.rejected``.
+SUPERSEDE_REASON = _SUPERSEDE_REASON
 
 # Statuses whose open gates are legitimate reuse candidates (qa F3): a
 # terminal run's open gate is orphaned — the run will never resume to act on
@@ -213,9 +219,11 @@ async def evaluate_gate_coalescing(
     # Changed SHA — supersede: close the old gate with a SYSTEM-committed
     # rejection (guarded re-validation against a concurrent claimer) and
     # un-park the old run so the committed-decision resume machinery resumes
-    # it: it routes through the gate's reject route when one is configured,
-    # and with no reject route continues along the normal path (no
-    # terminate-by-default yet — FAR-1487). Then raise fresh.
+    # it: it routes through the gate's reject route when one is configured;
+    # with no reject route it ENDS ``rejected`` / ``hitl.superseded`` (FAR-1487;
+    # the executor finalize detects the supersede via this decision's
+    # ``decision_payload.reason`` and the absence of an account), unless the
+    # gate is explicitly ``on_reject: proceed``. Then raise fresh.
     now = datetime.now(UTC)
     superseded = await session.execute(
         update(HitlClaim)

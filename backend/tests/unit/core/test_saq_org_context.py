@@ -149,7 +149,8 @@ async def test_job_error_is_forwarded_with_the_jobs_org(
     assert "saqorg.job_error" in sink.messages
     assert sink.orgs == [_ORG_ID]
     assert org_id_var.get() is None
-    assert queue.finished and queue.finished[0][1].name == "COMPLETE"  # type: ignore[union-attr]
+    assert queue.finished
+    assert queue.finished[0][1].name == "COMPLETE"
 
 
 async def test_system_job_without_org_is_not_attributed_to_a_previous_org(

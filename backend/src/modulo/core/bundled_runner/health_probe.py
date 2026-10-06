@@ -305,6 +305,7 @@ async def run_runner_health_probe(
     with a dead engine alerts once instead of sitting silently green.
     """
     from modulo.core.bundled_runner.runner_reconciler import deployment_identity
+    from modulo.core.cron_helpers import _bound_org
     from modulo.db.crud.runner_probe import (
         PROBE_RETENTION_SECONDS,
         get_runner_probe_cache,
@@ -356,51 +357,55 @@ async def run_runner_health_probe(
                 retention_seconds=PROBE_RETENTION_SECONDS,
             )
             for org_id, image_refs in org_refs.items():
-                try:
-                    # qa F2: the SAVEPOINT confines one org's failure — a
-                    # poisoned statement rolls back to the savepoint and the
-                    # outer transaction (other orgs' upserts) stays usable.
-                    async with session.begin_nested():
-                        real_refs = [r for r in image_refs if not is_placeholder_bundled_runner_image_ref(r)]
-                        # qa F4: aggregate over NON-placeholder refs only; a
-                        # placeholder-only org has no inspectable image and
-                        # must read unknown (None), never a permanent false
-                        # "image not pulled".
-                        images_present: bool | None = (
-                            aggregate_image_presence([checked_images.get(r) for r in real_refs])
-                            if outcome.reachable
-                            else None
-                        )
+                # FAR-1501: bind this org so the per-org failures below
+                # (org_infra_failed / org_failed / transition emissions) are
+                # attributed by ErrorTrackingLogHandler instead of dropped.
+                async with _bound_org(org_id):
+                    try:
+                        # qa F2: the SAVEPOINT confines one org's failure — a
+                        # poisoned statement rolls back to the savepoint and the
+                        # outer transaction (other orgs' upserts) stays usable.
+                        async with session.begin_nested():
+                            real_refs = [r for r in image_refs if not is_placeholder_bundled_runner_image_ref(r)]
+                            # qa F4: aggregate over NON-placeholder refs only; a
+                            # placeholder-only org has no inspectable image and
+                            # must read unknown (None), never a permanent false
+                            # "image not pulled".
+                            images_present: bool | None = (
+                                aggregate_image_presence([checked_images.get(r) for r in real_refs])
+                                if outcome.reachable
+                                else None
+                            )
 
-                        previous = await get_runner_probe_cache(session, org_id=org_id, machine_id=identity)
-                        was_reachable = previous.engine_reachable if previous is not None else True
+                            previous = await get_runner_probe_cache(session, org_id=org_id, machine_id=identity)
+                            was_reachable = previous.engine_reachable if previous is not None else True
 
-                        await upsert_runner_probe_cache(
-                            session,
-                            org_id=org_id,
-                            machine_id=identity,
-                            engine_reachable=outcome.reachable,
-                            images_present=images_present,
-                            image_checks={ref: checked_images.get(ref) for ref in real_refs},
-                            engine_info=outcome.engine_info,
-                            probe_error=outcome.error,
-                        )
-                        orgs_probed += 1
+                            await upsert_runner_probe_cache(
+                                session,
+                                org_id=org_id,
+                                machine_id=identity,
+                                engine_reachable=outcome.reachable,
+                                images_present=images_present,
+                                image_checks={ref: checked_images.get(ref) for ref in real_refs},
+                                engine_info=outcome.engine_info,
+                                probe_error=outcome.error,
+                            )
+                            orgs_probed += 1
 
-                        if was_reachable and not outcome.reachable:
-                            transitions += 1
-                            await _emit_unreachable_transition(session, org_id, identity, outcome.error)
-                except SQLAlchemyError as exc:
-                    # Infra error for THIS org only: the savepoint rolled it
-                    # back, the outer tx is still usable. Record and continue;
-                    # re-raised at the end (qa F3) so SAQ retries engage.
-                    orgs_failed += 1
-                    if first_infra_error is None:
-                        first_infra_error = exc
-                    _log.exception("runner_probe.org_infra_failed org=%s", org_id)
-                except Exception:
-                    # Non-infra per-org error: fail-open (logged, skipped).
-                    _log.exception("runner_probe.org_failed org=%s", org_id)
+                            if was_reachable and not outcome.reachable:
+                                transitions += 1
+                                await _emit_unreachable_transition(session, org_id, identity, outcome.error)
+                    except SQLAlchemyError as exc:
+                        # Infra error for THIS org only: the savepoint rolled it
+                        # back, the outer tx is still usable. Record and continue;
+                        # re-raised at the end (qa F3) so SAQ retries engage.
+                        orgs_failed += 1
+                        if first_infra_error is None:
+                            first_infra_error = exc
+                        _log.exception("runner_probe.org_infra_failed org=%s", org_id)
+                    except Exception:
+                        # Non-infra per-org error: fail-open (logged, skipped).
+                        _log.exception("runner_probe.org_failed org=%s", org_id)
         _log.info(
             "runner_probe.tick_completed machine=%s reachable=%s orgs=%d failed=%d duration_ms=%d",
             identity,

@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.models.assistant_skill import AssistantSkill
 from modulo.db.models.system_config import SystemConfig
 from modulo.db.rls import set_rls_org
@@ -274,7 +276,12 @@ def _assistant_config_response(current: dict[str, Any]) -> AssistantConfigRespon
     )
 
 
-@router.put("/config")
+@router.put(
+    "/config",
+    dependencies=[
+        Depends(audited("assistant_config_updated", "assistant_config", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("admin.assistant.update_assistant_config")
 async def update_assistant_config(
     req: AssistantConfigUpdate,
@@ -390,7 +397,13 @@ async def list_org_skills(
         ) from None
 
 
-@router.post("/skills", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/skills",
+    dependencies=[
+        Depends(audited("assistant_skill_created", "assistant_skill", principal_dep=get_current_tenant_user))
+    ],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.assistant.create_org_skill")
 async def create_org_skill(
     req: SkillCreate,
@@ -436,7 +449,12 @@ async def create_org_skill(
         ) from None
 
 
-@router.put("/skills/{skill_id}")
+@router.put(
+    "/skills/{skill_id}",
+    dependencies=[
+        Depends(audited("assistant_skill_updated", "assistant_skill", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("admin.assistant.update_org_skill")
 async def update_org_skill(
     skill_id: uuid.UUID,
@@ -483,7 +501,20 @@ async def update_org_skill(
         ) from None
 
 
-@router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/skills/{skill_id}",
+    dependencies=[
+        Depends(
+            audited(
+                "assistant_skill_deleted",
+                "assistant_skill",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 @handle_db_errors("admin.assistant.delete_org_skill")
 async def delete_org_skill(
     skill_id: uuid.UUID,
@@ -566,7 +597,16 @@ async def get_org_context_sources(
         ) from None
 
 
-@router.put("/context-sources/{source_key}")
+@router.put(
+    "/context-sources/{source_key}",
+    dependencies=[
+        Depends(
+            audited(
+                "assistant_context_source_updated", "assistant_context_source", principal_dep=get_current_tenant_user
+            )
+        )
+    ],
+)
 @handle_db_errors("admin.assistant.set_org_context_source")
 async def set_org_context_source(
     source_key: str,
@@ -606,7 +646,20 @@ async def set_org_context_source(
         ) from None
 
 
-@router.delete("/context-sources", status_code=status.HTTP_200_OK)
+@router.delete(
+    "/context-sources",
+    dependencies=[
+        Depends(
+            audited(
+                "assistant_context_sources_reset",
+                "assistant_context_source",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=status.HTTP_200_OK,
+)
 @handle_db_errors("admin.assistant.reset_org_context_sources")
 async def reset_org_context_sources(
     session: AsyncSession = Depends(get_db_session),

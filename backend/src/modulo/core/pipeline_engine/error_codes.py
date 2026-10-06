@@ -655,6 +655,24 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
             "by dispatcher_reconcile to free its concurrency slot."
         ),
     ),
+    # FAR-1487: a HITL rejection with no reject route ENDS the run with the
+    # terminal ``rejected`` status. Not a failure (nothing broke) - no alert,
+    # never retried. ``hitl.superseded`` is the BOOKKEEPING variant: a newer
+    # version of the work item replaced a still-waiting review (coalesced
+    # supersede), so the older run ends ``rejected`` WITHOUT looking like a
+    # human said "no" (silent, like ``run.superseded``).
+    "hitl.rejected": ErrorCodeSpec(
+        error_class="hitl",
+        retryable=False,
+        alert_severity=None,
+        guidance="Rejected by a reviewer at a HITL gate with no reject route; the run ended.",
+    ),
+    "hitl.superseded": ErrorCodeSpec(
+        error_class="hitl",
+        retryable=False,
+        alert_severity=None,
+        guidance="Superseded by a newer version of the work item; the older review was closed and its run ended.",
+    ),
     # --- eval codes ------------------------------------------------------
     _CODE_EVAL_BLOCKED: ErrorCodeSpec(
         error_class="eval",

@@ -1,5 +1,6 @@
 """Architecture test: every route-local ``except SQLAlchemyError`` arm that
-reports a 503 must lead with the shared ``raise_session_contract_error`` guard.
+reports a 503 — or reports the MCP database-unavailable payload — must lead
+with the shared session-contract guard.
 
 FAR-1464. A local ``except SQLAlchemyError`` arm never reaches
 ``handle_db_errors``, so before this sweep a client-side session-contract
@@ -13,9 +14,10 @@ of every arm that answers 503:
         raise_session_contract_error(exc, "<module>.<function>")
         ... existing logging / 503 raise ...
 
-This test AST-scans ``backend/src/modulo/api/**`` and FAILS when an arm that
-reports a 503 does not lead with that guard, so the misclassification cannot
-reappear. Arms legitimately exempt are listed in ``_EXEMPT`` with a reason.
+This test AST-scans ``backend/src/modulo/api/**`` and — since FAR-1481 —
+``backend/src/modulo/auth/**`` and FAILS when an arm that reports a 503 does
+not lead with that guard, so the misclassification cannot reappear. Arms
+legitimately exempt are listed in ``_EXEMPT`` with a reason.
 
 Scope notes:
 
@@ -24,20 +26,41 @@ Scope notes:
   ``status_code=503``, or logs ``log_service_unavailable("db_transient", ...)``.
   Arms that merely swallow, re-raise, or answer 4xx/500 are out of scope —
   they cannot misreport an outage as a 503.
-* Helper resolution is CROSS-MODULE within the scanned ``modulo.api`` tree
-  (iteration-2 fix): a helper reached via ``from modulo.api.<...> import <name>``
+* FAR-1482 adds the SECOND predicate: "returns the MCP database-unavailable
+  payload". MCP tool results carry no status code — the payload IS the
+  response — so the same misclassification appears as a returned
+  ``{"error": "database_unavailable"}`` / ``_tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)``
+  dict rather than a 503. That shape would otherwise be invisible to a
+  503-only scanner, so it gets its own predicate and its own violation text.
+* Two guard shapes exist, one per surface, and both are recognised as
+  "leads with the guard" (see ``_leads_with_guard``): the REST/HTTP form
+  ``raise_session_contract_error(exc, key)`` as a bare statement, and the MCP
+  payload form ``if (err := _tool_session_contract_error(exc, key)) is not
+  None: return err`` — where the call sits in the ``if`` test so it evaluates
+  before any database-unavailable reply. Both delegate to the SAME shared
+  classifier in ``db_error_handling``; only the rendering differs (500 vs
+  payload), which is why accepting either satisfies both predicates.
+* Helper resolution is CROSS-MODULE across the scanned ``modulo.api`` +
+  ``modulo.auth`` trees (iteration-2 fix): a helper reached via
+  ``from modulo.api.<...> import <name>``
   (incl. ``as`` aliases, relative imports, ``import modulo.api.<...>`` usage and
   ``import *``) is resolved to its definition in the source module and the
   503-predicate is computed as a fixed point over the whole import graph —
   so an arm whose 503 comes from an imported helper is flagged exactly like a
-  module-local one. Helpers defined OUTSIDE the scanned tree (``modulo.core``,
+  module-local one. Helpers defined OUTSIDE the scanned trees (``modulo.core``,
   ``modulo.db``, third-party) are unresolvable and are NOT treated as 503 —
   documented boundary, not a silent gap; no current arm delegates its 503 to
-  a non-``modulo.api`` helper.
+  a non-scanned helper. FAR-1481 added the auth root because
+  ``auth/dependencies.py``'s two arms sat outside the api root and were
+  therefore never swept.
+* ``_EXEMPT`` keys are namespaced by root (``"api/<rel>"`` / ``"auth/<rel>"``)
+  so the two roots cannot collide on a shared filename.
 * ``except PendingRollbackError`` arms are NOT scanned: that type is a strict
   SUBclass of ``InvalidRequestError``, so such an arm can only ever see
   PendingRollbackError instances — a plain session-contract violation never
-  reaches it, and no guard can apply.
+  reaches it, and no guard can apply. The same reasoning excludes
+  ``except IntegrityError`` arms that answer ``database_unavailable``: an
+  InvalidRequestError can never be caught there.
 * ``MissingGreenlet`` is a subclass of ``InvalidRequestError``; the guard
   delegates both to the shared classifier, which maps them to 500.
 
@@ -45,7 +68,8 @@ The cross-module resolution is proven by the synthetic-tree tests at the
 bottom of this module: a 503-raising helper in one file, an UNGUARDED arm in
 another file delegating to it (both the ``from ... import`` and the
 ``import ... as`` shapes) is flagged; the guarded shape and a module-local
-control behave the same way the real tree does.
+control behave the same way the real tree does. The MCP payload predicate has
+its own planted-violation / guarded-pair proof for the same reason.
 """
 
 from __future__ import annotations
@@ -55,18 +79,40 @@ from pathlib import Path
 
 _API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "api"
 _API_PREFIX = "modulo.api"
+_AUTH_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "auth"
+_AUTH_PREFIX = "modulo.auth"
+
+#: (root path, module prefix, root name) for every scanned tree. The root
+#: name namespaces ``_EXEMPT`` keys and violation paths so the two roots
+#: cannot collide on a shared filename (FAR-1481 added ``auth``).
+_ROOTS: tuple[tuple[Path, str, str], ...] = (
+    (_API_ROOT, _API_PREFIX, "api"),
+    (_AUTH_ROOT, _AUTH_PREFIX, "auth"),
+)
+_ROOTS_BY_NAME: dict[str, Path] = {name: path for path, _prefix, name in _ROOTS}
 
 #: Files whose SQLAlchemyError arms are allowed to report a 503 WITHOUT the
 #: guard, mapped to the reason the exemption is legitimate (FAR-1464).
+#: Keys are ``"<root name>/<path under src/modulo>"`` (FAR-1481).
 _EXEMPT = {
-    "db_error_handling.py": (
+    "api/db_error_handling.py": (
         "The shared classifier itself: _translate_wrapped_exception's SQLAlchemyError "
         "backstop IS the canonical 503 mapping every other arm's guard delegates to — "
         "guarding it would be self-referential."
     ),
 }
 
-_GUARD_NAME = "raise_session_contract_error"
+#: REST/HTTP rendering of the shared classifier: raises 500, never returns.
+_HTTP_GUARD_NAME = "raise_session_contract_error"
+#: MCP payload rendering of the SAME classifier: returns the payload, else None.
+_MCP_GUARD_NAME = "_tool_session_contract_error"
+_GUARD_NAMES = frozenset({_HTTP_GUARD_NAME, _MCP_GUARD_NAME})
+
+#: MCP tool-error shapes the same misclassification takes when there is no
+#: status code to carry it (FAR-1482).
+_MCP_DB_UNAVAILABLE_CODE = "database_unavailable"
+_MCP_DB_UNAVAILABLE_MSG_ARG = "_MSG_DB_TEMPORARILY_UNAVAILABLE"
+
 _RESPONSE_CLASSES = frozenset({"Response", "JSONResponse", "PlainTextResponse", "HTMLResponse", "RedirectResponse"})
 _HTTP_503_MARKERS = frozenset({"503", "HTTP_503_SERVICE_UNAVAILABLE"})
 _MAX_BINDING_CHASE = 10
@@ -117,6 +163,36 @@ def _logs_db_transient(node: ast.Call) -> bool:
     return isinstance(first, ast.Constant) and first.value == "db_transient"
 
 
+def _returns_mcp_db_unavailable(node: ast.Return) -> bool:
+    """``return {"error": "database_unavailable", ...}`` (FAR-1482).
+
+    Also matches ``return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)``, whose
+    code is already ``internal_error`` but whose DETAIL still claims a database
+    outage — the same misreport in a different wrapper.
+    """
+    value = node.value
+    if isinstance(value, ast.Call) and _name_of(value.func) == "_tool_error":
+        return bool(value.args) and _name_of(value.args[0]) == _MCP_DB_UNAVAILABLE_MSG_ARG
+    if isinstance(value, ast.Dict):
+        for key, item in zip(value.keys, value.values, strict=False):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "error"
+                and isinstance(item, ast.Constant)
+                and item.value == _MCP_DB_UNAVAILABLE_CODE
+            ):
+                return True
+    return False
+
+
+def _body_returns_mcp_db_unavailable(body: list[ast.stmt]) -> bool:
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Return) and _returns_mcp_db_unavailable(node):
+                return True
+    return False
+
+
 def _dotted_parts(node: ast.expr | None) -> list[str] | None:
     """``a.b.c`` -> ``["a", "b", "c"]``; None for non-dotted expressions."""
     if isinstance(node, ast.Name):
@@ -151,14 +227,14 @@ def _body_shape(body: list[ast.stmt]) -> tuple[bool, list[ast.expr]]:
     return direct, call_funcs
 
 
-def _module_of_rel(rel: str) -> str:
-    """Map a file path relative to the api root to its ``modulo.api...`` module name."""
+def _module_of_rel(rel: str, prefix: str) -> str:
+    """Map a file path relative to its root to its ``modulo.<...>`` module name."""
     parts = rel.split("/")
     if parts[-1] == "__init__.py":
         parts = parts[:-1]
-        return ".".join([_API_PREFIX, *parts]) if parts else _API_PREFIX
+        return ".".join([prefix, *parts]) if parts else prefix
     parts[-1] = parts[-1][: -len(".py")]
-    return ".".join([_API_PREFIX, *parts])
+    return ".".join([prefix, *parts])
 
 
 def _resolve_from_module(current_module: str, node: ast.ImportFrom) -> str | None:
@@ -174,43 +250,46 @@ def _resolve_from_module(current_module: str, node: ast.ImportFrom) -> str | Non
 
 
 class _ApiIndex:
-    """Parsed snapshot of the scanned tree plus its import graph."""
+    """Parsed snapshot of the scanned trees (api + auth) plus their import graph."""
 
-    def __init__(self, root: Path) -> None:
-        self.root = root
+    def __init__(self, roots: list[tuple[Path, str, str]]) -> None:
         self.trees: dict[str, ast.Module] = {}
         self.rels: dict[str, str] = {}
         self.defs: dict[str, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
         self.bindings: dict[str, dict[str, tuple[str, str]]] = {}
         self.aliases: dict[str, dict[str, str]] = {}
         self.stars: dict[str, list[str]] = {}
-        for path in sorted(root.rglob("*.py")):
-            rel = path.relative_to(root).as_posix()
-            module = _module_of_rel(rel)
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            self.trees[module] = tree
-            self.rels[module] = rel
-            self.defs.setdefault(module, {})
-            self.bindings.setdefault(module, {})
-            self.aliases.setdefault(module, {})
-            self.stars.setdefault(module, [])
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    self.defs[module][node.name] = node
-                elif isinstance(node, ast.ImportFrom):
-                    target = _resolve_from_module(module, node)
-                    if target is None:
-                        continue
-                    for alias in node.names:
-                        if alias.name == "*":
-                            self.stars[module].append(target)
-                        else:
-                            self.bindings[module][alias.asname or alias.name] = (target, alias.name)
-                elif isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name.startswith(_API_PREFIX):
-                            # import modulo.api.routes.admin [as adm]
-                            self.aliases[module][alias.asname or alias.name.split(".")[0]] = alias.name
+        for root, prefix, root_name in roots:
+            if not root.exists():
+                continue
+            for path in sorted(root.rglob("*.py")):
+                rel_within_root = path.relative_to(root).as_posix()
+                rel = f"{root_name}/{rel_within_root}"
+                module = _module_of_rel(rel_within_root, prefix)
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                self.trees[module] = tree
+                self.rels[module] = rel
+                self.defs.setdefault(module, {})
+                self.bindings.setdefault(module, {})
+                self.aliases.setdefault(module, {})
+                self.stars.setdefault(module, [])
+                for node in tree.body:
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        self.defs[module][node.name] = node
+                    elif isinstance(node, ast.ImportFrom):
+                        target = _resolve_from_module(module, node)
+                        if target is None:
+                            continue
+                        for alias in node.names:
+                            if alias.name == "*":
+                                self.stars[module].append(target)
+                            else:
+                                self.bindings[module][alias.asname or alias.name] = (target, alias.name)
+                    elif isinstance(node, ast.Import):
+                        for alias in node.names:
+                            if alias.name.startswith((_API_PREFIX, _AUTH_PREFIX)):
+                                # import modulo.api.routes.admin [as adm]
+                                self.aliases[module][alias.asname or alias.name.split(".")[0]] = alias.name
 
 
 def _resolve_def_key(index: _ApiIndex, module: str, func: ast.expr) -> tuple[str, str] | None:
@@ -317,16 +396,45 @@ def _except_type_names(handler: ast.ExceptHandler) -> list[str]:
     return []
 
 
+def _call_is_guard(node: ast.AST) -> bool:
+    return any(isinstance(n, ast.Call) and _name_of(n.func) in _GUARD_NAMES for n in ast.walk(node))
+
+
 def _leads_with_guard(handler: ast.ExceptHandler) -> bool:
+    """True when the arm's FIRST statement evaluates the shared classifier.
+
+    Two shapes, one per surface (both delegate to ``db_error_handling``):
+
+    * REST/HTTP — a bare call statement, e.g.
+      ``raise_session_contract_error(exc, "routes.x.handler")``. It raises 500
+      for a contract violation and never returns, so calling it first is enough.
+    * MCP payload — the guard RETURNS the payload instead of raising, so the
+      arm has to branch on it and hand the payload back (``if (err :=
+      guard(exc, key)) is not None: return err``). The ``return`` inside the
+      branch is required: without it the verdict is dropped and the arm still
+      answers "database unavailable" — exactly the misclassification this test
+      exists to catch.
+    """
     first = handler.body[0]
-    return (
-        isinstance(first, ast.Expr) and isinstance(first.value, ast.Call) and _name_of(first.value.func) == _GUARD_NAME
-    )
+    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Call):
+        return _name_of(first.value.func) in _GUARD_NAMES
+    if isinstance(first, ast.If) and _call_is_guard(first.test):
+        return any(isinstance(node, ast.Return) for node in ast.walk(first))
+    return False
 
 
-def _iter_violations(api_root: Path = _API_ROOT, exempt: dict[str, str] | None = None) -> list[str]:
+def _iter_violations(
+    api_root: Path | None = _API_ROOT,
+    exempt: dict[str, str] | None = None,
+    auth_root: Path | None = _AUTH_ROOT,
+) -> list[str]:
     exempt = _EXEMPT if exempt is None else exempt
-    index = _ApiIndex(api_root)
+    roots: list[tuple[Path, str, str]] = []
+    if api_root is not None:
+        roots.append((api_root, _API_PREFIX, "api"))
+    if auth_root is not None:
+        roots.append((auth_root, _AUTH_PREFIX, "auth"))
+    index = _ApiIndex(roots)
     state = _compute_503_states(index)
     violations: list[str] = []
     for module, rel in sorted(index.rels.items(), key=lambda item: item[1]):
@@ -340,34 +448,49 @@ def _iter_violations(api_root: Path = _API_ROOT, exempt: dict[str, str] | None =
                 if "SQLAlchemyError" not in _except_type_names(handler):
                     continue
                 direct, call_funcs = _body_shape(handler.body)
-                if not direct and not any(
+                reports_503 = direct or any(
                     (key := _resolve_def_key(index, module, func)) is not None and state.get(key, False)
                     for func in call_funcs
-                ):
+                )
+                reports_mcp_payload = _body_returns_mcp_db_unavailable(handler.body)
+                if not reports_503 and not reports_mcp_payload:
                     continue
-                if not _leads_with_guard(handler):
+                if _leads_with_guard(handler):
+                    continue
+                if reports_mcp_payload:
+                    violations.append(
+                        f"  {rel}:{handler.lineno} — except SQLAlchemyError returns an MCP "
+                        f"database-unavailable payload without a leading session-contract guard"
+                    )
+                else:
                     violations.append(
                         f"  {rel}:{handler.lineno} — except SQLAlchemyError reports a 503 "
-                        f"without a leading {_GUARD_NAME}(...) guard"
+                        f"without a leading {_HTTP_GUARD_NAME}(...) guard"
                     )
     return violations
 
 
 def test_sqlalchemy_error_503_arms_lead_with_session_contract_guard() -> None:
-    """FAR-1464: no 503-reporting route arm may misclassify a session-contract error."""
+    """FAR-1464/FAR-1481/FAR-1482: no DB-outage-reporting api or auth arm may
+    misclassify a session-contract error."""
     violations = _iter_violations()
     exempt_note = "".join(f"\n  EXEMPT {rel}: {reason}" for rel, reason in sorted(_EXEMPT.items()))
     assert not violations, (
-        f"Found {len(violations)} except-SQLAlchemyError arm(s) that report a 503 "
-        f"without a leading {_GUARD_NAME} guard (FAR-1464). Add the guard as the "
-        "arm's first statement — InvalidRequestError/MissingGreenlet must surface "
-        "as 500, not 503/db_transient:\n" + "\n".join(violations) + exempt_note
+        f"Found {len(violations)} except-SQLAlchemyError arm(s) that report a 503 (FAR-1464/FAR-1481) "
+        "or an MCP database-unavailable payload (FAR-1482) without a leading session-contract "
+        "guard. Add the guard as the arm's FIRST statement — InvalidRequestError/MissingGreenlet "
+        "must surface as a programming error, never as an outage:\n" + "\n".join(violations) + exempt_note
     )
 
 
 def test_every_exemption_is_a_real_file() -> None:  # pragma: no cover - bookkeeping
     """Allowlist hygiene: an exemption for a file that no longer exists is stale."""
-    missing = [rel for rel in _EXEMPT if not (_API_ROOT / rel).exists()]
+    missing = []
+    for key in _EXEMPT:
+        root_name, _, rel = key.partition("/")
+        root = _ROOTS_BY_NAME[root_name]
+        if not (root / rel).exists():
+            missing.append(key)
     assert not missing, f"stale _EXEMPT entries (file gone): {missing}"
 
 
@@ -462,7 +585,7 @@ def test_cross_module_delegating_503_helper_is_flagged_when_unguarded(tmp_path: 
             "routes/cross_route.py": _CROSS_ROUTE_FROM_IMPORT + "\n\n" + _CROSS_ROUTE_DOTTED_IMPORT,
         },
     )
-    violations = _iter_violations(tmp_path, exempt={})
+    violations = _iter_violations(tmp_path, exempt={}, auth_root=None)
 
     assert any("routes/cross_route.py" in v for v in violations), (
         f"cross-module-delegated 503 was NOT flagged (the QA-gate hole): {violations}"
@@ -474,7 +597,7 @@ def test_cross_module_delegating_503_helper_is_flagged_when_unguarded(tmp_path: 
 def test_cross_module_delegating_503_helper_is_clean_when_guarded(tmp_path: Path) -> None:
     """The same synthetic shape with the guard first statement passes."""
     _write_synthetic_tree(tmp_path, {"routes/cross_route.py": _CROSS_ROUTE_GUARDED})
-    violations = _iter_violations(tmp_path, exempt={})
+    violations = _iter_violations(tmp_path, exempt={}, auth_root=None)
 
     assert not violations, f"guarded cross-module arm must be clean: {violations}"
 
@@ -482,8 +605,143 @@ def test_cross_module_delegating_503_helper_is_clean_when_guarded(tmp_path: Path
 def test_module_local_delegating_503_helper_is_flagged_when_unguarded(tmp_path: Path) -> None:
     """Control: the module-local delegation shape keeps being flagged."""
     _write_synthetic_tree(tmp_path, {"routes/local_route.py": _LOCAL_ROUTE})
-    violations = _iter_violations(tmp_path, exempt={})
+    violations = _iter_violations(tmp_path, exempt={}, auth_root=None)
 
     assert any("routes/local_route.py" in v for v in violations), (
         f"module-local delegation must stay flagged: {violations}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MCP payload predicate (FAR-1482). MCP tool results carry no status code, so
+# the same misclassification returns a database-unavailable payload instead of
+# raising 503 — invisible to a 503-only scanner. Planted-violation proof for
+# the payload predicate AND for the MCP guard shape it accepts.
+# ---------------------------------------------------------------------------
+
+_MCP_PAYLOAD_UNGUARDED = """\
+from sqlalchemy.exc import SQLAlchemyError
+
+
+async def handler() -> dict:
+    try:
+        await whatever()
+    except SQLAlchemyError:
+        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+"""
+
+_MCP_PAYLOAD_GUARDED = """\
+from sqlalchemy.exc import SQLAlchemyError
+
+
+async def handler() -> dict:
+    try:
+        await whatever()
+    except SQLAlchemyError as exc:
+        if (err := _tool_session_contract_error(exc, "mcp.handler")) is not None:
+            return err
+        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+"""
+
+_MCP_TEMPORARILY_UNGUARDED = """\
+from sqlalchemy.exc import SQLAlchemyError
+
+
+async def handler() -> dict:
+    try:
+        await whatever()
+    except SQLAlchemyError:
+        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
+"""
+
+
+def test_mcp_database_unavailable_payload_is_flagged_when_unguarded(tmp_path: Path) -> None:
+    """Anti-vacuity for the FAR-1482 payload predicate: a planted violation fires."""
+    _write_synthetic_tree(tmp_path, {"routes/mcp_payload.py": _MCP_PAYLOAD_UNGUARDED})
+    violations = _iter_violations(tmp_path, exempt={})
+
+    assert any("routes/mcp_payload.py" in v and "database-unavailable payload" in v for v in violations), (
+        f"MCP database-unavailable payload without the guard was NOT flagged: {violations}"
+    )
+
+
+def test_mcp_temporarily_unavailable_payload_is_flagged_when_unguarded(tmp_path: Path) -> None:
+    """The ``_tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)`` wrapper shape too."""
+    _write_synthetic_tree(tmp_path, {"routes/mcp_payload.py": _MCP_TEMPORARILY_UNGUARDED})
+    violations = _iter_violations(tmp_path, exempt={})
+
+    assert any("routes/mcp_payload.py" in v and "database-unavailable payload" in v for v in violations), (
+        f"_tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE) without the guard was NOT flagged: {violations}"
+    )
+
+
+def test_mcp_payload_guard_shape_is_accepted(tmp_path: Path) -> None:
+    """The MCP ``if (err := guard(...)) is not None: return err`` shape passes.
+
+    The guard RETURNS a payload rather than raising, so it cannot be a bare
+    statement — proving the scanner recognises the payload rendering without
+    weakening the REST/HTTP check.
+    """
+    _write_synthetic_tree(tmp_path, {"routes/mcp_payload.py": _MCP_PAYLOAD_GUARDED})
+    violations = _iter_violations(tmp_path, exempt={})
+
+    assert not violations, f"guarded MCP payload arm must be clean: {violations}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1481: the auth root is scanned with the SAME predicate as the api root.
+# A synthetic modulo.auth tree proves the second root is wired in — an
+# unguarded 503 arm under auth/ is flagged, the guarded shape is clean.
+# ---------------------------------------------------------------------------
+
+_AUTH_UNGUARDED_SOURCE = """\
+from fastapi import HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
+
+
+async def auth_handler() -> None:
+    try:
+        await whatever()
+    except SQLAlchemyError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="down")
+"""
+
+_AUTH_GUARDED_SOURCE = """\
+from fastapi import HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
+
+
+async def auth_handler() -> None:
+    try:
+        await whatever()
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "auth.deps.auth_handler")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="down")
+"""
+
+
+def _write_synthetic_auth_tree(root: Path, source: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "deps.py").write_text(source, encoding="utf-8")
+
+
+def test_auth_root_unguarded_503_arm_is_flagged(tmp_path: Path) -> None:
+    """FAR-1481: without the auth root wired in this arm would never be scanned."""
+    auth_root = tmp_path / "auth"
+    _write_synthetic_auth_tree(auth_root, _AUTH_UNGUARDED_SOURCE)
+
+    violations = _iter_violations(None, exempt={}, auth_root=auth_root)
+
+    assert any("auth/deps.py" in v for v in violations), (
+        f"an unguarded auth-root 503 arm was NOT flagged (auth root not wired in?): {violations}"
+    )
+
+
+def test_auth_root_guarded_503_arm_is_clean(tmp_path: Path) -> None:
+    """The guarded auth shape passes, exactly like the api tree."""
+    auth_root = tmp_path / "auth"
+    _write_synthetic_auth_tree(auth_root, _AUTH_GUARDED_SOURCE)
+
+    violations = _iter_violations(None, exempt={}, auth_root=auth_root)
+
+    assert not violations, f"guarded auth-root arm must be clean: {violations}"

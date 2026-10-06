@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.core.cron_helpers import _bound_org
 from modulo.core.notifier import EVENT_HITL_OVERDUE
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.organisation import Organisation
@@ -118,7 +119,15 @@ async def dispatch_overdue_notifications(
 
     all_dispatched: list[dict[str, Any]] = []
     for org_id in await _fetch_org_ids(factory):
-        all_dispatched.extend(await _process_org_overdue(org_id, factory, notifier, warning_cutoff, now))
+        # FAR-1501: bind THIS org for the whole per-org tick so every ERROR
+        # inside it — the notification dispatch failure, any session failure
+        # in the selection txn — is attributed by ErrorTrackingLogHandler
+        # instead of dropped as no_org_context. ``_bound_org`` resets in
+        # finally, so the pre-loop phases (org collection) and the next org's
+        # tick never inherit the binding; a ``return`` out of
+        # ``_process_org_overdue`` exits this ``async with`` normally.
+        async with _bound_org(org_id):
+            all_dispatched.extend(await _process_org_overdue(org_id, factory, notifier, warning_cutoff, now))
     return all_dispatched
 
 

@@ -714,3 +714,40 @@ async def test_poisoned_org_infra_error_isolates_and_reraises() -> None:
     ):
         await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
     assert other_org in upserted_orgs
+
+
+@pytest.mark.asyncio
+async def test_multiple_org_infra_errors_keep_the_first_and_count_each() -> None:
+    """More than one org failing with SQLAlchemyError: each failure is counted
+    and the tick re-raises the FIRST infra error — ``first_infra_error`` is
+    latched once and never overwritten by a later org, so SAQ's retry surfaces
+    the original cause rather than the last org's."""
+    session = _make_session()
+    boundary = _fake_boundary(reachable=True)
+    other_org = uuid.UUID("00000000-0000-0000-0000-000000000002")
+    first_error = SQLAlchemyError("first org poisoned")
+    second_error = SQLAlchemyError("second org poisoned")
+    log_exceptions: list[str] = []
+
+    async def _list_orgs(s: Any) -> list[uuid.UUID]:
+        return [_ORG_ID, other_org]
+
+    async def _upsert(_session: Any, **kwargs: Any) -> None:
+        raise first_error if kwargs["org_id"] == _ORG_ID else second_error
+
+    def _record_failure(msg: str, *args: Any, **kwargs: Any) -> None:
+        log_exceptions.append(msg % args)
+
+    with (
+        patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
+        patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+        patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+        patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+        patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
+        patch("modulo.core.bundled_runner.health_probe._log.exception", new=_record_failure),
+        pytest.raises(SQLAlchemyError) as excinfo,
+    ):
+        await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
+    assert excinfo.value is first_error
+    assert len(log_exceptions) == 2
+    assert all("runner_probe.org_infra_failed" in message for message in log_exceptions)
