@@ -1425,30 +1425,46 @@ async def fire_cron_trigger(
         # never the "latest existing snapshot", which goes stale the moment
         # the graph is edited and made every post-edit cron run execute the
         # first snapshot forever. Only an explicit config pin bypasses this.
-        if snapshot_id is None:
-            snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
-            if snapshot_id is None:
-                return {"status": "skipped", "reason": "pipeline_not_found"}
-
-        config = trigger.config_json or {}
-        from modulo.core.trigger_engine import _warn_unrecognised_config_keys
-
-        _warn_unrecognised_config_keys(trigger_id, config)
-        input_payload = config.get("input_template", {})
-
+        #
+        # FAR-1536: the auto-create and create_run share a SAVEPOINT. Every
+        # return out of this function (including skips) COMMITs the enclosing
+        # transaction, so the pause-race skip below would otherwise persist an
+        # unreferenced snapshot — a row no run points at, minted by a fire that
+        # did nothing. Rolling back to the savepoint restores the invariant
+        # "a fire that skips writes no snapshot" for this path. The skip itself
+        # is unchanged: only the savepoint rolls back, the outer transaction
+        # still commits, so the job still returns skipped (never a failed job
+        # that only becomes a skip after an SAQ retry).
         try:
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="cron",
-                trigger_id=trigger_id,
-                input_payload=input_payload,
-            )
+            async with session.begin_nested():
+                if snapshot_id is None:
+                    snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
+                    if snapshot_id is None:
+                        # The no_pipeline TriggerEvent and last_fired_at stamp
+                        # inside _auto_create_snapshot are meant to persist
+                        # (skip-not-defer, review PR #982): leaving the
+                        # savepoint normally RELEASEs it into the outer txn.
+                        return {"status": "skipped", "reason": "pipeline_not_found"}
+
+                config = trigger.config_json or {}
+                from modulo.core.trigger_engine import _warn_unrecognised_config_keys
+
+                _warn_unrecognised_config_keys(trigger_id, config)
+                input_payload = config.get("input_template", {})
+
+                run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="cron",
+                    trigger_id=trigger_id,
+                    input_payload=input_payload,
+                )
         except TriggersPausedError:
             # TOCTOU race backstop: the org was paused between the early check
             # and create_run. Skip, no paused TriggerEvent (race backstop only).
+            # The savepoint above rolled back the auto-created snapshot with it.
             _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
             return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
 

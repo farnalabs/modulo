@@ -31,6 +31,10 @@ real Postgres + Redis (testcontainers):
    PipelineSnapshot" at trigger time — docs/architecture.md).
 3. A cron trigger whose config pins ``snapshot_id`` keeps executing that exact
    snapshot after the edit — pin semantics are unchanged by the fix.
+4. A fire that skips because the org was paused mid-fire leaves NO snapshot
+   behind (FAR-1536): the auto-create runs before ``create_run``'s authority
+   gate and every return commits the fire transaction, so the race-backstop
+   skip used to persist an unreferenced snapshot.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from __future__ import annotations
 import json
 import uuid
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
@@ -289,6 +294,36 @@ async def _live_node_label(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> st
     return str(nodes[0].get("label")) if nodes else None
 
 
+async def _run_count(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> int:
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT count(*) FROM runs WHERE pipeline_id = :pid"),
+            {"pid": str(pipeline_id)},
+        )
+        return int(result.scalar_one())
+
+
+async def _snapshot_exists(db_engine: AsyncEngine, snapshot_id: uuid.UUID) -> bool:
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT count(*) FROM pipeline_snapshots WHERE id = :sid"),
+            {"sid": str(snapshot_id)},
+        )
+        return int(result.scalar_one()) > 0
+
+
+async def _set_org_paused(db_engine: AsyncEngine, org_id: uuid.UUID, paused: bool) -> None:
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "UPDATE organisations SET triggers_paused = :paused, "
+                "triggers_paused_at = CASE WHEN :paused THEN now() ELSE NULL END "
+                "WHERE id = :oid"
+            ),
+            {"paused": paused, "oid": str(org_id)},
+        )
+
+
 async def _cleanup(
     db_engine: AsyncEngine,
     pipeline_id: uuid.UUID,
@@ -452,4 +487,81 @@ async def test_pinned_cron_trigger_keeps_executing_its_pinned_snapshot(
         assert run_snap == pinned_snap, "pinned snapshot must win over the edited live graph"
         assert await _snapshot_node_label(db_engine, run_snap) == "v1"
     finally:
+        await _cleanup(db_engine, pipeline_id, trigger_id, schema_id)
+
+
+@pytest.mark.asyncio
+async def test_paused_race_fire_skips_without_persisting_a_snapshot(
+    saq_settings_env: str,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fire that loses the pause race persists NO snapshot (FAR-1536 M1).
+
+    ``fire_cron_trigger`` auto-creates the snapshot BEFORE ``create_run``'s
+    org-pause authority gate, and every return out of the fire job (including
+    skips) COMMITS the enclosing transaction — so the ``TriggersPausedError``
+    race-backstop skip used to persist an unreferenced snapshot: a row no run
+    points at, written by a fire that did nothing.
+
+    The race is driven deterministically rather than by scheduling: the org is
+    paused in the database, while the fire job's own early race-backstop read
+    (``ch.org_is_paused``) is pinned to "not paused" — exactly the state that
+    read would have observed had the pause landed a moment after it. The
+    authority gate in ``create_run`` then reads the real, paused row and raises.
+
+    What this proves: the auto-create ran, the fire reported skipped, and the
+    snapshot it produced is NOT in the table once the fire returns — i.e. the
+    outer transaction committed without it. What it does NOT prove: that the
+    interleaving itself can be observed end-to-end in a single-threaded test
+    (the window is a genuine concurrent race); here the two reads are forced
+    to disagree instead.
+    """
+    schema_id = await _seed_schema(db_engine, test_org, test_user)
+    pipeline_id = await _seed_pipeline(db_engine, test_org, test_user, label="v1", output_schema_id=schema_id)
+    trigger_id = await _seed_due_cron_trigger(db_engine, test_org, test_user, pipeline_id)
+    try:
+        # Enqueue while the org is still unpaused — fire_due_triggers skips
+        # paused orgs outright, so the tick has to happen before the pause.
+        captured_kwargs = await _tick_and_capture_fire(monkeypatch, trigger_id)
+        assert not captured_kwargs["snapshot_id"], "an unpinned fire must not carry a pre-resolved snapshot"
+
+        # Enter the race window: pause, then pin the fire job's early read to
+        # its pre-pause value.
+        await _set_org_paused(db_engine, test_org, True)
+        monkeypatch.setattr(ch, "org_is_paused", AsyncMock(return_value=False))
+
+        # Record the snapshot the auto-create produces so the proof below is
+        # not vacuous (it fails if the auto-create never ran).
+        auto_created: list[uuid.UUID] = []
+        real_auto_create = ch._auto_create_snapshot
+
+        async def _spy_auto_create(*args: Any, **kwargs: Any) -> uuid.UUID | None:
+            snapshot_id = await real_auto_create(*args, **kwargs)
+            if snapshot_id is not None:
+                auto_created.append(snapshot_id)
+            return snapshot_id
+
+        monkeypatch.setattr(ch, "_auto_create_snapshot", _spy_auto_create)
+
+        snapshots_before = await _snapshot_count(db_engine, pipeline_id)
+        runs_before = await _run_count(db_engine, pipeline_id)
+
+        outcome = await _execute_cron_fire(captured_kwargs)
+
+        # Paused-org semantics are unchanged: a skipped fire, never a failed one.
+        assert outcome == {"status": "skipped", "reason": ch.PAUSE_SKIP_REASON}, outcome
+        assert auto_created, "the fire never reached the snapshot auto-create — the test proves nothing"
+        assert await _snapshot_count(db_engine, pipeline_id) == snapshots_before, (
+            "the paused-race skip committed an unreferenced snapshot "
+            f"(auto-created {auto_created[0] if auto_created else None})"
+        )
+        assert not await _snapshot_exists(db_engine, auto_created[0]), (
+            f"auto-created snapshot {auto_created[0]} survived the pause-race skip"
+        )
+        assert await _run_count(db_engine, pipeline_id) == runs_before, "a paused fire must not create a run"
+    finally:
+        await _set_org_paused(db_engine, test_org, False)
         await _cleanup(db_engine, pipeline_id, trigger_id, schema_id)

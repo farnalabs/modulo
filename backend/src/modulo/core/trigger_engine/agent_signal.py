@@ -298,8 +298,13 @@ async def _resolve_snapshot_id(
             }
 
     # No snapshot pinned in config — fall back to the target pipeline's latest
-    # snapshot (same resolution cron triggers use). A zero-UUID here would fail
-    # the cross-org FK trigger on runs.snapshot_id.
+    # EXISTING snapshot: the newest row already in pipeline_snapshots, never a
+    # newly created one. This deliberately differs from cron since FAR-1536:
+    # an unpinned cron fire now auto-creates a snapshot from the live graph at
+    # fire time instead of resolving an existing row, so after a graph edit the
+    # two paths diverge (cron runs the edit, this path runs the newest stored
+    # snapshot). Resolution here is unchanged. A zero-UUID here would fail the
+    # cross-org FK trigger on runs.snapshot_id.
     snap_result = await session.execute(
         text("SELECT id FROM pipeline_snapshots WHERE pipeline_id = :pid ORDER BY created_at DESC LIMIT 1"),
         {"pid": str(trigger.pipeline_id)},
