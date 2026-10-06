@@ -37,9 +37,11 @@ from modulo.api.dependencies import (
     require_system_or_org_admin,
     require_system_permission,
 )
+from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
@@ -69,6 +71,11 @@ from modulo.db.crud.last_admin_guard import (
 )
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_organisation
+from modulo.db.crud.pipeline_snapshot import (
+    SnapshotLockTerminateDeniedError,
+    inspect_snapshot_lock,
+    terminate_snapshot_lock_holders,
+)
 from modulo.db.crud.publisher import (
     create_publisher,
     get_publisher_by_key,
@@ -751,7 +758,11 @@ async def _create_or_adopt_account(
     return account, membership
 
 
-@router.post("/users", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users",
+    dependencies=[Depends(audited("user_created_by_admin", "user", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.admin_create_user")
 async def admin_create_user(
     req: CreateUserRequest,
@@ -831,7 +842,10 @@ class AdminCreateTeamResponse(BaseModel):
 @router.post(
     "/teams",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_feature("team_rbac")],
+    dependencies=[
+        Depends(audited("team_created", "team", principal_dep=get_current_tenant_user)),
+        require_feature("team_rbac"),
+    ],
 )
 async def admin_create_team(
     req: AdminCreateTeamRequest,
@@ -955,7 +969,10 @@ async def admin_get_org(
     )
 
 
-@router.put("/org")
+@router.put(
+    "/org",
+    dependencies=[Depends(audited("organisation_updated", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("admin.admin_update_org")
 async def admin_update_org(
     req: UpdateOrgRequest,
@@ -1010,7 +1027,14 @@ async def admin_update_org(
     )
 
 
-@router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK, dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/org/regenerate-api-key",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("org_api_key_regenerated", "api_key", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("admin.admin_regenerate_api_key")
 async def admin_regenerate_api_key(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1149,7 +1173,9 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
 
 
-@router.put("/users/{user_id}")
+@router.put(
+    "/users/{user_id}", dependencies=[Depends(audited("user_updated", "user", principal_dep=get_current_tenant_user))]
+)
 @handle_db_errors("admin.admin_update_user")
 async def admin_update_user(
     user_id: uuid.UUID,
@@ -1353,7 +1379,10 @@ def _raise_bg_pgcode(
         ) from None
 
 
-@router.post("/users/{user_id}/deactivate")
+@router.post(
+    "/users/{user_id}/deactivate",
+    dependencies=[Depends(audited("user_deactivated", "user", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
 async def admin_deactivate_user(
     user_id: uuid.UUID,
@@ -1479,7 +1508,10 @@ async def admin_deactivate_user(
     return _to_user_list_item(account, org_role, org_membership=membership)
 
 
-@router.post("/users/{user_id}/reactivate")
+@router.post(
+    "/users/{user_id}/reactivate",
+    dependencies=[Depends(audited("user_reactivated", "user", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
 async def admin_reactivate_user(
     user_id: uuid.UUID,
@@ -1577,7 +1609,10 @@ class AdminResetPasswordResponse(BaseModel):
     temporary_password: str
 
 
-@router.post("/users/{user_id}/reset-password")
+@router.post(
+    "/users/{user_id}/reset-password",
+    dependencies=[Depends(audited("user_password_reset_by_admin", "user", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("admin.admin_reset_password")
 async def admin_reset_password(
     user_id: uuid.UUID,
@@ -1752,7 +1787,11 @@ async def _append_invite_audit_event_fail_open(
         )
 
 
-@router.post("/users/invite", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users/invite",
+    dependencies=[Depends(audited("invite_created", "invitation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.admin_invite_user")
 async def admin_invite_user(
     req: InviteUserRequest,
@@ -1873,7 +1912,20 @@ async def admin_list_invitations(
     )
 
 
-@router.delete("/users/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/users/invitations/{invitation_id}",
+    dependencies=[
+        Depends(
+            audited(
+                "invite_revoked",
+                "invitation",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 @handle_db_errors("admin.admin_revoke_invitation")
 async def admin_revoke_invitation(
     invitation_id: uuid.UUID,
@@ -2037,7 +2089,13 @@ async def _update_team_or_raise(
     return team
 
 
-@router.put("/teams/{team_id}", dependencies=[require_feature("team_rbac")])
+@router.put(
+    "/teams/{team_id}",
+    dependencies=[
+        Depends(audited("team_updated", "team", principal_dep=get_current_tenant_user)),
+        require_feature("team_rbac"),
+    ],
+)
 async def admin_update_team(
     team_id: uuid.UUID,
     req: AdminUpdateTeamRequest,
@@ -2106,7 +2164,10 @@ class BulkReassignResponse(BaseModel):
 
 @router.post(
     "/teams/{team_id}/reassign-all",
-    dependencies=[require_feature("team_rbac")],
+    dependencies=[
+        Depends(audited("team_resources_reassigned", "team", principal_dep=get_current_tenant_user)),
+        require_feature("team_rbac"),
+    ],
 )
 @handle_db_errors("admin.reassign_all_team_resources")
 async def admin_reassign_all_team_resources(
@@ -2163,7 +2224,21 @@ async def admin_reassign_all_team_resources(
     return BulkReassignResponse(reassigned=reassigned, resource_types=touched)
 
 
-@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("team_rbac")])
+@router.delete(
+    "/teams/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "team_deleted",
+                "team",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("team_rbac"),
+    ],
+)
 async def admin_delete_team(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -2415,6 +2490,16 @@ class DeletionRequestResponse(BaseModel):
 
 @router.post(
     "/org/deletion-request",
+    dependencies=[
+        Depends(
+            audited(
+                "org_deletion_requested",
+                "organisation",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
     status_code=status.HTTP_202_ACCEPTED,
 )
 @handle_db_errors(_CODE_ADMIN_REQUEST_ORG_DELETION)
@@ -2493,7 +2578,10 @@ class ConfirmDeletionResponse(BaseModel):
     hard_deleted_runs: int
 
 
-@router.post("/org/deletion-confirm")
+@router.post(
+    "/org/deletion-confirm",
+    dependencies=[Depends(audited("org_deletion_confirmed", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_CONFIRM_ORG_DELETION)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
@@ -2547,7 +2635,10 @@ class OrgExportResponse(BaseModel):
     exported_at: str
 
 
-@router.patch("/org/deletion-cancel")
+@router.patch(
+    "/org/deletion-cancel",
+    dependencies=[Depends(audited("org_deletion_cancelled", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_CANCEL_ORG_DELETION)
 async def cancel_org_deletion(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
@@ -2618,7 +2709,10 @@ async def export_org_data(
     )
 
 
-@router.delete("/org")
+@router.delete(
+    "/org",
+    dependencies=[Depends(audited("org_deletion_requested", "organisation", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
 async def delete_org_immediate(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
@@ -3202,7 +3296,11 @@ async def admin_list_publishers(
     )
 
 
-@router.post("/publishers", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/publishers",
+    dependencies=[Depends(audited("publisher_created", "publisher", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.admin_create_publisher")
 async def admin_create_publisher(
     req: PublisherCreateRequest,
@@ -3292,7 +3390,10 @@ async def _enforce_publisher_key_uniqueness(
         )
 
 
-@router.put("/publishers/{publisher_id}")
+@router.put(
+    "/publishers/{publisher_id}",
+    dependencies=[Depends(audited("publisher_updated", "publisher", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("admin.admin_update_publisher")
 async def admin_update_publisher(
     publisher_id: uuid.UUID,
@@ -3349,7 +3450,20 @@ async def admin_update_publisher(
     return _to_publisher_response(publisher)
 
 
-@router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/publishers/{publisher_id}",
+    dependencies=[
+        Depends(
+            audited(
+                "publisher_deleted",
+                "publisher",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 @handle_db_errors("admin.admin_delete_publisher")
 async def admin_delete_publisher(
     publisher_id: uuid.UUID,
@@ -3383,7 +3497,21 @@ class RetentionPurgeRequest(BaseModel):
     max_age_days: int = 90
 
 
-@router.post("/purge/runs", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.post(
+    "/purge/runs",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "run_retention_purge",
+                "run",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_retention_purge_runs(
     req: RetentionPurgeRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3422,7 +3550,21 @@ class ManualPurgeRequest(BaseModel):
     older_than: str
 
 
-@router.post("/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.post(
+    "/purge",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "run_purge",
+                "run",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_manual_purge(
     req: ManualPurgeRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3473,7 +3615,21 @@ class PurgeRunsResponse(BaseModel):
     purged_count: int
 
 
-@router.post("/runs/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.post(
+    "/runs/purge",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited(
+                "stale_run_purge",
+                "run",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_purge_stale_runs(
     request: PurgeRunsRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3600,7 +3756,14 @@ async def admin_get_retention(
     return RetentionConfigResponse(retention_days=_retention_days_from_setting(row))
 
 
-@router.put("/runs/retention", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
+@router.put(
+    "/runs/retention",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("run_retention_updated", "run_retention", principal_dep=get_current_tenant_user)),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def admin_update_retention(
     req: UpdateRetentionRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3791,7 +3954,13 @@ async def admin_get_sandbox_concurrency(
     return SandboxConcurrencyResponse(sandbox_concurrency_limit=limit.cap, is_default=limit.is_default)
 
 
-@router.put("/org/sandbox-concurrency", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/sandbox-concurrency",
+    dependencies=[
+        Depends(audited("sandbox_concurrency_updated", "organisation", principal_dep=get_current_tenant_user))
+    ],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_sandbox_concurrency(
     req: UpdateSandboxConcurrencyRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -3910,7 +4079,13 @@ async def admin_get_hitl_review_window(
     return HitlReviewWindowResponse(hitl_review_window_seconds=value, is_default=is_default)
 
 
-@router.put("/org/hitl-review-window", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/hitl-review-window",
+    dependencies=[
+        Depends(audited("hitl_review_window_updated", "organisation", principal_dep=get_current_tenant_user))
+    ],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_hitl_review_window(
     req: UpdateHitlReviewWindowRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4012,7 +4187,13 @@ async def admin_get_work_item_agent_minting(
     return WorkItemAgentMintingResponse(work_item_agent_minting_enabled=enabled)
 
 
-@router.put("/org/work-item-agent-minting", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/work-item-agent-minting",
+    dependencies=[
+        Depends(audited("work_item_agent_minting_updated", "organisation", principal_dep=get_current_tenant_user))
+    ],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_work_item_agent_minting(
     req: UpdateWorkItemAgentMintingRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4106,7 +4287,11 @@ async def admin_get_community_objects(
     return CommunityObjectsResponse(community_objects_enabled=enabled)
 
 
-@router.put("/org/community-objects", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/community-objects",
+    dependencies=[Depends(audited("community_objects_updated", "organisation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_community_objects(
     req: UpdateCommunityObjectsRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4191,7 +4376,11 @@ async def admin_get_run_concurrency(
     return RunConcurrencyResponse(run_concurrency_limit=limit)
 
 
-@router.put("/org/run-concurrency", status_code=status.HTTP_200_OK)
+@router.put(
+    "/org/run-concurrency",
+    dependencies=[Depends(audited("run_concurrency_updated", "organisation", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_update_run_concurrency(
     req: UpdateRunConcurrencyRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4288,7 +4477,11 @@ async def _admin_journey_write(
     await _record_org_audit(session, current_user, audit_event, audit_payload)
 
 
-@router.post("/org/journeys/dismiss", status_code=status.HTTP_200_OK)
+@router.post(
+    "/org/journeys/dismiss",
+    dependencies=[Depends(audited("journey_dismissed", "journey", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_dismiss_journey(
     req: JourneyDismissRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4317,7 +4510,11 @@ async def admin_dismiss_journey(
     return JourneyDismissRestoreResponse(kind=req.kind, ref=req.ref, dismissed=True)
 
 
-@router.post("/org/journeys/restore", status_code=status.HTTP_200_OK)
+@router.post(
+    "/org/journeys/restore",
+    dependencies=[Depends(audited("journey_restored", "journey", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 async def admin_restore_journey(
     req: JourneyRestoreRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -4468,7 +4665,11 @@ async def get_telemetry_status(
     return TelemetryStatusResponse(enabled=is_telemetry_enabled())
 
 
-@router.put("/telemetry", response_model=TelemetryStatusResponse)
+@router.put(
+    "/telemetry",
+    dependencies=[Depends(audited("telemetry_status_updated", "organisation", principal_dep=get_current_tenant_user))],
+    response_model=TelemetryStatusResponse,
+)
 @handle_db_errors("admin.set_telemetry_status")
 async def set_telemetry_status(
     req: TelemetryToggleRequest,
@@ -4498,3 +4699,138 @@ async def set_telemetry_status(
     )
 
     return TelemetryStatusResponse(enabled=is_telemetry_enabled())
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 Part 2 — pipeline snapshot advisory-lock operator clear path
+# ---------------------------------------------------------------------------
+# A snapshot advisory lock (two int4 keys derived from the pipeline id) is
+# SESSION-scoped and owned by the connection that acquired it, so a backend that
+# dies — or wedges — while holding one cannot be cleared from elsewhere:
+# ``pg_advisory_unlock`` only works on the holding connection itself. The only
+# primitive that clears it is terminating the holding backend, which requires
+# superuser or ``pg_signal_backend``. Both routes are therefore STRICT
+# system-admin (``require_system_permission``: fail-closed ``is_system_admin``
+# gate, no org-role fall-through) and derive the keys with the SAME
+# ``_pipeline_lock_keys`` the acquirer uses — never caller-supplied keys, so a
+# backend outside this pipeline's keys can never be touched.
+
+_AUDIT_EVENT_SNAPSHOT_LOCK_RELEASED = "pipeline_snapshot_lock_released"
+_AUDIT_LOG_SNAPSHOT_LOCK_RELEASE = "admin.snapshot_lock.release_audit_failed"
+
+
+class SnapshotLockHolder(BaseModel):
+    """One backend holding the pipeline's snapshot advisory lock.
+
+    Every field except ``pid`` may be NULL: ``pg_locks`` is readable by any
+    role, but ``pg_stat_activity`` redacts the detail columns of backends the
+    viewer does not own unless it holds ``pg_read_all_stats``. ``pid`` and
+    ``granted`` are always present, which is what the diagnostic is for.
+    """
+
+    pid: int
+    application_name: str | None = None
+    state: str | None = None
+    backend_start: datetime | None = None
+    query_start: datetime | None = None
+    granted: bool = False
+
+
+class SnapshotLockStatusResponse(BaseModel):
+    held: bool
+    holders: list[SnapshotLockHolder]
+
+
+class SnapshotLockReleaseResponse(BaseModel):
+    released: int
+    pids: list[int]
+
+
+@router.get("/pipelines/{pipeline_id}/snapshot-lock", response_model=SnapshotLockStatusResponse)
+@handle_db_errors("admin.snapshot_lock.status")
+async def get_pipeline_snapshot_lock(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
+) -> SnapshotLockStatusResponse:
+    """Report whether this pipeline's snapshot advisory lock is held, and by whom.
+
+    Read-only — it neither acquires nor releases anything. Run it before the
+    release endpoint to see WHICH backend is wedged (pid, application, state,
+    how long it has been there) instead of terminating blind.
+    """
+    async with session.begin():
+        payload = await inspect_snapshot_lock(session, pipeline_id)
+    return SnapshotLockStatusResponse.model_validate(payload)
+
+
+@router.post("/pipelines/{pipeline_id}/snapshot-lock/release", response_model=SnapshotLockReleaseResponse)
+@handle_db_errors("admin.snapshot_lock.release")
+async def release_pipeline_snapshot_lock(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
+) -> SnapshotLockReleaseResponse:
+    """Terminate the backend(s) holding this pipeline's snapshot advisory lock.
+
+    Idempotent: no holder means ``{"released": 0, "pids": []}`` and HTTP 200, so
+    an operator can re-issue it after a crash without checking first. Only
+    backends holding THIS pipeline's derived keys are terminated, never this
+    session and never an unrelated backend.
+
+    Two deliberate refusal arms, both fail-closed:
+
+    * no organisation context on the principal → 403. Terminating a backend is a
+      destructive operator action and must land on an audit chain; one that
+      cannot be recorded is not performed.
+    * the database role lacks the signal right (SQLSTATE 42501) → 403 problem
+      detail naming the grant (``GRANT pg_signal_backend TO "<app role>";``).
+      ``pg_terminate_backend`` requires superuser or ``pg_signal_backend``, and
+      a self-hosted deployment's runtime role normally has neither.
+
+    The audit event is written AFTER the termination through
+    ``append_audit_event_isolated`` (fail-open with a loud log): the backends are
+    already gone and a failed audit write must never resurrect them.
+    """
+    org_id = current_user.organisation_id
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Snapshot-lock release requires an organisation context so the terminated "
+                "backends can be recorded on that organisation's audit chain."
+            ),
+        )
+
+    try:
+        async with session.begin():
+            payload = await terminate_snapshot_lock_holders(session, pipeline_id)
+    except SnapshotLockTerminateDeniedError as exc:
+        raise ProblemException(ProblemType.FORBIDDEN, str(exc)) from exc
+
+    await _audit_logger.append_audit_event_isolated(
+        session,
+        TenantPrincipal(
+            username=current_user.username,
+            organisation_id=org_id,
+            account_id=current_user.account_id,
+            org_role=current_user.org_role or "",
+            is_system_admin=current_user.is_system_admin,
+            via_api_key=current_user.via_api_key,
+            client_kind=current_user.client_kind,
+        ),
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        event_type=_AUDIT_EVENT_SNAPSHOT_LOCK_RELEASED,
+        payload={
+            "pipeline_id": str(pipeline_id),
+            "released": int(payload["released"]),
+            "pids": [int(pid) for pid in payload["pids"]],
+            "summary": (
+                f"Terminated {payload['released']} backend(s) holding the snapshot advisory "
+                f"lock for pipeline {pipeline_id}"
+            ),
+        },
+        log_key=_AUDIT_LOG_SNAPSHOT_LOCK_RELEASE,
+    )
+    return SnapshotLockReleaseResponse.model_validate(payload)

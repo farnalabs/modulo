@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 import jinja2
 
 from modulo.core.bundled_runner.profile import (
+    TEMPLATE_CONFIG_JSON,
     is_placeholder_bundled_runner_image_ref,
 )
 from modulo.core.runtime_provider import (
@@ -43,6 +44,7 @@ from modulo.core.runtime_provider import (
     ProviderNotConfiguredError,
     WorkspaceSpec,
     build_hub,
+    egress_tier_for_provider_type,
 )
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.util import validate_workspace_network
@@ -75,10 +77,15 @@ class SandboxDispatchTimeoutValidationError(ValueError):
 class RunnerDispatchRoute:
     """The resolved dispatch route for a sandbox_agent node."""
 
-    provider_type: str  # "runner_docker" | "e2b" | "none"
+    provider_type: str  # "runner_docker" | "e2b" | "kubernetes" | "none"
     profile: Any = None
     provider: Any = None
     hub: RuntimeProviderHub | None = None
+    # FAR-1051 review: on a kubernetes route the bound profile's declared
+    # image_ref is the authoritative workspace/pod image. Carried on the route
+    # so node_runner's sandbox spec uses the same source as the bundled-runner
+    # mapper (``_workspace_spec_for_dispatch``); None on every other route.
+    image_ref_override: str | None = None
 
 
 async def load_environment_profile(
@@ -132,6 +139,12 @@ async def resolve_sandbox_dispatch_route(
     - ``runner_docker`` -> hub-resolved Docker provider (the registration
       matrix per ADR 029: ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST``
       registers the provider), plus the locked-ephemeral check.
+    - ``kubernetes`` (FAR-1051) -> hub-resolved Kubernetes provider — the
+      registration matrix's ``MODULO_KUBERNETES_ENABLED`` gate — so an
+      unregistered provider fails LOUD here with the typed config error
+      (carrying its remediation) instead of deep inside provisioning. The
+      route carries provider + hub so node_runner reuses that ONE instance
+      as the dispatch provider and disposes the hub in its finally.
     - ``local`` / ``local_docker`` -> dispatch-unbound: typed config error
       (the D4 upgrade rule — never silently activated).
     """
@@ -189,6 +202,63 @@ async def resolve_sandbox_dispatch_route(
             provider=provider,
             hub=hub,
         )
+    if provider_type == "kubernetes":
+        # FAR-1051: mirrors the runner_docker branch's hub resolution EXACTLY
+        # (fresh hub -> hub.resolve(profile) -> typed config error on failure),
+        # because route resolution is where an unregistered provider must fail
+        # LOUD — with the remediation env var — rather than deep inside
+        # node_runner's provisioning path. Deliberately NOT mirrored from
+        # docker: no placeholder-digest check (that pins the Bundled Runner's
+        # own image ref), and no E2B timeout validation (Kubernetes
+        # provisioning is provider-managed, ADR 029).
+        #
+        # Error family: ``UnknownProviderTypeError`` subclasses
+        # ``ProviderNotConfiguredError``, so this one handler maps BOTH to the
+        # typed dispatch-unbound error; the ADR 040 new-family errors
+        # (``RateLimitedError`` and friends, ``RuntimeProviderError``) are not
+        # caught and propagate unwrapped (error-family site map A).
+        #
+        # FAR-1051 review: the Kubernetes tier requires an explicit pod image.
+        # ``node_runner`` falls back to the node's E2B ``template_id`` when the
+        # route carries no image_ref, and a template_id is not a container
+        # image — the pod then ImagePullBackOffs mid-run. Fail LOUD here,
+        # BEFORE building the hub (mirroring the runner_docker
+        # placeholder-digest check above), so the operator is told to set the
+        # profile's image_ref rather than discovering it from a stuck pod.
+        if not (getattr(profile, "image_ref", None) or "").strip():
+            raise SandboxDispatchUnboundError(
+                f"Environment profile '{getattr(profile, 'name', profile)}' is bound to the "
+                "Kubernetes provider but declares no image_ref; the Kubernetes tier requires the "
+                "workspace pod image (an E2B template_id is not a container image), so set the "
+                "profile's image_ref to a runner container image before dispatching."
+            )
+        # The returned provider + hub are consumed by ``node_runner``: the
+        # provider becomes the dispatch's provider (one client per dispatch)
+        # and the hub is aclosed in the dispatch's finally.
+        try:
+            from modulo.core.runtime_config.key_bridge import override_int_or
+            from modulo.settings import get_settings
+
+            settings = get_settings()
+            # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable.
+            concurrency = override_int_or(
+                "MODULO_MAX_LOCAL_CONCURRENCY",
+                int(getattr(settings, "modulo_max_local_concurrency", 2) or 2),
+            )
+            hub = build_hub(max_local_concurrency=concurrency)
+            provider = hub.resolve(profile)
+        except ProviderNotConfiguredError as exc:
+            raise SandboxDispatchUnboundError(str(exc)) from exc
+        return RunnerDispatchRoute(
+            provider_type="kubernetes",
+            profile=profile,
+            provider=provider,
+            hub=hub,
+            # FAR-1051 review: the operator's declared image_ref governs the pod
+            # image, matching the bundled-runner mapper — so the sandbox route
+            # never silently substitutes the node's E2B template_id.
+            image_ref_override=getattr(profile, "image_ref", None),
+        )
     raise SandboxDispatchUnboundError(f"Environment profile provider_type '{provider_type}' is not dispatchable.")
 
 
@@ -237,8 +307,9 @@ def _workspace_spec_for_dispatch(
     default permitted (the tier's purpose) with the per-profile ``none``
     opt-in.
 
-    Egress resolution (FAR-1085): uses :func:`resolve_egress` with the
-    Docker tier so both node-level and profile-level policies are
+    Egress resolution (FAR-1085): uses :func:`resolve_egress` with the TIER
+    the profile's provider resolves to (FAR-1051 — previously hardcoded to
+    ``docker``), so both node-level and profile-level policies are
     considered, and ``selected`` without an allowlist or on a
     non-enforcing tier returns a refusal.
     """
@@ -256,31 +327,47 @@ def _workspace_spec_for_dispatch(
     }
 
     # FAR-1085: canonical egress resolution — node -> profile -> provider default,
-    # with tier capability check (Docker cannot enforce "selected").
+    # with tier capability check (e.g. Docker cannot enforce "selected").
+    #
+    # FAR-1051: the TIER follows the profile's RESOLVED provider instead of the
+    # historical hardcoded "docker", so a kubernetes-bound profile resolves —
+    # and, where the tier cannot enforce the policy, REFUSES by name — on the
+    # tier its dispatch actually runs (a hardcoded docker tier let such a
+    # profile certify an enforcement the provider never performs). An
+    # unrecognised provider_type fails CLOSED: the raw value is passed through
+    # so ``resolve_egress`` refuses it as an unknown tier rather than silently
+    # defaulting to an enforceable one. A profile with no declared type keeps
+    # this arm's historical Docker tier (the Bundled Runner is the only route
+    # that reached this mapper before FAR-1051).
+    _provider_type = getattr(profile, "provider_type", None)
+    _provider_type = _provider_type.strip().lower() if isinstance(_provider_type, str) else ""
+    _tier = egress_tier_for_provider_type(_provider_type) or (_provider_type or "docker")
     egress_resolved = resolve_egress(
         node_egress_policy=node_egress_policy,
         node_egress_allowlist=node_egress_allowlist,
         profile_network_policy=getattr(profile, "network_policy", None),
-        tier="docker",
+        tier=_tier,
     )
     if egress_resolved.refusal is not None:
         from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
 
-        raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on Docker tier: {egress_resolved.refusal}")
+        raise SandboxTierRefusedError(
+            f"Node '{node_id}' egress refused on {_tier.capitalize()} tier: {egress_resolved.refusal}"
+        )
 
     # Map canonical policy to WorkspaceSpec egress_policy vocabulary
     # LOSSLESSLY (FAR-1050): the shared helper is the single owner of this
     # mapping — identical to the profile-path mapper in
     # api/routes/environment_profiles.py, so the two cannot drift (ADR 040).
-    # The Docker tier refuses "selected" above (tier capability), so only
-    # None/"deny_all" are reachable here today — the lossless mapping is
-    # defence-in-depth.
+    # The tiers this mapper runs on today (docker, kubernetes) both refuse
+    # "selected" above (tier capability), so only None/"deny_all" are
+    # reachable — the lossless mapping is defence-in-depth.
     spec_egress = spec_egress_for_canonical(egress_resolved.policy)
     # FAR-1050 R5 parity: carry the selected-mode allowlist in the same
     # metadata key the legacy E2B create path stamps and the E2B provider
-    # reads. Unreachable here today (Docker refuses "selected"), stamped as
-    # defence-in-depth against a future allowlist source silently behaving
-    # as deny_all.
+    # reads. Unreachable here today (every reachable tier refuses "selected"),
+    # stamped as defence-in-depth against a future allowlist source silently
+    # behaving as deny_all.
     if egress_resolved.policy == "selected" and egress_resolved.allowlist:
         metadata[WORKSPACE_METADATA_EGRESS_ALLOWLIST_KEY] = json.dumps(egress_resolved.allowlist)
 
@@ -289,13 +376,23 @@ def _workspace_spec_for_dispatch(
     # directly to the DB could bypass the route validation.
     raw_network = cfg.get("workspace_network")
     validated_network = validate_workspace_network(raw_network)
+    # FAR-1051 (qa-iterate): the FALLBACK timeout is read from the shipped
+    # profile default block (``TEMPLATE_CONFIG_JSON["timeout_seconds"]``) —
+    # the same constant the seeded profile's own config starts from — so the
+    # dispatch default and the profile default can never drift apart. This is
+    # the previous expression with ONLY the magic literal replaced: an
+    # explicitly-set ``config_json.timeout_seconds`` keeps its exact
+    # historical coercion (``int`` of the raw value, TypeError on a
+    # non-numeric one, AttributeError on a malformed non-dict config — never
+    # a silent substitute default).
+    _timeout_seconds = int(cfg.get("timeout_seconds", TEMPLATE_CONFIG_JSON["timeout_seconds"]))
     return WorkspaceSpec(
         environment_profile_id=profile.id,
         organisation_id=org_id,  # type: ignore[arg-type]
         run_id=run_uuid,
         image_ref=getattr(profile, "image_ref", None) or "",
         capabilities=getattr(profile, "capabilities_json", None) or [],
-        timeout_seconds=int(cfg.get("timeout_seconds", 3600)),
+        timeout_seconds=_timeout_seconds,
         resource_limits={"memory_mb": int(cfg.get("memory_mb", 1024))},
         egress_policy=spec_egress,
         persistence_policy=getattr(profile, "persistence_policy", "ephemeral"),

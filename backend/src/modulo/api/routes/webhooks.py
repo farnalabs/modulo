@@ -48,6 +48,7 @@ from modulo.core.audit_coverage import audited
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
+from modulo.core.logging_config import org_id_var
 
 # Deprecated private aliases — kept importable so legacy patch targets and
 # callers referencing the underscore names keep working (M5 public-API fix).
@@ -112,6 +113,34 @@ async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
     """
     org_exists = await session.execute(select(Organisation.id).where(Organisation.id == org_id))
     return org_exists.scalar_one_or_none() is not None
+
+
+def _bind_webhook_org_context(request: Request, org_id: uuid.UUID) -> None:
+    """Publish the trigger's organisation where ERROR capture can see it (FAR-1484).
+
+    Webhook ingress resolves its organisation ONLY at the trigger bootstrap
+    (``load_trigger_and_org_global``) — the unauthenticated HMAC path has no
+    principal at all — so without this bind every ERROR logged from that point
+    on (the HMAC-secret decrypt failure, snapshot/DB errors, the
+    ``db_transient`` 503s of the 2026-09-04 incident) was dropped by
+    ``ErrorTrackingLogHandler`` for want of an org.
+
+    Both carriers, same contract as ``bind_principal_context`` (FAR-1417):
+
+    * ``org_id_var`` — read synchronously by the handler inside this request's
+      task context, covering the route body AND the ``handle_db_errors``
+      wrapper that logs escaping errors.
+    * ``request.state.organisation_id`` — the ASGI scope is shared with every
+      middleware layer, so an OUTER ``CatchAllMiddleware`` can re-bind from it
+      after an unhandled failure.
+
+    Failures BEFORE the bootstrap (bad JSON, system-role fallback, trigger
+    not found) have no organisation to resolve and keep the announced
+    ``no_org_context`` drop — never fabricate one here.
+    """
+    org = str(org_id)
+    org_id_var.set(org)
+    request.state.organisation_id = org
 
 
 async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
@@ -260,6 +289,11 @@ async def receive_webhook(
                 system_session, trigger_id, principal.organisation_id if principal else None
             )
 
+            # FAR-1484: the org is resolved HERE (derived from the trigger row,
+            # so it always exists once the bootstrap returned). Bind before any
+            # further work so every ERROR from this point on — HMAC decrypt,
+            # snapshot, DB — is attributed instead of dropped.
+            _bind_webhook_org_context(request, org_id)
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 
@@ -662,6 +696,11 @@ async def replay_webhook(
                 system_session, trigger_id, principal.organisation_id if principal else None
             )
 
+            # FAR-1484: the org is resolved HERE (derived from the trigger row,
+            # so it always exists once the bootstrap returned). Bind before any
+            # further work so every ERROR from this point on — HMAC decrypt,
+            # snapshot, DB — is attributed instead of dropped.
+            _bind_webhook_org_context(request, org_id)
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 

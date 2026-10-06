@@ -4495,6 +4495,18 @@ elements:
       - testid: settings-mcp-create-key-role
         type: select
         dynamic_testid: false
+      - testid: api-key-grants-selector
+        type: element
+        dynamic_testid: false
+      - testid: api-key-grants-restrict
+        type: checkbox
+        dynamic_testid: false
+      - testid: api-key-grants-list
+        type: element
+        dynamic_testid: false
+      - testid: api-key-grants-empty-error
+        type: element
+        dynamic_testid: false
       - testid: settings-mcp-copy-key-value
         type: button
         dynamic_testid: false
@@ -4503,6 +4515,15 @@ elements:
         dynamic_testid: false
       - testid: settings-mcp-org-scope-note
         type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-loading
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-load-error
+        type: element
+        dynamic_testid: false
+      - testid: settings-mcp-grants-retry
+        type: button
         dynamic_testid: false
       - testid: settings-mcp-key-created-done
         type: button
@@ -5512,6 +5533,7 @@ features:
             - "[x] Library items can be copied into the org with the CopyToAdaptWizard"
             - "[x] Library collections authoring and publishing ship behind the library_collection feature flag: a collection is created as a draft, its manifest pins are updated while draft, and it is published — invalid/duplicate pins, an empty manifest and more than MAX_COLLECTION_PINS are rejected 422, a duplicate slug is 409, and every collection endpoint 404s when the flag is off (docs/product-map/library/library.md, backend/tests/unit/api/test_library_collection.py)"
             - "[x] Workflow bundle export writes a .modulo.zip / signed YAML bundle with org-private fields (owner_team_id, visibility, credentials/ciphertexts, env secrets) stripped, and workflow import runs a two-phase REST contract — /import/analyse resolves connector/schema(abstract_name)/model-backend references and detects pipeline-name conflicts with a disambiguation suffix, /import/confirm materialises the pipeline (200 imported); a tampered non-JSON bundle is rejected 400 without creating entities (backend/tests/bdd/features/workflows/import.feature, workflows/export.feature, steps/test_workflows.py)"
+            - "[x] Composite library-primitive content is masked on every read surface (FAR-1380): the shared LibraryPrimitiveResponse._mask_composite_graph_credentials validator masks credential-bearing node fields inside a composite primitive's content_json for the library list/get/create/patch/delete/restore/adapt responses, community contribute + contributions list + admin publish responses, the community install response and the fixture contributions list, and the MCP modulo://library/{type}/{slug} resource masks composite nodes before rendering; non-composite primitives pass through byte-identical. The FAR-1374 sentinel rule applies on write: POST /api/v1/libraries, PATCH /api/v1/libraries/{id} and POST /api/v1/libraries/community/contribute resolve a submitted mask echo against the stored sub-graph (resolve_and_reject_mask_sentinels) and refuse an unmappable sentinel with 422 COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL, and a masked-read -> patch round-trip preserves the stored secret (backend/tests/unit/api/test_library_primitive_masking.py, api/routes/library.py, api/mcp_server.py; control statement docs/deployment-security.md 2.6)"
         deferrals:
             - "Collections authoring is gated behind the default-off library_collection feature flag per org (FAR-760); collection install/uninstall + community trust gates are tracked under feat-library-collections"
     feat-library-collections:
@@ -5571,6 +5593,7 @@ features:
             - "[x] MCP library browse (2026-09-25): the `search_library` tool is the read-only library-browse surface, on the read-only allowlist (`resource.read_only` viewer floor) in the centralized scope gate and gated at the handler by the real `_check_agent_tool_scope` chokepoint — an authenticated caller at or above viewer browses, and a node-level `capability_scope.allowed_tools` that excludes the tool is denied `insufficient_scope` before any DB read; the four `mcp/library_browse.feature` scenarios execute in CI against the real handler + scope-gate seams (auth re-validation + list/session seams patched), closing the last legacy `/mcp/tools/call` `@awaiting-implementation` draft"
             - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI tokenised on ANY whitespace (so two URIs pasted on one line separate correctly and match the backend's space-joined storage round-trip) where every entry must be an absolute http:// or https:// URI (localhost / 127.0.0.1 stay valid for local development) with duplicates de-duplicated and invalid entries named in an inline error, plus at least one of the three valid scopes (trigger:run, hitl:review, library:browse); the confirm button is never validity-disabled, so a submit always reaches the guard and surfaces every touched-field error; success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, both values are wiped from component state when the dialog closes (the footer Done handler and the Dialog hide event), and a rejected clipboard write (insecure plain-HTTP context, no navigator.clipboard) renders a visible copy-failed message telling the user to select the value and copy manually instead of console-only; the section is gated to org role admin/operator with a restricted state driven by the list call's 403, a fetch rejection or a non-array list body renders the inline section error rather than the 'no clients registered yet' empty state, and the API keys card degrades the same way - a 403 from GET /api/v1/api-keys (the identical admin|operator gate) renders a restricted API-keys card instead of failing the whole page, while non-403 API key failures stay fatal (SettingsMcpView.spec.ts)"
             - "[x] The MCP API-keys card distinguishes a REVOKED key from an EXPIRED one by the observed facts instead of the derived is_active flag (FAR-1296/FAR-1299): the key serializer emits revoked_at (ISO-8601 when set, else null — the revocation FACT, not an inference from is_active) alongside lookup_prefix/role/scope/last_used_at/expires_at, revocation is a DELETE /api/v1/api-keys/{key_id} (the earlier PUT was silently dropped — FAR-1291), and the /settings/mcp table renders a per-key status badge (settings-mcp-key-status) computed as revoked (revoked_at set, checked first) / expired (revoked_at null and the expiry elapsed) / active (revoked_at null, expiry not elapsed), with the revoke button shown only for active keys (api/routes/api_keys.py + auth/api_key._serialize_key; SettingsMcpView.vue, SettingsMcpView.spec.ts, test_api_keys_endpoint.py)"
+            - "[x] API key grant-sets can be set at creation from REST and MCP (FAR-1477): POST /api/v1/api-keys and the MCP create_api_key tool both accept an optional grants list (omitted = legacy role bundle, [] = explicit deny-all, otherwise exactly those permissions) behind the per-org api_key_grants flag (OFF => 422, never a silent widen) and both run the same mint cap (unknown key 422, non-delegable 403, above the caller's live capability 403); the Settings > MCP create-key dialog shows a grant picker only when GET /api/v1/api-keys/grantable-permissions reports the flag ON, lists only backend-supplied delegable permissions (grouped by prefix, filtered to the caller's role level), defaults to off (role bundle), omits grants rather than sending [] and blocks Create while restriction is on with nothing ticked (ApiKeyGrantsSelector.vue, SettingsMcpView.vue, ApiKeyGrantsSelector.spec.ts, test_api_key_grants.py, test_api_key_mgmt_tools.py)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered
@@ -5664,7 +5687,6 @@ features:
             - "[x] The read-mask sentinel never reaches storage or a run (FAR-1374): every composite-template write entry (POST /api/v1/composite-templates, PATCH, the editor PUT, and save-as-composite) resolves masked echoes against the stored graph FIRST, then refuses any surviving or unresolvable sentinel with 422 (COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL) naming the sub-node, field, and key; composite expansion fails closed with the same code for pre-fix or direct-DB-written sentinel rows so a mask literal can never land in a run snapshot or clobber a host-injected credential (core/composite_engine/expander.py MaskedCredentialExpansionError); graph-save validation surfaces the same condition, and the admin housekeeping sweep reports pre-existing degraded templates detection-only - repair is manual credential re-entry in the composite editor, never an automatic rewrite (core/housekeeping.py)"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
-            - "The library-primitive credential surface (composite/pipeline primitives installed from the Library) is excluded from the plaintext-at-rest + mask-on-read control statement pending FAR-1380"
     feat-plugins:
         description: Plugin registry
         status: partial
@@ -5738,10 +5760,10 @@ features:
             - "[x] The Runners page (route-per-tab under /admin/runners/profiles + /admin/runners/concurrency) renders a persistent status strip (60s auto-refetch, worst-of across machines, loading/unknown/unavailable states never render confident green, probe error surfaced with remediation copy pointing at docs/security/bundled-runner-operator-guide.md), the Profiles tab (health badges, per-row template-apply, sandbox-agent style test-connection events), and the Concurrency tab (the D3b org sandbox-concurrency cap with the ge=0 le=100 clamp, effective-cap display refetched after a successful save, preflight warnings); every legacy route (/environment-profiles, /environment-profiles/new, /environment-profiles/:id, /admin/sandbox-concurrency) redirects"
             - "[x] A hung socket-proxy cannot stall the probe: the aiodocker client carries a bounded timeout (total 10s, connect 5s), so the hang becomes a recorded unreachable with a real transition alert well under the 120s job timeout, and any Docker URL userinfo in engine error strings is scrubbed to ***@ before persisting or logging (credential-bearing MODULO_DOCKER_HOST)"
         deferrals:
-            - The node-editor sandbox-agent panel slices its runner-health display against this cache (D5 node-editor slice — follow-up: pipeline editor consume)
-            - Housekeeping is NOT exempt from the concurrency cap (dispatch gate unchanged); the Runners page surfaces the cap only (follow-up: housekeeping exemption decision)
-            - The strip does not surface the org-wide ACTIVE workspace count (probe cache carries engine state only; follow-up: extend the cache row)
-            - Compose-file e2e coverage of the probe is deferred (unit + integration crud tests pin the contract; follow-up: compose e2e)
+            - "The node-editor sandbox-agent panel slices its runner-health display against this cache (D5 node-editor slice — follow-up: pipeline editor consume)"
+            - "Housekeeping is NOT exempt from the concurrency cap (dispatch gate unchanged); the Runners page surfaces the cap only (follow-up: housekeeping exemption decision)"
+            - "The strip does not surface the org-wide ACTIVE workspace count (probe cache carries engine state only; follow-up: extend the cache row)"
+            - "Compose-file e2e coverage of the probe is deferred (unit + integration crud tests pin the contract; follow-up: compose e2e)"
     feat-schemas:
         description: Typed JSON schemas, schema editor, inference, parameter schemas, and schema enforcement
         status: covered
@@ -5913,7 +5935,6 @@ features:
             - "[x] The no-delivery streak engine covers cron triggers as well as ongoing (FAR-1387): the sweep walks cron triggers' terminal classifications with the SAME streak walk and GREATEST(last_delivery_at, streak_epoch) boundary, streak_status returns real values for a covered cron (no longer the unconfigured base), and a cron trip NOTIFIES and SURFACES (append-only cron_trigger.no_delivery_streak_alert record + sweep 'tripped' count) without auto-deactivating — deactivation is opt-in per cron via config_json no_delivery_auto_deactivate (default OFF), cron applies its own 48h minimum wall-clock window (MODULO_CRON_STREAK_MIN_WINDOW_HOURS override), and cron audit records use cron_trigger.* event types, never the ongoing_trigger.* stream (backend/src/modulo/core/trigger_streak.py, backend/tests/unit/core/test_trigger_streak_engine.py)"
             - "[x] The streak badge in SettingsTriggersView renders for every trigger type the engine covers — ongoing AND cron — via ONE mirrored constant (STREAK_COVERED_TRIGGER_TYPES, pointing at the backend STREAK_TRIGGER_TYPES in core/trigger_streak.py), and the 'Deactivated' badge + re-enable action are driven by streak_status.state === 'deactivated' (deactivated_reason), NEVER by the trigger type: a notify-only cron trip (state 'ok', deactivated_reason null) shows only 'No-delivery streak x/N' with role=status/aria-live, while 'Deactivated' wording appears only when the backend reports the deactivated state (frontend/src/views/SettingsTriggersView.vue, frontend/src/__tests__/SettingsTriggersView.spec.ts; FAR-1405)"
         deferrals:
-            - Slack app-mention triggers register as a trigger type and are endpoint-tested, but are an alpha/community surface without a BDD feature file
             - Route-level webhook validation failures (HMAC/timestamp) roll back with the request and do not persist a TriggerEvent for those typed errors in that path (documented pre-existing limitation)
     feat-variants:
         description: Variant comparison and AB test models
