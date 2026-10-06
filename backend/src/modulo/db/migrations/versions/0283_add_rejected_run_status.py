@@ -1,7 +1,7 @@
 """HITL reject-terminates (FAR-1487): add the terminal ``rejected`` run status.
 
-Revision ID: 0281_add_rejected_run_status
-Revises: 0280_runs_node_deadline_watchdog_fired_count
+Revision ID: 0283_add_rejected_run_status
+Revises: 0282_env_profiles_kubernetes
 Create Date: 2026-10-05
 
 A HITL rejection with no configured reject destination now ENDS the run with a
@@ -31,8 +31,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0281_add_rejected_run_status"
-down_revision: str | None = "0280_runs_node_deadline_watchdog_fired_count"
+revision: str = "0283_add_rejected_run_status"
+down_revision: str | None = "0282_env_profiles_kubernetes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

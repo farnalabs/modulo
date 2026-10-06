@@ -1,6 +1,6 @@
 """Vocabulary/constraint parity tests for the ``rejected`` run-status widening (FAR-1487).
 
-``0281_add_rejected_run_status`` widens EVERY closed copy of the run-status
+``0283_add_rejected_run_status`` widens EVERY closed copy of the run-status
 vocabulary that a terminal ``rejected`` run touches:
 
 * ``ck_runs_status`` (``runs``) - the model's CheckConstraint is the single
@@ -24,7 +24,7 @@ from sqlalchemy import CheckConstraint, Index
 
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
-_NAME = "0281_add_rejected_run_status"
+_NAME = "0283_add_rejected_run_status"
 _PATH = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_NAME}.py"
 
 
@@ -57,7 +57,7 @@ class TestChain:
     def test_chains_off_the_previous_head(self) -> None:
         module = _load()
         assert module.revision == _NAME
-        assert module.down_revision == "0280_runs_node_deadline_watchdog_fired_count"
+        assert module.down_revision == "0282_env_profiles_kubernetes"
 
 
 class TestRunsStatusCheck:
