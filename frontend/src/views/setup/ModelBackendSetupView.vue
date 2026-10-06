@@ -51,6 +51,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import { useApi } from '../../composables/useApi'
+import { getApiErrorCode } from '../../lib/api/apiError'
 import { useMutation } from '../../composables/useMutation'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
@@ -85,12 +86,10 @@ const { loading, error, mutate: submit } = useMutation(async () => {
     success.value = true
     return resp
   } catch (e: unknown) {
-    const detail = typeof e === 'object' && e !== null
-      ? String((e as Record<string, unknown>).detail ?? (e as Record<string, unknown>).message ?? '')
-      : ''
-    if (detail.includes('invalid_token')) {
+    const code = getApiErrorCode(e)
+    if (code === 'invalid_token') {
       throw new Error(t('views.ModelBackendSetupView.error_link_expired'))
-    } else if (detail.includes('backend_not_found')) {
+    } else if (code === 'backend_not_found') {
       throw new Error(t('views.ModelBackendSetupView.error_backend_not_found'))
     }
     throw new Error(t('views.ModelBackendSetupView.error_setup_failed'))

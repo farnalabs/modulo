@@ -5,6 +5,10 @@ export interface ProblemDetail {
   detail: string
   instance?: string
   request_id?: string
+  // RFC 9457 extension member carrying the route's machine-readable error code
+  // (e.g. "invalid_token"). Clients branch on this rather than on the human
+  // `detail` prose.
+  code?: string
 }
 
 const PROBLEM_TITLES: Record<string, string> = {

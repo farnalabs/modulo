@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick, ref } from 'vue'
 import { mount } from '@vue/test-utils'
+import { ApiError } from '../lib/api/apiError'
 
 // The one-time setup token is delivered in the URL FRAGMENT (#token=...) — never
 // the query string — so it is not sent to the server nor leaked via Referer/access
@@ -33,10 +34,17 @@ import ModelBackendSetupView from '../views/setup/ModelBackendSetupView.vue'
 
 describe('ModelBackendSetupView', () => {
   beforeEach(() => {
+    // The view reads/strips the URL fragment on mount; reset it so a token set
+    // by one test cannot leak into the next.
+    window.location.hash = ''
     mockPost.mockReset()
     mockPost.mockResolvedValue({ status: 'ok', backend_id: 'abc', name: 'OpenAI Prod' })
     mockControls.loading = ref(false)
     mockControls.error = ref(null)
+  })
+
+  afterEach(() => {
+    window.location.hash = ''
   })
 
   it('reads the setup token from the URL fragment and strips it from the address bar', () => {
@@ -200,11 +208,14 @@ describe('ModelBackendSetupView', () => {
     expect(wrapper.find('[data-testid="model-backend-setup-submit"]').text()).toBe('Saving...')
   })
 
-  // Coverage: every branch of the submit catch maps the backend detail to a
-  // user-facing, localised error.
+  // Coverage: every branch of the submit catch maps the backend machine code to
+  // a user-facing, localised error. The rejections mirror what useApi actually
+  // throws: an ApiError carrying the RFC 9457 `code` extension member.
   it('throws the expired-link error for an invalid_token response', async () => {
     window.location.hash = '#token=secret-token-123'
-    mockPost.mockRejectedValueOnce({ detail: 'invalid_token' })
+    mockPost.mockRejectedValueOnce(
+      new ApiError('Token not found, expired, or already used', 404, 'invalid_token'),
+    )
     const wrapper = mount(ModelBackendSetupView, {
       global: { stubs: { PageHeader: true, Button: true } },
     })
@@ -215,7 +226,7 @@ describe('ModelBackendSetupView', () => {
 
   it('throws the backend-not-found error for a backend_not_found response', async () => {
     window.location.hash = '#token=secret-token-123'
-    mockPost.mockRejectedValueOnce({ detail: 'backend_not_found' })
+    mockPost.mockRejectedValueOnce(new ApiError('backend_not_found', 404, 'backend_not_found'))
     const wrapper = mount(ModelBackendSetupView, {
       global: { stubs: { PageHeader: true, Button: true } },
     })
@@ -226,7 +237,20 @@ describe('ModelBackendSetupView', () => {
 
   it('throws the generic setup error for any other failure', async () => {
     window.location.hash = '#token=secret-token-123'
+    // A plain Error (no machine code) — e.g. a network failure — must fall
+    // through to the generic message.
     mockPost.mockRejectedValueOnce(new Error('network down'))
+    const wrapper = mount(ModelBackendSetupView, {
+      global: { stubs: { PageHeader: true, Button: true } },
+    })
+    await wrapper.find('input[type="password"]').setValue('sk-test')
+    await expect((wrapper.vm as unknown as { submit: () => Promise<unknown> }).submit())
+      .rejects.toThrow('Setup failed. Please try again.')
+  })
+
+  it('throws the generic setup error for an ApiError without a code', async () => {
+    window.location.hash = '#token=secret-token-123'
+    mockPost.mockRejectedValueOnce(new ApiError('Internal Server Error', 500))
     const wrapper = mount(ModelBackendSetupView, {
       global: { stubs: { PageHeader: true, Button: true } },
     })

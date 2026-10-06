@@ -242,6 +242,43 @@ class TestProblemFromHttpException:
         problem = problem_from_http_exception(_Request(), exc)  # type: ignore[arg-type]
         assert problem.detail == str({"field": "name"})
 
+    def test_dict_detail_preserves_machine_error_code(self) -> None:
+        exc = HTTPException(  # type: ignore[arg-type]
+            status_code=404,
+            detail={"error": "invalid_token", "detail": "Token not found, expired, or already used"},
+        )
+        problem = problem_from_http_exception(_Request("rid"), exc)  # type: ignore[arg-type]
+        assert problem.code == "invalid_token"
+        assert problem.detail == "Token not found, expired, or already used"
+        assert problem.status == 404
+
+    def test_dict_detail_without_human_detail_uses_code_as_detail(self) -> None:
+        exc = HTTPException(status_code=404, detail={"error": "backend_not_found", "backend_id": "abc"})  # type: ignore[arg-type]
+        problem = problem_from_http_exception(_Request(), exc)  # type: ignore[arg-type]
+        assert problem.code == "backend_not_found"
+        assert problem.detail == "backend_not_found"
+
+    def test_dict_detail_without_error_code_has_no_code(self) -> None:
+        exc = HTTPException(status_code=400, detail={"reason": "nope"})  # type: ignore[arg-type]
+        problem = problem_from_http_exception(_Request(), exc)  # type: ignore[arg-type]
+        assert problem.code is None
+        assert "reason" in problem.detail
+
+    def test_dict_detail_with_non_string_error_has_no_code(self) -> None:
+        exc = HTTPException(status_code=400, detail={"error": 7, "detail": "bad"})  # type: ignore[arg-type]
+        problem = problem_from_http_exception(_Request(), exc)  # type: ignore[arg-type]
+        assert problem.code is None
+        assert problem.detail == "bad"
+
+    def test_to_response_serializes_code_extension_member_when_present(self) -> None:
+        problem = ProblemDetail.from_type(ProblemType.NOT_FOUND, detail="gone", code="invalid_token")
+        body = _body(problem.to_response())
+        assert body["code"] == "invalid_token"
+
+    def test_to_response_omits_code_when_absent(self) -> None:
+        problem = ProblemDetail.from_type(ProblemType.NOT_FOUND, detail="gone")
+        assert "code" not in _body(problem.to_response())
+
 
 class TestProblemFromValidationError:
     def test_joins_loc_and_msg(self) -> None:
