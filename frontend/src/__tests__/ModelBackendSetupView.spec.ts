@@ -111,4 +111,38 @@ describe('ModelBackendSetupView', () => {
     expect(wrapper.find('form').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('missing its one-time token')
   })
+
+  // UX conformance: A11Y-2 (every form control has an associated label via a
+  // for/id pair) and VIS-4 (every interactive element carries a data-testid).
+  it('associates the API-key input with its label and tags the submit button', () => {
+    window.location.hash = '#token=secret-token-123'
+    const wrapper = mount(ModelBackendSetupView, {
+      global: {
+        stubs: {
+          PageHeader: true,
+          Button: true,
+        },
+      },
+    })
+
+    const input = wrapper.find('input[type="password"]')
+    expect(input.exists()).toBe(true)
+    const inputId = input.attributes('id')
+    expect(inputId).toBeTruthy()
+    const label = wrapper.find(`label[for="${inputId}"]`)
+    expect(label.exists()).toBe(true)
+    expect(label.text()).toBe('API Key')
+
+    expect(wrapper.find('[data-testid="model-backend-setup-submit"]').exists()).toBe(true)
+    expect(wrapper.find('input[aria-label="Form control"]').exists()).toBe(false)
+  })
+
+  // UX conformance: I18N-1 (no hardcoded user-facing strings in the view).
+  it('resolves every user-facing string through the en-US locale', async () => {
+    window.location.hash = ''
+    const wrapper = mount(ModelBackendSetupView)
+    expect(wrapper.text()).toContain('This setup link is missing its one-time token.')
+    // A raw key leaking into the DOM means the string bypassed vue-i18n.
+    expect(wrapper.text()).not.toContain('views.ModelBackendSetupView')
+  })
 })
