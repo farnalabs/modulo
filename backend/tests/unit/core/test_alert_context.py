@@ -6,13 +6,16 @@ are deterministic) and renders the context with the shared helpers that both
 alert channels import.
 
 Note on how the fields are passed: ``Settings`` is a ``case_sensitive=False``
-``BaseSettings``, so constructor keys are matched against each field's
-ENVIRONMENT ALIAS case-insensitively. ``alert_context`` also works under its
-field name (it case-folds onto the ``ALERT_CONTEXT`` alias), but
-``environment`` does NOT: the ``MODULO_ENV`` spelling is required, because a
-``environment``-named key is silently dropped by ``extra="ignore"``. This
-suite therefore passes both as their aliases (``MODULO_ENV`` /
+``BaseSettings`` with ``populate_by_name=True`` (FAR-1500), so constructor keys
+are accepted under EITHER the field's environmental alias
+(case-insensitively) or the field's own name — ``MODULO_ENV`` and
+``environment`` both set the environment field, and ``ALERT_CONTEXT`` and
+``alert_context`` both set the context field. Before FAR-1500 only the alias
+worked for ``environment`` (an ``environment``-named key was silently dropped
+by ``extra="ignore"``, because the name does not case-fold onto ``MODULO_ENV``);
+the suite passes both fields as their aliases here (``MODULO_ENV`` /
 ``ALERT_CONTEXT``), exactly as the rest of the suite passes ``ALERT_EMAIL_TO``.
+The name-keyed contract is pinned in ``tests/unit/test_settings.py``.
 
 """
 
