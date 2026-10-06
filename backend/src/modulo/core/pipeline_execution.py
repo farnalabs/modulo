@@ -2289,9 +2289,15 @@ async def _redispatch_stranded_rows(stranded_rows: list[Any]) -> dict[str, int]:
     sessions (and the row lock the UPDATE held) never overlap a live
     transaction.
     """
+    from modulo.core.cron_helpers import _bound_org
+
     redispatch_outcomes: dict[str, int] = {}
     for row in stranded_rows:
-        outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
+        # FAR-1501: each stranded row belongs to one org — bind it so the
+        # failure logged by the re-dispatch (and by dispatch_run below) is
+        # attributed by ErrorTrackingLogHandler instead of dropped.
+        async with _bound_org(row.organisation_id):
+            outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
         redispatch_outcomes[outcome] = redispatch_outcomes.get(outcome, 0) + 1
     return redispatch_outcomes
 

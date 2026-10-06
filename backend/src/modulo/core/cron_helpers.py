@@ -6263,36 +6263,43 @@ async def _dispatcher_reconcile_body(
         early_detect_minutes=early_detect_minutes,
     )
     for org_id in org_ids:
-        if stage is not None:
-            stage["op"] = f"reconcile_org:{org_id}"
-        # FAR-904: bound cumulative rows processed across all orgs so the
-        # sweep always completes within the inner deadline.  The per-org
-        # reconcile loop processes terminalizers + a row scan + per-row
-        # operations; without a cross-org cap the tick can grow unbounded
-        # (many orgs * many rows each) and hit the timeout.  Overflow drains
-        # on subsequent 60s ticks.
-        if rows_processed >= max_rows:
-            summary["rows_deferred"] = summary.get("rows_deferred", 0) + len(org_ids) - org_ids.index(org_id)
-            break
-        rows_before = summary["scanned"]
-        enqueue_failed_redispatched = await _reconcile_org(
-            factory=factory,
-            q=q,
-            redis_client=redis_client,
-            org_id=org_id,
-            re_dispatch_predicate=re_dispatch_predicate,
-            tuning=tuning,
-            enqueue_failed_redispatched=enqueue_failed_redispatched,
-            summary=summary,
-            terminalized_run_ids=terminalized_run_ids,
-            terminalize_max=terminalize_max,
-            early_detect_minutes=early_detect_minutes,
-            # FAR-1425: hand the ORG the remainder of the tick's row budget,
-            # not just the inter-org gate.  ``rows_processed < max_rows`` is
-            # guaranteed here (the break above), so this is always >= 1.
-            row_budget=max_rows - rows_processed,
-        )
-        rows_processed += summary["scanned"] - rows_before
+        # FAR-1501: the whole per-org tick runs with THIS org bound so every
+        # ERROR emitted below — ``read failed (org ...)``, terminalizer
+        # failures, per-row re-enqueue/Redis failures — is attributed by
+        # ErrorTrackingLogHandler instead of dropped as no_org_context.
+        # ``_bound_org`` resets in finally, so neither the pre-loop phases
+        # nor the next org's tick inherit the binding.
+        async with _bound_org(org_id):
+            if stage is not None:
+                stage["op"] = f"reconcile_org:{org_id}"
+            # FAR-904: bound cumulative rows processed across all orgs so the
+            # sweep always completes within the inner deadline.  The per-org
+            # reconcile loop processes terminalizers + a row scan + per-row
+            # operations; without a cross-org cap the tick can grow unbounded
+            # (many orgs * many rows each) and hit the timeout.  Overflow drains
+            # on subsequent 60s ticks.
+            if rows_processed >= max_rows:
+                summary["rows_deferred"] = summary.get("rows_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+                break
+            rows_before = summary["scanned"]
+            enqueue_failed_redispatched = await _reconcile_org(
+                factory=factory,
+                q=q,
+                redis_client=redis_client,
+                org_id=org_id,
+                re_dispatch_predicate=re_dispatch_predicate,
+                tuning=tuning,
+                enqueue_failed_redispatched=enqueue_failed_redispatched,
+                summary=summary,
+                terminalized_run_ids=terminalized_run_ids,
+                terminalize_max=terminalize_max,
+                early_detect_minutes=early_detect_minutes,
+                # FAR-1425: hand the ORG the remainder of the tick's row budget,
+                # not just the inter-org gate.  ``rows_processed < max_rows`` is
+                # guaranteed here (the break above), so this is always >= 1.
+                row_budget=max_rows - rows_processed,
+            )
+            rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
     # dispatch_failed / hitl_review_expired): the terminalizers write raw UPDATEs and never
