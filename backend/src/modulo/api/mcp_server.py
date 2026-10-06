@@ -47,7 +47,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from modulo.api.db_error_handling import raise_session_contract_error
+from modulo.api.db_error_handling import raise_session_contract_error, session_contract_error_payload
 from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
@@ -1749,35 +1749,14 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
 
 
 def _tool_session_contract_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any] | None:
-    """MCP payload form of the shared session-contract classifier (FAR-1482).
+    """MCP payload rendering of the shared session-contract classifier (FAR-1482).
 
-    ``raise_session_contract_error`` is the ONE classifier for "is this a
-    client-side session-contract violation?"; its documented contract is to
-    RAISE ``HTTPException(500, MSG_SESSION_CONTRACT)`` for one and to RETURN
-    for every other exception. MCP tool results carry no status code — the
-    payload IS the response — so this adapter reads that verdict off the raise
-    and re-emits the classifier's own message as this surface's SPECIFIC
-    ``session_contract_error`` payload (FAR-1502: a branchable code, never the
-    generic ``internal_error``)::
-
-        {"error": "session_contract_error", "detail": MSG_SESSION_CONTRACT}
-
-    One classifier, two renderings: REST answers 500, MCP answers a
-    ``session_contract_error`` payload carrying the same ``MSG_SESSION_CONTRACT``
-    text, so a caller reading either surface gets the same verdict. The detail
-    is taken from the exception the classifier raised rather than restated
-    here, so the two surfaces cannot drift apart.
-
-    Returns ``None`` for any exception the classifier does not flag, so the
-    caller's own database-unavailable handling runs unchanged — a genuine
-    transient ``OperationalError`` / ``PendingRollbackError`` still reports
-    ``database_unavailable``.
+    The rendering itself lives next to ``raise_session_contract_error`` in
+    ``db_error_handling`` (FAR-1502 review: a shared home), so the MCP tool
+    surface and the run WebSocket control-frame surface share ONE
+    implementation and neither has to import the other's module.
     """
-    try:
-        raise_session_contract_error(exc, log_key)
-    except FastAPIHTTPException as http_exc:
-        return _tool_error(str(http_exc.detail), code="session_contract_error")
-    return None
+    return session_contract_error_payload(exc, log_key)
 
 
 def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[str, Any]:

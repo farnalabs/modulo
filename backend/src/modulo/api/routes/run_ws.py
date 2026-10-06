@@ -29,9 +29,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, session_contract_error_payload
 from modulo.api.dependencies import _get_engine
-from modulo.api.mcp_server import _tool_session_contract_error
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
 from modulo.core.logging_config import org_id_var
@@ -199,7 +198,7 @@ async def run_websocket(
         # retry-inviting outage frame. Transient errors keep the aligned
         # ``database_unavailable`` vocabulary — the same code the REST/MCP
         # surfaces use for this frame (was ``db_unavailable``).
-        if (contract_error := _tool_session_contract_error(exc, "run_ws.run_websocket")) is not None:
+        if (contract_error := session_contract_error_payload(exc, "run_ws.run_websocket")) is not None:
             await ws.send_json(contract_error)
             await ws.close(code=1011)
             return
