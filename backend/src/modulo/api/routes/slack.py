@@ -36,12 +36,13 @@ from modulo.api.dependencies import (
     get_system_db_session,
     system_engine_is_fallback,
 )
+from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PipelineNotRunnableError, TriggersPausedError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
@@ -343,6 +344,18 @@ async def receive_slack_event(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the app-mention delivery is refused at the create_run
+        # choke point when the target pipeline is archived/soft-deleted — 409
+        # Conflict, never a generic 500. Caught outside the
+        # begin-block so the snapshot rolls back with the refusal.
+        _log.info(
+            "slack.receive_event.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
+            trigger_id,
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except TriggerBusyError:
         # Concurrent same-trigger deliveries serialize on the engine's
         # advisory lock. The loser is NOT executed and NOT auto-queued: the

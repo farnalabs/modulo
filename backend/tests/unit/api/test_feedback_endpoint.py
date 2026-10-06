@@ -815,6 +815,28 @@ class TestReviewFeedback:
 
         assert resp.status_code == 500
 
+    def test_create_correction_run_archived_pipeline_returns_409(self, client: TestClient) -> None:
+        """FAR-1528: the correction run goes through the create_run choke
+        point - an archived/soft-deleted pipeline is refused with 409 (state
+        in the detail), not a generic 500."""
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_spawn.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+
+        assert resp.status_code == 409
+        assert "archived" in resp.json()["detail"]
+
 
 class TestListEvalProposals:
     def test_returns_proposals(self, client: TestClient) -> None:

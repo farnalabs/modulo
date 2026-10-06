@@ -39,6 +39,7 @@ from modulo.api.dependencies import (
     require_permission,
     system_engine_is_fallback,
 )
+from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_delivery, record_busy_delivery
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -47,7 +48,7 @@ from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.audit_coverage import audited, audited_system, bind_audit_actor_source, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
-from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
+from modulo.core.exceptions import PipelineNotRunnableError, SnapshotLockNotAvailableError, TriggersPausedError
 from modulo.core.logging_config import org_id_var
 
 # Deprecated private aliases — kept importable so legacy patch targets and
@@ -488,6 +489,20 @@ async def receive_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the delivery is refused at the create_run choke point when
+        # the target pipeline is archived/soft-deleted — 409 Conflict, never a
+        # generic 500. Deliberately caught OUTSIDE the
+        # begin-block (the PipelineBackpressureError pattern): the snapshot
+        # created above rolls back with the refusal, and the sender gets a
+        # clear, non-retryable answer instead of a crash.
+        _log.info(
+            "webhooks.receive_webhook.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
+            trigger_id,
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except SnapshotLockNotAvailableError as exc:
         from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
 
@@ -837,6 +852,18 @@ async def replay_webhook(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the replay is refused at the create_run choke point when
+        # the target pipeline has since been archived/soft-deleted — 409
+        # Conflict, never a generic 500. Caught outside the
+        # begin-block so the snapshot rolls back with the refusal.
+        _log.info(
+            "webhooks.replay_webhook.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
+            trigger_id,
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except TriggerConfigInvalidError as exc:
         _log.warning(
             "webhooks.replay_webhook.trigger_config_invalid",

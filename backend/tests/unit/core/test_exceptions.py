@@ -15,6 +15,7 @@ import pytest
 
 from modulo.core.exceptions import (
     OrgDeletedError,
+    PipelineNotRunnableError,
     SnapshotLockNotAvailableError,
     TriggersPausedError,
 )
@@ -110,3 +111,32 @@ class TestOrgDeletedError:
     def test_is_catchable_by_type(self) -> None:
         with pytest.raises(OrgDeletedError):
             raise OrgDeletedError(org_id=uuid.uuid4(), deleted=True)
+
+
+class TestPipelineNotRunnableError:
+    """FAR-1528: the create_run pipeline-state gate's per-pipeline refusal."""
+
+    def test_subclass_of_runtime_error(self) -> None:
+        assert issubclass(PipelineNotRunnableError, RuntimeError)
+
+    def test_attributes_and_message(self) -> None:
+        pipeline_id = uuid.uuid4()
+        exc = PipelineNotRunnableError(pipeline_id=pipeline_id, state="archived")
+        assert exc.pipeline_id == pipeline_id
+        assert exc.state == "archived"
+        assert str(exc) == f"cannot create run: pipeline {pipeline_id} is archived"
+
+    def test_message_without_pipeline_id(self) -> None:
+        exc = PipelineNotRunnableError(state="deleted")
+        assert str(exc) == "cannot create run: pipeline None is deleted"
+
+    def test_is_distinct_from_the_org_level_guards(self) -> None:
+        """A PER-PIPELINE refusal: never caught by, and never standing in for,
+        the org-level pause / org-deleted guards (routes map each separately)."""
+        exc = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+        assert not isinstance(exc, TriggersPausedError)
+        assert not isinstance(exc, OrgDeletedError)
+
+    def test_is_catchable_by_type(self) -> None:
+        with pytest.raises(PipelineNotRunnableError):
+            raise PipelineNotRunnableError(state="archived")

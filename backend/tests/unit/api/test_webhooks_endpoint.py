@@ -612,6 +612,47 @@ def test_receive_webhook_concurrent_limit_returns_429(client: TestClient) -> Non
     assert resp.status_code == 429
 
 
+def test_receive_webhook_archived_pipeline_returns_409(client: TestClient) -> None:
+    """FAR-1528: an archived/soft-deleted pipeline refuses the delivery with
+    409 at the create_run choke point - never a generic 500, never a fake
+    2xx ack (the sender must see the refusal)."""
+    from modulo.core.exceptions import PipelineNotRunnableError
+
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": "1700000000"},
+        )
+
+    assert resp.status_code == 409
+    assert "archived" in resp.json()["detail"]
+
+
+def test_replay_webhook_soft_deleted_pipeline_returns_409(client: TestClient) -> None:
+    """FAR-1528: a replay of a run whose pipeline has since been soft-deleted
+    (or archived) is refused with 409 at the create_run choke point."""
+    from modulo.core.exceptions import PipelineNotRunnableError
+
+    event_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="deleted")
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 409
+    assert "deleted" in resp.json()["detail"]
+
+
 def test_receive_webhook_snapshot_lock_busy_returns_503_error(client: TestClient) -> None:
     """FAR-527: a busy per-pipeline snapshot advisory lock used to ack 202
     {"status": "queued"} while nothing was queued anywhere — a silent drop.

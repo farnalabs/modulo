@@ -71,3 +71,38 @@ class RateLimitConflictError(RuntimeError):
         self.pipeline_id = pipeline_id
         self.rate_limit_key = rate_limit_key
         super().__init__(f"rate limit conflict for pipeline {pipeline_id}, key {rate_limit_key!r}")
+
+
+class PipelineNotRunnableError(RuntimeError):
+    """Raised by ``create_run`` when the pipeline's lifecycle state refuses a run (FAR-1528).
+
+    The pipeline-state gate sits in ``create_run`` — the SINGLE choke point
+    every run origin converges on (REST manual trigger + rerun, MCP
+    ``trigger_pipeline``, webhook, replay, cron, polling, agent_signal, slack
+    app-mention, variant runs, feedback correction) — so one gate covers them
+    all. ``state`` is the refusing lifecycle condition:
+
+    * ``"archived"`` — ``pipelines.archived_at IS NOT NULL``
+    * ``"deleted"``  — ``pipelines.deleted_at IS NOT NULL`` (soft delete)
+
+    Sibling of ``TriggersPausedError`` (the org-wide pause kill-switch) and
+    ``OrgDeletedError`` (the org-level guard), but distinct from both: this is
+    a PER-PIPELINE refusal and is never mapped to the trigger ``skipped`` /
+    ``PAUSE_SKIP_REASON`` envelope. Read failures are NEVER converted into
+    this error — a ``SQLAlchemyError`` read failure in the gate propagates
+    untouched (fail closed by raising the read error itself, never fabricate
+    a state and never treat an unreadable row as runnable).
+
+    FAR-1530 (per-pipeline Paused state) adds another ``state`` value at the
+    same gate; callers mapping this error respond with 409 Conflict and the
+    state in the detail for any state they do not special-case.
+
+    Lives in ``modulo.core.exceptions`` alongside ``TriggersPausedError``; the
+    ``db-does-not-import-core`` contract exempts the consuming CRUD module
+    (see ``.importlinter``).
+    """
+
+    def __init__(self, *, state: str, pipeline_id: uuid.UUID | None = None) -> None:
+        self.state = state
+        self.pipeline_id = pipeline_id
+        super().__init__(f"cannot create run: pipeline {pipeline_id} is {state}")
