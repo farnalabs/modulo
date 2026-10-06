@@ -28,7 +28,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.organisation import (
     MODULO_REGISTRY_ORG_ID,
-    ORPHAN_ORG_ID,
+    SYSTEM_ORG_ID,
     Organisation,
 )
 from modulo.settings import Settings, get_settings
@@ -204,7 +204,7 @@ def test_create_org_unexpected_error_500(api: tuple[TestClient, AsyncMock], monk
 
 def test_list_orgs_hides_orphan_org(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
-    orphan = _org(org_id=ORPHAN_ORG_ID, name="orphan", slug="orphan")
+    orphan = _org(org_id=SYSTEM_ORG_ID, name="orphan", slug="orphan")
     monkeypatch.setattr(admin_orgs, "list_organisations", AsyncMock(return_value=[_org(), orphan]))
     resp = client.get("/api/v1/admin/orgs")
     assert resp.status_code == 200
@@ -221,7 +221,7 @@ def test_list_orgs_hides_registry_sentinel_org(
     normal tenant org and the orphan exclusion still pass."""
     client, _ = api
     sentinel = _org(org_id=MODULO_REGISTRY_ORG_ID, name="Modulo", slug="modulo")
-    orphan = _org(org_id=ORPHAN_ORG_ID, name="orphan", slug="orphan")
+    orphan = _org(org_id=SYSTEM_ORG_ID, name="orphan", slug="orphan")
     monkeypatch.setattr(admin_orgs, "list_organisations", AsyncMock(return_value=[_org(), sentinel, orphan]))
     resp = client.get("/api/v1/admin/orgs")
     assert resp.status_code == 200

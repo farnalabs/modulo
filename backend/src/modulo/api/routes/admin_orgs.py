@@ -41,7 +41,7 @@ from modulo.db.crud.organisation import (
     list_organisations,
     update_organisation,
 )
-from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, ORPHAN_ORG_ID, Organisation
+from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -306,7 +306,7 @@ class ListOrgItem(BaseModel):
 
 # Reserved orgs are infrastructure, never customer tenants — hide them from
 # the admin listing. One frozenset so future reserved orgs are a single edit.
-RESERVED_ORG_IDS = frozenset({ORPHAN_ORG_ID, MODULO_REGISTRY_ORG_ID})
+RESERVED_ORG_IDS = frozenset({SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID})
 
 
 @router.get("")

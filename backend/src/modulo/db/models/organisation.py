@@ -20,14 +20,22 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base, SoftDeleteMixin
 
-# The nil-UUID sentinel organisation backing unauthenticated public error
-# ingest (seeded by migration 0171). It is infrastructure, not a customer org:
-# error_events/error_groups rows written under it form an orphan partition
-# that is RLS-hidden from tenant sessions (the organisations table itself has
-# NO RLS — the row is a visible sentinel, excluded from admin org listings).
-# Single shared constant so call sites (errors.py ingest, admin_orgs.py
-# listing, migration tooling) cannot drift.
-ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+# The nil-UUID sentinel organisation — the SYSTEM / no-tenant sentinel
+# (seeded by migration 0172, ``0172_seed_orphan_organisation``, whose parent
+# is 0171_runs_list_performance_indexes). It is infrastructure, not a customer
+# org, and backs every write that has no tenant: unauthenticated public error
+# ingest (api/routes/errors.py), org-less system errors (core/cron_helpers.py
+# and core/error_tracking/saq_hooks.py), the cron system context, and the
+# ``token_families.organisation_id`` server default. Rows written under it
+# form a partition that is RLS-hidden from tenant sessions (the organisations
+# table itself has NO RLS — the row is a visible sentinel, excluded from
+# admin org listings).
+#
+# SYSTEM_ORG_ID is the ONE canonical definition: every call site imports it
+# rather than re-typing the literal, so the value cannot drift between
+# definitions (previously re-declared locally in cron_helpers.py and
+# saq_hooks.py — FAR-1505).
+SYSTEM_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # The modulo-library registry sentinel organisation (FAR-826): library
 # collection installs materialise registry primitives as shadow rows under it
